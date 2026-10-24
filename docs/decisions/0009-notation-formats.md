@@ -43,6 +43,31 @@ ruled out reverse engineering. So:
 - Revisit only if an official specification is published under terms that
   allow implementation.
 
+## Deferred: interoperability import via file-format study (revisit later)
+Noted on 2026-10-24 as a possible future exception. **Nothing to do now.**
+- **Legal background (not legal advice):** in the EU, data file formats
+  are not protected by copyright, and lawful users may observe, study and
+  test a program's functioning (CJEU, *SAS Institute v World Programming*,
+  2012). UK law has equivalent provisions (CDPA ss.50B, 50BA; contract
+  terms overriding them are void under s.296A). US law differs, and licence
+  terms banning reverse engineering have been enforced there. Courts have
+  ruled against reverse engineering that goes beyond the exceptions
+  (*IBM v LzLabs*).
+- **Only acceptable method:** study data files we create ourselves, with
+  known content, to document the structure. No decompiling of the editor,
+  no copying of third-party parser code, no copying of documentation text.
+- **Process if adopted:** one person writes a format description from
+  test files alone. Someone who hasn't seen existing parsers implements
+  it. Decision records at each step. Legal review per distribution
+  country before release.
+- **Scope if adopted:** import only, newest (XML-based) format first,
+  older binary formats only if users need them. MusicXML remains the
+  export format. Factual compatibility wording only, with no logos or
+  implied endorsement.
+- **Before adopting:** amend [CLEAN_ROOM.md](../CLEAN_ROOM.md) to allow
+  file-format study for interoperability, keeping the bans on decompiling
+  and on copying third-party code.
+
 ## Consequences
 - MusicXML quality is critical. Round-trip tests cover tab techniques and
   percussion.

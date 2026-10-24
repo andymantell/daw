@@ -655,3 +655,4 @@ Tracked in [`docs/decisions/`](decisions/):
 | 0008 | Review of openDAW (exposure record) | Accepted |
 | 0009 | Notation data model and tab/drum formats | Proposed |
 | — | Product name and trademark search | Open — before public release |
+| — | Import of a proprietary tab-editor format via file-format study (see 0009, *Deferred*) | **Parked — revisit later** |

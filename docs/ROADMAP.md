@@ -283,6 +283,13 @@ from audio.
 - EQ, compressor, gate, limiter, algorithmic and convolution reverb, delay.
 - Guitar amp and cabinet simulation (our own models and impulse
   responses). Tuner as an insert.
+- **Neural amp model player:** loads open-format neural amp/pedal captures
+  (`.nam` files from the open-source Neural Amp Modeler ecosystem), so
+  teachers and students can use the tone of a captured real amp without a
+  plugin. Built on a licence-compatible inference library (C++ core
+  reported as MIT, licence still to verify; pure-Rust ports exist). Users
+  supply their own capture files. We bundle only captures we make ourselves
+  or that are licensed for redistribution.
 - Built on the same processor interface as hosted plugins.
 
 ### 2.6 Automation (M)
@@ -549,4 +556,5 @@ Tracked in [`docs/decisions/`](decisions/):
 | 0005 | Timing model: ticks + sample frames | Proposed |
 | 0006 | Native desktop application (Windows, macOS, Linux) | Accepted |
 | 0007 | UI toolkit | **Open — decided by spike 0.1** |
+| 0008 | Review of openDAW (exposure record) | Accepted |
 | — | Product name and trademark search | Open — before public release |

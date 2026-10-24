@@ -208,6 +208,7 @@ session, with music-quality audio.
 | Lock-free queues | `rtrb`, `ringbuf` |
 | Real-time-safe memory reclamation | `basedrop`-style deferred drop, `arc-swap` |
 | Stretch / pitch | Decided in spike 0.6 (licence-sensitive) |
+| Neural amp model inference (Phase 2) | Neural Amp Modeler core library (reported MIT, to verify) or a pure-Rust port such as `nam-rs` |
 | ML inference (Phase 7) | ONNX runtime bindings or a pure-Rust runtime |
 | Port mapping (UPnP/NAT-PMP) | `igd-next` or similar |
 | WebRTC / QUIC | `webrtc-rs`, libdatachannel bindings, `quinn` |

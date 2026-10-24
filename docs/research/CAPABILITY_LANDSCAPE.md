@@ -89,6 +89,7 @@ end for what could not be verified.
 |---|---|---|---|
 | EQ, compressor, gate, limiter, reverb (algorithmic + convolution), delay | 2 | M | |
 | Guitar amp & cabinet simulation | 2 | M | Our own models and impulse responses. |
+| Neural amp model player (open `.nam` capture format) | 2 | M | Captured real-amp tones without plugins; inference-library licence to verify; user-supplied captures. |
 | Modulation (chorus, flanger, phaser, tremolo, auto-pan) | 3 | L | |
 | Multi-stage/multiband saturation, transient shaper, de-esser, multiband dynamics | 3 | M | |
 | Pitch shifter, harmoniser, vocoder | 5–7 | M | |

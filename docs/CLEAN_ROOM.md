@@ -53,6 +53,15 @@ Permitted sources of knowledge:
   screen. Comparative *user* testing ("can a student do X?") is fine.
 - **No circumventing plugin copy protection** or licensing. We host plugins
   only through their published plugin interfaces.
+- **No using the source code of copyleft (GPL/AGPL) or otherwise
+  incompatibly licensed DAW projects as implementation reference.** This
+  includes open-source web and desktop DAWs such as openDAW (AGPLv3). Do not
+  copy, translate or closely paraphrase their code, schemas or internal
+  designs. Their public user-facing documentation and general ideas
+  ("supports neural amp models", "offers shared-folder storage") may inform
+  *what* we build. *How* we build it must come from our own design,
+  published specifications and the literature. Note any such exposure in
+  the relevant decision record.
 
 ## 3. How we write features down
 

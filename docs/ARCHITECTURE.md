@@ -90,6 +90,13 @@ My Lesson.project/              (folder; zipped into a single file as a bundle)
 - **Identity:** each install has a key pair. Changes are attributed by
   public key, and roles (owner/editor/commenter) are stored in the
   document and enforced when merging.
+- **Notation-ready note data:** notes carry optional performance
+  attributes alongside pitch, time and velocity: string and fret,
+  techniques (bend amount and shape, slide, hammer-on/pull-off, harmonic,
+  palm mute…), drum articulation and notehead, and tie/tuplet hints. Tab,
+  staff and drum staff are views computed from this data plus the track's
+  tuning or drum map, so no separate notation document can drift out of
+  sync (Roadmap 3.8, decision 0009).
 - **Interchange-ready from day one:** the DAWproject exporter arrives in
   Phase 4, but the schema must be able to express everything DAWproject
   1.0 can from the start: nested clips, warp points, mixed beat/second

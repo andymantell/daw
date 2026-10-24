@@ -71,4 +71,9 @@ placeholders that may change before launch.
 | **Chord Track** | A global track describing the harmony over time, usable by tools. |
 | **Scale Mode** | Project/clip key + scale used to guide editing and generation. |
 | **Modulator** | A source (LFO, envelope, step, random, follower) that drives parameters. |
-| **Tab View** | Guitar/bass tablature view of note data. |
+| **Notation Lane** | A timeline lane showing a track's notes as notation (tab, standard staff or drum staff), synced to the tempo map and playback. |
+| **Tab View** | Guitar/bass tablature view of note data, per string, with techniques. |
+| **Tuning** | String count and pitch per string (plus capo) for a tab track. |
+| **Drum Staff** | Five-line percussion staff view of drum note data. |
+| **Drum Map** | Mapping of kit pieces to note numbers, staff positions and noteheads. Defaults to the General MIDI percussion map. |
+| **Fret Assigner** | The tool that picks string and fret for notes that arrive without positions. |

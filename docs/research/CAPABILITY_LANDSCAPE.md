@@ -48,7 +48,7 @@ end for what could not be verified.
 | Monophonic pitch editing (pitch, drift, vibrato, formant) | 7 | H | |
 | Plugin-based direct audio editing via ARA 2 | 7 | M | Open SDK (Apache 2.0). |
 | ML stem separation | 7 | H | Model weights *and* training data must be licensed for our use. |
-| Audio-to-MIDI (mono, then poly); chord detection | 7 | H | |
+| Audio-to-MIDI (mono, then poly); chord detection | 7 | H | Also drafts tab and drum notation from recordings. |
 | Spectral view and repair | 8 | H | |
 
 ## 3. Practice & education (our emphasis)
@@ -62,7 +62,7 @@ end for what could not be verified.
 | Comments pinned to time/track | 1 | L | |
 | Text tab blocks | 1 | L | |
 | Practice log; assignments with progress | 3 | L | |
-| Tab view and entry for notes | 3 | M | |
+| Guitar/bass tab and drum staff as timeline notation lanes | 3 | H | See section 6a. |
 | Isolate/remove a part from a backing track | 7 | H | Uses stem separation. |
 | Live lesson call (audio/video, music-quality audio) | 4 | M | Peer-to-peer. |
 
@@ -113,8 +113,28 @@ end for what could not be verified.
 | Constrained generators (rhythm, melody, chords) | 8 | M | Rule-based first. |
 | Microtonal tuning (scale files) | 8 | M | |
 | Articulation/expression maps | 8 | M | |
-| Score/notation editor | 8 | H | Tab first. |
+| Full score/notation editor (all instruments) | 8 | H | Builds on Phase 3 notation lanes. |
 | Virtual accompanist players | — | H | Research only; clean training data required. |
+
+## 6a. Notation lanes (tab & drums, Phase 3)
+
+| Capability | Phase | Risk | Notes |
+|---|---|---|---|
+| Notation as a view of track note data (tab, staff, drum staff, note editor stay in sync) | 3 | M | One source of truth. |
+| Tab for any string count, tuning and capo; optional standard staff | 3 | M | |
+| Guitar/bass techniques (bends, slides, hammer-ons/pull-offs, vibrato, palm mute, harmonics, tapping, slap/pop…) | 3 | M | |
+| Chord diagrams and names | 3 | L | |
+| Automatic string/fret assignment with user override | 3 | H | Fingering optimisation from published methods. |
+| Drum staff with editable drum map and legend; General MIDI percussion default | 3 | M | Published drumset-notation conventions. |
+| Drum articulations (accents, ghosts, flams, rolls, hi-hat states, chokes, rimshot/cross-stick) | 3 | M | |
+| Notation scrolls with playback; works with loop/slow-down/tempo trainer | 3 | M | |
+| Import MusicXML (open, W3C CG) incl. tab and percussion | 3 | M | |
+| Import MIDI with drum detection and auto tab positions | 3 | M | |
+| Import plain-text tab (best effort, user aligns rhythm) | 3 | M | |
+| Export MusicXML, MIDI, text tab, PDF/print | 3 | M | |
+| SMuFL music-font rendering | 3 | M | OFL fonts bundled with licence. |
+| Import of proprietary tab-editor formats | — | — | Only with an official public spec (decision 0009). |
+| Draft tab/drum notation from audio | 7 | H | Via audio-to-MIDI. |
 
 ## 7. Plugins & extensibility
 

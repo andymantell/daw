@@ -348,13 +348,77 @@ from audio.
 ### 3.7 Lesson depth (M)
 - Practice log: time spent, loop counts, tempo reached per section.
 - Lesson history: a snapshot per lesson, plus a timeline of lessons.
-- **Tab view** for notes (guitar and bass tunings), and tab entry.
 - Assignments ("bars 9–16 at 90 bpm by next week"), with progress both
   can see.
 
-**Exit criteria**
+### 3.8 Notation lanes: guitar/bass tab and drum staff (XL)
+**Goal:** tab and drum notation are first-class timeline items. The aim is
+recreating songs: transcribe or import a part, line it up with the original
+recording, loop and slow it down, and play along while the notation scrolls.
+
+- **One source of truth:** notation is a *view* of a track's note data, not
+  a separate document. Tab, standard staff, drum staff and the note editor
+  all show and edit the same notes, and the instrument plays them.
+- **Notation lane on the timeline:** shown inside or under an instrument
+  track, following the tempo map, bars, sections and loop region. It scrolls
+  in sync with playback (page or continuous mode), and can sit directly
+  under the audio track being transcribed.
+- **Guitar & bass tab:**
+  - Any string count (6/7/8-string guitar, 4/5/6-string bass) and any
+    tuning (standard, drop, open, custom), plus capo.
+  - Optional standard staff above the tab; rhythm shown in tab (stems and
+    beams) or hidden.
+  - Techniques: hammer-on, pull-off, slide, bend and release (with amount),
+    vibrato, palm mute, let ring, dead/ghost notes, natural and artificial
+    harmonics, tapping, slap/pop (bass), tremolo picking, strum direction.
+  - Chord diagrams and chord names above the staff.
+  - **Tab entry by keyboard** (string + fret), and by playing: from MIDI
+    guitar controllers (one channel per string), from recorded audio via
+    audio-to-MIDI (Phase 7), or from the note editor.
+  - **Automatic string/fret assignment** when notes come without positions
+    (MIDI, audio-to-MIDI). The assigner minimises hand movement, using
+    published fingering-optimisation methods, and lets the user override
+    positions per note or lock a hand position.
+- **Drum staff:**
+  - Standard five-line percussion staff, with a **drum map** (which kit
+    piece goes on which line or space, and with which notehead), following
+    widely used published drumset-notation conventions. Editable per
+    project, with a printed legend (key).
+  - Default mapping from the General MIDI percussion key map, so MIDI drum
+    parts display correctly with no setup. Custom maps for other kits and
+    drum plugins.
+  - Articulations: accents, ghost notes, flams, drags, rolls, open/closed/
+    pedal hi-hat, cymbal chokes, rimshots and cross-stick, with voicing
+    (hands up, feet down).
+  - Entry by drum pad / e-kit (MIDI), the step sequencer, or the note editor.
+- **Playback & practice tie-ins:** everything from Phase 1 practice tools
+  applies (loop a bar range, slow down, tempo trainer). Count-in and the
+  metronome follow the notation's bars. Practice-mute the transcribed part
+  to play it yourself.
+- **Import:**
+  - **MusicXML** (open W3C Community Group format, v4.0), including tab
+    and percussion parts.
+  - **Standard MIDI files**, with drum-channel detection and the General
+    MIDI drum map. Tab positions are assigned automatically for guitar and
+    bass tracks.
+  - **Plain-text (ASCII) tab**, best-effort parser with a review step.
+    Rhythm is often missing, so the user aligns it to the beat grid.
+  - Proprietary tab-editor formats are **not** supported unless an official
+    specification becomes public (see decision 0009).
+- **Export:** MusicXML, MIDI, plain-text tab, and print/PDF of the notation
+  with the drum legend.
+- **Rendering:** our own layout engine, using a **SMuFL**-compliant music
+  font (the standard music-font layout). SIL OFL-licensed fonts can be
+  bundled with their licence.
+
+**Exit criteria (Phase 3)**
 - A song can be composed with built-in and third-party instruments.
 - A teacher can set an assignment and see the student's practice progress.
+- A student imports a MusicXML or MIDI file of a song, sees guitar tab, bass
+  tab and a drum staff lined up under the original recording, and loops and
+  slows a section while the notation follows.
+- Tab and drum notation round-trip through MusicXML without losing notes,
+  string/fret positions or supported techniques.
 
 ---
 
@@ -500,6 +564,9 @@ guitar through effects into loops works properly.
 - **Monophonic pitch editing** (XL), built in: note-level pitch, drift,
   vibrato, formant.
 - **Audio-to-MIDI** (L) and **chord detection** to a **chord track** (M).
+  Audio-to-MIDI feeds the Phase 3 notation lanes: draft **guitar/bass tab
+  and drum staff from a recording**, with automatic string/fret assignment
+  and drum-piece classification, then reviewed and corrected by the user.
 - **Stem separation** (L): on-device inference, only with models whose
   weights *and* training data permit our use. Lesson use: remove the guitar
   from a backing track.
@@ -522,7 +589,9 @@ guitar through effects into loops works properly.
 
 - Large projects: 200+ tracks, multi-core graph processing with work
   stealing, lazy loading, a built-in performance profiler.
-- **Score/notation editor** (XL), building on tab view.
+- **Full score/notation editor** (XL), building on the Phase 3 notation
+  lanes: all instruments, multi-staff scores, parts extraction and
+  engraving-quality layout.
 - **Articulation/expression maps** (M). **Microtonal tuning** (M).
 - **Video track** (L): timecode and frame rates.
 - **Surround/immersive mixing** (XL): multichannel buses, panning, binaural
@@ -584,4 +653,5 @@ Tracked in [`docs/decisions/`](decisions/):
 | 0006 | Native desktop application (Windows, macOS, Linux) | Accepted |
 | 0007 | UI toolkit | **Open — decided by spike 0.1** |
 | 0008 | Review of openDAW (exposure record) | Accepted |
+| 0009 | Notation data model and tab/drum formats | Proposed |
 | — | Product name and trademark search | Open — before public release |

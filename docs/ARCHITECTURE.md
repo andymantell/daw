@@ -90,6 +90,13 @@ My Lesson.project/              (folder; zipped into a single file as a bundle)
 - **Identity:** each install has a key pair. Changes are attributed by
   public key, and roles (owner/editor/commenter) are stored in the
   document and enforced when merging.
+- **Interchange-ready from day one:** the DAWproject exporter arrives in
+  Phase 4, but the schema must be able to express everything DAWproject
+  1.0 can from the start: nested clips, warp points, mixed beat/second
+  time units per clip, automation points with interpolation, sends,
+  clip slots/scenes, per-note expressions, and opaque plugin state.
+  Then the converter is a mapping layer, not a model change. Schema
+  reviews check new structures against the DAWproject reference.
 
 ## 4. Audio engine
 

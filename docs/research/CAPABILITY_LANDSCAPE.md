@@ -184,7 +184,7 @@ mixer, not only behind physical buttons.
 | Export FLAC, MP3, Opus; stems by bus | 3 | L | |
 | Templates | 2 | L | |
 | Standard MIDI files | 3 | L | |
-| DAWproject import/export (open, MIT spec) | 4 | M | |
+| DAWproject import/export (open, MIT spec, v1.0) | 4 | M | Schema designed to express it from Phase 0; loss report on export/import. |
 | Track versions | 4 | M | |
 | Content browser with tags, search, tempo-synced preview | 3 | L | |
 | Video track | 8 | M | |

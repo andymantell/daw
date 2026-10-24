@@ -371,8 +371,28 @@ from audio.
   accept/reject.
 - **Track versions** (M): alternative versions of a track's content and
   settings.
-- **Interchange** (M): DAWproject (open, MIT-licensed spec) import/export.
-  Stem packages.
+- **Interchange: DAWproject** (L): import and export of the open DAWproject
+  format (v1.0, MIT-licensed; a ZIP of XML plus audio and plugin-state
+  files). It's supported by several major DAWs, so teachers and students
+  can move songs in and out of other DAWs.
+  - Our own reader/writer, implemented from the published schema and
+    reference (no official Rust library exists). If we ship their schema
+    files, we include the MIT copyright notice.
+  - Maps: tracks, channels, sends and routing; nested clips with fades
+    and loop points; markers; notes with per-note expressions; automation
+    (tempo, time signature, mixer, plugin and built-in device parameters);
+    warp points to our stretch markers; clip slots and scenes to the Clip
+    Grid; VST 3 / CLAP / AU plugins with embedded state; the four generic
+    built-in devices (EQ, compressor, gate, limiter) to ours.
+  - **Export report:** before exporting, list what won't survive
+    (comments, lesson and practice data, collaboration history, take lanes,
+    Live Looper state, other built-in effects). Offer to render affected
+    tracks to audio.
+  - **Import report:** list anything that couldn't be mapped. Plugins
+    missing on this machine keep their state and are flagged.
+  - Time conversion between decimal beats/seconds and our integer
+    ticks/sample frames, with defined rounding and tests.
+- **Stem packages** (S): audio and MIDI stems as a simple folder or ZIP.
 - **Teacher with many students** (M): a lesson library, per-student
   projects and templates.
 - **Activity history** (S): who changed what, and when.
@@ -381,7 +401,11 @@ from audio.
 - A full remote lesson runs inside the app with video and shared playback
   on typical home connections.
 - DAWproject round-trip keeps tracks, clips, tempo and automation that the
-  format supports.
+  format supports. Tested automatically against a fixture set (our own
+  projects exported and re-imported, plus files exported from other DAWs
+  that we create ourselves).
+- Every loss on export or import is listed in the report shown to the
+  user. Nothing is dropped silently.
 
 ---
 

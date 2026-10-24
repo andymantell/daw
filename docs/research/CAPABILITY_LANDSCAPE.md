@@ -26,7 +26,7 @@ end for what could not be verified.
 | Low-latency software monitoring through effects/plugins | 1 | M | Core reason for going native. |
 | Punch in/out, pre-roll and post-roll | 2 | L | |
 | Loop recording into stacked take lanes | 2 | M | |
-| Comping: swipe-select best parts, auto crossfades, audition, flatten | 2 | M | |
+| Comping: swipe-select best parts, auto crossfades, audition, flatten; several saved comps | 2 | M | |
 | Multi-input simultaneous recording | 2 | L | |
 | Retrospective capture (keep input played while not recording) | 2 (audio), 3 (MIDI) | L | Valuable for students. |
 | Monitor section: control-room output, cue/headphone mixes, talkback, dim/mono, speaker switching | 2 | M | Useful for in-person lessons. |
@@ -93,8 +93,10 @@ end for what could not be verified.
 | Modulation (chorus, flanger, phaser, tremolo, auto-pan) | 3 | L | |
 | Multi-stage/multiband saturation, transient shaper, de-esser, multiband dynamics | 3 | M | |
 | Pitch shifter, harmoniser, vocoder | 5–7 | M | |
-| Performance effects (beat repeat, roll, stutter, freeze, filter sweeps, lo-fi, radio, robot, tape stop) | 5 | M | |
-| Modulators (LFO, step, random, sample & hold, envelope follower) | 7 | M | |
+| Performance effects: filters, modulation, pitch/voice (harmony, vocoder, robot, guitar-to-bass…), drive/dynamics, delays (reverse, granular, tape-style), time-mangling (warp, freeze, roll, slicer, beat repeat/scatter/shift), colour (lo-fi, radio, vinyl) | 5 | M | Full palette in Roadmap 5.2. |
+| Modulators (LFO, step, shaper, random, S&H, follower incl. sidechain, macro, scripted); no takeover of the target | 7 | M | |
+| Device containers: parallel, frequency-split, mid/side, L/R chains; layered instruments | 3 | M | |
+| Real-time monophonic pitch correction | 7 | M | |
 
 ## 6. MIDI & instruments
 
@@ -104,6 +106,12 @@ end for what could not be verified.
 | Note editor with velocity/CC lanes, quantise, humanise | 3 | M | |
 | Groove templates (extract and apply timing/velocity feel) | 3 | M | |
 | Step sequencer / drum patterns: swing, probability, Euclidean | 3 | L | |
+| Per-lane length/resolution/direction (polymeter), ratchets, micro-offset, gate, velocity variance | 3 | L | |
+| Linked pattern clips (edit once, update all instances) | 3 | M | |
+| Group probability; random note from a chord | 3 | L | |
+| Note selection/filter by attribute; per-note expression curves | 3 | M | |
+| Drum machine: layered pads, synthesised drum voices, choke groups, per-pad FX and outputs | 3 | M | |
+| Slicer instrument (transient/grid slices, per-slice pitch/filter/pan/reverse) | 3 | L | |
 | Scale mode | 3 | L | |
 | Sampler, drum sampler, synth | 3 | M | Our own content only. |
 | Melodic pattern sequencer | 7 | L | |
@@ -111,6 +119,8 @@ end for what could not be verified.
 | Note transformations (strum, arpeggiate, ornament) | 7 | L | Strum is guitar-relevant. |
 | MPE and MIDI 2.0 | 7 | M | |
 | Constrained generators (rhythm, melody, chords) | 8 | M | Rule-based first. |
+| Chord progression tool with bassline generation | 7 | L | |
+| Idea starter: genre/key-based starting loops from our own content | 8 | L | |
 | Microtonal tuning (scale files) | 8 | M | |
 | Articulation/expression maps | 8 | M | |
 | Full score/notation editor (all instruments) | 8 | H | Builds on Phase 3 notation lanes. |
@@ -147,6 +157,8 @@ end for what could not be verified.
 | Sandboxing modes (in-process / shared / per-plugin process) | 2 | H | |
 | Multi-output plugins, sidechain to plugins, bus layouts | 2–3 | M | |
 | Plugin presets (native and our own) | 2 | L | |
+| Plugin editor scaling; cap on open editors | 2 | L | |
+| Older-to-newer plugin version mapping (e.g. VST 2 → VST 3) | 2 | M | Where the plugin declares compatibility. |
 | VST 3 instruments | 3 | M | |
 | CLAP hosting | 3 | M | MIT SDK. |
 | Audio Units hosting (macOS) | 3 | M | |
@@ -162,6 +174,12 @@ end for what could not be verified.
 |---|---|---|---|
 | Clip Grid: quantised launch, scenes, launch modes, follow actions | 6 | M | |
 | Capture grid performance to timeline | 6 | L | |
+| Performance snapshots with recall and morph | 6 | M | |
+| Live looping of a timeline region; pre-arranged performance structure | 6 | M | |
+| Stage rig mode: patches, set lists, song sheet (lyrics/chords/notation), foot control | 5 | M | |
+| LAN tempo sync with other apps/devices | 5 | M | Common SDK is GPLv2+/proprietary — check against licence decision. |
+| Companion remote on phone/tablet over local network (served by the app) | 5 | M | No internet or server needed. |
+| Audio streaming between devices on the local network | 8 | M | |
 | Pattern-based song building | 3 | L | |
 | MIDI learn / controller mapping | 3 | L | |
 
@@ -174,6 +192,12 @@ mixer, not only behind physical buttons.
 | Capability | Notes |
 |---|---|
 | Several stereo loop tracks with level/pan | Not limited to a fixed count. |
+| Per-track speed (half/normal/double) applied immediately or at loop end | |
+| Re-sync tolerance (snap back to grid within a beat or bar) | |
+| Per-track measure setting: auto, free, or fixed bars/note values | |
+| Tap tempo; long-press clear | |
+| Tracks start/stop on external MIDI start/stop | |
+| Per-loop-track/input/rhythm routing to main, alternate and headphone outputs | |
 | Record → overdub → play on one control; configurable order (rec→dub or rec→play) | |
 | Overdub modes: layer, replace, punch-replace | |
 | Per-track undo/redo; bookmark a layer to return to | |
@@ -185,8 +209,11 @@ mixer, not only behind physical buttons.
 | Play mode: multi vs single (one track at a time) | |
 | Auto-record on input threshold | |
 | Input effects (pre-record) and track effects (playback), several at once, in recallable banks | Any built-in or hosted plugin. |
+| Bank mode: one effect at a time or several; per-effect toggle or momentary switching | |
+| Effects targeted at chosen inputs or chosen loop tracks | |
+| Effect step sequencer (up to 16 steps, loop-synced, retrigger) | |
 | Master effects on the overall output | |
-| Rhythm patterns with kits; optional intro, fill, ending; start/stop triggers | Our own patterns and samples. |
+| Rhythm patterns by genre with variations and kits; intro, fill, ending; start triggers (with loop, at record end, before loop) and stop triggers (never, with loop, at record end); odd meters | Our own patterns and samples. |
 | Input mixer per source (gain, EQ, compression) | Covered by the general mixer. |
 | Multiple outputs (e.g. separate monitor/PA feeds) | Covered by routing/monitor section. |
 | Bounce playing loops into one track | |
@@ -207,6 +234,9 @@ mixer, not only behind physical buttons.
 | DAWproject import/export (open, MIT spec, v1.0) | 4 | M | Schema designed to express it from Phase 0; loss report on export/import. |
 | Track versions | 4 | M | |
 | Content browser with tags, search, tempo-synced preview | 3 | L | |
+| Sound similarity search, auto-tagging, browser history | 8 | M | On-device analysis only. |
+| Automatic mastering assistant | 8 | M | |
+| Bounce group in place; paste as rendered audio; parallel sample loading; start screen | 3 | L | |
 | Video track | 8 | M | |
 
 ## 11. Collaboration (our differentiator, serverless)
@@ -228,25 +258,31 @@ mixer, not only behind physical buttons.
 
 ## Research gaps
 
-What we could and couldn't verify, as of October 2026:
+Status after the second research pass (October 2026), done once the
+environment's network access was widened:
 
-- **Blocked sources.** This research environment could not reach several
-  primary sources: the loop station's official Parameter Guide and Owner's
-  Manual PDFs, one vendor's official feature page and release notes, and
-  one review site. Findings for those products come from search-result
-  summaries, retailer pages, secondary blogs and third-party manual mirrors.
-- **Loop station details not confirmed:** the complete names of all input
-  and track effect types (only counts and a partial list were confirmed),
-  the full set of quantise options, and bounce behaviour.
-- **DAW details from secondary sources only:** some edition-specific
-  features (which tier includes what), stem-separation stem counts, and
-  certain release-specific additions. These don't change our plan, since
-  we specify capabilities generically.
-- **Not researched yet:** other widely used DAWs beyond the four
-  originally surveyed, mastering-specific tools, post-production/dialogue
-  workflows, and education-focused music apps. These are worth surveying
-  before Phase 3 (education) and Phase 8 (pro scale).
+- **Now verified from primary sources:**
+  - The loop station's official Parameter Guide: track, record, play,
+    effect, rhythm, routing and master-effect settings, and the effect
+    list.
+  - One DAW vendor's official "all new features" page for its current
+    major version.
+  - Another vendor's official 2025 release notes.
+  - Another vendor's official product feature page.
+  - A detailed independent review of a fourth DAW's 2024 release.
+- **Still partial:**
+  - **Effect list:** automated text extraction from the PDF's multi-column
+    layout recovered most, but probably not all, of the 49 input and 53
+    track effect types. The roadmap lists effect *families*, which is
+    enough for planning.
+  - **One vendor's official release-notes page** renders its content with
+    JavaScript and couldn't be read as text. That release's features come
+    from an independent review instead.
+- **Not researched yet:** other widely used DAWs beyond the four surveyed,
+  mastering-specific tools, post-production/dialogue workflows, and
+  education-focused music apps. These are worth surveying before Phase 3
+  (education) and Phase 8 (pro scale).
 - **Ecosystem facts to re-verify before relying on them:** licences of
-  every candidate library (verified by the CI licence check), Rust
-  VST 3/CLAP host crate maturity (spike 0.1), the VST trademark/logo
-  usage terms, and JUCE pricing tiers (fallback only).
+  every candidate library (checked by CI), Rust VST 3/CLAP host crate
+  maturity (spike 0.1), VST trademark/logo terms, the LAN tempo-sync SDK
+  licence (GPLv2+ or proprietary), and JUCE pricing (fallback only).

@@ -254,7 +254,8 @@ from audio.
 - Punch in/out (manual and range-based), pre-roll and post-roll.
 - Loop recording into stacked **take lanes**.
 - **Comping:** swipe to choose the best parts, automatic crossfades,
-  audition takes, flatten a comp.
+  audition takes, flatten a comp. Save **several comps** of the same takes
+  and switch between them.
 - Multi-input recording on many armed tracks.
 - Retrospective capture: keep recent input even when not recording.
 
@@ -276,6 +277,11 @@ from audio.
 - Multi-output plugins, sidechain inputs to plugins, bus layouts.
 - Plugin presets in our own format plus the plugin's native presets.
 - Plugin delay changes handled live.
+- Plugin editor windows scale with the display. An optional cap on open
+  plugin editors protects CPU.
+- When a project references an older plugin version (e.g. VST 2) and only
+  the newer version is installed, map to the newer one where the plugin
+  declares compatibility, keeping state and parameters.
 - Compatibility test matrix maintained in CI where licences allow, plus a
   public compatibility list.
 
@@ -317,7 +323,9 @@ from audio.
 - MIDI device I/O on all operating systems. Instrument tracks, recording,
   overdub/merge, retrospective MIDI capture.
 - Note editor with velocity and CC lanes, quantise (strength, swing),
-  humanise, legato, transpose, scale snapping.
+  humanise, legato, transpose, scale snapping. Select and filter notes by
+  time, pitch, velocity, probability or length. Draw per-note expression
+  curves (pitch glide, LFO-shaped modulation) for MPE-capable instruments.
 - **Scale mode:** project and clip key/scale guiding editing.
 - Groove templates: extract a groove from audio or MIDI and apply it.
 - Standard MIDI file import/export. MIDI learn.
@@ -330,18 +338,40 @@ from audio.
 ### 3.3 Pattern & step programming (M)
 - Step sequencer / drum pattern editor: swing, per-step probability,
   Euclidean fills, per-step velocity and pitch. Patterns as clips.
+- Per-lane length, step resolution and play direction (polymeters, e.g.
+  triplet hi-hats over a 16th-note kick). Per-step repeats (ratchets),
+  micro-offset, gate, velocity variance. Note-repeat and randomised step
+  playback.
+- **Linked pattern clips:** several clips can reference one pattern, so
+  editing the pattern updates every instance. Any instance can be made
+  unique, or converted to plain notes.
+- Probability across groups of notes (a whole group plays or doesn't), and
+  "play one note of this chord at random".
 
 ### 3.4 Built-in instruments & content (L)
 - Multi-zone sampler, drum sampler, and a synth of our own design.
+- **Drum machine instrument:** pads with several layers each, mixing
+  samples with **synthesised drum voices**. Choke/exclusive groups (closed
+  hi-hat cuts off open), a per-pad effect chain, per-pad outputs and sends.
+  Drives, and is driven by, the step sequencer.
+- **Slicer:** slice a loop by transients or grid into a playable
+  instrument, with per-slice pitch, filter, pan and reverse.
 - Our own sound content: recorded or designed in-house, or licensed for
   redistribution.
 
 ### 3.5 Effects, set 2 (M)
 - Modulation effects, multi-stage saturation, transient shaper,
   de-esser, multiband dynamics.
+- **Device containers:** parallel chains with dry/wet, frequency-split
+  chains (per band), mid/side and left/right split chains, and layered
+  instruments sharing one set of notes. Containers can hold built-in and
+  hosted plugins.
 
 ### 3.6 Workflow (M)
-- Freeze and render in place. Bounce selection.
+- Freeze and render in place. Bounce selection. Bounce a whole group in
+  place. Paste a copied clip as rendered audio.
+- Projects load samples in parallel. A start screen shows recent
+  projects and templates.
 - Content browser with tags, search, and preview at project tempo.
 - Export FLAC, MP3, Ogg/Opus. Stem export by bus.
 
@@ -502,25 +532,72 @@ guitar through effects into loops works properly.
 - **Auto-record** when the input passes a threshold.
 - **Bounce** the playing loops into one track.
 - Recording length limited only by disk space.
+- **Per-track speed:** half, normal or double, with the change applied
+  immediately or at loop end.
+- **Re-sync tolerance:** when a track restarts, snap it back into alignment
+  if it's within a beat or a bar of the loop grid.
+- **Measure settings** per track: auto (follow the first recording), free
+  (whatever length you recorded), or a set number of bars or note values.
+- **Single-play switching** happens immediately or at loop end.
+- **Tap tempo**, plus a long press to clear a track.
+- **External sync:** chosen tracks start and stop on incoming MIDI
+  start/stop messages.
 
 ### 5.2 Performance effects (L)
 - **Input effects** (before recording) and **track effects** (on playback),
   several per section. Any built-in or hosted plugin can be used.
-- **Effect banks:** recallable sets, switchable live.
+- **Effect banks:** recallable sets, switchable live. Within a bank, allow
+  one effect at a time or several.
+- **Per-effect switch mode:** toggle (press on, press off) or momentary
+  (on only while held).
+- **Targeting:** input effects can apply to all inputs or chosen inputs.
+  Track effects can apply to all loop tracks or chosen tracks.
+- **Master effects** (e.g. bus compression and reverb) on chosen outputs.
 - Our own performance processors: filter sweeps, beat repeat, roll, freeze,
   stutter/gate patterns, pitch bend, harmoniser, vocoder, lo-fi, radio,
   robot, tape stop, reverse delay.
-- Step-sequenced parameter changes.
+- The full target palette, all our own designs:
+  - **Filters:** low, high and band pass, isolator.
+  - **Modulation:** phaser, flanger, chorus, tremolo, auto and manual pan,
+    ring modulation.
+  - **Pitch and voice:** pitch bend, octave, transpose, manual and
+    automatic harmony, vocoder, formant/voice, robot, real-time pitch
+    correction, guitar-to-bass.
+  - **Drive and dynamics:** distortion, preamp, dynamics, sustainer,
+    slow attack (volume swell).
+  - **Delays:** stereo, panning, reverse, modulated, granular, tape-style.
+  - **Time-mangling:** warp, twist (riser), freeze, roll, pattern
+    slicer, beat repeat, beat scatter, beat shift.
+  - **Colour:** lo-fi, radio, vinyl-style noise and scratch, reverb, gated
+    reverb, synth (pitch-tracking synth from the input), stereo enhancer.
+  - Beat-based effects work on playback only.
+- **Effect step sequencer:** up to 16 steps changing an effect parameter,
+  synced to the loop, with retrigger on loop start. Usable on any effect
+  parameter, including plugins.
 
 ### 5.3 Rhythm (M)
-- Built-in drum patterns and kits (our own content), with optional intro,
-  fill and ending. Start/stop triggers (on loop start, on record end, or
-  manual). Any instrument or pattern track can be the rhythm source.
+- Built-in drum patterns and kits (our own content), organised by genre,
+  each with several variations. Optional intro, fill and ending.
+  Variation changes happen at the next bar or loop end.
+- **Start triggers:** rhythm starts with the loop, when the first
+  recording ends, or before the loop (count-in style: press once to start
+  the rhythm, again to start recording in time).
+- **Stop triggers:** never (keep running for external sync), when the loop
+  stops, or when recording ends (a guide while recording).
+- Time signatures including odd meters (e.g. 5/8, 7/8, 15/8).
+- Any instrument or pattern track can be the rhythm source.
 
 ### 5.4 Control (M)
 - MIDI controllers, footswitches and expression pedals. Press, hold and
   double-press actions. Keyboard mapping. HID devices where feasible.
 - Macro controls spanning several parameters.
+- **Companion remote on a phone or tablet:** the desktop app serves a
+  simple control page over the local network. No internet or server of
+  ours is needed. It offers large looper buttons, effect pads, XY
+  control of several effects at once, and transport. It pairs by QR
+  code, and works on the same network only.
+- **Per-loop-track output routing:** send each loop track (and the rhythm,
+  and each input) to the main, alternate or headphone outputs separately.
 
 ### 5.5 Visible in DAW context (M) — *the differentiator*
 - Looper view: per track, the waveform, layer stack, loop position, state
@@ -529,6 +606,20 @@ guitar through effects into loops works properly.
   as clips for editing.
 - **Phrase sets:** save and recall loop-track sets with settings.
 - Collaborative: a teacher prepares a phrase set, the student performs.
+
+### 5.6 Stage rig mode (M)
+A performance setup for playing live with the sounds made in the
+project, especially for guitarists and singers.
+- **Patches and set lists:** each song is a patch (amp chain, effects,
+  loops, rhythm), stepped through by footswitch.
+- **On-screen song sheet:** lyrics, chords and notation (from the notation
+  lanes or a PDF), scrolling with the song.
+- Foot-controlled tap tempo, tuner on a footswitch, and MIDI foot
+  controller mapping that stays in place across patches.
+- Keyboard splits and layers, and chord triggers, for keyboard players.
+- **Tempo sync over the local network** with other apps and devices, via
+  an open LAN tempo-sync protocol. Its widely used SDK is GPLv2+ or
+  proprietary, which needs checking against decision 0001.
 
 **Exit criteria**
 - A five-loop performance with input and track effects runs 10 minutes
@@ -543,6 +634,10 @@ guitar through effects into loops works properly.
 - **Clip Grid** (L): clip slots, quantised launch, scenes, launch modes,
   follow actions, legato. Capture to timeline. Shares the Looper's
   scheduler.
+- **Performance snapshots** (M): capture the state of chosen parameters,
+  recall it on cue, and morph between snapshots.
+- **Timeline looping during performance** (M): loop a timeline region live,
+  and pre-arrange the structure of a performance before recording it.
 - **Audio follows tempo** (XL): high-quality stretch in real time and
   offline, with multiple algorithms.
 - **Stretch markers** (M), **transient detection and slicing** (M),
@@ -569,11 +664,22 @@ guitar through effects into loops works properly.
   and drum-piece classification, then reviewed and corrected by the user.
 - **Stem separation** (L): on-device inference, only with models whose
   weights *and* training data permit our use. Lesson use: remove the guitar
-  from a backing track.
+  from a backing track. Each stem can go to its own track automatically.
 - **Note transformations** (M): strum, arpeggiate, ornament, humanise.
 - **Melodic pattern sequencer** (M).
-- **Modulators** (M): LFO, step, envelope, follower, random, sample & hold,
-  able to drive any parameter, including plugin parameters.
+- **Modulators** (M): LFO, step, envelope (shaper), envelope follower
+  (including from a sidechain), random, sample & hold, macro knob, and
+  **scripted modulators**. Able to drive any parameter, including plugin
+  parameters, on any track.
+  - Sync modes: project-locked, free-running, or retriggered by notes.
+    Unipolar or bipolar depth.
+  - **No takeover:** the parameter stays adjustable by hand while being
+    modulated (modulation is applied around it).
+  - Modulation connections are shown on the target's interface.
+- **Real-time pitch correction** (M) as a built-in effect for vocals and
+  other monophonic sources: key/scale, speed, harmonies.
+- **Chord progression tool** (M): write progressions on the chord track
+  quickly, and generate a matching bassline.
 - **Scripting** (M): sandboxed scripts for editor actions and MIDI.
 - **Controller scripting** (M) for control surfaces.
 - **MIDI 2.0 / MPE** (M).
@@ -601,7 +707,18 @@ guitar through effects into loops works properly.
 - **External hardware** (M): MIDI clock/MTC, external instrument/effect
   inserts with latency compensation.
 - **Constrained generators** (M): rule-based rhythm/melody/chords.
-- Accessibility depth (complete screen-reader workflows). Localisation.
+- **Idea starter** (M): generate a starting loop (drums, bass, chords) by
+  genre and key from our own content, then edit it freely.
+- **Sound similarity search and auto-tagging** (M) in the content browser,
+  with on-device analysis only. Includes "swap this kit piece for a similar
+  one".
+- **Automatic mastering assistant** (M): analyses the mix and proposes
+  adjustable loudness, EQ and dynamics settings.
+- **Audio over the local network** (M): stream audio between instances and
+  devices on the same network (e.g. a teacher's and student's laptops in
+  the same room) with automatic latency compensation.
+- Accessibility depth (complete screen-reader workflows, keyboard access
+  to every area). Themes, including high contrast. Localisation.
 
 ---
 

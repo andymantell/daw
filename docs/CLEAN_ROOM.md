@@ -18,9 +18,11 @@ Permitted sources of knowledge:
 
 - **General musical and audio-engineering knowledge**: how mixing, recording,
   MIDI, time-stretching, looping, compression, etc. work in principle.
-- **Open standards and their published specifications**: Web Audio, Web MIDI,
-  MIDI 1.0/2.0, WAV/AIFF/FLAC/Ogg/Opus, Web Audio Modules (WAM), CLAP, the
-  open DAWproject exchange format, VST 3 (MIT-licensed SDK since v3.8.0), etc.
+- **Open standards, public SDKs and their published specifications**:
+  MIDI 1.0/2.0, WAV/AIFF/FLAC/Ogg/Opus, VST 3 (MIT-licensed SDK since
+  v3.8.0), CLAP (MIT), ARA 2 (Apache 2.0), Audio Units (Apple's public
+  documentation and SDKs), ASIO (SDK under GPLv3 or proprietary licence),
+  the open DAWproject exchange format, etc.
 - **Academic papers and textbooks** on DSP, music information retrieval, and
   collaborative editing (CRDTs, OT).
 - **Open-source code under a compatible licence**, used as a dependency with
@@ -49,6 +51,8 @@ Permitted sources of knowledge:
   a competing product, where those terms would be breached by contributing.
 - **No running competitor software side by side to replicate it** screen by
   screen. Comparative *user* testing ("can a student do X?") is fine.
+- **No circumventing plugin copy protection** or licensing. We host plugins
+  only through their published plugin interfaces.
 
 ## 3. How we write features down
 
@@ -80,13 +84,16 @@ methods) have been patented in the past. Policy:
 - Licences to watch closely:
   - **Copyleft (GPL/LGPL/AGPL)** libraries — e.g. some well-known
     time-stretch libraries are LGPL or GPL/commercial dual-licensed. Their
-    impact depends on our licence and how they are linked/bundled (WASM
-    bundling is effectively static linking — treat LGPL with care).
-  - **ASIO SDK** (optional desktop wrapper only): offered under GPLv3 *or* a
-    proprietary Steinberg licence (since October 2025). The choice depends on
-    the project licence.
-  - **VST 3 SDK** (optional desktop wrapper only): MIT since v3.8.0
-    (October 2025).
+    impact depends on our licence and how they are linked. Rust links
+    statically by default, so treat LGPL with particular care.
+  - **ASIO SDK**: offered under GPLv3 *or* a proprietary Steinberg licence
+    (since October 2025). The choice depends on the project licence.
+  - **VST 3 SDK**: MIT since v3.8.0 (October 2025). The **"VST" name and
+    logo are trademarks**. Check Steinberg's current trademark and logo
+    usage terms before using them in the product or marketing.
+  - **CLAP SDK**: MIT. **ARA 2 SDK**: Apache 2.0 (since 2021).
+  - **JUCE** (fallback only, if decision 0003 picks C++): AGPLv3 or
+    commercial tiers with revenue limits.
   - **ML models** (stem separation, pitch detection): both the model weights
     *and* the training data licence must permit our use.
   - **Sample/sound content**: we ship only content we create ourselves or that

@@ -1,6 +1,6 @@
 # 0002 — Web-first with an optional Electron desktop wrapper
 
-- **Status:** Accepted
+- **Status:** Superseded by [0006](0006-native-desktop-application.md) (2026-10-24)
 - **Date:** 2026-10-24
 - **Deciders:** Project owner
 

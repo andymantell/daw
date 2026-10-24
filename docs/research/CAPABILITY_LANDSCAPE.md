@@ -3,200 +3,229 @@
 A survey of capabilities that professional DAWs and hardware loop stations
 commonly offer, written **in generic terms** as allowed by
 [CLEAN_ROOM.md](../CLEAN_ROOM.md). It does not describe or replicate any
-specific product. Each capability is mapped to the roadmap phase where we plan
-to deliver *our own* version of it.
+specific product. Each capability is mapped to the roadmap phase where we
+plan to deliver *our own* version of it.
 
-How to read it:
+- **Phase** refers to [ROADMAP.md](../ROADMAP.md): `1` is the Lesson Room
+  vertical slice, and `—` means not planned yet.
+- **Risk** is technical difficulty and uncertainty: L (low), M (medium),
+  H (high).
 
-- **Phase**: where it lands in [ROADMAP.md](../ROADMAP.md) (`1` = vertical
-  slice, `—` = not planned yet).
-- **Web**: how feasible it is in a browser today. ✅ straightforward ·
-  ⚠️ possible with caveats · 🖥️ needs the optional desktop wrapper for full
-  quality.
-
-Last researched: October 2026. Browser-support statements must be checked
-again before each phase starts.
+Last researched: October 2026. See [Research gaps](#research-gaps) at the
+end for what could not be verified.
 
 ---
 
-## 1. Recording
+## 1. Recording & monitoring
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Select input device and channel(s) | 1 | ✅ | `getUserMedia` with device ID; browser DSP (echo cancel, noise suppress, AGC) must be disabled for music. |
-| Arm track, record, count-in, metronome | 1 | ✅ | |
-| Record-latency compensation (place takes correctly in time) | 1 | ⚠️ | Use loopback calibration; `AudioContext.outputLatency` helps but differs between browsers. |
-| Punch in/out (manual and range-based) | 2 | ✅ | |
-| Pre-roll / post-roll | 2 | ✅ | |
-| Loop recording into stacked takes | 2 | ✅ | |
-| Take lanes and comping (quick swipe comp, automatic crossfades) | 2 | ✅ | |
-| Retrospective capture (keep input you played while not recording) | 3 | ✅ | Ring buffer of recent input; very useful for students. |
-| Multi-input simultaneous recording | 2 | ⚠️ | Multichannel `getUserMedia` support varies by browser/OS. |
-| Low-latency software monitoring through effects | 8 | 🖥️ | Browsers on Windows use shared-mode WASAPI; direct/hardware monitoring is the web answer. |
+| Choose driver, device, sample rate, buffer size | 1 | M | ASIO/WASAPI/CoreAudio/ALSA/JACK. |
+| Input selection per track, arm, record, count-in, metronome | 1 | L | |
+| Recording-offset compensation | 1 | M | Measured by loopback; driver-reported values can be wrong. |
+| Low-latency software monitoring through effects/plugins | 1 | M | Core reason for going native. |
+| Punch in/out, pre-roll and post-roll | 2 | L | |
+| Loop recording into stacked take lanes | 2 | M | |
+| Comping: swipe-select best parts, auto crossfades, audition, flatten | 2 | M | |
+| Multi-input simultaneous recording | 2 | L | |
+| Retrospective capture (keep input played while not recording) | 2 (audio), 3 (MIDI) | L | Valuable for students. |
+| Monitor section: control-room output, cue/headphone mixes, talkback, dim/mono, speaker switching | 2 | M | Useful for in-person lessons. |
 
 ## 2. Audio editing
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Move, trim, split, duplicate, nudge clips; snap to grid | 1–2 | ✅ | Phase 1 has the minimal set. |
-| Fades and crossfades with curve shapes | 2 | ✅ | |
-| Clip gain and gain envelopes | 2 | ✅ | |
-| Non-destructive editing with unlimited, collaborative undo | 1–2 | ✅ | Per-user undo is a CRDT design concern. |
-| Normalise, reverse, (destructive) offline processing | 2 | ✅ | Produce new assets; never mutate the source. |
-| Tempo-following audio (stretch to project tempo) | 6 | ⚠️ | Several algorithm families; quality and CPU cost differ. |
-| Manual stretch markers on transients | 6 | ⚠️ | |
-| Transient detection, slicing to clips/sampler | 6 | ✅ | |
-| Audio quantise (align transients to grid) | 6 | ⚠️ | |
-| Tempo detection / build tempo map from free recording | 6 | ⚠️ | |
-| Monophonic pitch editing (note-level pitch/vibrato/formant) | 7 | ⚠️ | Hard DSP; heavy research phase. |
-| Spectral view / spectral repair | 9 | ⚠️ | |
-| ML stem separation (drums/bass/vocals/other…) | 7 | ⚠️ | WebGPU/WASM inference; model + training-data licences must be clean. |
-| Audio-to-MIDI (mono, then poly) | 7 | ⚠️ | |
-| Chord detection from audio/MIDI to chord track | 7 | ⚠️ | |
+| Move, trim, split, delete, snap | 1 | L | |
+| Nudge, slip, ripple, range tools, zoom | 2 | L | |
+| Fades and crossfades with curves; clip gain and envelopes | 2 | L | |
+| Group/linked editing across tracks (e.g. multi-mic drums) | 2 | M | |
+| Non-destructive editing with collaborative undo | 1 | M | Per-user undo over the CRDT. |
+| Offline processing (normalise, reverse, gain) creating new assets | 2 | L | |
+| Audio follows project tempo (stretch) | 6 | H | Quality vs CPU; licence-sensitive. |
+| Stretch markers; transient detection; slicing | 6 | M | |
+| Audio quantise to grid | 6 | M | |
+| Tempo detection / tempo map from free performance | 6 | M | |
+| Monophonic pitch editing (pitch, drift, vibrato, formant) | 7 | H | |
+| Plugin-based direct audio editing via ARA 2 | 7 | M | Open SDK (Apache 2.0). |
+| ML stem separation | 7 | H | Model weights *and* training data must be licensed for our use. |
+| Audio-to-MIDI (mono, then poly); chord detection | 7 | H | |
+| Spectral view and repair | 8 | H | |
 
 ## 3. Practice & education (our emphasis)
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Loop a region; A/B repeat | 1 | ✅ | |
-| Slow down/speed up without pitch change | 1 | ⚠️ | Needs a stretch implementation in a worklet (licence check). |
-| Transpose playback without tempo change | 1 | ⚠️ | Same engine as above. |
-| Chromatic tuner | 1 | ✅ | Pitch detection on input. |
-| Metronome with accents, subdivisions, gradual tempo trainer | 1 | ✅ | Tempo trainer: auto speed up each N loops. |
-| Comments pinned to time/track | 1 | ✅ | |
-| Practice log (time practised, tempo reached) | 3 | ✅ | |
-| Tab view / simple notation of notes | 3 | ✅ | Start with text tab in Phase 1. |
-| Isolate/remove a part from a backing track | 7 | ⚠️ | Uses stem separation. |
-| Live lesson call (video + music-quality audio) | 4 | ⚠️ | WebRTC; disable voice DSP, raise Opus bitrate. |
+| Loop a region / section | 1 | L | |
+| Speed change without pitch change; transpose without tempo change | 1 | M | Spike 0.6. |
+| Chromatic tuner | 1 | L | |
+| Metronome with accents, subdivisions; tempo trainer | 1 | L | |
+| Comments pinned to time/track | 1 | L | |
+| Text tab blocks | 1 | L | |
+| Practice log; assignments with progress | 3 | L | |
+| Tab view and entry for notes | 3 | M | |
+| Isolate/remove a part from a backing track | 7 | H | Uses stem separation. |
+| Live lesson call (audio/video, music-quality audio) | 4 | M | Peer-to-peer. |
 
-## 4. Mixing
+## 4. Mixing & routing
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Volume, pan, mute, solo, meters | 1 | ✅ | |
-| Insert effect chains with bypass and reorder | 2 | ✅ | |
-| Sends, effect returns, group buses | 2 | ✅ | |
-| Control-group faders (VCA-style) | 2 | ✅ | |
-| Sidechain routing with latency compensation | 2 | ✅ | |
-| Automatic processing-delay compensation | 2 | ✅ | Engine-wide, including sends and sidechains. |
-| Automation: draw, record (read/touch/latch/write), clip-based | 2 | ✅ | |
-| Mixer view embedded in the main editing window | 2 | ✅ | |
-| Channel strip presets, mixer snapshots | 3 | ✅ | |
-| Loudness/level metering (LUFS, true peak), spectrum, phase correlation | 2–3 | ✅ | |
-| Freeze / render in place | 3 | ✅ | |
-| Surround / immersive object mixing | 9 | ⚠️ | Binaural monitoring possible in browser; formats may involve licensing. |
+| Volume, pan, mute, solo, meters | 1 | L | |
+| Insert chains (bypass, reorder) | 1 (plugins), 2 (full) | L | |
+| Sends, returns, group buses, folder tracks | 2 | L | |
+| Control-group faders (VCA-style) | 2 | L | |
+| Sidechain routing | 2 | M | |
+| Engine-wide delay compensation (incl. sends, sidechains, plugins) | 1 (per track), 2 (global) | M | |
+| Automation (draw; read/touch/latch/write), clip automation | 2 | M | |
+| Mixer embedded in main window and as a full window | 2 | L | |
+| Metering: LUFS, true peak, spectrum, phase correlation | 2 | L | |
+| Channel strip presets, mixer snapshots | 3 | L | |
+| Freeze / render in place | 3 | M | Frozen audio for missing plugins is Phase 1. |
+| Surround / immersive mixing | 8 | H | Branded formats may need licences. |
 
 ## 5. Built-in effects
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| EQ (parametric, filters), compressor, gate, limiter | 2 | ✅ | |
-| Reverb (algorithmic + convolution), delay | 2 | ✅ | Convolution node built into Web Audio. |
-| Guitar amp/cab simulation (waveshaping + cabinet IRs) | 2 | ✅ | Our own IRs only. |
-| Modulation (chorus, flanger, phaser, tremolo, auto-pan) | 3 | ✅ | |
-| Distortion/saturation with multiple stages, multiband | 3 | ✅ | |
-| Transient shaper, de-esser, multiband dynamics | 3 | ✅ | |
-| Pitch shifter, harmoniser, vocoder | 5–7 | ⚠️ | |
-| Performance effects (beat repeat, roll, stutter, freeze, filter sweeps, lo-fi, vinyl-style) | 5 | ✅ | Used heavily in Live Looper mode. |
-| Parameter modulators (LFO, step, random, sample & hold, envelope follower) | 7 | ✅ | |
+| EQ, compressor, gate, limiter, reverb (algorithmic + convolution), delay | 2 | M | |
+| Guitar amp & cabinet simulation | 2 | M | Our own models and impulse responses. |
+| Modulation (chorus, flanger, phaser, tremolo, auto-pan) | 3 | L | |
+| Multi-stage/multiband saturation, transient shaper, de-esser, multiband dynamics | 3 | M | |
+| Pitch shifter, harmoniser, vocoder | 5–7 | M | |
+| Performance effects (beat repeat, roll, stutter, freeze, filter sweeps, lo-fi, radio, robot, tape stop) | 5 | M | |
+| Modulators (LFO, step, random, sample & hold, envelope follower) | 7 | M | |
 
 ## 6. MIDI & instruments
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| MIDI input from controllers | 3 | ⚠️ | Web MIDI works in Chromium and Firefox; **not natively in Safari** (as of 2026 research). |
-| Note editor with velocity/CC lanes, quantise, humanise | 3 | ✅ | |
-| Step sequencer / drum pattern editor with swing, probability, Euclidean fills | 3 | ✅ | |
-| Melodic pattern sequencer with scales | 7 | ✅ | |
-| Scale awareness (key/scale guides editing) | 3 | ✅ | |
-| Chord track driving tools/generators | 7 | ✅ | |
-| Note transformations (strum, arpeggiate, ornament, humanise) | 7 | ✅ | Strum is very guitar-relevant. |
-| Constrained generators (rhythm, melody, chords) | 9 | ✅ | Rule-based first; any ML must have clean data. |
-| Sampler (multi-zone, round robin), drum sampler | 3 | ✅ | |
-| Synthesiser(s) | 3 | ✅ | |
-| MPE and MIDI 2.0 | 7 | ⚠️ | Depends on browser API evolution. |
-| Microtonal tuning (scale files) | 9 | ✅ | |
-| Articulation/expression maps | 9 | ✅ | |
-| Score/notation editor | 9 | ⚠️ | Large project in its own right; tab first. |
-| Virtual/AI accompanist players | — | ⚠️ | Research only; strong clean-data requirement. |
+| MIDI device I/O | 3 | L | |
+| Note editor with velocity/CC lanes, quantise, humanise | 3 | M | |
+| Groove templates (extract and apply timing/velocity feel) | 3 | M | |
+| Step sequencer / drum patterns: swing, probability, Euclidean | 3 | L | |
+| Scale mode | 3 | L | |
+| Sampler, drum sampler, synth | 3 | M | Our own content only. |
+| Melodic pattern sequencer | 7 | L | |
+| Chord track driving tools | 7 | M | |
+| Note transformations (strum, arpeggiate, ornament) | 7 | L | Strum is guitar-relevant. |
+| MPE and MIDI 2.0 | 7 | M | |
+| Constrained generators (rhythm, melody, chords) | 8 | M | Rule-based first. |
+| Microtonal tuning (scale files) | 8 | M | |
+| Articulation/expression maps | 8 | M | |
+| Score/notation editor | 8 | H | Tab first. |
+| Virtual accompanist players | — | H | Research only; clean training data required. |
 
-## 7. Non-linear / performance
+## 7. Plugins & extensibility
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Clip Grid with quantised launch, scenes, follow actions | 6 | ✅ | |
-| Capture grid performance to timeline | 6 | ✅ | |
-| Pattern-based song building (patterns placed on timeline) | 3 | ✅ | |
-| Controller mapping (MIDI learn) | 3 | ⚠️ | Web MIDI caveat. |
+| VST 3 effects | 1 | H | Decisive part of spike 0.1. |
+| Out-of-process plugin scanning, blacklist | 1 | M | |
+| Plugin editor windows embedded | 1 | H | Per-OS windowing edge cases. |
+| Frozen-audio fallback for collaborators missing a plugin | 1 | M | |
+| Sandboxing modes (in-process / shared / per-plugin process) | 2 | H | |
+| Multi-output plugins, sidechain to plugins, bus layouts | 2–3 | M | |
+| Plugin presets (native and our own) | 2 | L | |
+| VST 3 instruments | 3 | M | |
+| CLAP hosting | 3 | M | MIT SDK. |
+| Audio Units hosting (macOS) | 3 | M | |
+| ARA 2 hosting | 7 | H | |
+| Intel-only plugins on Apple Silicon (bridge) | 0.7 decision | H | |
+| User scripting (editor actions, MIDI) | 7 | M | Sandboxed. |
+| Controller scripting / control surfaces | 7 | M | |
+| Customisable key commands, command palette | 2 | L | |
 
-## 8. Loop-station capabilities (Live Looper mode)
+## 8. Non-linear / performance
+
+| Capability | Phase | Risk | Notes |
+|---|---|---|---|
+| Clip Grid: quantised launch, scenes, launch modes, follow actions | 6 | M | |
+| Capture grid performance to timeline | 6 | L | |
+| Pattern-based song building | 3 | L | |
+| MIDI learn / controller mapping | 3 | L | |
+
+## 9. Loop-station capabilities (Live Looper mode, Phase 5)
 
 Generic capabilities found on multi-track loop stations, as a target list for
-our own mode. Our implementation must show everything on a visible timeline
-and in a visible mixer, not only behind physical buttons.
+our own mode. Our version must show everything on a visible timeline and
+mixer, not only behind physical buttons.
 
-| Capability | Phase | Notes |
-|---|---|---|
-| Several (e.g. 5+) stereo loop tracks, each with level/pan | 5 | We are not limited to a fixed number. |
-| Record → overdub → play cycle on one control; configurable order (rec→dub or rec→play) | 5 | |
-| Overdub modes: layer, replace, punch-in replace | 5 | |
-| Per-track undo/redo of last layer; "bookmark" a layer to return to | 5 | |
-| Loop sync: tracks aligned to a master loop length vs. free length | 5 | |
-| Tempo sync on/off; pitch follows tempo or not | 5 | |
-| One-shot (play once) vs loop | 5 | |
-| Reverse playback | 5 | |
-| Quantised start/stop (to beat/bar/loop end) | 5 | |
-| Start/stop modes: immediate, fade, at loop end | 5 | |
-| Play mode: multi (all play) vs single (one at a time, e.g. verse/chorus) | 5 | |
-| Auto-record when input level passes a threshold | 5 | |
-| Input effects (before recording) and track effects (on playback), several at once, in recallable banks | 5 | |
-| Performance effects: filters, beat repeat, roll, freeze, pitch bend, harmony, vocoder, lo-fi, radio, robot | 5 | Implemented as our own processors. |
-| Built-in rhythm/drum patterns with kits | 5 | Our own patterns and samples only. |
-| Bounce: record one track while playing others into it | 5 | |
-| Saved phrase sets (memory slots) | 5 | |
-| Footswitch / expression pedal / MIDI control, press/hold/double-press actions | 5 | Keyboard and Web MIDI first; HID later. |
-| Long recording time per track | 5 | Bounded by browser storage quotas; stream to disk (OPFS). |
+| Capability | Notes |
+|---|---|
+| Several stereo loop tracks with level/pan | Not limited to a fixed count. |
+| Record → overdub → play on one control; configurable order (rec→dub or rec→play) | |
+| Overdub modes: layer, replace, punch-replace | |
+| Per-track undo/redo; bookmark a layer to return to | |
+| Loop sync to a master length vs free length | |
+| Tempo sync on/off; pitch follows tempo optional | |
+| One-shot vs loop; reverse | |
+| Quantised record/start/stop (beat, bar, loop end) | |
+| Start modes: immediate, fade-in over N bars. Stop modes: immediate, fade-out, at loop end | |
+| Play mode: multi vs single (one track at a time) | |
+| Auto-record on input threshold | |
+| Input effects (pre-record) and track effects (playback), several at once, in recallable banks | Any built-in or hosted plugin. |
+| Master effects on the overall output | |
+| Rhythm patterns with kits; optional intro, fill, ending; start/stop triggers | Our own patterns and samples. |
+| Input mixer per source (gain, EQ, compression) | Covered by the general mixer. |
+| Multiple outputs (e.g. separate monitor/PA feeds) | Covered by routing/monitor section. |
+| Bounce playing loops into one track | |
+| Saved phrase sets (memory slots) | |
+| Footswitch/expression/MIDI control with press/hold/double-press actions | |
+| Long recordings | Disk-bounded. |
 
-## 9. Project, files & interchange
+## 10. Project, files & interchange
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Autosave, local-first editing, offline work | 1 | ✅ | IndexedDB/OPFS + CRDT. |
-| Project snapshots/versions | 1–2 | ✅ | Manual snapshots in Phase 1; diff summaries in Phase 2. |
-| Import audio (WAV, AIFF, FLAC, MP3, Ogg/Opus) | 1–2 | ✅ | Decode via `decodeAudioData` or WASM decoders. |
-| Export mixdown (WAV first; then FLAC, MP3, Opus) and stems | 1–3 | ✅ | |
-| Standard MIDI file import/export | 3 | ✅ | |
-| Open DAW-interchange format import/export (DAWproject, MIT-licensed spec) | 4 | ✅ | |
-| Templates | 2 | ✅ | |
-| Track/arrangement versions (alternate takes of a whole track) | 4 | ✅ | |
-| Video track for scoring/sync | 9 | ⚠️ | |
-| Content browser with tags, search, preview | 3 | ✅ | |
-| Search by sound similarity | — | ⚠️ | Research. |
+| Autosave, crash recovery, snapshots | 1 | L | |
+| Import audio (WAV, AIFF, FLAC, MP3, Ogg/Opus) | 1–2 | L | |
+| Export WAV + stems | 1 | L | |
+| Export FLAC, MP3, Opus; stems by bus | 3 | L | |
+| Templates | 2 | L | |
+| Standard MIDI files | 3 | L | |
+| DAWproject import/export (open, MIT spec) | 4 | M | |
+| Track versions | 4 | M | |
+| Content browser with tags, search, tempo-synced preview | 3 | L | |
+| Video track | 8 | M | |
 
-## 10. Extensibility & platform
+## 11. Collaboration (our differentiator, serverless)
 
-| Capability | Phase | Web | Notes |
+| Capability | Phase | Risk | Notes |
 |---|---|---|---|
-| Internal processor API (our devices built on it) | 2 | ✅ | |
-| Host web plugins (Web Audio Modules 2.0, open standard) | 7 | ✅ | |
-| Web CLAP (proposal) | — | ⚠️ | Watch; adoption unclear as of research. |
-| Native plugin hosting (VST 3 — MIT SDK; CLAP) | 8 | 🖥️ | Desktop wrapper only. |
-| ASIO / CoreAudio / JACK low-latency I/O | 8 | 🖥️ | Desktop wrapper only; ASIO SDK GPLv3 or proprietary. |
-| User scripting (editor actions, MIDI processing) | 7 | ✅ | Sandboxed. |
-| Controller scripting / surfaces | 7 | ⚠️ | |
-| Customisable key commands with search | 2 | ✅ | |
-| Built-in help assistant | — | ✅ | Later; must use our own docs. |
+| Bundle export/import with merge | 1 | L | |
+| Shared-folder sync via any cloud-synced directory | 1 | M | Must avoid provider conflict copies. |
+| Live session: teacher hosts, student joins by invite code | 1 | H | NAT traversal without a relay; spike 0.5. |
+| Presence, follow mode | 1 | L | |
+| Pinned comments and threads | 1 | L | |
+| Lesson history | 3 | L | |
+| Review mode (propose, diff, accept/reject) | 4 | M | |
+| Live lesson call | 4 | M | |
+| User-hosted relay for hard networks | 4 (open) | M | Only if we accept user-run infrastructure. |
+| Real-time remote jamming | — | H | Limited by network latency; interval-delay mode possible later. |
 
-## 11. Collaboration (our differentiator)
+---
 
-| Capability | Phase | Notes |
-|---|---|---|
-| Share link with roles | 1 | |
-| Real-time co-editing of project state | 1 | CRDT. |
-| Presence (who's here, their playhead) | 1 | |
-| Pinned comments and threads | 1 | |
-| Follow mode (my view follows the teacher's playhead) | 1 | |
-| Lesson history / snapshots per lesson | 3 | |
-| Review mode: suggest edits, accept/reject | 4 | |
-| Live lesson call | 4 | |
-| Real-time remote jamming | — | Fundamentally limited by network latency; possible interval-delay mode later. |
+## Research gaps
+
+What we could and couldn't verify, as of October 2026:
+
+- **Blocked sources.** This research environment could not reach several
+  primary sources: the loop station's official Parameter Guide and Owner's
+  Manual PDFs, one vendor's official feature page and release notes, and
+  one review site. Findings for those products come from search-result
+  summaries, retailer pages, secondary blogs and third-party manual mirrors.
+- **Loop station details not confirmed:** the complete names of all input
+  and track effect types (only counts and a partial list were confirmed),
+  the full set of quantise options, and bounce behaviour.
+- **DAW details from secondary sources only:** some edition-specific
+  features (which tier includes what), stem-separation stem counts, and
+  certain release-specific additions. These don't change our plan, since
+  we specify capabilities generically.
+- **Not researched yet:** other widely used DAWs beyond the four
+  originally surveyed, mastering-specific tools, post-production/dialogue
+  workflows, and education-focused music apps. These are worth surveying
+  before Phase 3 (education) and Phase 8 (pro scale).
+- **Ecosystem facts to re-verify before relying on them:** licences of
+  every candidate library (verified by the CI licence check), Rust
+  VST 3/CLAP host crate maturity (spike 0.1), the VST trademark/logo
+  usage terms, and JUCE pricing tiers (fallback only).

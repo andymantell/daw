@@ -42,14 +42,21 @@ placeholders that may change before launch.
 | **Stretch** | Changing duration without changing pitch. **Shift** = changing pitch without changing duration. |
 | **Stretch Markers** *(working)* | Anchors placed on audio that can be moved to retime it. |
 | **DI** | Direct-input (dry, unprocessed) instrument signal. |
-| **Monitoring** | Hearing the input while playing. *Direct/hardware* monitoring happens on the interface; *software* monitoring passes through the engine. |
+| **Monitoring** | Hearing the input while playing. *Direct/hardware* monitoring happens on the interface; *software* monitoring passes through the engine (and its effects). |
+| **Cue Mix** | A separate headphone mix for a performer. |
+| **Talkback** | A microphone path from the control position into performers' cue mixes. |
+| **Plugin Host** | The separate process(es) that load third-party plugins (VST 3, CLAP, AU), isolating crashes from the app. |
+| **Frozen Audio** | A rendered audio copy of a plugin track, shared with the project so collaborators without that plugin still hear it. |
 
 ## Collaboration
 
 | Term | Meaning |
 |---|---|
-| **Room** *(working)* | A shared space around a project with members and roles. A **Lesson Room** is a Room set up for teacher + student(s). |
-| **Member Roles** | Owner, Editor, Commenter, Viewer (lesson defaults: teacher = Owner, student = Editor). |
+| **Lesson Room** *(working)* | A project set up for a teacher and student(s), with members and roles. The name of the Phase 1 vertical slice. |
+| **Member Roles** | Owner, Editor, Commenter, Viewer (lesson defaults: teacher = Owner, student = Editor). Members are identified by public keys; there are no server accounts. |
+| **Live Session** | A real-time peer-to-peer connection. One member (usually the teacher) hosts, and the others join with an **Invite Code**. |
+| **Bundle** | A project folder packed into one file for sending. Importing it merges into an existing copy. |
+| **Shared Folder** | A project folder kept in a cloud-synced directory. The app merges changes from other members. |
 | **Presence** | Live indication of who is in a project, where their playhead/selection is. |
 | **Pinned Comment** | A comment attached to a time position/range on a track or the timeline. |
 | **Snapshot** | A named, restorable version of a project. |

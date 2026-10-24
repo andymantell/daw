@@ -1,9 +1,11 @@
 # Roadmap
 
-**Vision:** a web-first, collaborative digital audio workstation. It starts as
-the best tool for remote and in-person **guitar lessons** and grows, phase by
-phase, into a **full professional DAW**. It also has a visible, timeline-aware
-**Live Looper** performance mode.
+**Vision:** a native desktop digital audio workstation for Windows, macOS
+and Linux. It starts as the best tool for **guitar lessons**, where teacher
+and student share projects, and grows phase by phase into a **full
+professional DAW** with first-class **VST 3 plugin support** and a visible,
+timeline-aware **Live Looper** mode. It needs **no backend server**: all
+data lives on the users' machines, and collaboration is peer-to-peer.
 
 Guiding principles:
 
@@ -11,514 +13,492 @@ Guiding principles:
    person can use end to end. The first users are a guitar teacher and a
    student.
 2. **Architecture for the destination, scope for the slice.** Phase 1 is
-   small, but its data model, engine and sync layer must not need replacing
-   to reach Phase 9.
-3. **Web first, desktop optional.** Everything runs in a modern browser. An
-   optional Electron wrapper (Phase 8) adds low-latency native audio and
-   native plugins without forking the app.
-4. **Collaboration is core, not an add-on.** The project document is
-   shared, local-first and conflict-free from day one.
-5. **Clean-room, original work.** See [CLEAN_ROOM.md](CLEAN_ROOM.md). Every
-   feature is specified in generic terms and designed independently.
-6. **Audio correctness is non-negotiable.** No dropouts, sample-accurate
-   timing, deterministic offline renders, and automated audio tests.
+   small, but its project model, engine, plugin host and sync layer must
+   not need replacing to reach the final phase.
+3. **Native and low-latency.** Direct access to ASIO, CoreAudio,
+   WASAPI, ALSA, JACK and PipeWire. Monitoring through software effects
+   (e.g. an amp simulator) is a supported, everyday workflow.
+4. **Plugins are first-class.** VST 3 hosting arrives in the vertical slice.
+   CLAP, Audio Units (macOS) and ARA follow.
+5. **No server we operate.** Projects are folders on disk. Collaboration is
+   peer-to-peer (teacher hosts, student joins) plus project bundles and
+   shared folders.
+6. **Collaboration is core.** The project document is conflict-free and
+   mergeable from day one.
+7. **Clean-room, original work.** See [CLEAN_ROOM.md](CLEAN_ROOM.md).
+8. **Audio correctness is non-negotiable.** No dropouts, sample-accurate
+   timing, deterministic offline renders, automated audio tests.
 
 How this document works:
 
-- Phases are **sequential milestones**, and later phases can start in
-  parallel once their dependencies are met (see the dependency map at the
-  end).
+- Phases are **sequential milestones**. Later phases may start in parallel
+  once dependencies are met (see the dependency map).
 - Each phase lists **goals, deliverables, exit criteria and risks**. A phase
-  is done when its exit criteria are met, not when time runs out.
-- There are deliberately **no calendar estimates**. Sizes (S/M/L/XL) are
-  relative effort only.
+  is done when its exit criteria are met.
+- **No calendar estimates**. Sizes (S/M/L/XL) are relative effort only.
 - Feature coverage is cross-referenced in
   [research/CAPABILITY_LANDSCAPE.md](research/CAPABILITY_LANDSCAPE.md).
 
 ---
 
-## Phase 0 — Foundations & technical spikes
+## Phase 0 — Foundations & the Rust go/no-go spike
 
-**Goal:** answer the risky technical questions before building features. Set
-up the repository so that quality is automatic.
+**Goal:** settle the technology choice with evidence, retire the biggest
+risks, and set up a repository where quality checks are automatic.
 
-### 0.1 Repository & tooling (S)
-- Monorepo layout (see [ARCHITECTURE.md](ARCHITECTURE.md) §8).
-- TypeScript strict mode, linting and formatting, and unit test runner.
-- CI: lint, typecheck, unit tests, licence check of dependencies, build.
-- Contribution rules: DCO sign-off, code of conduct, clean-room policy link.
-- Decision records in `docs/decisions/` (template + first records).
+### 0.1 Rust go/no-go spike (L) — *first, and decisive*
+See [decisions/0003-implementation-language.md](decisions/0003-implementation-language.md).
+Build throwaway prototypes in Rust to prove four things:
 
-### 0.2 Decide the project licence (S, *blocking for 0.6*)
-- See [decisions/0001-project-licence.md](decisions/0001-project-licence.md).
-  This affects which time-stretch libraries we can use and how the
-  desktop ASIO build works.
+| Test | Pass criteria |
+|---|---|
+| **A. Audio I/O** | Full-duplex audio via ASIO (Windows) and CoreAudio (macOS) at 64–128-sample buffers, 48 kHz. 30 minutes with no dropouts under a synthetic DSP load. Measured round-trip latency recorded. Linux (JACK/PipeWire) best-effort. |
+| **B. VST 3 hosting** | Load **10–15 widely used VST 3 plugins** (free and commercial; effects and instruments; at least two amp simulators; at least one with copy protection) on Windows and macOS. Each one must: process audio; report latency; take parameter changes and automation; save and restore its state; and open, resize and close its editor window embedded in our own window. Unexpected crashes are logged. Out-of-process hosting is prototyped for at least two plugins. |
+| **C. UI** | In one or two candidate toolkits, a timeline with 300+ clips with waveforms, smooth horizontal and vertical scroll and zoom at 60 fps on a mid-range laptop. Text entry, menus, drag-and-drop and keyboard shortcuts work. A screen reader can read basic controls. |
+| **D. Engine** | A lock-free command path from UI to audio thread, and a graph swapped atomically without glitches. No allocations on the audio thread, verified with tooling. |
 
-### 0.3 Spike: audio engine in the browser (M)
-- An AudioWorklet running a WASM DSP module, with a lock-free ring buffer
-  (SharedArrayBuffer) between the main thread and the audio thread.
-- Confirm the cross-origin isolation headers (COOP/COEP) work with our
-  hosting, storage and auth providers. SharedArrayBuffer needs them.
-- Measure CPU headroom: N tracks of playback + simple effects before
-  dropouts, on a low-end laptop, on Chromium, Firefox and Safari.
+**Decision rule:** if A–D pass, adopt Rust. If **B or C** become a slog, with
+plugin windows or the UI toolkit eating disproportionate time, switch to
+**C++ with JUCE** before real product code exists. Then re-run B and C
+quickly to confirm. The result goes in decision 0003.
 
-### 0.4 Spike: latency measurement & compensation (M)
-- Loopback calibration (play a click, record it back, measure the offset).
-- Compare with `AudioContext.outputLatency` / `baseLatency` per browser.
-- Record a guitar DI against a click and confirm the take is within
-  ±1 ms of the grid after compensation, on at least: Windows/Chromium,
-  macOS/Safari, macOS/Chromium, Windows/Firefox.
-- Document the recommended monitoring setup (direct monitoring on the
-  interface).
+### 0.2 Repository & tooling (S)
+- Workspace layout per [ARCHITECTURE.md](ARCHITECTURE.md) §10.
+- CI on **Windows, macOS (Apple Silicon and Intel) and Linux**: build,
+  formatting, lints, unit tests, dependency licence check, and real-time
+  safety checks (no allocation on the audio thread) where tooling permits.
+- Contribution rules: DCO sign-off, code of conduct, clean-room policy.
+- Decision records in `docs/decisions/`.
 
-### 0.5 Spike: collaborative document (M)
-- Prototype the project schema on a CRDT (Yjs proposed, see
-  [decisions/0004-collaboration-model.md](decisions/0004-collaboration-model.md)).
-- Two browsers editing tracks and clips at the same time. Offline edits merge
-  on reconnect. Per-user undo.
-- Asset upload flow: a recorded take goes to object storage, and the
-  document references it by content hash.
+### 0.3 Project licence (S, *blocking*)
+- [decisions/0001-project-licence.md](decisions/0001-project-licence.md).
+  Affects the ASIO SDK licence (GPLv3 or proprietary), the JUCE fallback
+  (AGPLv3 or commercial) and which stretch libraries we may use.
 
-### 0.6 Spike: pitch-preserving speed change (M)
-- Evaluate stretch approaches for real-time playback at 50–150% speed and
-  ±12 semitones. Licence-compatible open implementations vs. our own
-  phase-vocoder/WSOLA-style implementation from the published literature.
-- Listening tests with guitar material. Measure CPU per track.
+### 0.4 Latency & recording-offset spike (M)
+- Measure the true round-trip latency with a loopback cable. Compare it
+  with what the driver reports, per OS and driver.
+- Record a guitar DI against a click. After compensation, takes must land
+  within ±1 sample-block of the grid.
 
-### 0.7 Browser support matrix (S)
-- Record the minimum browser versions and which features degrade where (e.g.
-  no Web MIDI on Safari, `setSinkId` availability, multichannel input).
+### 0.5 Peer-to-peer collaboration spike (L)
+- Prototype the project document on a Rust CRDT (candidates: `yrs`,
+  `automerge`, Loro). Two instances edit tracks and clips at the same time.
+  Offline edits merge on reconnect.
+- Prototype **teacher-hosted sessions with no server we operate**. Compare:
+  WebRTC data channels (STUN-based hole punching), QUIC with UPnP/NAT-PMP
+  port mapping, and a manual invite-code exchange.
+- Measure the connection success rate across home broadband, mobile
+  hotspot (carrier-grade NAT) and a strict corporate/school network.
+  Document the fallbacks.
+- See [decisions/0004-collaboration-model.md](decisions/0004-collaboration-model.md).
+
+### 0.6 Speed & pitch spike (M)
+- Real-time pitch-preserving playback at 50–150% speed, and transpose by
+  ±12 semitones. Compare licence-compatible libraries with our own
+  implementation from published literature. Listening tests on guitar
+  material, plus CPU per track.
+
+### 0.7 Platform & distribution baseline (M)
+- Supported OS versions. Apple Silicon and Intel builds. How to handle
+  Intel-only plugins on Apple Silicon (bridge process vs unsupported).
+- Code signing: Apple Developer Program membership, macOS notarisation, a
+  Windows code-signing certificate. An update mechanism that needs no server
+  we operate, such as release files hosted on GitHub Releases.
+- Crash reports written to local files that the user can choose to send.
+  No telemetry server.
 
 **Exit criteria**
-- All spikes have a written result in `docs/decisions/`, with a go or
-  no-go for the proposed approach.
-- CI is green on an empty app skeleton, and the licence check is enforced.
+- Decision 0003 is accepted (Rust or JUCE), with spike evidence attached.
+- All spikes have written results in `docs/decisions/`.
+- CI is green on all three operating systems, with the licence check enforced.
 
-**Key risks:** cross-origin isolation clashing with third-party
-auth/embeds; Safari audio quirks; stretch quality vs CPU.
+**Key risks:** plugin-window embedding edge cases; UI toolkit maturity; NAT
+traversal without a relay; stretch quality vs CPU.
 
 ---
 
 ## Phase 1 — Vertical slice: **Lesson Room**
 
-**Goal:** a teacher and a student can use the app in a real guitar lesson
-and between lessons. Record ideas, practise against backing tracks at
-reduced speed, and leave each other time-pinned feedback, in a shared
-project that stays in sync.
+**Goal:** a teacher and a student run real guitar lessons with it, in
+person or remote. Between lessons, they record ideas, practise against
+backing tracks at reduced speed through their favourite amp-sim plugin,
+and leave each other time-pinned feedback in a shared project.
 
 **Primary user stories**
-- *Teacher* creates a Lesson Room, imports a backing track, records an
-  example riff on a new track, marks sections ("Intro", "Bars 9–16"), and
-  shares a link.
-- *Student* opens the link, loops "Bars 9–16" at 70% speed with the
-  teacher's riff muted, records three attempts and leaves a question pinned
-  at bar 12.
-- *Teacher* listens to the attempts later, pins feedback on the second take,
-  and records a corrected version.
-- Both can tune up, use the metronome and work offline. Changes sync when
-  they reconnect.
+- *Teacher* creates a lesson project, imports a backing track, records an
+  example riff through a VST 3 amp simulator, marks sections ("Intro",
+  "Bars 9–16"), and invites the student.
+- *Student* joins (live via invite code, or by opening a shared bundle or
+  folder). They loop "Bars 9–16" at 70% speed with the teacher's riff
+  muted, record three takes while monitoring through their own amp plugin,
+  and pin a question at bar 12.
+- *Teacher* reviews the takes, pins feedback on take 2, and records a
+  corrected version. The student receives the changes on the next sync.
+- Both use a tuner and metronome and can work fully offline.
 
 ### 1.1 Engine core (L)
+- Audio device selection (driver, device, sample rate, buffer size) and a
+  device-settings panel with measured latency.
 - Transport: play, stop, position, loop region, tempo, time signature
   (single tempo in this phase).
-- Sample-accurate scheduler running in the worklet. Musical ↔ absolute
-  time conversion.
-- Audio clip playback from decoded assets, with streaming/caching for long
-  files.
-- Per-track gain, pan, mute, solo. Master bus. Peak meters.
-- Metronome: accents, subdivisions, count-in, separate output level.
-- Offline render path, sharing the same code as real time (it powers export
-  and tests).
+- A sample-accurate scheduler. Conversion between musical and absolute time.
+- Audio clip playback with disk streaming. Per-track gain, pan, mute,
+  solo. Master bus. Peak meters.
+- Metronome: accents, subdivisions, count-in, separate output routing.
+- Offline render path, sharing code with real time. It powers export and
+  tests.
 
-### 1.2 Recording (L)
-- Input device and channel selection. Browser voice processing disabled.
-- Arm, record, count-in, recording into a new take.
-- Latency compensation from calibration (wizard from spike 0.4). Per-device
-  calibration stored locally.
-- Guidance for direct monitoring. Optional software monitoring with a clear
-  latency warning.
-- Takes saved locally first (OPFS/IndexedDB), then uploaded in the
-  background.
-- Multiple takes on one track: the newest is shown on top, older ones stay
-  available (a simple version of take lanes, extended in Phase 2).
+### 1.2 Recording & monitoring (L)
+- Input channel selection per track, arm, record, count-in.
+- **Low-latency software monitoring** through the track's effect chain,
+  with a direct-monitoring option.
+- Recording-offset compensation (from 0.4), stored per device profile.
+- Takes are written straight to the project folder. Crash-safe: an
+  interrupted recording keeps what was captured.
+- Several takes per track: newest on top, older ones kept and switchable.
 
-### 1.3 Practice tools (M)
-- Loop region with quick selection by section/marker.
-- Pitch-preserving speed control (50–150%) and transpose (±12 st).
-- Tempo trainer: speed rises by X% every N loops up to a target.
-- Chromatic tuner (pitch detection on the input). Reference pitch setting.
-- Per-track "practice mute": mute the part being learnt.
+### 1.3 Plugin hosting — first cut (L)
+- Plugin scanning, run out of process so a bad plugin can't crash the app.
+  A plugin manager lets users enable, disable and rescan.
+- **VST 3 effects as track inserts** (instrument plugins come in Phase 3),
+  with bypass, reorder and saved state.
+- Plugin editor windows. Parameter changes saved in the project.
+- Plugin latency reported and compensated on the track.
+- **Missing plugin handling:** if a collaborator lacks a plugin, the track
+  plays its **frozen audio** (rendered automatically and shared with the
+  project), and the plugin's state is kept intact.
 
-### 1.4 Editing — minimal set (M)
-- Select, move, trim, split, delete clips. Snap to beat/bar.
+### 1.4 Practice tools (M)
+- Loop region, chosen quickly from sections and markers.
+- Pitch-preserving speed (50–150%) and transpose (±12 st).
+- Tempo trainer: speed increases by X% every N loops up to a target.
+- Chromatic tuner. Reference pitch setting.
+- Per-track "practice mute".
+
+### 1.5 Editing — minimal set (M)
+- Select, move, trim, split, delete clips. Snap to beat or bar.
 - Import audio files (drag and drop).
 - Markers and named sections.
-- Collaborative undo/redo (per user).
+- Undo/redo that works correctly with merged collaborator edits.
 
-### 1.5 Collaboration (L)
-- Accounts (email magic link or OAuth). Lesson Room with roles
-  (teacher = owner, student = editor).
-- Share by invite link. Revocation.
-- Real-time sync of the project document. Presence (avatars, playheads).
-- **Follow mode:** the student's view and playhead follow the teacher's
-  during a live lesson.
-- **Pinned comments:** comments on a time position/range on a track or the
-  timeline, with threads, resolve/unresolve, and jump-to-play.
-- Asset sync with progress, resumable uploads, and content-hash
-  de-duplication.
-- Local-first: the full project works offline and merges on reconnect.
+### 1.6 Collaboration — serverless (L)
+- **Project = a folder on disk**: a document file plus content-addressed
+  audio assets.
+- **Project bundle** export and import: a single file to send by any means.
+  Importing a bundle of an existing project *merges* it (CRDT) rather
+  than overwriting.
+- **Shared-folder sync:** if the project folder lives in a user's
+  cloud-synced folder (any provider), the app detects changes and merges
+  them safely.
+- **Live session (teacher hosts):** the teacher starts a session and shares
+  an invite code. The student joins peer-to-peer. Edits sync in real time,
+  with presence (who's here, their playhead) and **follow mode** (the
+  student's view follows the teacher's playhead).
+- Asset transfer peer-to-peer: chunked, resumable, verified by hash.
+- **Pinned comments:** on a time position or range on a track or the
+  timeline, with threads, resolve, and jump-to-play.
+- Identity without accounts: each install has a local key pair and a
+  display name. Members are known by their public keys, and the project
+  owner grants editor or commenter roles.
 
-### 1.6 Lesson notes & tab (S)
-- Rich-text lesson notes per project.
-- Plain-text tab blocks (monospace) that can be pinned to sections.
+### 1.7 Lesson notes & tab (S)
+- Rich-text lesson notes per project. Plain-text tab blocks pinned to
+  sections.
 
-### 1.7 Output & safety (M)
-- Export mixdown as WAV (and per-track stems).
-- Snapshot on demand ("Lesson 3 end"). Restore a snapshot.
-- Autosave, crash recovery.
-- Privacy: data minimisation, account deletion, data export. Lesson users
-  may include **children**, so design for applicable child-data rules (e.g.
-  UK Age Appropriate Design Code / GDPR, COPPA in the US) before public
-  launch.
+### 1.8 Output, safety & distribution (M)
+- Export mixdown as WAV, plus per-track stems.
+- Snapshots ("Lesson 3 end") and restore. Autosave. Crash recovery.
+- Signed, notarised installers for Windows and macOS. Linux build
+  (AppImage or Flatpak, chosen in 0.7). Update notification.
+- Privacy: everything stays local by default. Lesson users may include
+  **children**, so review applicable child-data rules (e.g. UK Age
+  Appropriate Design Code / GDPR, COPPA in the US) before public release,
+  even without a server.
 
-### 1.8 Quality bar (M, runs throughout)
-- No audio dropouts with 16 stereo tracks on the reference low-end laptop.
-- Golden-file audio tests: offline renders of fixture projects compared
-  against reference renders within a tolerance.
-- End-to-end tests of the user stories above in at least Chromium and
-  Firefox (Safari manually until automated).
-- Accessibility: full keyboard operation of transport/recording, screen
-  reader labels, colour-contrast compliance.
+### 1.9 Quality bar (M, runs throughout)
+- No dropouts with 16 stereo tracks plus 8 plugin instances at a
+  128-sample buffer on the reference laptop.
+- Golden-render audio tests. Automated plugin-host tests with a set of
+  freely redistributable test plugins.
+- Accessibility: full keyboard operation of transport and recording, and
+  screen-reader labels.
 
 **Exit criteria**
-- A real teacher and a real student complete **three consecutive lessons**
-  and the practice in between using only this app, with no blocking bugs.
-- Recorded takes land within ±1 ms of the grid on the supported matrix
-  (after calibration).
-- Offline edits from both users merge without data loss in the scripted
-  conflict tests.
+- A real teacher and student complete **three consecutive lessons** and the
+  practice between them using only this app, with no blocking bugs.
+- Recorded takes land within ±1 ms of the grid after calibration on the
+  supported OS/driver matrix.
+- Concurrent and offline edits merge without loss in the scripted
+  conflict tests, via live session, bundle and shared folder.
 
-**Out of scope for Phase 1:** MIDI, effects beyond gain/pan, automation,
-buses, tempo changes, comping UI, live video call.
+**Out of scope for Phase 1:** MIDI, instrument plugins, automation, buses,
+tempo changes, comping UI, built-in effects beyond gain/pan/tuner, and
+video calls.
 
 ---
 
 ## Phase 2 — Core audio DAW
 
-**Goal:** a capable audio-recording and mixing DAW. Someone could record and
-mix a full song of guitar, bass, vocals and imported drums.
+**Goal:** record and mix a full song of guitar, bass, vocals and drums
+from audio.
 
 ### 2.1 Editing depth (L)
-- Fades and crossfades (curve shapes), clip gain and envelopes.
-- Nudge, slip-edit (move audio inside a clip), ripple editing, range tools.
-- Grid settings, snap modes, zoom, multiple selection, keyboard-first
-  editing.
+- Fades and crossfades with curve shapes. Clip gain and gain envelopes.
+- Nudge, slip-edit, ripple edit, range tools, grid and snap modes, zoom.
+- Group editing across tracks (edit multiple drum mics together).
 - Customisable key commands with a searchable command palette.
-- Destructive operations produce new assets (normalise, reverse, gain).
+- Offline processing (normalise, reverse, gain) creates new assets.
 
 ### 2.2 Recording depth (M)
-- Punch in/out (manual and range), pre- and post-roll.
+- Punch in/out (manual and range-based), pre-roll and post-roll.
 - Loop recording into stacked **take lanes**.
-- **Comping:** swipe to choose the best parts, auto crossfades at edit points,
+- **Comping:** swipe to choose the best parts, automatic crossfades,
   audition takes, flatten a comp.
-- Multi-input recording (multiple tracks armed), where the browser
-  supports it.
+- Multi-input recording on many armed tracks.
+- Retrospective capture: keep recent input even when not recording.
 
-### 2.3 Mixer & routing (L)
-- Insert chains: add, reorder, bypass, wet/dry.
-- Sends (pre/post fader), effect return buses, group buses, folder tracks.
-- Control-group faders (VCA-style).
-- Sidechain inputs.
-- **Engine-wide processing-delay compensation**, including sends and
-  sidechains.
-- Mixer view inside the main window and as a separate full view.
-- Metering: peak/RMS, LUFS integrated/short-term, true peak.
+### 2.3 Mixer, routing & monitoring (L)
+- Inserts, sends (pre/post fader), effect return buses, group buses,
+  folder tracks.
+- Control-group (VCA-style) faders. Sidechain inputs.
+- **Engine-wide delay compensation**, including sends, sidechains and
+  plugins.
+- **Monitor section:** separate control-room output, **cue/headphone mixes**
+  per performer, **talkback**, dim/mono, speaker-set switching. This is
+  great for in-person lessons: the student gets their own headphone mix.
+- Metering: peak/RMS, LUFS, true peak, spectrum, phase correlation.
+- Mixer view inside the main window, and as a full window.
 
-### 2.4 Built-in effects, set 1 (L)
-- Parametric EQ with analyser. Compressor. Gate/expander. Limiter.
-- Algorithmic reverb and convolution reverb (our own impulse responses).
-- Delay (tempo-synced, ping-pong, filtered).
-- **Guitar amp and cabinet simulation** (waveshaping + cabinet IRs we
-  record or design ourselves). Tuner as an insert.
-- All built on our internal processor API (see Architecture §4) so they
-  later work as plugins too.
+### 2.4 Plugin hosting — depth (L)
+- Sandboxing options per plugin: in-process, shared host process, or own
+  process.
+- Multi-output plugins, sidechain inputs to plugins, bus layouts.
+- Plugin presets in our own format plus the plugin's native presets.
+- Plugin delay changes handled live.
+- Compatibility test matrix maintained in CI where licences allow, plus a
+  public compatibility list.
 
-### 2.5 Automation (M)
-- Draw and edit automation lanes for any parameter.
-- Record modes: read, touch, latch, write.
-- Clip-attached automation vs track automation.
+### 2.5 Built-in effects, set 1 (L)
+- EQ, compressor, gate, limiter, algorithmic and convolution reverb, delay.
+- Guitar amp and cabinet simulation (our own models and impulse
+  responses). Tuner as an insert.
+- Built on the same processor interface as hosted plugins.
 
-### 2.6 Tempo & time (M)
+### 2.6 Automation (M)
+- Automation lanes for every parameter, including plugin parameters.
+- Read/touch/latch/write modes. Clip-level automation.
+
+### 2.7 Tempo & time (M)
 - Tempo map with changes and ramps. Time-signature changes.
-- Clips follow tempo changes (MIDI-free phase: audio stays in absolute time
-  unless marked musical, ahead of Phase 6 stretching).
 
-### 2.7 Project management (S)
-- Named snapshots/versions with a diff summary ("3 tracks changed").
-- Project templates (e.g. "Guitar lesson", "Band demo").
+### 2.8 Project management (S)
+- Snapshots with a diff summary. Project templates (e.g. "Guitar lesson",
+  "Band demo").
 
 **Exit criteria**
-- A full multitrack song (≥24 tracks, ≥10 effects) can be recorded, comped,
-  mixed with automation, and exported, all in the browser, with no dropouts
-  on the reference machine.
+- A 24+-track song with 10+ plugins can be recorded, comped, mixed with
+  automation and exported with no dropouts at a 128-sample buffer on the
+  reference machine.
 - Delay compensation is verified by automated null tests.
 
 ---
 
 ## Phase 3 — MIDI, instruments & practice depth
 
-**Goal:** compose and arrange with virtual instruments, and broaden the
-lesson toolkit.
-
 ### 3.1 MIDI foundation (L)
-- Web MIDI input (Chromium, Firefox). Clear messaging where it is
-  unavailable (Safari).
-- Instrument tracks, MIDI recording, overdub/merge, retrospective capture
-  (keep what you just played).
-- Note editor: velocity and CC lanes, quantise (with strength/swing),
+- MIDI device I/O on all operating systems. Instrument tracks, recording,
+  overdub/merge, retrospective MIDI capture.
+- Note editor with velocity and CC lanes, quantise (strength, swing),
   humanise, legato, transpose, scale snapping.
-- **Scale mode:** project/clip key and scale that guide editing.
-- Standard MIDI file import/export.
-- MIDI learn for controller mapping.
+- **Scale mode:** project and clip key/scale guiding editing.
+- Groove templates: extract a groove from audio or MIDI and apply it.
+- Standard MIDI file import/export. MIDI learn.
 
-### 3.2 Pattern & step programming (M)
+### 3.2 Instrument plugins & more formats (L)
+- **VST 3 instruments**, including multi-output instruments.
+- **CLAP** hosting (open SDK, MIT).
+- **Audio Units** hosting on macOS.
+
+### 3.3 Pattern & step programming (M)
 - Step sequencer / drum pattern editor: swing, per-step probability,
-  Euclidean fill, per-step velocity/pitch.
-- Patterns as reusable clips on the timeline.
+  Euclidean fills, per-step velocity and pitch. Patterns as clips.
 
-### 3.3 Instruments (L)
-- Multi-zone sampler (round robin, velocity layers) and drum sampler.
-- Subtractive/wavetable synth (our own design and presets).
-- Our own sound content: kits, presets and samples recorded or designed
-  in-house or licensed for redistribution.
+### 3.4 Built-in instruments & content (L)
+- Multi-zone sampler, drum sampler, and a synth of our own design.
+- Our own sound content: recorded or designed in-house, or licensed for
+  redistribution.
 
-### 3.4 Effects, set 2 (M)
-- Modulation (chorus, flanger, phaser, tremolo, auto-pan), saturation/
-  distortion (multi-stage, multiband), transient shaper, de-esser,
-  multiband compressor.
+### 3.5 Effects, set 2 (M)
+- Modulation effects, multi-stage saturation, transient shaper,
+  de-esser, multiband dynamics.
 
-### 3.5 Workflow (M)
+### 3.6 Workflow (M)
 - Freeze and render in place. Bounce selection.
-- Content browser: tags, search, preview at project tempo, favourites.
-- Export formats: FLAC, MP3, Opus. Stem export by bus.
-- Channel strip presets. Mixer snapshots.
+- Content browser with tags, search, and preview at project tempo.
+- Export FLAC, MP3, Ogg/Opus. Stem export by bus.
 
-### 3.6 Lesson depth (M)
+### 3.7 Lesson depth (M)
 - Practice log: time spent, loop counts, tempo reached per section.
 - Lesson history: a snapshot per lesson, plus a timeline of lessons.
-- **Tab view** of MIDI/notes (guitar/bass tunings), and tab entry that
-  generates notes.
-- Teacher assignment: "practise bars 9–16 to 90 bpm by next week" with
-  progress visible to both.
+- **Tab view** for notes (guitar and bass tunings), and tab entry.
+- Assignments ("bars 9–16 at 90 bpm by next week"), with progress both
+  can see.
 
 **Exit criteria**
-- A song can be composed using only built-in instruments, MIDI and audio.
-- A teacher can set an assignment, and see the student's practice progress
-  and tab-based exercises.
+- A song can be composed with built-in and third-party instruments.
+- A teacher can set an assignment and see the student's practice progress.
 
 ---
 
 ## Phase 4 — Collaboration depth & interchange
 
-**Goal:** make co-working richer than in any single-user DAW.
-
-- **Live lesson call** (L): WebRTC audio/video in the Room. Music mode
-  (voice DSP off, high-bitrate Opus, stereo). Teacher can stream the
-  project's playback to the student. Self-hosted TURN.
-- **Review mode** (M): a collaborator proposes changes on a branch of the
-  project. The owner sees a diff and accepts or rejects.
+- **Live lesson call** (L): peer-to-peer audio and video in a session. Music-quality
+  audio (high-bitrate stereo Opus, no voice processing). The teacher can
+  send their playback to the student.
+- **Connectivity hardening** (M): better NAT traversal, connection
+  diagnostics, and clear fallbacks when a direct connection is impossible.
+  An optional relay that **users host themselves** is an open question
+  (see decision 0004).
+- **Review mode** (M): proposals on a branch of the project, with diff and
+  accept/reject.
 - **Track versions** (M): alternative versions of a track's content and
-  settings, switchable and comparable.
-- **Interchange** (M): import/export the open DAWproject format. Audio and
-  MIDI stem packages.
-- **Organisation features** (M): teacher with many students, rooms list,
-  per-student defaults, bulk sharing.
-- **Permissions & audit** (S): who changed what, when (activity feed).
+  settings.
+- **Interchange** (M): DAWproject (open, MIT-licensed spec) import/export.
+  Stem packages.
+- **Teacher with many students** (M): a lesson library, per-student
+  projects and templates.
+- **Activity history** (S): who changed what, and when.
 
 **Exit criteria**
-- A full lesson runs inside the app with video and shared playback.
-- A project round-trips through DAWproject export and import without
-  losing tracks, clips, tempo or automation that the format supports.
+- A full remote lesson runs inside the app with video and shared playback
+  on typical home connections.
+- DAWproject round-trip keeps tracks, clips, tempo and automation that the
+  format supports.
 
 ---
 
 ## Phase 5 — **Live Looper** mode
 
-**Goal:** a live-looping performance mode with the immediacy of a
-hardware loop station. Unlike hardware, every loop, layer, effect and
-setting is **visible**: on a looper view and on the project timeline.
+**Goal:** live looping with the immediacy of a hardware loop station, but
+with every loop, layer, effect and setting **visible**: in a looper view
+and on the project timeline. With native low-latency monitoring, playing
+guitar through effects into loops works properly.
 
 ### 5.1 Looper engine (L)
-- Any number of **loop tracks** (default 5), stereo, each with level/pan in
+- Any number of **loop tracks** (default 5), stereo, with level and pan in
   the mixer.
-- One-button cycle per track: record → overdub → play → stop. The order can
-  be set per track (rec→dub→play or rec→play→dub).
-- **Loop sync:** the first loop sets the master length, and others are
-  multiples or divisions of it. Alternatively free-length tracks.
-- **Quantised actions:** start/stop/record snap to beat, bar or loop end.
-  Immediate mode available.
-- **Tempo sync:** loops follow project tempo, with optional pitch-follows-
-  tempo (uses the Phase 1 stretch engine).
-- Per-track: one-shot vs loop, reverse, start mode (immediate/fade-in),
-  stop mode (immediate/fade-out/at loop end), loop length in bars.
+- One control per track cycles record → overdub → play → stop. The order
+  is configurable (rec→dub→play or rec→play→dub).
+- **Loop sync** (aligned to a master loop length) or free-length tracks.
+- **Quantised actions** to beat, bar or loop end, or immediate.
+- **Tempo sync**, with optional pitch-follows-tempo.
+- Per-track: one-shot or loop, reverse, start mode (immediate or fade-in
+  over N bars), stop mode (immediate, fade-out, or at loop end), loop
+  length in bars.
 - Overdub modes: **layer**, **replace** and **punch-replace**.
-- **Per-track layer history:** undo/redo the last layer, **bookmark** a
-  layer and jump back to it.
-- **Play mode:** *multi* (all tracks independent) or *single* (starting one
-  stops the other, for verse/chorus switching).
-- **Auto-record:** recording starts when input passes a threshold.
-- **Bounce:** record the mix of playing loops into another loop track.
-- Recording limited only by storage. Long loops stream to OPFS.
+- **Layer history:** undo/redo per track, **bookmark** a layer and return
+  to it.
+- **Play mode:** multi (independent) or single (one track at a time, for
+  verse/chorus switching).
+- **Auto-record** when the input passes a threshold.
+- **Bounce** the playing loops into one track.
+- Recording length limited only by disk space.
 
-### 5.2 Effects for performance (L)
+### 5.2 Performance effects (L)
 - **Input effects** (before recording) and **track effects** (on playback),
-  several at once per section.
-- **Effect banks:** recallable sets of effects, switchable live.
-- Our own performance processors: filters (LP/BP/HP with sweep), beat
-  repeat, roll, freeze, stutter/gate patterns, pitch bend, harmoniser,
-  vocoder, lo-fi, radio, robot, tape stop, reverse-delay.
-- Step-sequenced parameter changes on effects.
+  several per section. Any built-in or hosted plugin can be used.
+- **Effect banks:** recallable sets, switchable live.
+- Our own performance processors: filter sweeps, beat repeat, roll, freeze,
+  stutter/gate patterns, pitch bend, harmoniser, vocoder, lo-fi, radio,
+  robot, tape stop, reverse delay.
+- Step-sequenced parameter changes.
 
 ### 5.3 Rhythm (M)
-- Built-in drum patterns and kits (our own content), with tempo, swing and
-  fills. Or use any instrument/pattern track as the rhythm source.
+- Built-in drum patterns and kits (our own content), with optional intro,
+  fill and ending. Start/stop triggers (on loop start, on record end, or
+  manual). Any instrument or pattern track can be the rhythm source.
 
 ### 5.4 Control (M)
-- Keyboard mapping, Web MIDI controllers and footswitches. Press / hold /
-  double-press can trigger different actions.
-- A large-target touch layout for tablets.
-- Assignable "macro" controls across multiple parameters.
+- MIDI controllers, footswitches and expression pedals. Press, hold and
+  double-press actions. Keyboard mapping. HID devices where feasible.
+- Macro controls spanning several parameters.
 
 ### 5.5 Visible in DAW context (M) — *the differentiator*
-- Looper view: each loop track shows its waveform, layer stack, position
-  in the loop, state and active effects.
-- **Every take and layer is a real asset** on the project timeline. A
-  performance can be **captured to the timeline** as clips for later
-  editing.
-- **Phrase sets:** save and recall loop-track sets with their settings.
-- Loops are collaborative objects: a teacher can prepare a phrase set, and
-  a student performs over it.
+- Looper view: per track, the waveform, layer stack, loop position, state
+  and effects.
+- Every layer is a real asset. **Capture a performance to the timeline**
+  as clips for editing.
+- **Phrase sets:** save and recall loop-track sets with settings.
+- Collaborative: a teacher prepares a phrase set, the student performs.
 
 **Exit criteria**
-- A five-loop performance with input and track effects runs for 10
-  minutes on the reference machine with no dropouts. Captured to timeline,
-  it plays back identically (offline-render comparison).
-- Loop alignment is sample-accurate after latency compensation (automated
-  test).
-- Performance-quality monitoring needs direct/hardware monitoring in the
-  browser. The desktop wrapper (Phase 8) provides low-latency software
-  monitoring through effects.
+- A five-loop performance with input and track effects runs 10 minutes
+  at a 128-sample buffer with no dropouts. Captured to the timeline, it
+  renders identically offline.
+- Loop alignment is sample-accurate (automated test).
 
 ---
 
 ## Phase 6 — Clip Grid & musical time for audio
 
-**Goal:** non-linear arranging and audio that follows tempo.
-
-- **Clip Grid** (L): clip slots per track, quantised launch, scenes,
-  launch modes (trigger, gate, toggle, repeat), follow actions,
-  legato switching. Capture to timeline. Shares the scheduler with Live
-  Looper.
-- **Audio follows tempo** (XL): high-quality offline and real-time stretch,
-  multiple algorithms (rhythmic, tonal, complex), with a quality/CPU trade-off.
-- **Stretch markers** (M): manual and automatic (from transients) anchors.
-- **Transient detection and slicing** (M): slice to clips, slice to sampler.
-- **Audio quantise** (M): align transients to the grid, with strength.
-- **Tempo detection** (M): detect tempo and build a tempo map from a free
-  performance.
+- **Clip Grid** (L): clip slots, quantised launch, scenes, launch modes,
+  follow actions, legato. Capture to timeline. Shares the Looper's
+  scheduler.
+- **Audio follows tempo** (XL): high-quality stretch in real time and
+  offline, with multiple algorithms.
+- **Stretch markers** (M), **transient detection and slicing** (M),
+  **audio quantise** (M), **tempo detection / tempo map from a free
+  performance** (M).
 
 **Exit criteria**
-- A drum loop at a different tempo can be dropped into a project and
-  follow tempo changes with no audible artefacts at ±20%.
-- A student's free-tempo recording can be turned into a tempo map that the
-  metronome follows.
+- Loops at foreign tempos follow tempo changes at ±20% with no obvious
+  artefacts.
+- A student's free-tempo recording becomes a tempo map the metronome
+  follows.
 
 ---
 
 ## Phase 7 — Intelligence & extensibility
 
-**Goal:** advanced audio analysis, modulation and third-party extension.
-
-- **Monophonic pitch editing** (XL): note-level pitch, drift, vibrato and
-  formant editing on vocal/guitar lines.
-- **Audio-to-MIDI** (L): monophonic first, then polyphonic. Chord detection
-  writes to a chord track.
-- **Stem separation** (L): on-device inference (WebGPU/WASM), only with
-  models whose weights *and* training data permit our use (decision record
-  required). Lesson use: remove the guitar part from a backing track.
-- **Chord track** (M): global harmony that guides scale mode, pattern
-  sequencer, and note transformations.
-- **Note transformations** (M): strum (guitar-specific), arpeggiate,
-  ornament, humanise, connect.
-- **Melodic pattern sequencer** (M): scales, mono/poly, randomise.
-- **Modulators** (M): LFO, step, envelope, envelope follower, random,
-  sample & hold. Can drive any parameter.
-- **Web plugin hosting** (L): Web Audio Modules 2.0 host, plugin sandboxing,
-  preset storage, automation, and delay compensation for hosted plugins.
-- **Scripting** (M): sandboxed user scripts for editor actions and MIDI
-  processing.
-- **MPE / MIDI 2.0** (M): as browser APIs allow.
+- **ARA 2 hosting** (L): open SDK (Apache 2.0). Lets compatible
+  pitch-editing and analysis plugins work directly on project audio.
+- **Monophonic pitch editing** (XL), built in: note-level pitch, drift,
+  vibrato, formant.
+- **Audio-to-MIDI** (L) and **chord detection** to a **chord track** (M).
+- **Stem separation** (L): on-device inference, only with models whose
+  weights *and* training data permit our use. Lesson use: remove the guitar
+  from a backing track.
+- **Note transformations** (M): strum, arpeggiate, ornament, humanise.
+- **Melodic pattern sequencer** (M).
+- **Modulators** (M): LFO, step, envelope, follower, random, sample & hold,
+  able to drive any parameter, including plugin parameters.
+- **Scripting** (M): sandboxed scripts for editor actions and MIDI.
+- **Controller scripting** (M) for control surfaces.
+- **MIDI 2.0 / MPE** (M).
 
 **Exit criteria**
-- A third-party WAM plugin can be installed, automated, saved and
-  collaborated on.
-- Pitch-edited and stem-separated audio renders identically offline and
-  in real time.
+- An ARA-capable plugin edits project audio, and its results save,
+  restore and sync to collaborators (as frozen audio if they lack the
+  plugin).
 
 ---
 
-## Phase 8 — Optional desktop wrapper (Electron)
+## Phase 8 — Professional scale
 
-**Goal:** the *same* app, packaged for desktop, with native-quality audio
-I/O and native plugins. This phase is **optional** and can start any time
-after Phase 2, but it must never fork the codebase.
-
-- **Shell** (M): Electron app loading the web build, with auto-update and
-  code signing (macOS notarisation, Windows signing).
-- **Native audio backend** (L): a native audio module (C++ or Rust) behind
-  the *same engine interface* the web build uses. ASIO (Windows),
-  CoreAudio (macOS), JACK/PipeWire/ALSA (Linux). Exclusive/low-buffer
-  modes.
-- **Low-latency software monitoring** (M): through effects, which makes
-  Live Looper fully usable for guitar.
-- **Native plugin hosting** (XL): VST 3 (MIT SDK) and CLAP, in a separate
-  plugin process for crash isolation. Plugin UIs in native windows.
-  State is serialised into the shared project so web collaborators can
-  see (but not run) them, with a frozen-audio fallback.
-- **Licensing** (S): ASIO SDK is GPLv3 *or* proprietary. Choose per
-  decision 0001 and record it.
-- **Filesystem** (S): projects on local disk, watched folders, large
-  sample libraries.
-
-**Exit criteria**
-- Round-trip input-to-output latency ≤ 10 ms on Windows with ASIO at a
-  64–128 sample buffer on reference hardware.
-- A project made on desktop with a native plugin opens on the web, using
-  frozen audio for that plugin's track.
-
----
-
-## Phase 9 — Professional scale
-
-**Goal:** match the depth expected of a workhorse DAW in large
-productions.
-
-- Large projects: 200+ tracks, long sessions, lazy loading, multi-core DSP
-  (multiple worklets / WASM threads), a performance profiler in the app.
+- Large projects: 200+ tracks, multi-core graph processing with work
+  stealing, lazy loading, a built-in performance profiler.
 - **Score/notation editor** (XL), building on tab view.
-- **Articulation/expression maps** (M) for orchestral libraries.
-- **Microtonal tuning** (M) via scale files.
-- **Video track** (L) for scoring and sync. Timecode, frame rates.
+- **Articulation/expression maps** (M). **Microtonal tuning** (M).
+- **Video track** (L): timecode and frame rates.
 - **Surround/immersive mixing** (XL): multichannel buses, panning, binaural
-  monitoring. Format licensing reviewed before any branded format support.
+  monitoring. Format licensing reviewed before supporting any branded
+  format.
 - **Spectral view and repair** (L).
-- **Constrained generators** (M): rule-based rhythm/melody/chord
-  generation within scale/chord constraints.
-- **External hardware integration** (M): MIDI clock/MTC sync, external
-  instrument and effect routing with latency compensation (desktop).
-- **Accessibility depth**: complete screen-reader workflows for blind and
-  low-vision musicians.
-- **Localisation**.
+- **External hardware** (M): MIDI clock/MTC, external instrument/effect
+  inserts with latency compensation.
+- **Constrained generators** (M): rule-based rhythm/melody/chords.
+- Accessibility depth (complete screen-reader workflows). Localisation.
 
 ---
 
@@ -526,51 +506,47 @@ productions.
 
 | Track | Standing commitments |
 |---|---|
-| **Audio quality** | Golden-render tests, null tests for routing/latency, dropout monitoring in CI on a reference profile, fuzzing of file decoders. |
-| **Performance** | Budgets per phase (tracks/effects before dropout; UI frame time at 60 fps with large projects). Regressions fail CI. |
-| **Collaboration correctness** | Randomised multi-client convergence tests on the CRDT schema; schema migrations versioned and tested. |
-| **Security & privacy** | Least-privilege storage access, signed asset URLs, rate limits, child-safety review for lesson features, dependency audits. |
-| **Accessibility** | Keyboard-first design, ARIA, reduced-motion, contrast. Screen-reader testing each phase. |
-| **Clean-room hygiene** | Decision records, licence checks, trademark-free naming, periodic review of [CLEAN_ROOM.md](CLEAN_ROOM.md). |
-| **Docs** | User guide and developer docs grow with each phase. All original writing. |
-| **User research** | Every phase is validated with real musicians. Phase 1 to 4 always includes a teacher and a student. |
+| **Audio quality** | Golden-render tests, null tests, real-time safety checks, fuzzing of file decoders and of the project/bundle parsers. |
+| **Performance** | Per-phase budgets (tracks/plugins at a 128-sample buffer; 60 fps UI). Regressions fail CI. |
+| **Plugin compatibility** | A growing test matrix and a public compatibility list. Crash isolation is always on for scanning. |
+| **Collaboration correctness** | Randomised multi-peer convergence tests. Versioned schema migrations. |
+| **Security & privacy** | Signed invite codes, encrypted peer-to-peer transport, verified asset hashes, never executing content received from peers, child-safety review. |
+| **Distribution** | Signed and notarised builds, reproducible release pipeline, update checks without our own server. |
+| **Accessibility** | Keyboard-first, screen-reader support (toolkit-dependent, so it's a criterion in 0.1). |
+| **Clean-room hygiene** | Decision records, licence checks, trademark-free naming. |
+| **User research** | Every phase is validated with real musicians. Phases 1–4 always include a teacher and a student. |
 
 ---
 
 ## Dependency map
 
 ```
-Phase 0 ─► Phase 1 (Lesson Room) ─► Phase 2 (Core audio DAW)
-                                     │
-                     ┌───────────────┼──────────────────┬───────────────┐
-                     ▼               ▼                  ▼               ▼
-              Phase 3 (MIDI)   Phase 4 (Collab)  Phase 5 (Looper)  Phase 8 (Desktop, optional,
-                     │                                  │           can run in parallel)
-                     └───────────────┬──────────────────┘
-                                     ▼
-                       Phase 6 (Clip Grid & stretch)
-                                     ▼
-                       Phase 7 (Intelligence & plugins)
-                                     ▼
-                       Phase 9 (Professional scale)
+Phase 0 (Rust go/no-go) ─► Phase 1 (Lesson Room) ─► Phase 2 (Core audio DAW)
+                                                        │
+                               ┌────────────────────────┼─────────────────────┐
+                               ▼                        ▼                     ▼
+                         Phase 3 (MIDI &          Phase 4 (Collab       Phase 5 (Live Looper)
+                          instruments)             depth)                (after 3.1 MIDI)
+                               └────────────────────────┬─────────────────────┘
+                                                        ▼
+                                          Phase 6 (Clip Grid & stretch)
+                                                        ▼
+                                          Phase 7 (Intelligence & extensibility)
+                                                        ▼
+                                          Phase 8 (Professional scale)
 ```
-
-- Phase 5 needs Phase 2 (effects, mixer) and benefits from Phase 3 (MIDI
-  control). It can start once 3.1 MIDI foundation is done.
-- Phase 6 Clip Grid reuses the Phase 5 scheduler.
-- Phase 8 can start after Phase 2 and run in parallel with everything after.
 
 ## Open decisions
 
-Tracked in [`docs/decisions/`](decisions/). Status as of this roadmap:
+Tracked in [`docs/decisions/`](decisions/):
 
 | # | Decision | Status |
 |---|---|---|
-| 0001 | Project licence (open source vs proprietary vs dual) | **Open — owner to decide in Phase 0** |
-| 0002 | Web-first with optional Electron wrapper | Accepted |
-| 0003 | DSP language: Rust → WASM | Proposed — confirm in spike 0.3 |
-| 0004 | Collaboration model: CRDT (Yjs) + object storage for assets | Proposed — confirm in spike 0.5 |
-| 0005 | Timing model: tick-based musical time + sample-accurate engine | Proposed |
-| — | Product name and trademark search | Open — before public launch |
-| — | Hosting provider (must support COOP/COEP headers) | Open — Phase 0 |
-| — | UI framework | Open — Phase 0 (see Architecture §7) |
+| 0001 | Project licence | **Open — owner decides in Phase 0** |
+| 0002 | ~~Web-first with optional Electron wrapper~~ | Superseded by 0006 |
+| 0003 | Implementation language: Rust, with C++/JUCE fallback | **Proposed — decided by spike 0.1** |
+| 0004 | Collaboration: CRDT + peer-to-peer, no server we operate | Proposed — validated by spike 0.5 |
+| 0005 | Timing model: ticks + sample frames | Proposed |
+| 0006 | Native desktop application (Windows, macOS, Linux) | Accepted |
+| 0007 | UI toolkit | **Open — decided by spike 0.1** |
+| — | Product name and trademark search | Open — before public release |

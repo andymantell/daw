@@ -401,9 +401,12 @@ from audio.
 - A full remote lesson runs inside the app with video and shared playback
   on typical home connections.
 - DAWproject round-trip keeps tracks, clips, tempo and automation that the
-  format supports. Tested automatically against a fixture set (our own
-  projects exported and re-imported, plus files exported from other DAWs
-  that we create ourselves).
+  format supports. Tested automatically against a fixture set: our own
+  projects exported and re-imported, plus **community test files** exported
+  from other DAWs (e.g. shared by DAWproject users and converter projects).
+  Each community file is added only once its licence or the contributor's
+  permission allows redistribution in our repo, with its source and terms
+  recorded alongside it.
 - Every loss on export or import is listed in the report shown to the
   user. Nothing is dropped silently.
 

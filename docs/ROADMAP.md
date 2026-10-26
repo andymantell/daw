@@ -768,7 +768,7 @@ Tracked in [`docs/decisions/`](decisions/):
 | 0002 | ~~Web-first with optional Electron wrapper~~ | Superseded by 0006 |
 | 0003 | Implementation language: Rust, with C++/JUCE fallback | **Proposed — decided by spike 0.1** |
 | 0004 | Collaboration: CRDT + peer-to-peer, no server we operate | Proposed — validated by spike 0.5 |
-| 0005 | Timing model: ticks + sample frames | Proposed |
+| 0005 | Timing model: ticks + sample frames | Accepted |
 | 0006 | Native desktop application (Windows, macOS, Linux) | Accepted |
 | 0007 | UI toolkit | **Open — decided by spike 0.1** |
 | 0008 | Review of openDAW (exposure record) | Accepted |

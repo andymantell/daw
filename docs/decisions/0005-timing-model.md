@@ -1,14 +1,15 @@
 # 0005 — Timing model
 
-- **Status:** Proposed
-- **Date:** 2026-10-24
+- **Status:** Accepted
+- **Date:** 2026-10-24 (accepted 2026-10-26)
+- **Deciders:** Project owner
 
 ## Context
 The DAW needs musical editing (bars/beats), sample-accurate playback,
 tempo changes, tempo-following audio, and loopers and clip launching
 that quantise to the beat.
 
-## Proposed decision
+## Decision
 - Musical positions are stored as integer **ticks at 960 PPQ**.
 - Absolute positions are stored as **sample frames** at the project sample
   rate. Seconds are only used for display.

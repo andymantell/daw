@@ -88,7 +88,7 @@ methods) have been patented in the past. Policy:
 ## 5. Dependencies & licences
 
 - Every third-party dependency must have a licence compatible with the
-  project's own licence (still to be chosen — see
+  project's own licence, **GPL-3.0-or-later** (see
   [decisions/0001-project-licence.md](decisions/0001-project-licence.md)).
 - Licences to watch closely:
   - **Copyleft (GPL/LGPL/AGPL)** libraries — e.g. some well-known

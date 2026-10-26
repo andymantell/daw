@@ -34,3 +34,8 @@ bundles and shared folders.
 - **Local-first and serverless:** your data stays on your machines.
 - **Original work:** clean-room policy; no copying or reverse engineering.
 - **Audio correctness:** sample-accurate timing, no dropouts, automated audio tests.
+
+## Licence
+
+GNU General Public License v3.0 or later (`GPL-3.0-or-later`). See
+[LICENSE](LICENSE) and [decision 0001](docs/decisions/0001-project-licence.md).

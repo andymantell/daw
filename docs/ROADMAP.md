@@ -70,10 +70,11 @@ quickly to confirm. The result goes in decision 0003.
 - Contribution rules: DCO sign-off, code of conduct, clean-room policy.
 - Decision records in `docs/decisions/`.
 
-### 0.3 Project licence (S, *blocking*)
-- [decisions/0001-project-licence.md](decisions/0001-project-licence.md).
-  Affects the ASIO SDK licence (GPLv3 or proprietary), the JUCE fallback
-  (AGPLv3 or commercial) and which stretch libraries we may use.
+### 0.3 Project licence (S) — *done*
+- **GPL-3.0-or-later**, see
+  [decisions/0001-project-licence.md](decisions/0001-project-licence.md).
+  The ASIO SDK is used under its GPLv3 option, and GPL-compatible
+  stretch libraries are allowed.
 
 ### 0.4 Latency & recording-offset spike (M)
 - Measure the true round-trip latency with a loopback cable. Compare it
@@ -619,7 +620,8 @@ project, especially for guitarists and singers.
 - Keyboard splits and layers, and chord triggers, for keyboard players.
 - **Tempo sync over the local network** with other apps and devices, via
   an open LAN tempo-sync protocol. Its widely used SDK is GPLv2+ or
-  proprietary, which needs checking against decision 0001.
+  proprietary. Its GPLv2-or-later option is compatible with our GPLv3
+  licence (decision 0001).
 
 **Exit criteria**
 - A five-loop performance with input and track effects runs 10 minutes
@@ -762,7 +764,7 @@ Tracked in [`docs/decisions/`](decisions/):
 
 | # | Decision | Status |
 |---|---|---|
-| 0001 | Project licence | **Open — owner decides in Phase 0** |
+| 0001 | Project licence: GPL-3.0-or-later | Accepted |
 | 0002 | ~~Web-first with optional Electron wrapper~~ | Superseded by 0006 |
 | 0003 | Implementation language: Rust, with C++/JUCE fallback | **Proposed — decided by spike 0.1** |
 | 0004 | Collaboration: CRDT + peer-to-peer, no server we operate | Proposed — validated by spike 0.5 |

@@ -773,3 +773,4 @@ Tracked in [`docs/decisions/`](decisions/):
 | 0009 | Notation data model and tab/drum formats | Proposed |
 | — | Product name and trademark search | Open — before public release |
 | — | Import of a proprietary tab-editor format via file-format study (see 0009, *Deferred*) | **Parked — revisit later** |
+| — | Browser access to ASIO and other low-latency audio devices, e.g. for a web companion (see 0002 and 0006 for why browsers can't do this today) | **Parked — revisit later** |

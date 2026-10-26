@@ -1,0 +1,9 @@
+# Phase 0 throwaway prototypes (ROADMAP 0.1). Not shipped.
+[workspace]
+resolver = "3"
+members = ["engine", "vst3-scan"]
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false

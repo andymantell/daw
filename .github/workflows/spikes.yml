@@ -1,0 +1,44 @@
+# Builds and tests the Phase 0 spikes (ROADMAP 0.1) on Windows and Linux.
+# The Windows job uploads the prototypes as a downloadable artifact.
+name: spikes
+
+on:
+  push:
+    branches: [main]
+    paths: ["spikes/**", ".github/workflows/spikes.yml"]
+  pull_request:
+    paths: ["spikes/**", ".github/workflows/spikes.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: spikes
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal -c clippy,rustfmt
+          rustup default stable
+      - run: cargo fmt --all --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+      - run: cargo test --release
+      - run: cargo build --release
+      - name: Upload Windows prototypes
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spikes-windows-x64
+          path: |
+            spikes/target/release/vst3-scan.exe
+          if-no-files-found: error

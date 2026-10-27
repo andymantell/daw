@@ -24,6 +24,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: ALSA headers (Linux audio)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # The ASIO bindings are generated with bindgen, which needs libclang;
+      # the Windows runner ships LLVM. The build downloads the ASIO SDK.
+      - name: libclang for bindgen
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
       - name: Rust toolchain
         shell: bash
         run: |

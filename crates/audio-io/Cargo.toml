@@ -1,0 +1,20 @@
+[package]
+name = "daw-audio-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cpal = "0.18.2"
+daw-engine = { path = "../engine" }
+
+# ASIO on Windows. The build downloads Steinberg's ASIO SDK (used under its
+# GPLv3 option, decision 0001) and needs libclang for bindgen.
+[target.'cfg(windows)'.dependencies]
+cpal = { version = "0.18.2", features = ["asio"] }

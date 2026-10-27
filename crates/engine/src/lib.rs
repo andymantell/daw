@@ -3,4 +3,5 @@
 
 pub mod engine;
 pub mod graph;
+pub mod metronome;
 pub mod time;

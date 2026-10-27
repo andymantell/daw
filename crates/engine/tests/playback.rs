@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use daw_engine::engine::{self, Command};
 use daw_engine::graph::{AudioData, ClipSpec, CompileError, Mix, Session, TrackSpec};
+use daw_engine::metronome::Metronome;
 use daw_engine::time::{Frames, PPQ, Tempo, TempoMap, Ticks, TimeSignature};
 
 const RATE: u32 = 48_000;
@@ -268,6 +269,13 @@ fn audio_thread_never_allocates() {
         ]));
     }
     let (mut ctl, mut eng) = engine::new(512);
+    ctl.send(Command::SetMetronome(Metronome {
+        enabled: true,
+        subdivision: 4,
+        ..Metronome::default()
+    }))
+    .ok()
+    .unwrap();
     let first = s.compile(512).unwrap();
     s.tracks.pop();
     let second = s.compile(512).unwrap();
@@ -314,4 +322,98 @@ fn audio_thread_never_allocates() {
         1,
         "the old graph comes back to be freed"
     );
+}
+
+fn first_sound(x: &[f32], from: usize) -> Option<usize> {
+    x[from..].iter().position(|&s| s != 0.0).map(|i| i + from)
+}
+
+#[test]
+fn metronome_clicks_on_each_beat() {
+    let s = session();
+    let (mut ctl, mut eng) = engine::new(500);
+    ctl.send(Command::SetGraph(Box::new(s.compile(500).unwrap())))
+        .ok()
+        .unwrap();
+    ctl.send(Command::SetMetronome(Metronome {
+        enabled: true,
+        ..Metronome::default()
+    }))
+    .ok()
+    .unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let mut out = Vec::new();
+    for _ in 0..100 {
+        let (mut l, mut r) = (vec![0.0; 500], vec![0.0; 500]);
+        eng.process(&mut l, &mut r);
+        assert_eq!(l, r, "clicks are centred");
+        out.extend(l);
+    }
+    // Each click is a sine starting at zero, so its first non-zero
+    // sample is one frame after the beat.
+    assert_eq!(first_sound(&out, 0), Some(1));
+    assert!(
+        out[2_000..24_000].iter().all(|&x| x == 0.0),
+        "silence between clicks"
+    );
+    assert_eq!(first_sound(&out, 2_000), Some(24_001));
+    // The first beat of the bar is the accented (louder) click.
+    let peak = |a: usize| out[a..a + 1_000].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(peak(0) > peak(24_000));
+}
+
+#[test]
+fn count_in_plays_clicks_then_starts_on_the_frame() {
+    let mut s = session();
+    let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), mono(vec![0.5; 100_000]))]);
+    t.mix.pan = -1.0;
+    s.tracks.push(t);
+    let (mut ctl, mut eng) = engine::new(512);
+    ctl.send(Command::SetGraph(Box::new(s.compile(512).unwrap())))
+        .ok()
+        .unwrap();
+    ctl.send(Command::CountIn { bars: 1 }).ok().unwrap();
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    let mut counting = Vec::new();
+    for _ in 0..200 {
+        let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+        eng.process(&mut l, &mut r);
+        counting.push(ctl.status().counting_in());
+        left.extend(l);
+        right.extend(r);
+    }
+    // One bar of 4/4 at 120 BPM is 96,000 frames of clicks only: the
+    // right channel (where the hard-left track is silent) has clicks.
+    assert_eq!(first_sound(&right, 0), Some(1));
+    assert_eq!(first_sound(&right, 2_000), Some(24_001));
+    assert!(
+        left[..96_000].iter().all(|&x| x.abs() < 0.5),
+        "no track audio yet"
+    );
+    // Then the track starts on exactly the right frame.
+    assert!(left[95_999].abs() < 0.5);
+    assert_eq!(left[96_000], 0.5);
+    assert!(counting[0] && !counting[199]);
+    assert_eq!(ctl.status().position(), Frames(200 * 512 - 96_000));
+}
+
+#[test]
+fn clicks_can_go_to_their_own_output() {
+    let s = session();
+    let (mut ctl, mut eng) = engine::new(256);
+    ctl.send(Command::SetGraph(Box::new(s.compile(256).unwrap())))
+        .ok()
+        .unwrap();
+    ctl.send(Command::SetMetronome(Metronome {
+        enabled: true,
+        separate_output: true,
+        ..Metronome::default()
+    }))
+    .ok()
+    .unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let (mut l, mut r, mut c) = (vec![0.0; 256], vec![0.0; 256], vec![0.0; 256]);
+    eng.process_split(&mut l, &mut r, Some(&mut c));
+    assert!(l.iter().chain(&r).all(|&x| x == 0.0));
+    assert_eq!(first_sound(&c, 0), Some(1));
 }

@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use crate::metronome::Clicks;
 use crate::time::{Frames, TempoMap, Ticks};
 
 /// Most tracks a graph can hold; meters are sized to this up front.
@@ -194,6 +195,7 @@ pub struct Graph {
     pub(crate) any_solo: bool,
     /// Per-track scratch, two channels each, `max_block` long.
     pub(crate) scratch: Vec<[Vec<f32>; 2]>,
+    pub(crate) clicks: Clicks,
 }
 
 impl Session {
@@ -260,6 +262,7 @@ impl Session {
             tracks,
             master: db_to_gain(self.master_db),
             any_solo,
+            clicks: Clicks::new(rate),
         })
     }
 }

@@ -15,7 +15,9 @@ bundles and shared folders.
 
 > **Status:** Phase 0. Proceeding with Rust at risk while the on-device
 > spike tests wait for the test machine (see
-> [decision 0003](docs/decisions/0003-implementation-language.md)).
+> [decision 0003](docs/decisions/0003-implementation-language.md)). Steps
+> waiting for the owner are listed in the
+> [review queue](docs/REVIEW_QUEUE.md).
 
 ## Documents
 

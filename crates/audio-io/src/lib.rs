@@ -256,7 +256,7 @@ impl Running {
 // The fields are held only to keep the audio running until dropped.
 #[allow(dead_code)]
 enum Backend {
-    Device(cpal::Stream, Option<cpal::Stream>),
+    Device(Box<(cpal::Stream, Option<cpal::Stream>)>),
     Silent(SilentThread),
 }
 
@@ -381,7 +381,7 @@ pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String>
     }
     stream.play().map_err(|e| e.to_string())?;
     Ok(Running {
-        _backend: Backend::Device(stream, in_stream),
+        _backend: Backend::Device(Box::new((stream, in_stream))),
         status,
         channels,
         input_channels,

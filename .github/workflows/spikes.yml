@@ -54,4 +54,19 @@ jobs:
             spikes/target/release/audio-io.exe
             spikes/target/release/plugin-host.exe
             spikes/target/release/ui-timeline.exe
+            spikes/target/release/stretch-bench.exe
+          if-no-files-found: error
+      # Spike 0.6: measure the speed and pitch candidates and keep the
+      # rendered audio for listening tests.
+      - name: Speed and pitch benchmark
+        if: runner.os == 'Linux'
+        run: cargo run --release -p stretch-bench -- --seconds 5
+      - name: Upload speed and pitch results
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stretch-listening
+          path: |
+            spikes/stretch-report.txt
+            spikes/stretch-listen/
           if-no-files-found: error

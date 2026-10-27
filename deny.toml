@@ -34,6 +34,15 @@ confidence-threshold = 0.9
 # The list covers future dependencies too.
 unused-allowed-license = "allow"
 
+# Fonts bundled by the first UI toolkit tried in spike 0.1 C. Fonts are
+# data under their own font licences, not code linked into ours. Allowed
+# for this one crate only, pending the UI toolkit decision
+# (docs/decisions/0007-ui-toolkit.md), which must confirm the product can
+# ship them or swap in fonts under licences we have checked.
+[[licenses.exceptions]]
+crate = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"

@@ -19,6 +19,9 @@ Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
 | Project document on a CRDT | `collab-doc` | Both candidates pass. Loro preferred (see below). |
 | Live peer-to-peer connection | — | Not started. Needs real home, mobile and school networks. |
 
+Speed and pitch spike ([ROADMAP](../docs/ROADMAP.md) 0.6): `stretch`.
+CPU and objective checks done; listening tests still to do (see below).
+
 Test machine: Windows only for now, so the macOS (CoreAudio) half of A
 and B is still open.
 
@@ -75,6 +78,58 @@ averaged 22 fps. That run says the timeline logic is cheap. It says
 nothing about real drawing speed, so the verdict waits for a run on the
 owner's PC. Not yet checked: a screen reader actually reading the
 timeline, high-DPI scaling, and input method editors for typing.
+
+## 0.6: speed and pitch, `stretch`
+
+Real-time pitch-preserving speed change and transpose, behind one
+interface that a track would call each audio block. Candidates:
+
+| Candidate | What it is | Licence | Speed | Pitch |
+|---|---|---|---|---|
+| `signalsmith` | Signalsmith Stretch (C++) through its Rust wrapper | MIT | yes | yes |
+| `timestretch` | Pure-Rust library, its wide-range keylock engine | MIT | yes | offline only, so not tested |
+| `own-2048`, `own-4096` | Our phase vocoder (`src/pv.rs`), 2048- or 4096-sample FFT, written from the papers cited at the top of the file | ours | yes | yes |
+
+```
+stretch-bench                          synthetic guitar material
+stretch-bench --input my-playing.wav   a real recording (48 kHz)
+stretch-bench --seconds 30             longer CPU runs
+```
+
+It writes `stretch-report.txt` and WAV files for every candidate and
+setting into `stretch-listen/`. CI runs it on Linux and uploads both as the
+`stretch-listening` artifact.
+
+Results in a cloud container (4 cores, no audio hardware, 48 kHz mono,
+256-frame blocks, 10 s per setting; timings on shared machines are noisy):
+
+| Candidate | Share of one core per track | Tracks per core | Pitch error | Attack smear at 50% speed |
+|---|---|---|---|---|
+| signalsmith | 1.6–2.6% | 39–61 | up to 2.5 cents | 62 ms |
+| timestretch (speed only) | 3.6–15% (15% at 150% speed) | 7–28 | 0 | 40 ms |
+| own-2048 | 1.1–5.1% | 20–88 | 0 | 37 ms |
+| own-4096 | 1.9–6.0% | 17–53 | 0 | 49 ms |
+
+- None of them allocated memory on the audio thread at any setting.
+- All kept time: input used per output sample matched the speed to within
+  0.1% (our vocoder's figure moves by up to one analysis hop because it
+  works in whole frames).
+- Pitch error is measured on a steady 220 Hz tone. 2.5 cents is under the
+  5 cents often given as the smallest audible pitch difference.
+- Attack smear is the time from 1% level to the peak of a single pluck
+  (1 ms in the original). Every candidate softens pick attacks when slowed
+  down. Ours resets phase at detected onsets, but the attack still spreads
+  ahead of itself. Better transient handling is the obvious next step if
+  we keep our own.
+- Worst-case block times (up to a few ms) come from the shared machine
+  and from frame-based processing doing a whole FFT frame in one block.
+  On the owner's PC this needs checking alongside spike A.
+
+So far: CPU is no obstacle for any of them, and both signalsmith and our
+own vocoder cover the full 50–150% and ±12 semitone range. The choice now
+rests on how they sound on real guitar. Still to do: listening tests on
+real guitar recordings (`--input`), checking speed and pitch changes made
+while playing, and stereo.
 
 ## D. Engine
 

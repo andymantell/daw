@@ -25,5 +25,18 @@ Timeline benchmark, plugin-window embedding, accessibility (e.g. AccessKit
 support), text/IME, theming for an original visual language, licence, and
 maintenance activity.
 
+## Spike results so far (2026-10-27)
+- **egui** (first candidate, `spikes/ui-timeline`): a 320-clip timeline
+  with waveforms, menus, shortcuts, drag with snap, a rename dialog and a
+  screen-reader description. Building each frame took about 1 ms of our
+  code. The 60 fps check needs a real GPU and waits for the owner's PC.
+- egui bundles default fonts under the SIL Open Font Licence 1.1 and the
+  Ubuntu Font Licence 1.0. The licence check allows these for that one
+  crate only, as a stopgap. If egui is chosen, this decision must confirm
+  the product can ship those fonts or replace them with fonts whose
+  licences we have checked.
+- Not yet tried: the other candidates, and embedding a plugin editor
+  inside the toolkit's window (spike B opens editors in a separate window).
+
 ## Decision
 _Not yet made._

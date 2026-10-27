@@ -1,1 +1,4 @@
 /target/
+/spikes/target/
+/spikes/*-report.txt
+/spikes/stretch-listen/

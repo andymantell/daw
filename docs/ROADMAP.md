@@ -99,6 +99,11 @@ quickly to confirm. The result goes in decision 0003.
   ±12 semitones. Compare licence-compatible libraries with our own
   implementation from published literature. Listening tests on guitar
   material, plus CPU per track.
+- Status (2026-10-27): started. CPU and objective checks done for two
+  MIT-licensed libraries and our own phase vocoder
+  ([spikes/stretch](../spikes/README.md)). All are light enough per track
+  and none allocates on the audio thread. Listening tests on real guitar
+  recordings are still to do.
 
 ### 0.7 Platform & distribution baseline (M)
 - Supported OS versions. Apple Silicon and Intel builds. How to handle

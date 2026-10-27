@@ -26,7 +26,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: ALSA and font headers (audio backend, Slint UI spike)
+      - name: ALSA and font headers (audio backend, UI)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfontconfig1-dev libxkbcommon-dev
       # The ASIO bindings are generated with bindgen, which needs libclang;

@@ -120,6 +120,9 @@ quickly to confirm. The result goes in decision 0003.
   we operate, such as release files hosted on GitHub Releases.
 - Crash reports written to local files that the user can choose to send.
   No telemetry server.
+- *Status (2026-10-27): research written up in
+  [PLATFORM_DISTRIBUTION.md](research/PLATFORM_DISTRIBUTION.md), with
+  proposals waiting on Andy in [REVIEW_QUEUE.md](REVIEW_QUEUE.md).*
 
 **Exit criteria**
 - Decision 0003 is accepted (Rust or JUCE), with spike evidence attached.

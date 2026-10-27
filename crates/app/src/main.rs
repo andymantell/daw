@@ -83,6 +83,10 @@ fn cache_dir() -> PathBuf {
     base.join("daw").join("converted")
 }
 
+/// The product's name, until it has a real one: the window title and the
+/// folder for unsaved takes follow it.
+const APP_NAME: &str = "DAW";
+
 /// Where takes go until the project is saved, when they move into the
 /// project's folder: a visible folder in the user's profile (the owner's
 /// choice, 2026-10-27), e.g. `C:\Users\<name>\DAW\Unsaved takes`.
@@ -90,7 +94,7 @@ fn takes_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map_or_else(std::env::temp_dir, PathBuf::from)
-        .join("DAW")
+        .join(APP_NAME)
         .join("Unsaved takes")
 }
 
@@ -1054,7 +1058,7 @@ fn main() -> eframe::Result {
     let files: Vec<String> = std::env::args().skip(1).collect();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("DAW")
+            .with_title(APP_NAME)
             .with_inner_size([1100.0, 600.0])
             .with_drag_and_drop(true),
         ..Default::default()

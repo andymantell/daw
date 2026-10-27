@@ -8,7 +8,7 @@ Nothing here ships. Licence: GPL-3.0-or-later.
 |---|---|---|
 | **A. Audio I/O** (ASIO on Windows) | `audio-io` | Built. Not yet run on the owner's PC and interface. |
 | **B. VST 3 hosting** | `vst3-scan`, `plugin-host`, `vst3-test-plugin` | Host passes its automated tests with our own test plugin on Linux and Windows CI. Not yet run against real plugins on the owner's PC. |
-| **C. UI** | — | Not started. |
+| **C. UI** | `ui-timeline` | First toolkit (egui) built for Windows. Its own code takes about 1 ms a frame; the 60 fps check still needs a real GPU, so it waits for the owner's PC. |
 | **D. Engine** | `engine` | Passing (see below). |
 
 Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
@@ -45,6 +45,36 @@ The report is saved as `audio-spike-report.txt`. Pass criterion
 Checked so far only against Linux's null audio device in the cloud
 container, which isn't paced in real time, so it shows the detector working
 but says nothing about real drivers.
+
+## C. UI: `ui-timeline`
+
+First candidate toolkit: egui (through eframe, drawing with the GPU). The
+test is a timeline of 32 tracks with 10 clips each (320 clips), every clip
+showing a waveform drawn from a multi-resolution peak summary, one column
+per pixel. It covers the everyday pieces a DAW needs: a menu bar, keyboard
+shortcuts (Space plays, F2 renames, Delete removes, +/- zoom), wheel scroll,
+Ctrl+wheel zoom around the mouse, dragging clips with a 0.25 s snap, a
+rename dialog with text entry, and a screen-reader description of the
+timeline (egui exposes this through AccessKit).
+
+```
+ui-timeline                         interactive
+ui-timeline --bench 20              scrolls and zooms by itself for 20 s,
+                                    writes ui-bench-report.txt, then exits
+ui-timeline --tracks 64 --clips-per-track 20   heavier session
+```
+
+Pass mark: 99% of frames under 16.7 ms of CPU and at least 55 fps on
+average, at 1280×800, on the owner's PC.
+
+Result in a cloud container with no GPU (software drawing on 4 cores,
+10 s run): our own code that builds each frame took a median of 1.2 ms
+(99th percentile 2.6 ms). The whole frame, including software drawing,
+took a median of 9.7 ms but reached 69 ms at the 99th percentile, and
+averaged 22 fps. That run says the timeline logic is cheap. It says
+nothing about real drawing speed, so the verdict waits for a run on the
+owner's PC. Not yet checked: a screen reader actually reading the
+timeline, high-DPI scaling, and input method editors for typing.
 
 ## D. Engine
 

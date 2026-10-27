@@ -114,6 +114,11 @@ standing in for an interface):
       recording offset. Record a click track through a loopback cable and
       check the take lines up with the original to within a millisecond.
       Also say whether the driver-reported figure the app shows is close.
+- [ ] **1.2 Settings kept, and direct monitoring.** Apply the UMC1820
+      at 128 samples, close the app and open it again: it should come
+      back on the same device and settings. Then tick Monitoring → Direct
+      in Settings, turn on the UMC1820's direct monitor, and check you
+      hear the guitar once (not doubled) and the M buttons are greyed.
 - [ ] **1.2 Crash safety.** While recording, end the app from Task
       Manager. Pass: the take file in `%USERPROFILE%\DAW\Unsaved takes` opens in
       another player and holds everything up to about a second before.

@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running};
+use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running, SavedProfiles};
 use daw_engine::engine::{self, Command, Controller};
 use daw_engine::graph::{ClipSpec, Input, Mix, Session, TrackSpec};
 use daw_engine::import;
@@ -136,6 +136,8 @@ struct App {
     message: Option<String>,
     /// The device stopped (unplugged, say): when to look for it again.
     reconnect: Option<Instant>,
+    /// Device settings kept between runs.
+    saved: SavedProfiles,
 }
 
 /// How often to look for a lost device.
@@ -143,7 +145,13 @@ const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 
 impl App {
     fn new(files: Vec<String>) -> App {
-        let profile = audio::default_profile();
+        // The device used last time, if it is still there.
+        let saved = load_settings();
+        let profile = saved
+            .current()
+            .filter(|p| audio::is_present(p))
+            .cloned()
+            .or_else(audio::default_profile);
         let rate = profile.as_ref().map_or(48_000, |p| p.rate);
         let (ctl, eng, disk, recorder) = new_engine();
         let mut app = App {
@@ -169,6 +177,7 @@ impl App {
             master_meter: (0.0, 0.0),
             message: None,
             reconnect: None,
+            saved,
         };
         app.audio = app.open_device(eng);
         for f in files {
@@ -360,7 +369,8 @@ impl App {
             spec.mix = t.mix;
             spec.input = t.input;
             spec.arm = t.arm;
-            spec.monitor = t.monitor;
+            // With direct monitoring the interface plays the input.
+            spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
             s.tracks.push(spec);
         }
         match s.compile(audio::MAX_BLOCK) {
@@ -560,6 +570,7 @@ impl App {
             Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
             Audio::Stopped => 0,
         };
+        let direct = self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
         let mut changes = Vec::new();
         let mut rebuild = false;
         egui::Grid::new("tracks")
@@ -591,10 +602,16 @@ impl App {
                                 .toggle_value(&mut t.arm, arm)
                                 .on_hover_text("Arm for recording")
                                 .changed();
-                            rebuild |= ui
-                                .toggle_value(&mut t.monitor, "M")
-                                .on_hover_text("Monitor: hear the input through this track")
-                                .changed();
+                            let m =
+                                ui.add_enabled(!direct, egui::Button::selectable(t.monitor, "M"));
+                            if m.clicked() {
+                                t.monitor = !t.monitor;
+                                rebuild = true;
+                            }
+                            m.on_hover_text("Monitor: hear the input through this track")
+                                .on_disabled_hover_text(
+                                    "Direct monitoring is on (Settings → Audio device)",
+                                );
                         });
                     });
                     meter(ui, t.meter);
@@ -651,6 +668,7 @@ impl App {
                     click: None,
                     input: None,
                     record_offset: None,
+                    direct_monitoring: false,
                 });
                 egui::Grid::new("device").num_columns(2).show(ui, |ui| {
                     ui.label("Driver");
@@ -670,7 +688,14 @@ impl App {
                         .width(260.0)
                         .show_ui(ui, |ui| {
                             for d in host.map(|h| h.devices.as_slice()).unwrap_or(&[]) {
-                                ui.selectable_value(&mut draft.device, d.name.clone(), &d.name);
+                                if ui
+                                    .selectable_value(&mut draft.device, d.name.clone(), &d.name)
+                                    .clicked()
+                                    && let Some(p) = self.saved.for_device(&draft.host, &d.name)
+                                {
+                                    // Used before: start from its settings.
+                                    *draft = p.clone();
+                                }
                             }
                         });
                     ui.end_row();
@@ -738,6 +763,11 @@ impl App {
                             ui.label("from the driver's reported latency");
                         }
                     });
+                    ui.end_row();
+
+                    ui.label("Monitoring");
+                    ui.checkbox(&mut draft.direct_monitoring, "Direct: I listen through the interface")
+                        .on_hover_text("The app never plays inputs back, so you don't hear them twice. Use when the interface's own monitor knob or switch is on.");
                     ui.end_row();
 
                     ui.label("Metronome output");
@@ -819,9 +849,44 @@ impl App {
         if apply {
             self.reconnect = None;
             self.profile = self.draft.clone();
+            if let Some(p) = &self.profile {
+                self.saved.use_profile(p.clone());
+                if let Err(e) = save_settings(&self.saved) {
+                    self.message = Some(format!("Could not save the device settings: {e}"));
+                }
+            }
             self.restart_audio();
         }
     }
+}
+
+/// Settings are kept per user: `%APPDATA%\<name>\settings.txt` on
+/// Windows, `~/.config/<name>/settings.txt` elsewhere.
+fn settings_path() -> PathBuf {
+    std::env::var_os("APPDATA")
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME"))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join(APP_NAME)
+        .join("settings.txt")
+}
+
+fn load_settings() -> SavedProfiles {
+    std::fs::read_to_string(settings_path())
+        .map(|t| SavedProfiles::from_text(&t))
+        .unwrap_or_default()
+}
+
+fn save_settings(s: &SavedProfiles) -> std::io::Result<()> {
+    let path = settings_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // Written whole and renamed, so a crash never leaves half a file.
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, s.to_text())?;
+    std::fs::rename(tmp, path)
 }
 
 fn new_engine() -> (Controller, engine::Engine, StreamerThread, RecorderThread) {

@@ -49,6 +49,9 @@ pub struct DeviceProfile {
     /// in frames: the interface's round trip, measured with a loopback
     /// cable. `None` uses the latency the driver reports instead.
     pub record_offset: Option<u32>,
+    /// The player listens through the interface's own direct monitoring,
+    /// so the app never plays inputs back (no doubled sound).
+    pub direct_monitoring: bool,
 }
 
 /// One device as the driver describes it.
@@ -146,6 +149,7 @@ pub fn default_profile() -> Option<DeviceProfile> {
         click: None,
         input,
         record_offset: None,
+        direct_monitoring: false,
     })
 }
 
@@ -564,4 +568,172 @@ where
             None,
         )
         .map_err(|e| format!("could not open the output: {e}"))
+}
+
+/// Device profiles saved between runs: the one in use, and every one
+/// used before, so each device keeps its own settings (its recording
+/// offset in particular). Stored as plain `key = value` text, one
+/// `[profile]` section each, the first being the one in use.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedProfiles {
+    pub profiles: Vec<DeviceProfile>,
+}
+
+impl SavedProfiles {
+    /// The profile in use, if any.
+    pub fn current(&self) -> Option<&DeviceProfile> {
+        self.profiles.first()
+    }
+
+    /// The saved profile for this driver and device, if it was used before.
+    pub fn for_device(&self, host: &str, device: &str) -> Option<&DeviceProfile> {
+        self.profiles
+            .iter()
+            .find(|p| p.host == host && p.device == device)
+    }
+
+    /// Makes `p` the profile in use, replacing any saved for its device.
+    pub fn use_profile(&mut self, p: DeviceProfile) {
+        self.profiles
+            .retain(|q| !(q.host == p.host && q.device == p.device));
+        self.profiles.insert(0, p);
+    }
+
+    pub fn to_text(&self) -> String {
+        let mut s = String::new();
+        for p in &self.profiles {
+            s += "[profile]\n";
+            s += &format!("host = {}\n", p.host);
+            s += &format!("device = {}\n", p.device);
+            s += &format!("rate = {}\n", p.rate);
+            if let Some(b) = p.buffer {
+                s += &format!("buffer = {b}\n");
+            }
+            s += &format!("main = {} {}\n", p.main.0, p.main.1);
+            if let Some(c) = p.click {
+                s += &format!("click = {c}\n");
+            }
+            if let Some(i) = &p.input {
+                s += &format!("input = {i}\n");
+            }
+            if let Some(o) = p.record_offset {
+                s += &format!("record_offset = {o}\n");
+            }
+            if p.direct_monitoring {
+                s += "direct_monitoring = yes\n";
+            }
+            s += "\n";
+        }
+        s
+    }
+
+    /// Reads what [`to_text`](Self::to_text) wrote. Unknown keys and
+    /// unreadable values are skipped, so an older or damaged file loses
+    /// only what it cannot say.
+    pub fn from_text(text: &str) -> SavedProfiles {
+        let mut profiles = Vec::new();
+        let mut cur: Option<DeviceProfile> = None;
+        for line in text.lines().map(str::trim) {
+            if line == "[profile]" {
+                profiles.extend(cur.take());
+                cur = Some(DeviceProfile {
+                    host: String::new(),
+                    device: String::new(),
+                    rate: 48_000,
+                    buffer: None,
+                    main: (0, 1),
+                    click: None,
+                    input: None,
+                    record_offset: None,
+                    direct_monitoring: false,
+                });
+                continue;
+            }
+            let (Some(p), Some((k, v))) = (cur.as_mut(), line.split_once('=')) else {
+                continue;
+            };
+            let v = v.trim();
+            match k.trim() {
+                "host" => p.host = v.into(),
+                "device" => p.device = v.into(),
+                "rate" => p.rate = v.parse().unwrap_or(p.rate),
+                "buffer" => p.buffer = v.parse().ok(),
+                "main" => {
+                    let mut it = v.split_whitespace().filter_map(|x| x.parse().ok());
+                    if let (Some(l), Some(r)) = (it.next(), it.next()) {
+                        p.main = (l, r);
+                    }
+                }
+                "click" => p.click = v.parse().ok(),
+                "input" => p.input = Some(v.into()),
+                "record_offset" => p.record_offset = v.parse().ok(),
+                "direct_monitoring" => p.direct_monitoring = v == "yes",
+                _ => {}
+            }
+        }
+        profiles.extend(cur);
+        profiles.retain(|p| !p.host.is_empty() && !p.device.is_empty());
+        SavedProfiles { profiles }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(device: &str) -> DeviceProfile {
+        DeviceProfile {
+            host: "ASIO".into(),
+            device: device.into(),
+            rate: 48_000,
+            buffer: Some(128),
+            main: (0, 1),
+            click: Some(3),
+            input: Some(device.into()),
+            record_offset: Some(271),
+            direct_monitoring: true,
+        }
+    }
+
+    #[test]
+    fn profiles_survive_a_round_trip() {
+        let mut s = SavedProfiles::default();
+        s.use_profile(profile("UMC1820"));
+        let mut other = profile("Built-in = Speakers");
+        other.buffer = None;
+        other.click = None;
+        other.input = None;
+        other.record_offset = None;
+        other.direct_monitoring = false;
+        s.use_profile(other.clone());
+        let back = SavedProfiles::from_text(&s.to_text());
+        assert_eq!(back, s);
+        assert_eq!(back.current(), Some(&other));
+        assert_eq!(
+            back.for_device("ASIO", "UMC1820").unwrap().record_offset,
+            Some(271)
+        );
+    }
+
+    #[test]
+    fn using_a_device_again_replaces_its_old_profile() {
+        let mut s = SavedProfiles::default();
+        s.use_profile(profile("A"));
+        s.use_profile(profile("B"));
+        let mut a = profile("A");
+        a.rate = 96_000;
+        s.use_profile(a.clone());
+        assert_eq!(s.profiles.len(), 2);
+        assert_eq!(s.current(), Some(&a));
+    }
+
+    #[test]
+    fn damaged_files_keep_what_they_can() {
+        let s = SavedProfiles::from_text(
+            "junk\n[profile]\nhost = WASAPI\ndevice = Speakers\nrate = lots\nfuture = 1\n[profile]\nrate = 44100\n",
+        );
+        assert_eq!(s.profiles.len(), 1);
+        assert_eq!(s.profiles[0].rate, 48_000);
+        assert_eq!(s.profiles[0].device, "Speakers");
+    }
 }

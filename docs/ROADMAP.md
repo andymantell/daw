@@ -187,8 +187,10 @@ engine through a lock-free queue. Until a project is saved, takes go in
 the user's profile under `DAW/Unsaved takes` (owner's choice,
 2026-10-27; `DAW` becomes the product's name once it has one, set in
 one place in the app); saving the project moves them into its folder
-(to build with project saving). Still to do: direct-monitoring option, and keeping
-device settings between runs.*
+(to build with project saving). Device settings are kept between runs, per device
+(`%APPDATA%\DAW\settings.txt`), so each interface keeps its own recording
+offset; a direct-monitoring option stops the app playing inputs back
+when the interface's own monitoring is used.*
 - Input channel selection per track, arm, record, count-in.
 - **Low-latency software monitoring** through the track's effect chain,
   with a direct-monitoring option.

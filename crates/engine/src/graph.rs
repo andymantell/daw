@@ -6,7 +6,8 @@
 //! a [`Graph`]: positions converted to frames, gains to linear factors,
 //! and every buffer allocated up front. The audio thread only reads it.
 //!
-//! Phase 1 graph: audio clips → track (gain, pan, mute, solo) → master.
+//! Phase 1 graph: audio clips and, when monitoring, the track's input →
+//! track (gain, pan, mute, solo) → master.
 
 use std::sync::Arc;
 
@@ -78,10 +79,40 @@ impl Source {
     }
 }
 
-/// A clip placed on a track, in musical time.
+/// Where a clip starts. Each clip keeps its own time base (decision
+/// 0005): musical clips move with the tempo, absolute ones (recorded
+/// takes) stay on the frame they were captured at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Position {
+    Musical(Ticks),
+    Absolute(Frames),
+}
+
+impl From<Ticks> for Position {
+    fn from(t: Ticks) -> Position {
+        Position::Musical(t)
+    }
+}
+
+impl From<Frames> for Position {
+    fn from(f: Frames) -> Position {
+        Position::Absolute(f)
+    }
+}
+
+impl Position {
+    pub fn frames(self, map: &TempoMap) -> Frames {
+        match self {
+            Position::Musical(t) => map.frames_at(t),
+            Position::Absolute(f) => f,
+        }
+    }
+}
+
+/// A clip placed on a track.
 #[derive(Clone, Debug)]
 pub struct ClipSpec {
-    pub start: Ticks,
+    pub start: Position,
     pub source: Source,
     /// Where in the source playback begins, in frames.
     pub offset: usize,
@@ -91,9 +122,9 @@ pub struct ClipSpec {
 }
 
 impl ClipSpec {
-    pub fn new(start: Ticks, source: impl Into<Source>) -> ClipSpec {
+    pub fn new(start: impl Into<Position>, source: impl Into<Source>) -> ClipSpec {
         ClipSpec {
-            start,
+            start: start.into(),
             source: source.into(),
             offset: 0,
             len: None,
@@ -106,6 +137,12 @@ impl ClipSpec {
 pub struct TrackSpec {
     pub clips: Vec<ClipSpec>,
     pub mix: Mix,
+    /// The audio input this track records from and monitors.
+    pub input: Option<Input>,
+    /// Records its input while the transport records.
+    pub arm: bool,
+    /// Plays its input through the track (software monitoring).
+    pub monitor: bool,
 }
 
 impl TrackSpec {
@@ -113,6 +150,58 @@ impl TrackSpec {
         TrackSpec {
             clips,
             mix: Mix::default(),
+            input: None,
+            arm: false,
+            monitor: false,
+        }
+    }
+}
+
+/// Device input channels (from 0) for a track: one, or a stereo pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Input {
+    pub first: usize,
+    pub stereo: bool,
+}
+
+impl Input {
+    pub fn mono(ch: usize) -> Input {
+        Input {
+            first: ch,
+            stereo: false,
+        }
+    }
+
+    pub fn stereo(first: usize) -> Input {
+        Input {
+            first,
+            stereo: true,
+        }
+    }
+
+    pub fn channels(self) -> usize {
+        if self.stereo { 2 } else { 1 }
+    }
+}
+
+/// One block of device input, interleaved.
+#[derive(Clone, Copy)]
+pub(crate) struct InputBlock<'a> {
+    pub data: &'a [f32],
+    pub channels: usize,
+}
+
+impl InputBlock<'_> {
+    /// Sample `i` of channel `ch`; silence for a channel the device lacks.
+    #[inline]
+    pub fn get(&self, i: usize, ch: usize) -> f32 {
+        if ch < self.channels {
+            self.data
+                .get(i * self.channels + ch)
+                .copied()
+                .unwrap_or(0.0)
+        } else {
+            0.0
         }
     }
 }
@@ -224,6 +313,9 @@ pub(crate) struct TrackNode {
     /// Gains reached at the end of the last block, for smoothing.
     pub last: (f32, f32),
     pub stereo: bool,
+    pub input: Option<Input>,
+    pub arm: bool,
+    pub monitor: bool,
 }
 
 impl TrackNode {
@@ -297,7 +389,7 @@ impl Session {
                 if len == 0 {
                     continue;
                 }
-                let start = self.tempo.frames_at(c.start).0;
+                let start = c.start.frames(&self.tempo).0;
                 let src = match &c.source {
                     Source::Memory(d) => NodeSrc::Memory(d.clone()),
                     Source::File(f) => {
@@ -329,11 +421,18 @@ impl Session {
                 });
             }
             clips.sort_by_key(|c| c.start);
+            let monitor = t.monitor && t.input.is_some();
+            if monitor && t.input.is_some_and(|i| i.stereo) {
+                stereo = true;
+            }
             tracks.push(TrackNode {
                 clips,
                 mix: t.mix,
                 last: (0.0, 0.0),
                 stereo,
+                input: t.input,
+                arm: t.arm && t.input.is_some(),
+                monitor,
             });
         }
         let any_solo = tracks.iter().any(|t| t.mix.solo);
@@ -385,14 +484,18 @@ impl Graph {
     }
 
     /// Plays frames `[pos, pos + n)` of every track into its scratch
-    /// buffers, applies the mixer, and adds the tracks into `out`. Peak
-    /// levels go to `peaks` (track by track, after the fader).
-    /// Returns how many frames of streamed audio were missing.
+    /// buffers, adds monitored input, applies the mixer, and adds the
+    /// tracks into `out`. With `play` false (stopped, or counting in) only
+    /// monitored input sounds. Peak levels go to `peaks` (track by track,
+    /// after the fader). Returns how many frames of streamed audio were
+    /// missing.
     pub(crate) fn render(
         &mut self,
         pos: i64,
         out: [&mut [f32]; 2],
         peaks: &mut [(f32, f32)],
+        input: InputBlock,
+        play: bool,
     ) -> usize {
         let n = out[0].len();
         let mut missing = 0;
@@ -402,9 +505,19 @@ impl Graph {
             let (sl, sr) = (&mut sl[..n], &mut sr[..n]);
             sl.fill(0.0);
             sr.fill(0.0);
+            if t.monitor
+                && let Some(inp) = t.input
+            {
+                let right = if inp.stereo { inp.first + 1 } else { inp.first };
+                for i in 0..n {
+                    sl[i] += input.get(i, inp.first);
+                    sr[i] += input.get(i, right);
+                }
+            }
             // Clips are sorted by start; skip those that end before this
             // block, stop at the first that starts after it.
-            for c in &t.clips {
+            let clips = if play { &t.clips[..] } else { &[] };
+            for c in clips {
                 if c.start >= pos + n as i64 {
                     break;
                 }

@@ -11,14 +11,19 @@
 //! split there, and play continues from the loop start in the same block.
 //! A count-in plays clicks only, for a whole number of bars before the
 //! play position, then playback starts on the exact frame.
+//!
+//! With device input ([`Engine::process_duplex`]), tracks can monitor
+//! their input at any time, and armed tracks record while the transport
+//! records and plays (not during the count-in); see [`crate::record`].
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::graph::{Graph, MAX_TRACKS, Mix};
+use crate::graph::{Graph, InputBlock, MAX_TRACKS, Mix};
 use crate::metronome::{self, Metronome, Voice};
+use crate::record::{BLOCK_FRAMES, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
 use crate::time::{Frames, Ticks};
 
@@ -43,6 +48,8 @@ pub enum Command {
         mix: Mix,
     },
     SetMetronome(Metronome),
+    /// Records armed tracks whenever playing (after any count-in).
+    SetRecording(bool),
 }
 
 /// Shared with the UI: where playback is, and peak levels since the UI
@@ -61,6 +68,12 @@ pub struct Status {
     /// order the same as their bits, so `fetch_max` works on them.
     track_peaks: Vec<[AtomicU32; 2]>,
     master_peaks: [AtomicU32; 2],
+    /// Input level per track, before the fader, whether monitored or not.
+    input_peaks: Vec<[AtomicU32; 2]>,
+    /// The transport is set to record (armed tracks record while playing).
+    recording: AtomicBool,
+    /// Recorded frames lost because the recording thread fell behind.
+    rec_dropped: AtomicU64,
 }
 
 impl Status {
@@ -77,7 +90,28 @@ impl Status {
                 .map(|_| [AtomicU32::new(0), AtomicU32::new(0)])
                 .collect(),
             master_peaks: [AtomicU32::new(0), AtomicU32::new(0)],
+            input_peaks: (0..MAX_TRACKS)
+                .map(|_| [AtomicU32::new(0), AtomicU32::new(0)])
+                .collect(),
+            recording: AtomicBool::new(false),
+            rec_dropped: AtomicU64::new(0),
         }
+    }
+
+    /// True while set to record, including when stopped and waiting to.
+    pub fn recording(&self) -> bool {
+        self.recording.load(Ordering::Relaxed)
+    }
+
+    /// Frames of recorded input lost because the disk fell behind.
+    pub fn rec_dropped(&self) -> u64 {
+        self.rec_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Input peak (left, right) on a track since the last call. Mono
+    /// inputs report the same value twice.
+    pub fn take_input_peak(&self, track: usize) -> (f32, f32) {
+        self.input_peaks.get(track).map_or((0.0, 0.0), take_pair)
     }
 
     pub fn position(&self) -> Frames {
@@ -150,6 +184,10 @@ pub struct Controller {
     retired: Consumer<Box<Graph>>,
     placements: Arc<Mutex<Vec<Placement>>>,
     streamer: Option<Streamer>,
+    recorder: Option<Recorder>,
+    record_dir: Arc<Mutex<std::path::PathBuf>>,
+    record_rate: Arc<Mutex<u32>>,
+    takes: Arc<Mutex<Vec<Take>>>,
     status: Arc<Status>,
     max_block: usize,
 }
@@ -166,6 +204,7 @@ impl Controller {
     /// streams.
     pub fn set_graph(&mut self, graph: Graph) -> Result<(), Command> {
         *self.placements.lock().unwrap() = graph.placements();
+        *self.record_rate.lock().unwrap() = graph.tempo().sample_rate();
         self.send(Command::SetGraph(Box::new(graph)))
     }
 
@@ -173,6 +212,22 @@ impl Controller {
     /// by hand with [`Streamer::service`]. Can be taken once.
     pub fn take_streamer(&mut self) -> Option<Streamer> {
         self.streamer.take()
+    }
+
+    /// The recording side, to run with [`Recorder::spawn`] or drive by
+    /// hand with [`Recorder::service`]. Can be taken once.
+    pub fn take_recorder(&mut self) -> Option<Recorder> {
+        self.recorder.take()
+    }
+
+    /// The folder new takes are written to.
+    pub fn set_record_dir(&mut self, dir: impl Into<std::path::PathBuf>) {
+        *self.record_dir.lock().unwrap() = dir.into();
+    }
+
+    /// Takes finished since the last call.
+    pub fn finished_takes(&mut self) -> Vec<Take> {
+        std::mem::take(&mut *self.takes.lock().unwrap())
     }
 
     /// The block size graphs must be compiled for.
@@ -216,12 +271,17 @@ pub struct Engine {
     click_buf: Vec<f32>,
     /// Per-block track peaks, preallocated.
     peaks: Vec<(f32, f32)>,
+    recording: bool,
+    to_recorder: Producer<RecBlock>,
 }
 
 /// Commands that fit in the queue before `send` refuses more.
 const QUEUE: usize = 1024;
 /// Chunk messages between the disk thread and the audio thread.
 const DISK_QUEUE: usize = 4096;
+/// Recorded blocks in flight: about 20 seconds of one stereo track at
+/// 48 kHz, shared between armed tracks, before input is lost.
+const REC_QUEUE: usize = 8192;
 
 /// Creates a connected controller and engine. `max_block` is the largest
 /// block the audio callback will ask for; larger ones are split.
@@ -235,12 +295,27 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let (back_tx, back_rx) = RingBuffer::new(DISK_QUEUE * 2);
     let placements = Arc::new(Mutex::new(Vec::new()));
     let streamer = Streamer::new(disk_tx, back_rx, status.clone(), placements.clone());
+    let (rec_tx, rec_rx) = RingBuffer::new(REC_QUEUE);
+    let record_dir = Arc::new(Mutex::new(std::env::temp_dir().join("daw-takes")));
+    let record_rate = Arc::new(Mutex::new(48_000));
+    let takes = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Recorder::new(
+        rec_rx,
+        status.clone(),
+        record_dir.clone(),
+        record_rate.clone(),
+        takes.clone(),
+    );
     (
         Controller {
             commands: cmd_tx,
             retired: ret_rx,
             placements,
             streamer: Some(streamer),
+            recorder: Some(recorder),
+            record_dir,
+            record_rate,
+            takes,
             status: status.clone(),
             max_block,
         },
@@ -260,6 +335,8 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             count_in_to: None,
             click_buf: vec![0.0; max_block],
             peaks: vec![(0.0, 0.0); MAX_TRACKS],
+            recording: false,
+            to_recorder: rec_tx,
         },
     )
 }
@@ -343,6 +420,7 @@ impl Engine {
                     }
                 }
                 Command::SetMetronome(m) => self.metronome = m,
+                Command::SetRecording(on) => self.recording = on,
             }
         }
     }
@@ -360,6 +438,20 @@ impl Engine {
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
+        click: Option<&mut [f32]>,
+    ) {
+        self.process_duplex(&[], 0, left, right, click);
+    }
+
+    /// Like [`process_split`](Self::process_split), with this block's
+    /// device input: `input` holds `channels` interleaved channels for the
+    /// same frames as the outputs (missing frames are silence).
+    pub fn process_duplex(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        left: &mut [f32],
+        right: &mut [f32],
         mut click: Option<&mut [f32]>,
     ) {
         debug_assert_eq!(left.len(), right.len());
@@ -371,6 +463,27 @@ impl Engine {
             c.fill(0.0);
         }
         let n = left.len().min(right.len());
+        let inp = |range: std::ops::Range<usize>| InputBlock {
+            data: input
+                .get(range.start * channels..(range.end * channels).min(input.len()))
+                .unwrap_or(&[]),
+            channels,
+        };
+        self.input_meters(inp(0..n));
+        if !self.playing {
+            // Stopped: monitored inputs still sound.
+            let mut done = 0;
+            while done < n {
+                let r = done..(done + self.max_block).min(n);
+                self.render(
+                    inp(r.clone()),
+                    &mut left[r.clone()],
+                    &mut right[r.clone()],
+                    false,
+                );
+                done = r.end;
+            }
+        }
         let mut done = 0;
         while self.playing && done < n {
             let mut len = (n - done).min(self.max_block);
@@ -386,8 +499,15 @@ impl Engine {
                 len = len.min((end - self.pos) as usize);
             }
             let range = done..done + len;
-            if !counting {
-                self.render(&mut left[range.clone()], &mut right[range.clone()]);
+            let block = inp(range.clone());
+            self.render(
+                block,
+                &mut left[range.clone()],
+                &mut right[range.clone()],
+                !counting,
+            );
+            if !counting && self.recording {
+                self.record(block, len);
             }
             if counting || self.metronome.enabled {
                 self.clicks(len);
@@ -433,6 +553,60 @@ impl Engine {
         self.status
             .counting_in
             .store(self.count_in_to.is_some(), Ordering::Relaxed);
+        self.status
+            .recording
+            .store(self.recording, Ordering::Relaxed);
+    }
+
+    /// Sends `len` frames of each armed track's input, from `pos`, to the
+    /// recording thread.
+    fn record(&mut self, input: InputBlock, len: usize) {
+        let Some(g) = &self.graph else { return };
+        for (ti, t) in g.tracks.iter().enumerate() {
+            let Some(sel) = t.input.filter(|_| t.arm) else {
+                continue;
+            };
+            let ch = sel.channels();
+            let mut done = 0;
+            while done < len {
+                let run = (len - done).min(BLOCK_FRAMES);
+                let mut b = RecBlock::EMPTY;
+                b.track = ti as u16;
+                b.channels = ch as u8;
+                b.len = run as u16;
+                b.at = self.pos + done as i64;
+                for i in 0..run {
+                    for c in 0..ch {
+                        b.samples[i * ch + c] = input.get(done + i, sel.first + c);
+                    }
+                }
+                if self.to_recorder.push(b).is_err() {
+                    self.status
+                        .rec_dropped
+                        .fetch_add(run as u64, Ordering::Relaxed);
+                }
+                done += run;
+            }
+        }
+    }
+
+    fn input_meters(&mut self, input: InputBlock) {
+        let Some(g) = &self.graph else { return };
+        if input.channels == 0 {
+            return;
+        }
+        let frames = input.data.len() / input.channels;
+        for (ti, t) in g.tracks.iter().enumerate() {
+            let Some(sel) = t.input else { continue };
+            let right = if sel.stereo { sel.first + 1 } else { sel.first };
+            let mut p = (0.0f32, 0.0f32);
+            for i in 0..frames {
+                p.0 = p.0.max(input.get(i, sel.first).abs());
+                p.1 = p.1.max(input.get(i, right).abs());
+            }
+            raise(&self.status.input_peaks[ti][0], p.0);
+            raise(&self.status.input_peaks[ti][1], p.1);
+        }
     }
 
     /// Renders `len` frames of clicks from `pos` into `click_buf`.
@@ -451,12 +625,18 @@ impl Engine {
         }
     }
 
-    fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn render(&mut self, input: InputBlock, left: &mut [f32], right: &mut [f32], play: bool) {
         let Some(g) = &mut self.graph else {
             return;
         };
         let tracks = g.track_count();
-        let missing = g.render(self.pos, [left, right], &mut self.peaks[..tracks]);
+        let missing = g.render(
+            self.pos,
+            [left, right],
+            &mut self.peaks[..tracks],
+            input,
+            play,
+        );
         if missing > 0 {
             self.status
                 .underruns

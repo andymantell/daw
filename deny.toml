@@ -43,6 +43,48 @@ unused-allowed-license = "allow"
 crate = "epaint_default_fonts"
 allow = ["OFL-1.1", "Ubuntu-font-1.0"]
 
+# The second UI toolkit tried in spike 0.1 C offers GPL-3.0-only (or its
+# own licences, which we do not use). GPL-3.0-only code can be combined
+# with our GPL-3.0-or-later code, but the combined program could then only
+# be distributed under GPLv3, not a later version. Allowed for these crates
+# only, pending the UI toolkit decision (docs/decisions/0007-ui-toolkit.md).
+[[licenses.exceptions]]
+crate = "i-slint-backend-selector"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-backend-winit"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-common"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-compiler"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-core"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-core-macros"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-renderer-femtovg"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-renderer-skia"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "i-slint-renderer-software"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "slint"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "slint-build"
+allow = ["GPL-3.0-only"]
+[[licenses.exceptions]]
+crate = "slint-macros"
+allow = ["GPL-3.0-only"]
+
 [bans]
 multiple-versions = "allow"
 wildcards = "deny"

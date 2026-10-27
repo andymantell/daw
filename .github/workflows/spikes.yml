@@ -26,9 +26,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: ALSA headers (Linux audio backend)
+      - name: ALSA and font headers (audio backend, Slint UI spike)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfontconfig1-dev libxkbcommon-dev
       # The ASIO bindings are generated with bindgen, which needs libclang;
       # the Windows runner ships LLVM. The build downloads the ASIO SDK.
       - name: libclang for bindgen
@@ -54,6 +54,7 @@ jobs:
             spikes/target/release/audio-io.exe
             spikes/target/release/plugin-host.exe
             spikes/target/release/ui-timeline.exe
+            spikes/target/release/ui-timeline-slint.exe
             spikes/target/release/stretch-bench.exe
             spikes/target/release/latency.exe
             spikes/target/release/collab-net.exe

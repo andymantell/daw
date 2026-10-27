@@ -35,8 +35,18 @@ maintenance activity.
   crate only, as a stopgap. If egui is chosen, this decision must confirm
   the product can ship those fonts or replace them with fonts whose
   licences we have checked.
-- Not yet tried: the other candidates, and embedding a plugin editor
-  inside the toolkit's window (spike B opens editors in a separate window).
+- **Slint** (second candidate, `spikes/ui-slint`): the same timeline,
+  built 2026-10-27. Each clip is an element with its own screen-reader
+  name and selected state; waveforms are images drawn in Rust. Menus,
+  dialog, text entry, shortcuts and dragging all worked when driven by
+  scripted input in the cloud. The real speed check waits for the owner's
+  PC, as for egui.
+- Slint's open-source licence is GPL-3.0-only. It can be combined with our
+  GPL-3.0-or-later code, but the combined program could then only be
+  distributed under GPLv3. The licence check allows it for the Slint crates
+  only, pending this decision.
+- Not yet tried: iced and Vizia, and embedding a plugin editor inside the
+  toolkit's window (spike B opens editors in a separate window).
 
 ## Decision
 _Not yet made._

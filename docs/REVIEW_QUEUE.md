@@ -42,11 +42,17 @@ Spike 0.1 decides whether Rust is confirmed
       `plugin-host oop "<first>.vst3" "<second>.vst3" --block 128`.
       Pass: no blocks over budget or late, and "audio flowing again after
       restart" after the deliberate crash.
-- [ ] **C. UI timeline.** `ui-timeline --bench 20`, then play with
-      `ui-timeline` by hand: scroll, Ctrl+wheel zoom, drag clips, double-click
-      to rename, Space to play. Pass: 99% of frames under 16.7 ms and at
-      least 55 fps. Also try Windows Narrator on the timeline, and display
-      scaling at 150%.
+- [ ] **C. UI timeline, both toolkits.** There are two versions of the same
+      timeline: `ui-timeline` (egui) and `ui-timeline-slint` (Slint). For
+      each one, run it with `--bench 20`, then play with it by hand: scroll,
+      Ctrl+wheel zoom, drag clips, double-click to rename, Space to play.
+      Pass: 99% of frames under 16.7 ms and at least 55 fps. Also try
+      Windows Narrator on the timeline (the Slint version should read each
+      clip by name), and display scaling at 150%.
+- [ ] **C. Which one feels better?** Say which of the two you would rather
+      use for an hour: smoothness, how text and menus look, how dragging
+      feels. Screenshots of both are in the project files under
+      `screenshots/`.
 - [ ] **0.4 Latency.** Connect output 1 to input 1 of the UMC1820 with a
       short jack cable, start with input 1's gain low (raise it if the report
       says no pulses were heard), and turn the monitors down (the test
@@ -95,9 +101,14 @@ is in the same download.
       run by others, for each machine's outside address. They see addresses
       only, never project data. Confirm this fits "no server we operate", or
       say if it should be optional (manual addresses only).
-- [ ] **0007 UI toolkit:** choose after the timeline run above. If egui is
+- [ ] **0007 UI toolkit:** choose after the timeline runs above. If egui is
       chosen, confirm that its bundled fonts (SIL Open Font Licence 1.1 and
-      Ubuntu Font Licence 1.0) can ship, or choose replacement fonts.
+      Ubuntu Font Licence 1.0) can ship, or choose replacement fonts. If
+      Slint is chosen, accept that its open-source licence is GPLv3 *only*:
+      the app stays GPL-3.0-or-later in our own code, but anyone
+      distributing the combined program could only use GPLv3, not a later
+      version. Its other licences (royalty-free, commercial) need not apply
+      to us.
 - [ ] **0.6 Speed and pitch:** choose a library or our own vocoder after
       listening.
 - [ ] **0.7 Windows signing:** ship unsigned test builds now, apply to a

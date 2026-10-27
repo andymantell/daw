@@ -8,7 +8,7 @@ Nothing here ships. Licence: GPL-3.0-or-later.
 |---|---|---|
 | **A. Audio I/O** (ASIO on Windows) | `audio-io` | Built. Not yet run on the owner's PC and interface. |
 | **B. VST 3 hosting** | `vst3-scan`, `plugin-host`, `vst3-test-plugin` | Host passes its automated tests with our own test plugin on Linux and Windows CI. Not yet run against real plugins on the owner's PC. |
-| **C. UI** | `ui-timeline` | First toolkit (egui) built for Windows. Its own code takes about 1 ms a frame; the 60 fps check still needs a real GPU, so it waits for the owner's PC. |
+| **C. UI** | `ui-timeline`, `ui-timeline-slint` | Two toolkits built for Windows with the same timeline: egui and Slint. Both work here (checked with scripted clicks and screenshots). The 60 fps check still needs a real GPU, so it waits for the owner's PC. |
 | **D. Engine** | `engine` | Passing (see below). |
 
 Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
@@ -81,6 +81,44 @@ averaged 22 fps. That run says the timeline logic is cheap. It says
 nothing about real drawing speed, so the verdict waits for a run on the
 owner's PC. Not yet checked: a screen reader actually reading the
 timeline, high-DPI scaling, and input method editors for typing.
+
+### Second candidate: Slint, `ui-timeline-slint`
+
+The same timeline, data and controls, built with Slint. The window is
+declared in Slint's own UI language (`ui-slint/ui/timeline.slint`). Rust
+works out which clips are visible and feeds them in each frame. Unlike
+egui, Slint keeps elements between frames, so each clip is a real element
+with its own screen-reader name and selected state. Waveforms are images
+drawn in Rust, only for the visible part of each clip, and cached until
+the zoom changes. It uses Slint's dark Fluent style.
+
+```
+ui-timeline-slint                   interactive
+ui-timeline-slint --bench 20        same automatic motion as the egui
+                                    version; writes ui-slint-bench-report.txt
+```
+
+Checked in the cloud container by driving it with scripted mouse and
+keyboard input and taking screenshots: dragging a clip, double-click to
+rename with typing, Escape to cancel, Delete, Space to play, +/- zoom, and
+the menus. All worked. One rough edge: the menu bar still works while the
+rename dialog is open.
+
+Software-drawing results from the same container (10 s runs, no GPU, so
+neither number means anything for real use):
+
+| | egui | Slint |
+|---|---|---|
+| Our code per frame (median / 99th) | 1.2 / 3.4 ms | 2.0 / 3.8 ms |
+| Drawing per frame (median) | 12 ms (CPU, includes our code) | 50 ms (software OpenGL) |
+| Average frame rate | 20 fps | 20 fps |
+
+Slint compiles its UI language at build time and pulls in two GPU
+renderers by default (one of them, Skia, is large C++), so it builds more
+slowly. The Linux release binaries are a similar size (about 31 MB for
+Slint, 29 MB for egui, neither stripped). Licence: GPL-3.0-only, or Slint's own royalty-free or commercial
+licences. The licence check allows GPL-3.0-only for the Slint crates only,
+pending decision 0007.
 
 ## 0.4: round-trip latency, `latency`
 

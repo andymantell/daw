@@ -48,6 +48,14 @@ export component MainWindow inherits Window {
     in property <bool> renaming;
     in property <string> rename-text;
     in-out property <bool> show-stats: true;
+    // The plugin editor panel (--panel, --plugin): Rust puts a native child
+    // window over the empty area and moves it to follow the layout.
+    in property <bool> show-panel;
+    in property <string> panel-status;
+    out property <length> panel-x: panel-area.absolute-position.x;
+    out property <length> panel-y: panel-area.absolute-position.y;
+    out property <length> panel-w: panel-area.width;
+    out property <length> panel-h: panel-area.height;
     out property <length> area-width: area.width;
     out property <length> area-height: area.height;
 
@@ -269,6 +277,21 @@ export component MainWindow inherits Window {
                             }
                         }
                     }
+                }
+            }
+
+            VerticalLayout {
+                height: root.show-panel ? 260px : 0px;
+                visible: root.show-panel;
+                padding: 4px;
+                spacing: 4px;
+                Text {
+                    text: "Plugin editor: " + root.panel-status;
+                    color: #cccccc;
+                    font-size: 12px;
+                }
+                panel-area := Rectangle {
+                    background: #2a2a33;
                 }
             }
 

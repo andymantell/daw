@@ -1831,6 +1831,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "embed-panel"
+version = "0.1.0"
+dependencies = [
+ "plugin-host",
+ "raw-window-handle",
+ "vst3",
+ "windows-sys 0.61.2",
+ "x11rb",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5976,6 +5987,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pin-weak",
+ "raw-window-handle",
  "slint-macros",
  "unicode-segmentation",
  "vtable",
@@ -6870,12 +6882,14 @@ name = "ui-timeline"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "embed-panel",
 ]
 
 [[package]]
 name = "ui-timeline-slint"
 version = "0.1.0"
 dependencies = [
+ "embed-panel",
  "slint",
  "slint-build",
 ]

@@ -6,6 +6,11 @@
 //!   ui-timeline-slint [--tracks 32] [--clips-per-track 10]
 //!   ui-timeline-slint --bench 20     scrolls and zooms by itself for 20 s,
 //!                                    then saves ui-slint-bench-report.txt
+//!   ui-timeline-slint --panel        adds a native child window at the
+//!                                    bottom, where a plugin editor would go
+//!   ui-timeline-slint --plugin <bundle.vst3>
+//!                                    opens that plugin's editor there
+//!                                    (Windows)
 //!
 //! Controls are the same as the egui version: mouse wheel scrolls,
 //! Ctrl+wheel (or +/-) zooms, drag a clip to move it, double-click a clip to
@@ -396,6 +401,39 @@ fn refresh(ui: &MainWindow, s: &mut State, m: &Models) {
     )));
 }
 
+/// Creates the native child window over the panel area once the window is
+/// up, then keeps it on top of that area as the layout changes.
+fn follow_panel(
+    ui: &MainWindow,
+    panel: &mut Option<embed_panel::Panel>,
+    plugin: Option<&std::path::Path>,
+) {
+    let scale = ui.window().scale_factor();
+    let rect = embed_panel::Rect {
+        x: (ui.get_panel_x() * scale).round() as i32,
+        y: (ui.get_panel_y() * scale).round() as i32,
+        w: (ui.get_panel_w() * scale).round() as i32,
+        h: (ui.get_panel_h() * scale).round() as i32,
+    };
+    if rect.w <= 0 || rect.h <= 0 {
+        return;
+    }
+    match panel {
+        Some(p) => p.set_rect(rect),
+        None => match embed_panel::Panel::new(&ui.window().window_handle(), rect) {
+            Ok(mut p) => {
+                let status = match plugin {
+                    Some(b) => p.open_plugin(b).unwrap_or_else(|e| e),
+                    None => p.status(),
+                };
+                ui.set_panel_status(status.into());
+                *panel = Some(p);
+            }
+            Err(e) => ui.set_panel_status(format!("no panel: {e}").into()),
+        },
+    }
+}
+
 fn bench_report(b: &Bench, s: &State) -> String {
     let mut ren = b.render.clone();
     ren.sort_by(f32::total_cmp);
@@ -449,6 +487,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let mut tracks = 32;
     let mut per = 10;
     let mut bench = None;
+    let mut embed: Option<Option<std::path::PathBuf>> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut num = || args.next().and_then(|v| v.parse::<f64>().ok());
@@ -456,9 +495,11 @@ fn main() -> Result<(), slint::PlatformError> {
             "--tracks" => tracks = num().unwrap_or(32.0) as usize,
             "--clips-per-track" => per = num().unwrap_or(10.0) as usize,
             "--bench" => bench = Some(num().unwrap_or(20.0)),
+            "--panel" => embed = Some(None),
+            "--plugin" => embed = Some(args.next().map(std::path::PathBuf::from)),
             _ => {
                 eprintln!(
-                    "usage: ui-timeline-slint [--tracks N] [--clips-per-track N] [--bench SECONDS]"
+                    "usage: ui-timeline-slint [--tracks N] [--clips-per-track N] [--bench SECONDS] [--panel] [--plugin BUNDLE]"
                 );
                 std::process::exit(2);
             }
@@ -476,6 +517,9 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_tracks(ModelRc::from(models.tracks.clone()));
     ui.set_ticks(ModelRc::from(models.ticks.clone()));
     ui.set_track_height(TRACK_HEIGHT);
+    ui.set_show_panel(embed.is_some());
+    ui.set_panel_status("starting".into());
+    let panel: Rc<RefCell<Option<embed_panel::Panel>>> = Rc::new(RefCell::new(None));
 
     // Every callback changes the state, then refreshes the window.
     let wire = |f: Handler| {
@@ -624,8 +668,12 @@ fn main() -> Result<(), slint::PlatformError> {
     let timer = Timer::default();
     {
         let (w, s, m) = (ui.as_weak(), state.clone(), models.clone());
+        let panel = panel.clone();
         timer.start(TimerMode::Repeated, Duration::from_millis(8), move || {
             let ui = w.unwrap();
+            if let Some(plugin) = &embed {
+                follow_panel(&ui, &mut panel.borrow_mut(), plugin.as_deref());
+            }
             let mut st = s.borrow_mut();
             let now = Instant::now();
             let mut done = false;

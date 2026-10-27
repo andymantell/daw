@@ -7,3 +7,4 @@ publish.workspace = true
 
 [dependencies]
 eframe = "0.37.0"
+embed-panel = { path = "../embed-panel" }

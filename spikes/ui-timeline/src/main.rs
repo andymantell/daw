@@ -8,6 +8,11 @@
 //!   ui-timeline [--tracks 32] [--clips-per-track 10]
 //!   ui-timeline --bench 20      scrolls and zooms by itself for 20 s,
 //!                               then saves ui-bench-report.txt and exits
+//!   ui-timeline --panel         adds a native child window at the bottom,
+//!                               where a plugin editor would go
+//!   ui-timeline --plugin <bundle.vst3>
+//!                               opens that plugin's editor in the panel
+//!                               (Windows)
 //!
 //! Controls: mouse wheel scrolls, Ctrl+wheel (or +/-) zooms, drag a clip to
 //! move it, double-click a clip to rename it, Space starts and stops the
@@ -108,7 +113,17 @@ struct App {
     show_stats: bool,
     frame_ms: Vec<f32>,
     bench: Option<Bench>,
+    embed: Option<Embed>,
 }
+
+/// The native child window for a plugin editor (`--panel`, `--plugin`).
+struct Embed {
+    plugin: Option<std::path::PathBuf>,
+    panel: Option<embed_panel::Panel>,
+    status: String,
+}
+
+const PANEL_HEIGHT: f32 = 260.0;
 
 impl App {
     fn new(tracks: usize, clips_per_track: usize, bench: Option<f64>) -> App {
@@ -148,6 +163,7 @@ impl App {
             playhead: 0.0,
             show_stats: true,
             frame_ms: Vec::new(),
+            embed: None,
             bench: bench.map(|seconds| Bench {
                 seconds,
                 ..Default::default()
@@ -444,6 +460,41 @@ impl App {
         });
     }
 
+    /// A bottom panel whose inside is a native child window. The window is
+    /// created on the first frame and moved to follow the layout.
+    fn embed_panel(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
+        let Some(e) = &mut self.embed else {
+            return;
+        };
+        let ppp = ui.ctx().pixels_per_point();
+        egui::Panel::bottom("plugin")
+            .exact_size(PANEL_HEIGHT)
+            .show(ui, |ui| {
+                ui.label(format!("Plugin editor: {}", e.status));
+                let area = ui.available_rect_before_wrap();
+                ui.allocate_rect(area, Sense::hover());
+                let rect = embed_panel::Rect {
+                    x: (area.left() * ppp).round() as i32,
+                    y: (area.top() * ppp).round() as i32,
+                    w: (area.width() * ppp).round() as i32,
+                    h: (area.height() * ppp).round() as i32,
+                };
+                match &mut e.panel {
+                    Some(p) => p.set_rect(rect),
+                    None => match embed_panel::Panel::new(frame, rect) {
+                        Ok(mut p) => {
+                            e.status = match &e.plugin {
+                                Some(b) => p.open_plugin(b).unwrap_or_else(|err| err),
+                                None => p.status(),
+                            };
+                            e.panel = Some(p);
+                        }
+                        Err(err) => e.status = format!("no panel: {err}"),
+                    },
+                }
+            });
+    }
+
     fn rename_window(&mut self, ui: &mut egui::Ui) {
         let Some((t, c, mut text)) = self.renaming.take() else {
             return;
@@ -584,6 +635,9 @@ impl eframe::App for App {
                 ));
             });
         }
+        if self.embed.is_some() {
+            self.embed_panel(ui, frame);
+        }
         egui::CentralPanel::default().show(ui, |ui| self.timeline(ui));
         self.rename_window(ui);
         if let Some(b) = &mut self.bench {
@@ -652,6 +706,7 @@ fn main() -> eframe::Result {
     let mut tracks = 32;
     let mut per = 10;
     let mut bench = None;
+    let mut embed = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut num = || args.next().and_then(|v| v.parse::<f64>().ok());
@@ -659,9 +714,11 @@ fn main() -> eframe::Result {
             "--tracks" => tracks = num().unwrap_or(32.0) as usize,
             "--clips-per-track" => per = num().unwrap_or(10.0) as usize,
             "--bench" => bench = Some(num().unwrap_or(20.0)),
+            "--panel" => embed = Some(None),
+            "--plugin" => embed = Some(args.next().map(std::path::PathBuf::from)),
             _ => {
                 eprintln!(
-                    "usage: ui-timeline [--tracks N] [--clips-per-track N] [--bench SECONDS]"
+                    "usage: ui-timeline [--tracks N] [--clips-per-track N] [--bench SECONDS] [--panel] [--plugin BUNDLE]"
                 );
                 std::process::exit(2);
             }
@@ -676,6 +733,14 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "ui-timeline",
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(tracks, per, bench)))),
+        Box::new(move |_cc| {
+            let mut app = App::new(tracks, per, bench);
+            app.embed = embed.map(|plugin| Embed {
+                plugin,
+                panel: None,
+                status: "starting".into(),
+            });
+            Ok(Box::new(app))
+        }),
     )
 }

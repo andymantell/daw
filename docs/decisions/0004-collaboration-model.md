@@ -46,6 +46,16 @@ order, smaller incremental updates and slower history growth, and
 built-in per-peer undo. The live-connection half (NAT traversal across
 real networks) is still to do, so the decision stays proposed.
 
+The connection half is built (`spikes/collab-net`) and passes on one
+machine: invite and reply codes swapped by hand, address discovery via
+public STUN servers, hole punching, and an encrypted QUIC link that
+checks the teacher's certificate against the invite, then live sync of
+the project document. STUN servers are run by others but see only our
+addresses, not project data. Whether this counts as "no server we
+operate" is a point to confirm. Still to do: success rates on real home,
+mobile and school networks, router port mapping (UPnP / NAT-PMP / PCP),
+and a comparison with WebRTC data channels.
+
 ## Validation (spike 0.5)
 Concurrent edits, offline merge, per-user undo, document size for a
 200-track project, and connection success rates across home broadband,

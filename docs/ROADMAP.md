@@ -96,6 +96,10 @@ quickly to confirm. The result goes in decision 0003.
   hotspot (carrier-grade NAT) and a strict corporate/school network.
   Document the fallbacks.
 - See [decisions/0004-collaboration-model.md](decisions/0004-collaboration-model.md).
+- Status (2026-10-27): document half done (Loro preferred). Connection
+  half built and passing on one machine (QUIC, codes swapped by hand,
+  STUN, hole punching); real-network runs are in the
+  [review queue](REVIEW_QUEUE.md).
 
 ### 0.6 Speed & pitch spike (M)
 - Real-time pitch-preserving playback at 50–150% speed, and transpose by

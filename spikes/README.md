@@ -17,7 +17,7 @@ Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
 | Part | Crate | Status |
 |---|---|---|
 | Project document on a CRDT | `collab-doc` | Both candidates pass. Loro preferred (see below). |
-| Live peer-to-peer connection | — | Not started. Needs real home, mobile and school networks. |
+| Live peer-to-peer connection | `collab-net` | Built and passing on one machine. Needs real home, mobile and school networks. |
 
 Latency spike ([ROADMAP](../docs/ROADMAP.md) 0.4): `latency`. Built;
 needs a loopback cable on the owner's interface.
@@ -114,6 +114,54 @@ Tested so far only with unit tests of the pulse finder: whole and
 fractional delays, noise, and polarity inversion. The stream side needs
 real hardware. The second half of 0.4, recording a guitar DI against a
 click, follows once the offsets are known.
+
+## 0.5, second half: `collab-net`
+
+A teacher-hosted live session with no server we operate:
+
+1. The teacher runs `collab-net host`. It prints an **invite code** holding
+   the teacher's addresses, a fingerprint of a throwaway certificate made
+   for this session, and a session secret.
+2. The student runs `collab-net join <invite>`. It prints a **reply code**
+   with the student's addresses, and starts connecting.
+3. The teacher pastes the reply code. The teacher's machine then sends
+   packets towards the student, which makes the teacher's router accept
+   the student's packets ("hole punching").
+
+Codes are base32 in groups of five with a checksum, so typos are caught
+and they can be read aloud; an invite with three addresses is about 140
+characters. Addresses come from the machine's own network address plus
+what public STUN servers report (they see only our address, never project
+data). The link is QUIC: encrypted, and the student checks the teacher's
+certificate against the invite. The student proves they were invited by
+sending the secret first. Over the link, the two project documents
+(Loro, from the first half) catch up with each other, then edits flow
+both ways.
+
+```
+collab-net probe            what this network allows
+collab-net host             teacher
+collab-net join <code>      student
+```
+
+`probe` asks three STUN servers for our outside address from the same
+socket. Same address and port from all of them means a router that direct
+connections usually get through. A port that changes per server means a
+strict router, where direct connections will probably fail. No answer
+means UDP is blocked.
+
+Tested on one machine: the STUN parser against the standard's published
+test vectors (RFC 5769), a STUN query against a local fake server, the
+codes (round trip, sloppy typing, typo detection), and five end-to-end
+link tests: edits both ways, offline edits merging at the next lesson, a
+wrong teacher refused, an uninvited student refused, and dead addresses
+skipped. The command-line host and join also passed against each other
+in the cloud container (round trip 0.3 ms). The container blocks UDP to
+the internet, so no real STUN answer or router has been tested yet.
+
+Not done yet: port mapping through UPnP or NAT-PMP (asking the home router
+to open a port), comparison with WebRTC data channels, and the success
+rates across real networks that the roadmap asks for.
 
 ## 0.6: speed and pitch, `stretch`
 

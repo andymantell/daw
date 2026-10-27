@@ -57,6 +57,24 @@ Spike 0.1 decides whether Rust is confirmed
       a few minutes). Optional: `stretch-bench --input my-playing.wav` with a
       48 kHz recording of real guitar, which makes better listening files.
 
+## On other networks
+
+Spike 0.5, live sessions without a server
+([decision 0004](decisions/0004-collaboration-model.md)). `collab-net.exe`
+is in the same download.
+
+- [ ] **Network probe, three places.** Run `collab-net probe` at home, on a
+      laptop tethered to a phone hotspot, and if possible on a school or
+      office network. Each run saves `net-probe-report.txt`; keep all three.
+- [ ] **A real two-machine session.** Teacher machine at home runs
+      `collab-net host`; a second machine (a student, or a laptop on a
+      phone hotspot) runs `collab-net join <invite>`. Paste the reply code
+      back into the teacher's window. Pass: both sides say "both edits
+      arrived". Try once on the same home network, and once with the
+      second machine on the hotspot.
+- [ ] **Windows firewall.** The first run may show a firewall prompt for
+      `collab-net`. Note what it says and whether allowing it was needed.
+
 ## Listening
 
 - [ ] **0.6 Speed and pitch.** Compare `original.wav` with each candidate's

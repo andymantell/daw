@@ -1,0 +1,22 @@
+# Product workspace. Layout follows docs/ARCHITECTURE.md §10; crates are
+# added as each area starts. Phase 0 throwaway prototypes live in spikes/,
+# which is a separate workspace.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/andymantell/daw"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

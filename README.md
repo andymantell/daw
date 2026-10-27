@@ -13,8 +13,9 @@ There is **no backend server**. Projects are folders on your disk, and
 collaboration is peer-to-peer (the teacher hosts a session) or via project
 bundles and shared folders.
 
-> **Status:** planning. No application code yet. Phase 0 begins with a
-> go/no-go spike for Rust (fallback: C++ with JUCE).
+> **Status:** Phase 0. Proceeding with Rust at risk while the on-device
+> spike tests wait for the test machine (see
+> [decision 0003](docs/decisions/0003-implementation-language.md)).
 
 ## Documents
 
@@ -26,6 +27,8 @@ bundles and shared folders.
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Project vocabulary (generic and original terms only) |
 | [docs/research/CAPABILITY_LANDSCAPE.md](docs/research/CAPABILITY_LANDSCAPE.md) | Generic survey of DAW and loop-station capabilities, mapped to phases, plus research gaps |
 | [docs/decisions/](docs/decisions/) | Decision records |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute: clean-room rules, sign-off, checks to run |
+| [spikes/](spikes/) | Phase 0 throwaway prototypes and their results |
 
 ## Principles
 

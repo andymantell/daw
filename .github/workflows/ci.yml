@@ -1,0 +1,77 @@
+# Product CI (ROADMAP 0.2): build, format, lints, tests and the dependency
+# licence check on Windows, macOS and Linux.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "*.md"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal -c clippy,rustfmt
+          rustup default stable
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      # macos-latest is Apple Silicon; also make sure Intel Macs build.
+      - name: Build for Intel macOS
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --workspace --target x86_64-apple-darwin
+
+  licences:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans sources
+      # The spikes are a separate workspace; hold them to the same policy.
+      - run: cp deny.toml spikes/deny.toml
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: spikes/Cargo.toml
+          command: check licenses bans sources
+
+  # Contributions carry a DCO sign-off (CONTRIBUTING.md). Checked on pull
+  # requests only.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every commit
+        shell: bash
+        run: |
+          missing=0
+          for c in $(git rev-list "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"); do
+            if ! git log -1 --format=%B "$c" | grep -q '^Signed-off-by: '; then
+              echo "::error::Commit $c has no Signed-off-by line (use git commit -s)"
+              missing=1
+            fi
+          done
+          exit $missing

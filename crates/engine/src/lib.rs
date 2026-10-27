@@ -1,0 +1,2 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Graph compiler, scheduler and real-time processing (ARCHITECTURE §4).

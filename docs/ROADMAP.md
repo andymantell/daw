@@ -62,7 +62,7 @@ plugin windows or the UI toolkit eating disproportionate time, switch to
 **C++ with JUCE** before real product code exists. Then re-run B and C
 quickly to confirm. The result goes in decision 0003.
 
-### 0.2 Repository & tooling (S)
+### 0.2 Repository & tooling (S) — *started 2026-10-27*
 - Workspace layout per [ARCHITECTURE.md](ARCHITECTURE.md) §10.
 - CI on **Windows, macOS (Apple Silicon and Intel) and Linux**: build,
   formatting, lints, unit tests, dependency licence check, and real-time

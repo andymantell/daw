@@ -54,7 +54,6 @@ jobs:
             spikes/target/release/audio-io.exe
             spikes/target/release/plugin-host.exe
             spikes/target/release/ui-timeline.exe
-            spikes/target/release/ui-timeline-slint.exe
             spikes/target/release/stretch-bench.exe
             spikes/target/release/latency.exe
             spikes/target/release/collab-net.exe

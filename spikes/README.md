@@ -8,7 +8,7 @@ Nothing here ships. Licence: GPL-3.0-or-later.
 |---|---|---|
 | **A. Audio I/O** (ASIO on Windows) | `audio-io` | Built. Not yet run on the owner's PC and interface. |
 | **B. VST 3 hosting** | `vst3-scan`, `plugin-host`, `vst3-test-plugin` | Host passes its automated tests with our own test plugin on Linux and Windows CI. Not yet run against real plugins on the owner's PC. |
-| **C. UI** | `ui-timeline`, `ui-timeline-slint` | Two toolkits built for Windows with the same timeline: egui and Slint. Both work here (checked with scripted clicks and screenshots). The 60 fps check still needs a real GPU, so it waits for the owner's PC. |
+| **C. UI** | `ui-timeline`, `embed-panel` | egui chosen (decision 0007) after comparing it with Slint. A plugin editor can sit in a native child window inside the app; works on Linux, Windows waits for the owner's PC. The 60 fps check still needs a real GPU, so it also waits for the owner's PC. |
 | **D. Engine** | `engine` | Passing (see below). |
 
 Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
@@ -82,7 +82,10 @@ nothing about real drawing speed, so the verdict waits for a run on the
 owner's PC. Not yet checked: a screen reader actually reading the
 timeline, high-DPI scaling, and input method editors for typing.
 
-### Second candidate: Slint, `ui-timeline-slint`
+### Second candidate: Slint (removed after the decision)
+
+*egui was chosen on 2026-10-27. The Slint version is no longer built; its
+code is in the history at commit 0f8edaf. What follows is the record.*
 
 The same timeline, data and controls, built with Slint. The window is
 declared in Slint's own UI language (`ui-slint/ui/timeline.slint`). Rust
@@ -119,6 +122,22 @@ slowly. The Linux release binaries are a similar size (about 31 MB for
 Slint, 29 MB for egui, neither stripped). Licence: GPL-3.0-only, or Slint's own royalty-free or commercial
 licences. The licence check allows GPL-3.0-only for the Slint crates only,
 pending decision 0007.
+
+### Plugin editors inside the window: `embed-panel`
+
+`ui-timeline --panel` adds a bottom panel whose inside is a native child
+window, created on the first frame and moved to follow the layout.
+`ui-timeline --plugin <bundle.vst3>` opens that plugin's editor in it
+(Windows: a Win32 child window passed to `IPlugView::attached` as "HWND";
+the toolkit's own event loop delivers the plugin's window messages). On
+Linux the child is an X11 window drawing a stand-in editor, because Linux
+plugin editors also need a host run loop, which this spike does not build.
+
+Checked in the cloud (X11, no window manager) with both toolkits: the child
+window shows in the right place, draws over the toolkit's GPU surface, and
+follows a window resize. Not checked: a real plugin editor (Windows only,
+waits for the owner's PC), keyboard focus moving between the app and the
+editor, high-DPI scaling, and Wayland.
 
 ## 0.4: round-trip latency, `latency`
 

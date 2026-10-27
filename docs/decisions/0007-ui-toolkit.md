@@ -1,6 +1,6 @@
 # 0007 — UI toolkit
 
-- **Status:** Open (decided by spike 0.1C)
+- **Status:** Accepted 2026-10-27 (egui), subject to the speed check on the owner's PC
 - **Date:** 2026-10-24
 
 ## Context
@@ -45,8 +45,27 @@ maintenance activity.
   GPL-3.0-or-later code, but the combined program could then only be
   distributed under GPLv3. The licence check allows it for the Slint crates
   only, pending this decision.
-- Not yet tried: iced and Vizia, and embedding a plugin editor inside the
-  toolkit's window (spike B opens editors in a separate window).
+- **Plugin editor inside the window** (`spikes/embed-panel`, both
+  toolkits): a native child window placed over an area of the toolkit's
+  window and moved with its layout. On Linux (X11, in the cloud) it stayed
+  visible and in place in both toolkits, including through a window
+  resize. On Windows it hosts a real VST 3 editor (`--plugin`), which
+  waits for the owner's PC.
+- Not tried: iced and Vizia.
 
 ## Decision
-_Not yet made._
+**egui**, chosen by the owner on 2026-10-27. The reason given: it suits
+agent-first development better. The whole UI is plain Rust code, with no
+separate UI language or designer tool, so changes can be made, built and
+checked in one place.
+
+Follow-ups:
+- The 60 fps check on the owner's PC still has to pass. If it fails
+  badly, this decision is reopened.
+- The bundled fonts (SIL Open Font Licence 1.1 and Ubuntu Font Licence
+  1.0) are still allowed only as a stopgap. Confirm they can ship, or
+  replace them.
+- Each clip should be given its own screen-reader entry, which Slint gave
+  for free. egui draws the timeline as one area today.
+- The Slint spike was removed from the build after this decision. Its
+  code is in the history at commit 0f8edaf.

@@ -2,6 +2,7 @@
 //! Graph compiler, scheduler and real-time processing (ARCHITECTURE §4).
 
 pub mod engine;
+pub mod export;
 pub mod graph;
 pub mod import;
 pub mod metronome;

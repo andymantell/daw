@@ -3,7 +3,7 @@
 //! play them with a mixer, loop, metronome and count-in, choose the audio
 //! device, and record: per track input, arm and monitor, with takes kept
 //! and switchable; VST 3 effects as track inserts; a tuner and practice
-//! mute.
+//! mute; export of the mix and stems to WAV.
 //!
 //! Usage: `daw [file.wav ...]`, or drop WAV files on the window. Files at
 //! another sample rate from the device are converted in the background
@@ -12,6 +12,7 @@
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
+mod export;
 mod fx;
 mod tuner;
 
@@ -163,6 +164,7 @@ struct App {
     saved: SavedProfiles,
     effects: Effects,
     tuner: tuner::Tuner,
+    export: export::Export,
 }
 
 /// How often to look for a lost device.
@@ -205,6 +207,7 @@ impl App {
             saved,
             effects: Effects::new(config_dir().join("plugins.txt")),
             tuner: tuner::Tuner::new(rate),
+            export: export::Export::default(),
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -395,6 +398,17 @@ impl App {
 
     /// Compiles the session and sends it to the engine.
     fn rebuild(&mut self) {
+        let s = self.session();
+        match s.compile_with(audio::MAX_BLOCK, &mut self.effects.pending) {
+            Ok(g) => {
+                self.send_graph(g);
+            }
+            Err(e) => self.message = Some(e.to_string()),
+        }
+    }
+
+    /// The session as the engine should play it now.
+    fn session(&self) -> Session {
         let mut s = Session::new(self.tempo_map());
         for t in &self.tracks {
             // A file still being converted to a new rate plays nothing
@@ -419,12 +433,75 @@ impl App {
             spec.inserts = t.fx.iter().map(FxSlot::spec).collect();
             s.tracks.push(spec);
         }
-        match s.compile_with(audio::MAX_BLOCK, &mut self.effects.pending) {
-            Ok(g) => {
-                self.send_graph(g);
-            }
-            Err(e) => self.message = Some(e.to_string()),
+        s
+    }
+
+    /// Renders the mix (and stems, if asked) to WAV in the background.
+    fn start_export(&mut self, req: export::Request) -> Result<(), String> {
+        let map = self.tempo_map();
+        let mut s = self.session();
+        // The mix as it stands: no practice mute, no live input.
+        for (spec, t) in s.tracks.iter_mut().zip(&self.tracks) {
+            spec.mix = t.mix;
+            spec.input = None;
+            spec.arm = false;
+            spec.monitor = false;
         }
+        let mut plugins = Vec::new();
+        let rate = self.rate;
+        let mut graph = |s: &Session, tracks: &[&Track], plugins: &mut Vec<_>| {
+            let mut fx = Vec::new();
+            for slot in tracks.iter().flat_map(|t| &t.fx) {
+                let (p, proc) = self.effects.fresh(slot, rate)?;
+                plugins.push(p);
+                fx.push((slot.id, proc));
+            }
+            s.compile_with(audio::MAX_BLOCK, &mut fx)
+                .map_err(|e| e.to_string())
+        };
+        let all: Vec<&Track> = self.tracks.iter().collect();
+        let mix = graph(&s, &all, &mut plugins)?;
+        let (from, to) = if req.loop_only {
+            (
+                map.frames_at(map.bar_start(self.loop_bars.0)),
+                map.frames_at(map.bar_start(self.loop_bars.1)),
+            )
+        } else {
+            // Room for effects to ring out after the last clip.
+            let tail = if self.tracks.iter().any(|t| !t.fx.is_empty()) {
+                2 * self.rate as i64
+            } else {
+                0
+            };
+            (Frames(0), Frames(mix.end().0 + tail))
+        };
+        let frames = (to.0 - from.0).max(0) as usize;
+        if frames == 0 {
+            return Err("There is nothing to export yet.".into());
+        }
+        let mut parts = vec![export::Part {
+            name: "Mix".into(),
+            graph: mix,
+        }];
+        if req.stems {
+            for (i, t) in self.tracks.iter().enumerate() {
+                let mut one = Session::new(map.clone());
+                let mut spec = s.tracks[i].clone();
+                spec.mix.mute = false;
+                spec.mix.solo = false;
+                one.tracks.push(spec);
+                parts.push(export::Part {
+                    name: format!("{:02} {}", i + 1, export::file_name(&t.name)),
+                    graph: graph(&one, &[t], &mut plugins)?,
+                });
+            }
+        }
+        let base = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map_or_else(std::env::temp_dir, PathBuf::from)
+            .join(APP_NAME)
+            .join("Exports");
+        self.export.start(&base, parts, plugins, from, frames)
     }
 
     fn send_graph(&mut self, g: daw_engine::graph::Graph) {
@@ -1140,6 +1217,12 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Export…").clicked() {
+                        self.export.open = true;
+                        ui.close();
+                    }
+                });
                 ui.menu_button("Settings", |ui| {
                     if ui.button("Audio device…").clicked() {
                         self.show_devices = true;
@@ -1218,6 +1301,16 @@ impl eframe::App for App {
             Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
             Audio::Stopped => 0,
         };
+        self.export.poll();
+        if self.export.busy() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        let loop_text = format!("bars {} to {}", self.loop_bars.0, self.loop_bars.1);
+        if let Some(req) = self.export.window(&ctx, &loop_text)
+            && let Err(e) = self.start_export(req)
+        {
+            self.message = Some(e);
+        }
         if let Some(c) = self.tuner.window(&ctx, inputs) {
             self.send(c);
         }

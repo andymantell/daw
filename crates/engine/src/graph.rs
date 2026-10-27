@@ -392,6 +392,7 @@ pub struct Graph {
     pub(crate) streams: Vec<StreamNode>,
     /// The file each stream reads, for the disk thread.
     placements: Vec<Placement>,
+    max_block: usize,
 }
 
 impl Session {
@@ -527,6 +528,7 @@ impl Session {
             clicks: Clicks::new(rate),
             streams,
             placements,
+            max_block,
         })
     }
 }
@@ -541,6 +543,11 @@ impl Graph {
     }
 
     /// The frame where the last clip ends, for offline renders.
+    /// The largest block this graph was compiled for.
+    pub fn max_block(&self) -> usize {
+        self.max_block
+    }
+
     pub fn end(&self) -> Frames {
         Frames(
             self.tracks

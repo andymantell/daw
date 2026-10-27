@@ -165,6 +165,19 @@ Screenshot (a 220 Hz test tone standing in for a guitar):
       track, press 🎧 on it and play along. Pass: that part goes silent and
       comes back, and Mute still works separately.
 
+### Phase 1 app: export
+
+Screenshot: `/mnt/project-files/screenshots/app-export.png`. In the cloud
+the exported mix matched the sum of the stems to within one step of
+24-bit, with a plugin on one track.
+
+- [ ] **1.8 Export.** With a backing, a take and an effect on the take's
+      track, File → Export with stems ticked. Pass: a new folder under
+      `%USERPROFILE%\DAW\Exports` holds Mix.wav and one file per track,
+      they open in another player, the mix sounds like playback (effects
+      included) and the stems line up when dropped into FL Studio.
+      Say if you'd rather choose the folder each time.
+
 ## On other networks
 
 Spike 0.5, live sessions without a server

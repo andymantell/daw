@@ -697,9 +697,30 @@ impl Engine {
 }
 
 /// Renders a graph offline, through the same code as real-time playback,
-/// from `from` for `frames` frames. Used for export and tests. Streamed
-/// files are read before each block, so nothing is missing.
+/// from `from` for `frames` frames. Used for tests; export streams with
+/// [`render_with`]. Streamed files are read before each block, so nothing
+/// is missing.
 pub fn render_offline(graph: Graph, from: Frames, frames: usize, block: usize) -> [Vec<f32>; 2] {
+    let mut out = [Vec::with_capacity(frames), Vec::with_capacity(frames)];
+    render_with(graph, from, frames, block, |l, r| {
+        out[0].extend_from_slice(l);
+        out[1].extend_from_slice(r);
+        true
+    });
+    out
+}
+
+/// Renders as [`render_offline`] does, handing each block to `sink`
+/// instead of keeping it. `sink` returns false to stop early. Returns the
+/// frames rendered.
+pub fn render_with(
+    graph: Graph,
+    from: Frames,
+    frames: usize,
+    block: usize,
+    mut sink: impl FnMut(&[f32], &[f32]) -> bool,
+) -> usize {
+    let block = block.max(1);
     let (mut ctl, mut eng) = new(block);
     let mut disk = ctl
         .take_streamer()
@@ -709,11 +730,16 @@ pub fn render_offline(graph: Graph, from: Frames, frames: usize, block: usize) -
     // Apply the commands so the disk thread sees the start position.
     eng.process(&mut [], &mut []);
     let _ = ctl.send(Command::Play);
-    let mut out = [vec![0.0; frames], vec![0.0; frames]];
-    let [l, r] = &mut out;
-    for (bl, br) in l.chunks_mut(block).zip(r.chunks_mut(block)) {
+    let (mut l, mut r) = (vec![0.0; block], vec![0.0; block]);
+    let mut done = 0;
+    while done < frames {
+        let n = block.min(frames - done);
         disk.service();
-        eng.process(bl, br);
+        eng.process(&mut l[..n], &mut r[..n]);
+        done += n;
+        if !sink(&l[..n], &r[..n]) {
+            break;
+        }
     }
-    out
+    done
 }

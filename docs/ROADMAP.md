@@ -273,6 +273,12 @@ choice (spike 0.6 listening). The reference pitch is not saved yet.*
   sections.
 
 ### 1.8 Output, safety & distribution (M)
+*Started 2026-10-28. Done so far: File → Export writes the mix, and
+optionally each track as a stem, as 24-bit WAV at the session's rate,
+for the whole song or the loop, into a new numbered folder under
+`DAW\Exports` in the user's profile. Rendering runs in the background
+with its own copies of any plugins; practice mute, live input and the
+metronome are left out, and clipping is reported.*
 - Export mixdown as WAV, plus per-track stems.
 - Snapshots ("Lesson 3 end") and restore. Autosave. Crash recovery.
 - Signed, notarised installers for Windows and macOS. Linux build

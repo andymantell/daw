@@ -249,6 +249,17 @@ impl Effects {
         Ok(())
     }
 
+    /// A second instance of `slot`'s plugin with the same settings, for
+    /// rendering offline. Keep the [`Plugin`] until rendering is done.
+    pub fn fresh(&mut self, slot: &FxSlot, rate: u32) -> Result<(Plugin, Box<dyn Insert>), String> {
+        let state = slot.plugin.save_state()?;
+        let module = self.module(&slot.bundle)?;
+        let (plugin, processor) =
+            daw_plugins::instantiate(module, &slot.cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
+        plugin.load_state(&state)?;
+        Ok((plugin, Box::new(processor)))
+    }
+
     /// The window listing installed plugins.
     pub fn manager_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_manager;
@@ -385,7 +396,7 @@ impl Effects {
         egui::Window::new(format!("Effects: {track}"))
             .id(egui::Id::unique("track-fx"))
             .open(&mut open)
-            .default_pos(egui::pos2(440.0, 110.0))
+            .default_pos(egui::pos2(300.0, 240.0))
             .default_width(420.0)
             .show(ctx, |ui| {
                 if slots.is_empty() {

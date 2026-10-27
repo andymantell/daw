@@ -158,8 +158,10 @@ and leave each other time-pinned feedback in a shared project.
 pass. Done so far: tempo map, render graph with track mixer and meters,
 sample-accurate transport and loop, metronome with count-in and a
 separate click output, clips streamed from WAV files on disk, offline
-render (`crates/engine`). Still to do: audio device selection and the
-settings panel.*
+render (`crates/engine`), audio devices (`crates/audio-io`), and a first
+app window with a mixer, transport and device settings (`crates/app`).
+Still to do: measured latency in the settings panel (with 1.2), and
+importing files at other sample rates.*
 - Audio device selection (driver, device, sample rate, buffer size) and a
   device-settings panel with measured latency.
 - Transport: play, stop, position, loop region, tempo, time signature

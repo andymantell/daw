@@ -63,6 +63,25 @@ Spike 0.1 decides whether Rust is confirmed
       a few minutes). Optional: `stretch-bench --input my-playing.wav` with a
       48 kHz recording of real guitar, which makes better listening files.
 
+### Phase 1 app (first window)
+
+The app itself, `daw.exe`, is in the **daw-windows-x64** artifact of the
+latest **ci** run (not the spikes run). It only reads WAV files at the
+same sample rate as the audio device for now.
+
+- [ ] **1.1 Device and playback.** Open `daw.exe`, then Settings → Audio
+      device. Check that ASIO and the UMC1820 are listed, choose them at
+      48000 Hz and 128 samples, and Apply. Drop two or three WAV files
+      (48 kHz) on the window and play them for ten minutes. Pass: no
+      crackles, the meters move, and no yellow "disk too slow" warning.
+- [ ] **1.1 Mixer and transport.** Move volume and pan while playing
+      (smooth, no clicks), try mute and solo, loop bars 1 to 5, and Space
+      to start and stop.
+- [ ] **1.1 Metronome.** Turn the metronome on and check it feels on the
+      beat against a backing track you know the tempo of. Try Eighths,
+      Count-in, and Metronome output set to outputs 3/4 so the click is in
+      the headphones only.
+
 ## On other networks
 
 Spike 0.5, live sessions without a server

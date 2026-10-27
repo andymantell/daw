@@ -142,10 +142,15 @@ fn find(p: &DeviceProfile) -> Result<(Host, Device), String> {
         .find(|h| h.name().eq_ignore_ascii_case(&p.host))
         .ok_or(format!("the {} driver is not available", p.host))?;
     let host = cpal::host_from_id(id).map_err(|e| e.to_string())?;
+    // The default device is not always in the list (ALSA's "default").
     let device = host
         .output_devices()
         .map_err(|e| e.to_string())?
         .find(|d| device_name(d) == p.device)
+        .or_else(|| {
+            host.default_output_device()
+                .filter(|d| device_name(d) == p.device)
+        })
         .ok_or(format!("device {:?} not found", p.device))?;
     Ok((host, device))
 }
@@ -166,7 +171,7 @@ pub struct StreamStatus {
 
 /// A running device. Dropping it stops the audio.
 pub struct Running {
-    _stream: cpal::Stream,
+    _backend: Backend,
     pub status: Arc<StreamStatus>,
     pub channels: u16,
     pub rate: u32,
@@ -174,6 +179,63 @@ pub struct Running {
 
 /// Opens the device in `profile` and starts calling `engine` from its
 /// audio callback.
+// The fields are held only to keep the audio running until dropped.
+#[allow(dead_code)]
+enum Backend {
+    Device(cpal::Stream),
+    Silent(SilentThread),
+}
+
+struct SilentThread {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for SilentThread {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// Runs the engine in real time with no device, discarding the sound:
+/// for machines without audio (such as build servers) and for trying the
+/// app out. Playback, meters and the playhead all behave as normal.
+pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
+    let status = Arc::new(StreamStatus::default());
+    let stop = Arc::new(AtomicBool::new(false));
+    let (s, st) = (status.clone(), stop.clone());
+    let n = (buffer as usize).clamp(1, MAX_BLOCK);
+    let handle = std::thread::Builder::new()
+        .name("silent audio".into())
+        .spawn(move || {
+            let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+            let period = std::time::Duration::from_secs_f64(n as f64 / rate as f64);
+            let mut next = std::time::Instant::now();
+            while !st.load(Ordering::Relaxed) {
+                engine.process(&mut l, &mut r);
+                s.callbacks.fetch_add(1, Ordering::Relaxed);
+                s.last_frames.store(n as u64, Ordering::Relaxed);
+                next += period;
+                if let Some(wait) = next.checked_duration_since(std::time::Instant::now()) {
+                    std::thread::sleep(wait);
+                }
+            }
+        })
+        .expect("could not start the silent audio thread");
+    Running {
+        _backend: Backend::Silent(SilentThread {
+            stop,
+            handle: Some(handle),
+        }),
+        status,
+        channels: 2,
+        rate,
+    }
+}
+
 pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String> {
     let (_host, device) = find(profile)?;
     let supported = device
@@ -205,7 +267,7 @@ pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String>
     }?;
     stream.play().map_err(|e| e.to_string())?;
     Ok(Running {
-        _stream: stream,
+        _backend: Backend::Device(stream),
         status,
         channels,
         rate: profile.rate,

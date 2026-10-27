@@ -1,0 +1,20 @@
+[package]
+name = "daw-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "daw"
+path = "src/main.rs"
+
+[dependencies]
+daw-audio-io = { path = "../audio-io" }
+daw-engine = { path = "../engine" }
+eframe = "0.37.0"

@@ -94,6 +94,33 @@ first, which takes a moment for long files.
       after a moment. Converted copies are kept in
       `%LOCALAPPDATA%\daw\converted`; say if that is the wrong place.
 
+### Phase 1 app: recording
+
+Same `daw.exe`. Screenshot of the flow in the cloud (with a test tone
+standing in for an interface):
+`/mnt/project-files/screenshots/app-recording-takes.png`.
+
+- [ ] **1.2 Input and monitoring.** Settings → Audio device: Input device
+      should be the UMC1820 already. Add a track, set its Input to In 1
+      (your guitar), press **R** (arm) and **M** (monitor). Pass: you hear
+      the guitar through the app, the meter moves, and at 128 samples it
+      feels immediate enough to play. Note any crackle.
+- [ ] **1.2 Recording.** With a backing track loaded and Count-in on,
+      press Record (or the R key), then Space. Play along for a minute
+      and stop. Pass: a Take 1 appears and plays back in time with the
+      backing. Record again: Take 2 plays, and Take 1 can be chosen back.
+- [ ] **1.2 Recording offset.** Run the loopback test from the latency
+      spike (review item above) and enter its round trip as the measured
+      recording offset. Record a click track through a loopback cable and
+      check the take lines up with the original to within a millisecond.
+      Also say whether the driver-reported figure the app shows is close.
+- [ ] **1.2 Crash safety.** While recording, end the app from Task
+      Manager. Pass: the take file in `%LOCALAPPDATA%\daw\takes` opens in
+      another player and holds everything up to about a second before.
+- [ ] **Owner decision: where takes go** before projects exist. They are
+      in `%LOCALAPPDATA%\daw\takes` for now; once projects are saved they
+      go in the project folder (roadmap 1.2).
+
 ## On other networks
 
 Spike 0.5, live sessions without a server

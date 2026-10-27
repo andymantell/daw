@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Audio devices (ARCHITECTURE §4.1): listing drivers and devices, and
-//! running the engine on an output device.
+//! running the engine on them, with input for monitoring and recording.
 //!
 //! A [`DeviceProfile`] says which driver ("host"), device, sample rate,
 //! buffer size and output channels to use. [`start`] opens that device and
@@ -9,7 +9,11 @@
 //! channel layout the device uses. On Windows, ASIO is preferred where a
 //! driver is installed.
 //!
-//! Not here yet: audio input (roadmap 1.2). If the device is unplugged
+//! Input arrives in its own callback. It is passed to the output callback
+//! through a lock-free queue holding a little slack (two buffers of
+//! silence to start with), since some drivers run the two callbacks on
+//! separate threads; with ASIO both come from the same driver callback.
+//! If the device is unplugged
 //! the stream reports it in [`StreamStatus::failed`] and stops; the app
 //! watches for the device with [`is_present`] and starts again.
 
@@ -19,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, FromSample, Host, SampleFormat, SizedSample, StreamConfig};
 use daw_engine::engine::Engine;
+use rtrb::{Consumer, Producer, RingBuffer};
 
 /// The largest block the engine is asked for in one go. Device buffers
 /// bigger than this are processed in several calls.
@@ -37,6 +42,13 @@ pub struct DeviceProfile {
     pub main: (usize, usize),
     /// Device channel for the separate metronome output, if any.
     pub click: Option<usize>,
+    /// Device to record from: the same as `device` for an audio
+    /// interface; `None` for no input.
+    pub input: Option<String>,
+    /// How much later recorded audio arrives than it was played along to,
+    /// in frames: the interface's round trip, measured with a loopback
+    /// cable. `None` uses the latency the driver reports instead.
+    pub record_offset: Option<u32>,
 }
 
 /// One device as the driver describes it.
@@ -119,6 +131,12 @@ pub fn default_profile() -> Option<DeviceProfile> {
     let host = preferred_host();
     let d = host.default_output_device()?;
     let info = describe(&d);
+    // An interface records from itself; otherwise the default input.
+    let input = if info.input_channels > 0 {
+        Some(info.name.clone())
+    } else {
+        host.default_input_device().map(|d| device_name(&d))
+    };
     Some(DeviceProfile {
         host: host.id().name().to_string(),
         device: info.name,
@@ -126,6 +144,8 @@ pub fn default_profile() -> Option<DeviceProfile> {
         buffer: None,
         main: (0, 1.min(info.output_channels.saturating_sub(1) as usize)),
         click: None,
+        input,
+        record_offset: None,
     })
 }
 
@@ -156,6 +176,32 @@ fn find(p: &DeviceProfile) -> Result<(Host, Device), String> {
     Ok((host, device))
 }
 
+fn find_input(host: &Host, name: &str) -> Option<Device> {
+    host.input_devices()
+        .ok()?
+        .find(|d| device_name(d) == name)
+        .or_else(|| {
+            host.default_input_device()
+                .filter(|d| device_name(d) == name)
+        })
+}
+
+/// Devices on `host` that can record, for choosing the input.
+pub fn input_devices(host: &str) -> Vec<DeviceInfo> {
+    let Some(id) = cpal::available_hosts()
+        .into_iter()
+        .find(|h| h.name().eq_ignore_ascii_case(host))
+    else {
+        return Vec::new();
+    };
+    let Ok(host) = cpal::host_from_id(id) else {
+        return Vec::new();
+    };
+    host.input_devices()
+        .map(|ds| ds.map(|d| describe(&d)).collect())
+        .unwrap_or_default()
+}
+
 /// Whether the device in `profile` can be found now, for example after it
 /// was unplugged.
 pub fn is_present(profile: &DeviceProfile) -> bool {
@@ -171,6 +217,11 @@ pub struct StreamStatus {
     pub last_frames: AtomicU64,
     /// Output latency the driver reported on the last callback, in µs.
     pub output_latency_us: AtomicU64,
+    /// Input latency the driver reported on the last input callback, µs.
+    pub input_latency_us: AtomicU64,
+    /// Output callbacks that found less input waiting than they needed
+    /// (the gap is filled with silence).
+    pub input_short: AtomicU64,
     /// Set if the driver reported an error (for example the device was
     /// unplugged); playback has stopped.
     pub failed: AtomicBool,
@@ -181,7 +232,23 @@ pub struct Running {
     _backend: Backend,
     pub status: Arc<StreamStatus>,
     pub channels: u16,
+    /// Input channels being passed to the engine; 0 for none.
+    pub input_channels: u16,
+    /// Why there is no input, if one was asked for and failed.
+    pub input_error: Option<String>,
     pub rate: u32,
+}
+
+impl Running {
+    /// The recording offset to use: the profile's measured one, or else
+    /// the input and output latency the driver reports.
+    pub fn record_offset(&self, profile: &DeviceProfile) -> u32 {
+        profile.record_offset.unwrap_or_else(|| {
+            let us = self.status.input_latency_us.load(Ordering::Relaxed)
+                + self.status.output_latency_us.load(Ordering::Relaxed);
+            (us * self.rate as u64 / 1_000_000) as u32
+        })
+    }
 }
 
 /// Opens the device in `profile` and starts calling `engine` from its
@@ -189,7 +256,7 @@ pub struct Running {
 // The fields are held only to keep the audio running until dropped.
 #[allow(dead_code)]
 enum Backend {
-    Device(cpal::Stream),
+    Device(cpal::Stream, Option<cpal::Stream>),
     Silent(SilentThread),
 }
 
@@ -210,7 +277,13 @@ impl Drop for SilentThread {
 /// Runs the engine in real time with no device, discarding the sound:
 /// for machines without audio (such as build servers) and for trying the
 /// app out. Playback, meters and the playhead all behave as normal.
+///
+/// With the environment variable `DAW_TEST_INPUT` set, it also feeds two
+/// input channels of test tone (220 Hz left, 330 Hz right), so recording
+/// can be tried without an interface.
 pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
+    let test_input = std::env::var_os("DAW_TEST_INPUT").is_some();
+    let in_ch: usize = if test_input { 2 } else { 0 };
     let status = Arc::new(StreamStatus::default());
     let stop = Arc::new(AtomicBool::new(false));
     let (s, st) = (status.clone(), stop.clone());
@@ -219,10 +292,18 @@ pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
         .name("silent audio".into())
         .spawn(move || {
             let (mut l, mut r) = (vec![0.0f32; n], vec![0.0f32; n]);
+            let mut inp = vec![0.0f32; n * in_ch];
+            let mut t = 0u64;
             let period = std::time::Duration::from_secs_f64(n as f64 / rate as f64);
             let mut next = std::time::Instant::now();
             while !st.load(Ordering::Relaxed) {
-                engine.process(&mut l, &mut r);
+                for frame in inp.chunks_mut(2) {
+                    let x = t as f32 / rate as f32 * std::f32::consts::TAU;
+                    frame[0] = (x * 220.0).sin() * 0.3;
+                    frame[1] = (x * 330.0).sin() * 0.3;
+                    t += 1;
+                }
+                engine.process_duplex(&inp, in_ch, &mut l, &mut r, None);
                 s.callbacks.fetch_add(1, Ordering::Relaxed);
                 s.last_frames.store(n as u64, Ordering::Relaxed);
                 next += period;
@@ -239,12 +320,14 @@ pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
         }),
         status,
         channels: 2,
+        input_channels: in_ch as u16,
+        input_error: None,
         rate,
     }
 }
 
 pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String> {
-    let (_host, device) = find(profile)?;
+    let (host, device) = find(profile)?;
     let supported = device
         .default_output_config()
         .map_err(|e| format!("could not read the device's settings: {e}"))?;
@@ -257,34 +340,148 @@ pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String>
             return Err(format!("the device has no output {}", ch + 1));
         }
     }
+    let buffer_size = profile
+        .buffer
+        .map_or(BufferSize::Default, BufferSize::Fixed);
     let config = StreamConfig {
         channels,
         sample_rate: profile.rate,
-        buffer_size: profile
-            .buffer
-            .map_or(BufferSize::Default, BufferSize::Fixed),
+        buffer_size,
     };
     let status = Arc::new(StreamStatus::default());
+
+    // Input first, so the output callback has its queue from the start.
+    let slack = 2 * profile.buffer.unwrap_or(1024) as usize;
+    let (input, input_error) = match &profile.input {
+        None => (None, None),
+        Some(name) => match open_input(&host, name, profile.rate, buffer_size, slack, &status) {
+            Ok(i) => (Some(i), None),
+            Err(e) => (None, Some(e)),
+        },
+    };
+    let (in_stream, in_rx, input_channels) = match input {
+        Some((s, rx, ch)) => (Some(s), Some(rx), ch),
+        None => (None, None, 0),
+    };
+    let out = Out {
+        profile,
+        input: in_rx,
+        input_channels: input_channels as usize,
+        slack,
+    };
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, &config, profile, engine, &status),
-        SampleFormat::I16 => build::<i16>(&device, &config, profile, engine, &status),
-        SampleFormat::I32 => build::<i32>(&device, &config, profile, engine, &status),
-        SampleFormat::U16 => build::<u16>(&device, &config, profile, engine, &status),
+        SampleFormat::F32 => build::<f32>(&device, &config, out, engine, &status),
+        SampleFormat::I16 => build::<i16>(&device, &config, out, engine, &status),
+        SampleFormat::I32 => build::<i32>(&device, &config, out, engine, &status),
+        SampleFormat::U16 => build::<u16>(&device, &config, out, engine, &status),
         f => Err(format!("unsupported sample format {f:?}")),
     }?;
+    if let Some(i) = &in_stream {
+        i.play().map_err(|e| e.to_string())?;
+    }
     stream.play().map_err(|e| e.to_string())?;
     Ok(Running {
-        _backend: Backend::Device(stream),
+        _backend: Backend::Device(stream, in_stream),
         status,
         channels,
+        input_channels,
+        input_error,
         rate: profile.rate,
     })
+}
+
+/// The input side: a stream that pushes interleaved `f32` samples into a
+/// queue, the queue's other end, and the channel count.
+type InputSide = (cpal::Stream, Consumer<f32>, u16);
+
+fn open_input(
+    host: &Host,
+    name: &str,
+    rate: u32,
+    buffer_size: BufferSize,
+    slack: usize,
+    status: &Arc<StreamStatus>,
+) -> Result<InputSide, String> {
+    let device = find_input(host, name).ok_or(format!("input device {name:?} not found"))?;
+    let supported = device
+        .default_input_config()
+        .map_err(|e| format!("could not read the input's settings: {e}"))?;
+    let channels = supported.channels();
+    let config = StreamConfig {
+        channels,
+        sample_rate: rate,
+        buffer_size,
+    };
+    // Room for plenty of slack; a full queue drops input.
+    let (mut tx, rx) = RingBuffer::<f32>::new((slack * 8).max(MAX_BLOCK * 4) * channels as usize);
+    for _ in 0..slack * channels as usize {
+        let _ = tx.push(0.0);
+    }
+    let stream = match supported.sample_format() {
+        SampleFormat::F32 => build_input::<f32>(&device, &config, tx, status),
+        SampleFormat::I16 => build_input::<i16>(&device, &config, tx, status),
+        SampleFormat::I32 => build_input::<i32>(&device, &config, tx, status),
+        SampleFormat::U16 => build_input::<u16>(&device, &config, tx, status),
+        f => Err(format!("unsupported input sample format {f:?}")),
+    }?;
+    Ok((stream, rx, channels))
+}
+
+fn build_input<T>(
+    device: &Device,
+    config: &StreamConfig,
+    mut tx: Producer<f32>,
+    status: &Arc<StreamStatus>,
+) -> Result<cpal::Stream, String>
+where
+    T: SizedSample + Send + 'static,
+    f32: FromSample<T>,
+{
+    let s = status.clone();
+    let on_error = {
+        let s = status.clone();
+        move |e: cpal::Error| {
+            s.failed.store(true, Ordering::Relaxed);
+            eprintln!("audio input error: {e}");
+        }
+    };
+    device
+        .build_input_stream(
+            *config,
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                let ts = info.timestamp();
+                if let Some(d) = ts.callback.checked_duration_since(ts.capture) {
+                    s.input_latency_us
+                        .store(d.as_micros() as u64, Ordering::Relaxed);
+                }
+                // A full queue means the output side has stalled; the
+                // input is dropped rather than blocking.
+                for x in data {
+                    if tx.push(x.to_sample::<f32>()).is_err() {
+                        break;
+                    }
+                }
+            },
+            on_error,
+            None,
+        )
+        .map_err(|e| format!("could not open the input: {e}"))
+}
+
+/// What the output callback needs besides the engine.
+struct Out<'a> {
+    profile: &'a DeviceProfile,
+    input: Option<Consumer<f32>>,
+    input_channels: usize,
+    /// Input frames to keep queued; more than a few times this is
+    /// dropped, so monitoring latency cannot creep up.
+    slack: usize,
 }
 
 fn build<T>(
     device: &Device,
     config: &StreamConfig,
-    profile: &DeviceProfile,
+    out: Out,
     mut engine: Engine,
     status: &Arc<StreamStatus>,
 ) -> Result<cpal::Stream, String>
@@ -292,11 +489,13 @@ where
     T: SizedSample + FromSample<f32> + Send + 'static,
 {
     let chans = config.channels as usize;
-    let (l_ch, r_ch, click_ch) = (profile.main.0, profile.main.1, profile.click);
-    // Planar scratch, allocated here, never in the callback.
+    let (l_ch, r_ch, click_ch) = (out.profile.main.0, out.profile.main.1, out.profile.click);
+    let (mut input, in_ch, slack) = (out.input, out.input_channels, out.slack);
+    // Scratch, allocated here, never in the callback.
     let mut l = vec![0.0f32; MAX_BLOCK];
     let mut r = vec![0.0f32; MAX_BLOCK];
     let mut c = vec![0.0f32; MAX_BLOCK];
+    let mut inp = vec![0.0f32; MAX_BLOCK * in_ch];
     let s = status.clone();
     let on_error = {
         let s = status.clone();
@@ -317,10 +516,33 @@ where
                     s.output_latency_us
                         .store(d.as_micros() as u64, Ordering::Relaxed);
                 }
+                if let Some(q) = &mut input {
+                    // Too much queued: drop the oldest down to the slack.
+                    let queued = q.slots() / in_ch;
+                    if queued > frames + 4 * slack
+                        && let Ok(chunk) = q.read_chunk((queued - frames - slack) * in_ch)
+                    {
+                        chunk.commit_all();
+                    }
+                }
                 for block in data.chunks_mut(MAX_BLOCK * chans) {
                     let n = block.len() / chans;
                     let (bl, br, bc) = (&mut l[..n], &mut r[..n], &mut c[..n]);
-                    engine.process_split(bl, br, click_ch.map(|_| &mut *bc));
+                    let bi = &mut inp[..n * in_ch];
+                    if let Some(q) = &mut input {
+                        let got = q.slots().min(bi.len());
+                        if let Ok(chunk) = q.read_chunk(got) {
+                            let (a, b) = chunk.as_slices();
+                            bi[..a.len()].copy_from_slice(a);
+                            bi[a.len()..got].copy_from_slice(b);
+                            chunk.commit_all();
+                        }
+                        if got < bi.len() {
+                            bi[got..].fill(0.0);
+                            s.input_short.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    engine.process_duplex(bi, in_ch, bl, br, click_ch.map(|_| &mut *bc));
                     for (i, frame) in block.chunks_mut(chans).enumerate() {
                         for (ch, out) in frame.iter_mut().enumerate() {
                             let mut v = 0.0;

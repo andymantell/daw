@@ -11,3 +11,4 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+rtrb = "0.4.1"

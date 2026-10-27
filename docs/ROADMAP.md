@@ -154,6 +154,9 @@ and leave each other time-pinned feedback in a shared project.
 - Both use a tuner and metronome and can work fully offline.
 
 ### 1.1 Engine core (L)
+*Started 2026-10-27, at risk until the Phase 0 checks on the owner's PC
+pass. Done so far: tempo map, render graph with track mixer and meters,
+sample-accurate transport and loop, offline render (`crates/engine`).*
 - Audio device selection (driver, device, sample rate, buffer size) and a
   device-settings panel with measured latency.
 - Transport: play, stop, position, loop region, tempo, time signature

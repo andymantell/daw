@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running};
 use daw_engine::engine::{self, Command, Controller};
@@ -83,7 +84,12 @@ struct App {
     loop_bars: (i64, i64),
     master_meter: (f32, f32),
     message: Option<String>,
+    /// The device stopped (unplugged, say): when to look for it again.
+    reconnect: Option<Instant>,
 }
+
+/// How often to look for a lost device.
+const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 
 impl App {
     fn new(files: Vec<String>) -> App {
@@ -110,6 +116,7 @@ impl App {
             loop_bars: (1, 5),
             master_meter: (0.0, 0.0),
             message: None,
+            reconnect: None,
         };
         app.audio = app.open_device(eng);
         for f in files {
@@ -145,7 +152,8 @@ impl App {
 
     /// Starts a fresh engine on the chosen device, keeping the session.
     fn restart_audio(&mut self) {
-        // Stop the old audio before starting the new.
+        // Stop the old audio before starting the new, keeping the place.
+        let pos = self.ctl.status().position();
         self.audio = Audio::Stopped;
         let (mut ctl, eng) = engine::new(audio::MAX_BLOCK);
         let disk = ctl.take_streamer().expect("new controller").spawn();
@@ -163,7 +171,38 @@ impl App {
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
         self.send_loop();
+        self.send(Command::Seek(pos));
         self.audio = self.open_device(eng);
+    }
+
+    /// Notices a device that has stopped, plays silently meanwhile, and
+    /// starts again on it once it is back.
+    fn watch_device(&mut self, ctx: &egui::Context) {
+        if let Audio::Running(r) = &self.audio
+            && r.status.failed.load(Ordering::Relaxed)
+        {
+            self.restart_audio();
+            if !matches!(self.audio, Audio::Running(_)) {
+                self.message = Some(
+                    "The audio device stopped (unplugged?). Playing silently until it is back."
+                        .into(),
+                );
+                self.reconnect = Some(Instant::now() + RECONNECT_EVERY);
+            }
+        }
+        let Some(at) = self.reconnect else { return };
+        if Instant::now() >= at {
+            if self.profile.as_ref().is_some_and(audio::is_present) {
+                self.restart_audio();
+            }
+            if matches!(self.audio, Audio::Running(_)) {
+                self.reconnect = None;
+                self.message = None;
+            } else {
+                self.reconnect = Some(Instant::now() + RECONNECT_EVERY);
+            }
+        }
+        ctx.request_repaint_after(RECONNECT_EVERY);
     }
 
     fn tempo_map(&self) -> TempoMap {
@@ -564,6 +603,7 @@ impl App {
             });
         self.show_devices = open;
         if apply {
+            self.reconnect = None;
             self.profile = self.draft.clone();
             self.restart_audio();
         }
@@ -615,6 +655,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.ctl.collect_garbage();
+        self.watch_device(&ctx);
 
         // Meters fall back at about 20 dB a second.
         let dt = ctx.input(|i| i.stable_dt).min(0.1);

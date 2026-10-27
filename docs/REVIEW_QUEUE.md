@@ -82,6 +82,11 @@ first, which takes a moment for long files.
       beat against a backing track you know the tempo of. Try Eighths,
       Count-in, and Metronome output set to outputs 3/4 so the click is in
       the headphones only.
+- [ ] **1.1 Unplugging.** While playing on the UMC1820, pull its USB
+      cable. Pass: the app says the device stopped and keeps running
+      (silently); plug it back in and within a few seconds sound returns
+      at the same place, without restarting the app. Note what happens
+      if not: ASIO drivers differ in how they report this.
 - [ ] **1.1 Other sample rates.** Drop a 44.1 kHz WAV file (a CD rip,
       say) next to a 48 kHz one. Pass: "Opening 1 file…" shows briefly,
       then both play in time and at the right pitch. Then change the

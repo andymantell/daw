@@ -9,8 +9,9 @@
 //! channel layout the device uses. On Windows, ASIO is preferred where a
 //! driver is installed.
 //!
-//! Not here yet: audio input (roadmap 1.2), and reconnecting after the
-//! device is unplugged (the stream reports the error and stops).
+//! Not here yet: audio input (roadmap 1.2). If the device is unplugged
+//! the stream reports it in [`StreamStatus::failed`] and stops; the app
+//! watches for the device with [`is_present`] and starts again.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -153,6 +154,12 @@ fn find(p: &DeviceProfile) -> Result<(Host, Device), String> {
         })
         .ok_or(format!("device {:?} not found", p.device))?;
     Ok((host, device))
+}
+
+/// Whether the device in `profile` can be found now, for example after it
+/// was unplugged.
+pub fn is_present(profile: &DeviceProfile) -> bool {
+    find(profile).is_ok()
 }
 
 /// Shared with the UI while a device runs.

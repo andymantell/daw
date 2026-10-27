@@ -162,7 +162,8 @@ render (`crates/engine`), audio devices (`crates/audio-io`), and a first
 app window with a mixer, transport and device settings (`crates/app`).
 Files at other sample rates are converted on import, in the background,
 into a cache folder (to move into the project folder once projects
-are saved). Still to do: measured latency in the settings panel (with
+are saved). If the device is unplugged, the app plays silently and
+starts again on it when it is back. Still to do: measured latency in the settings panel (with
 1.2).*
 - Audio device selection (driver, device, sample rate, buffer size) and a
   device-settings panel with measured latency.

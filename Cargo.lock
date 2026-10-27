@@ -887,7 +887,9 @@ version = "0.0.0"
 dependencies = [
  "daw-audio-io",
  "daw-engine",
+ "daw-plugins",
  "eframe",
+ "vst3",
 ]
 
 [[package]]

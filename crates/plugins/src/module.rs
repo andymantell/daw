@@ -68,8 +68,11 @@ pub struct Module {
 impl Module {
     pub fn load(bundle: &Path) -> Result<Module> {
         let bin = binary_path(bundle);
+        if !bin.is_file() {
+            return Err("could not load: no binary for this platform in the bundle".into());
+        }
         let lib = unsafe { libloading::Library::new(&bin) }
-            .map_err(|e| format!("could not load {}: {e}", bin.display()))?;
+            .map_err(|e| format!("could not load: {e}"))?;
         unsafe {
             #[cfg(windows)]
             if let Ok(init) = lib.get::<unsafe extern "system" fn() -> bool>(b"InitDll\0")

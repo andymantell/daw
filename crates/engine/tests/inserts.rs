@@ -91,7 +91,10 @@ fn effects_run_in_order_and_bypass_skips_them() {
         },
     ];
     s.tracks.push(t);
-    let mut fx = vec![(1, DelayGain::make(0, 0.5).0), (2, DelayGain::make(0, 0.0).0)];
+    let mut fx = vec![
+        (1, DelayGain::make(0, 0.5).0),
+        (2, DelayGain::make(0, 0.0).0),
+    ];
     let g = s.compile_with(64, &mut fx).unwrap();
     assert!(fx.is_empty(), "the graph took both effects");
     let [l, _] = engine::render_offline(g, Frames(0), 1000, 64);

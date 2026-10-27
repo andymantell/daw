@@ -200,6 +200,21 @@ when the interface's own monitoring is used.*
 - Several takes per track: newest on top, older ones kept and switchable.
 
 ### 1.3 Plugin hosting — first cut (L)
+*Started 2026-10-28, at risk. Done so far: VST 3 scanning of the
+standard folders, each bundle opened by a separate copy of the app with a
+30 s limit, results kept in `%APPDATA%\DAW\plugins.txt` and only changed
+bundles rescanned; a plugin list (Settings → Plugins) to switch plugins
+on and off, rescan, and retry failures; per-track effects (FX button) to
+add, bypass, reorder and remove, with the host's own sliders for any
+plugin's parameters and, on Windows, the plugin's own editor window;
+latency compensated by reading the track's clips ahead; monitoring runs
+through the effects; effects carry over unchanged when the session
+changes, and are made again with the same settings when the device or
+sample rate changes. Still to do: saving effects and their state in the
+project (with project saving), and frozen audio for missing plugins
+(with collaboration). Known limits: effects run inside the app, so a
+plugin that crashes while playing takes the app with it; latency
+compensation glitches for that many frames where a loop wraps.*
 - Plugin scanning, run out of process so a bad plugin can't crash the app.
   A plugin manager lets users enable, disable and rescan.
 - **VST 3 effects as track inserts** (instrument plugins come in Phase 3),

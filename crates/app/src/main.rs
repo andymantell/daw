@@ -2,11 +2,16 @@
 //! The desktop application. Phase 1 so far: open WAV files as tracks,
 //! play them with a mixer, loop, metronome and count-in, choose the audio
 //! device, and record: per track input, arm and monitor, with takes kept
-//! and switchable.
+//! and switchable; VST 3 effects as track inserts.
 //!
 //! Usage: `daw [file.wav ...]`, or drop WAV files on the window. Files at
 //! another sample rate from the device are converted in the background
 //! into a cache folder first.
+//!
+//! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
+//! that way to open each plugin safely in a separate process.
+
+mod fx;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,6 +28,7 @@ use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
 use daw_engine::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
 use eframe::egui::{self, Color32, Key, RichText, Sense, Stroke, vec2};
+use fx::{Effects, FxSlot};
 
 struct Track {
     name: String,
@@ -37,6 +43,8 @@ struct Track {
     input: Option<Input>,
     arm: bool,
     monitor: bool,
+    /// Insert effects, in order.
+    fx: Vec<FxSlot>,
     /// Peak levels shown on the meter, decaying.
     meter: (f32, f32),
 }
@@ -52,6 +60,7 @@ impl Track {
             input: None,
             arm: false,
             monitor: false,
+            fx: Vec::new(),
             meter: (0.0, 0.0),
         }
     }
@@ -138,6 +147,7 @@ struct App {
     reconnect: Option<Instant>,
     /// Device settings kept between runs.
     saved: SavedProfiles,
+    effects: Effects,
 }
 
 /// How often to look for a lost device.
@@ -178,7 +188,9 @@ impl App {
             message: None,
             reconnect: None,
             saved,
+            effects: Effects::new(config_dir().join("plugins.txt")),
         };
+        app.effects.start_scan();
         app.audio = app.open_device(eng);
         for f in files {
             app.add_file(Path::new(&f));
@@ -237,6 +249,22 @@ impl App {
         let takes = old.finished_takes();
         self.add_takes(takes);
         self.recording = false;
+        // The old engine took its effects with it: make them again, at
+        // the new rate, with the same settings.
+        let rate = self.profile.as_ref().map_or(self.rate, |p| p.rate);
+        self.effects.pending.clear();
+        for t in &mut self.tracks {
+            let mut failed = Vec::new();
+            for (i, slot) in t.fx.iter_mut().enumerate() {
+                if let Err(e) = self.effects.reload(slot, rate) {
+                    self.message = Some(format!("{}: {e}", slot.name));
+                    failed.push(i);
+                }
+            }
+            for i in failed.into_iter().rev() {
+                t.fx.remove(i);
+            }
+        }
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
         self.send_loop();
@@ -371,9 +399,10 @@ impl App {
             spec.arm = t.arm;
             // With direct monitoring the interface plays the input.
             spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
+            spec.inserts = t.fx.iter().map(FxSlot::spec).collect();
             s.tracks.push(spec);
         }
-        match s.compile(audio::MAX_BLOCK) {
+        match s.compile_with(audio::MAX_BLOCK, &mut self.effects.pending) {
             Ok(g) => {
                 self.send_graph(g);
             }
@@ -574,12 +603,12 @@ impl App {
         let mut changes = Vec::new();
         let mut rebuild = false;
         egui::Grid::new("tracks")
-            .num_columns(9)
+            .num_columns(10)
             .spacing(vec2(10.0, 10.0))
             .striped(true)
             .show(ui, |ui| {
                 for h in [
-                    "Track", "Input", "", "Level", "Volume", "Pan", "", "", "Take",
+                    "Track", "Input", "", "Level", "Volume", "Pan", "", "", "Effects", "Take",
                 ] {
                     ui.strong(h);
                 }
@@ -624,6 +653,23 @@ impl App {
                         .on_hover_text("Pan");
                     ui.toggle_value(&mut t.mix.mute, "Mute");
                     ui.toggle_value(&mut t.mix.solo, "Solo");
+                    let label = match t.fx.len() {
+                        0 => "FX".to_string(),
+                        n => format!("FX ({n})"),
+                    };
+                    let open = self.effects.open_track == Some(i);
+                    if ui
+                        .selectable_label(open, label)
+                        .on_hover_text(
+                            t.fx.iter()
+                                .map(|f| f.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" → "),
+                        )
+                        .clicked()
+                    {
+                        self.effects.open_track = (!open).then_some(i);
+                    }
                     rebuild |= take_picker(ui, i, t);
                     ui.end_row();
                     if t.mix != before {
@@ -863,13 +909,18 @@ impl App {
 /// Settings are kept per user: `%APPDATA%\<name>\settings.txt` on
 /// Windows, `~/.config/<name>/settings.txt` elsewhere.
 fn settings_path() -> PathBuf {
+    config_dir().join("settings.txt")
+}
+
+/// Per-user settings folder: `%APPDATA%\<name>` on Windows,
+/// `~/.config/<name>` elsewhere.
+fn config_dir() -> PathBuf {
     std::env::var_os("APPDATA")
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME"))
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(std::env::temp_dir)
         .join(APP_NAME)
-        .join("settings.txt")
 }
 
 fn load_settings() -> SavedProfiles {
@@ -1032,8 +1083,20 @@ impl eframe::App for App {
         for p in dropped {
             self.add_file(&p);
         }
-        if self.finish_imports() | self.finish_takes() {
+        let mut rebuild = self.finish_imports() | self.finish_takes();
+        for t in &mut self.tracks {
+            for slot in &mut t.fx {
+                rebuild |= slot.poll();
+            }
+        }
+        if let Some(e) = self.effects.poll_scan() {
+            self.message = Some(e);
+        }
+        if rebuild {
             self.rebuild();
+        }
+        if self.effects.scanning().is_some() {
+            ctx.request_repaint_after(Duration::from_millis(200));
         }
         if self.tracks.iter().any(|t| t.arm || t.monitor) {
             // Input meters move while stopped.
@@ -1061,6 +1124,10 @@ impl eframe::App for App {
                         self.show_devices = true;
                         ui.close();
                     }
+                    if ui.button("Plugins…").clicked() {
+                        self.effects.show_manager = true;
+                        ui.close();
+                    }
                 });
                 ui.separator();
                 match &self.audio {
@@ -1074,6 +1141,10 @@ impl eframe::App for App {
                     Audio::Silent(..) | Audio::Stopped => {
                         ui.colored_label(Color32::LIGHT_RED, "No audio device: playing silently");
                     }
+                }
+                if let Some(s) = self.effects.scanning() {
+                    ui.spinner();
+                    ui.label(s);
                 }
                 if !self.imports.is_empty() {
                     ui.spinner();
@@ -1113,6 +1184,23 @@ impl eframe::App for App {
             egui::ScrollArea::vertical().show(ui, |ui| self.mixer(ui));
         });
         self.device_window(&ctx);
+        self.effects.manager_window(&ctx);
+        if let Some(i) = self.effects.open_track {
+            match self.tracks.get_mut(i) {
+                Some(t) => {
+                    if self.effects.track_window(
+                        &ctx,
+                        &t.name,
+                        &mut t.fx,
+                        self.rate,
+                        &mut self.message,
+                    ) {
+                        self.rebuild();
+                    }
+                }
+                None => self.effects.open_track = None,
+            }
+        }
         if self.ctl.status().playing() {
             ctx.request_repaint();
         }
@@ -1120,7 +1208,16 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result {
-    let files: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let [flag, bundle] = args.as_slice()
+        && flag == daw_plugins::scan::SCAN_ARG
+    {
+        std::process::exit(daw_plugins::scan::child_main(bundle.as_ref()));
+    }
+    let files: Vec<String> = args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_NAME)

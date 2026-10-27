@@ -55,6 +55,7 @@ jobs:
             spikes/target/release/plugin-host.exe
             spikes/target/release/ui-timeline.exe
             spikes/target/release/stretch-bench.exe
+            spikes/target/release/latency.exe
           if-no-files-found: error
       # Spike 0.6: measure the speed and pitch candidates and keep the
       # rendered audio for listening tests.

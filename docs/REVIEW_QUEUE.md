@@ -41,6 +41,12 @@ Spike 0.1 decides whether Rust is confirmed
       to rename, Space to play. Pass: 99% of frames under 16.7 ms and at
       least 55 fps. Also try Windows Narrator on the timeline, and display
       scaling at 150%.
+- [ ] **0.4 Latency.** Connect output 1 to input 1 of the UMC1820 with a
+      short jack cable, start with input 1's gain low (raise it if the report
+      says no pulses were heard), and turn the monitors down (the test
+      pulses are short chirps). Run
+      `latency --device UMC --buffers 64,128,256 --repeats 5`.
+      Pass: each buffer size says STABLE or WITHIN A BLOCK.
 - [ ] **0.6 Speed and pitch, CPU on real hardware.** `stretch-bench` (takes
       a few minutes). Optional: `stretch-bench --input my-playing.wav` with a
       48 kHz recording of real guitar, which makes better listening files.

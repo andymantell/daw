@@ -19,6 +19,9 @@ Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
 | Project document on a CRDT | `collab-doc` | Both candidates pass. Loro preferred (see below). |
 | Live peer-to-peer connection | — | Not started. Needs real home, mobile and school networks. |
 
+Latency spike ([ROADMAP](../docs/ROADMAP.md) 0.4): `latency`. Built;
+needs a loopback cable on the owner's interface.
+
 Speed and pitch spike ([ROADMAP](../docs/ROADMAP.md) 0.6): `stretch`.
 CPU and objective checks done; listening tests still to do (see below).
 
@@ -78,6 +81,39 @@ averaged 22 fps. That run says the timeline logic is cheap. It says
 nothing about real drawing speed, so the verdict waits for a run on the
 owner's PC. Not yet checked: a screen reader actually reading the
 timeline, high-DPI scaling, and input method editors for typing.
+
+## 0.4: round-trip latency, `latency`
+
+Measures the true round trip with a cable from an output straight into an
+input, and compares it with what the driver reports. It plays six short
+swept-sine pulses and finds each one in the recording by cross-correlation,
+to a fraction of a sample. Then it stops and restarts the audio several
+times per buffer size, because a recording offset is only usable if it is
+the same every time audio starts.
+
+```
+latency --list
+latency --device UMC --buffers 64,128,256 --repeats 5 --out 1 --in 1
+```
+
+For each run it reports:
+
+- **Round trip:** where the pulse arrived in the input stream minus where
+  it was sent in the output stream, counting frames from stream start.
+- **Driver reports:** output plus input latency from the driver's
+  timestamps.
+- **Timestamp error:** the arrival by the driver's input timestamps minus
+  the send time by its output timestamps. Zero means the reported
+  latencies are honest. Anything else is the extra recording offset a DAW
+  must apply.
+
+Then, across restarts, a verdict: stable (within one frame), within one
+block (meets the roadmap's ±1 block target), or unstable.
+
+Tested so far only with unit tests of the pulse finder: whole and
+fractional delays, noise, and polarity inversion. The stream side needs
+real hardware. The second half of 0.4, recording a guitar DI against a
+click, follows once the offsets are known.
 
 ## 0.6: speed and pitch, `stretch`
 

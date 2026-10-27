@@ -1,7 +1,7 @@
 # Phase 0 throwaway prototypes (ROADMAP 0.1). Not shipped.
 [workspace]
 resolver = "3"
-members = ["audio-io","collab-doc","engine", "plugin-host", "stretch", "ui-timeline", "vst3-scan", "vst3-test-plugin"]
+members = ["audio-io","collab-doc","engine", "latency", "plugin-host", "stretch", "ui-timeline", "vst3-scan", "vst3-test-plugin"]
 
 [workspace.package]
 edition = "2024"

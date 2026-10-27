@@ -81,6 +81,9 @@ quickly to confirm. The result goes in decision 0003.
   with what the driver reports, per OS and driver.
 - Record a guitar DI against a click. After compensation, takes must land
   within ±1 sample-block of the grid.
+- Status (2026-10-27): loopback measurement tool built
+  ([spikes/latency](../spikes/README.md)); waiting for a run on the test
+  machine.
 
 ### 0.5 Peer-to-peer collaboration spike (L)
 - Prototype the project document on a Rust CRDT (candidates: `yrs`,

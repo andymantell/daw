@@ -8,3 +8,4 @@ pub mod metronome;
 pub mod record;
 pub mod stream;
 pub mod time;
+pub mod tuner;

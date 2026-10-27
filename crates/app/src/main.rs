@@ -2,7 +2,8 @@
 //! The desktop application. Phase 1 so far: open WAV files as tracks,
 //! play them with a mixer, loop, metronome and count-in, choose the audio
 //! device, and record: per track input, arm and monitor, with takes kept
-//! and switchable; VST 3 effects as track inserts.
+//! and switchable; VST 3 effects as track inserts; a tuner and practice
+//! mute.
 //!
 //! Usage: `daw [file.wav ...]`, or drop WAV files on the window. Files at
 //! another sample rate from the device are converted in the background
@@ -12,6 +13,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod fx;
+mod tuner;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -43,6 +45,9 @@ struct Track {
     input: Option<Input>,
     arm: bool,
     monitor: bool,
+    /// Silenced to play the part yourself. Kept apart from `mix.mute`,
+    /// which belongs to the mix.
+    practice_mute: bool,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
     /// Peak levels shown on the meter, decaying.
@@ -50,6 +55,14 @@ struct Track {
 }
 
 impl Track {
+    /// The mix the engine plays: the track's own, with practice mute.
+    fn heard(&self) -> Mix {
+        Mix {
+            mute: self.mix.mute || self.practice_mute,
+            ..self.mix
+        }
+    }
+
     fn new(name: String) -> Track {
         Track {
             name,
@@ -60,6 +73,7 @@ impl Track {
             input: None,
             arm: false,
             monitor: false,
+            practice_mute: false,
             fx: Vec::new(),
             meter: (0.0, 0.0),
         }
@@ -148,6 +162,7 @@ struct App {
     /// Device settings kept between runs.
     saved: SavedProfiles,
     effects: Effects,
+    tuner: tuner::Tuner,
 }
 
 /// How often to look for a lost device.
@@ -189,6 +204,7 @@ impl App {
             reconnect: None,
             saved,
             effects: Effects::new(config_dir().join("plugins.txt")),
+            tuner: tuner::Tuner::new(rate),
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -267,6 +283,7 @@ impl App {
         }
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
+        self.send(self.tuner.command());
         self.send_loop();
         self.send(Command::Seek(pos));
         eng
@@ -394,7 +411,7 @@ impl App {
                 clips.push(ClipSpec::new(take.start, take.source.clone()));
             }
             let mut spec = TrackSpec::new(clips);
-            spec.mix = t.mix;
+            spec.mix = t.heard();
             spec.input = t.input;
             spec.arm = t.arm;
             // With direct monitoring the interface plays the input.
@@ -614,7 +631,7 @@ impl App {
                 }
                 ui.end_row();
                 for (i, t) in self.tracks.iter_mut().enumerate() {
-                    let before = t.mix;
+                    let before = t.heard();
                     let label = ui.label(&t.name);
                     if let Some((path, _)) = &t.file {
                         label.on_hover_text(path.display().to_string());
@@ -652,7 +669,11 @@ impl App {
                     ui.add(egui::Slider::new(&mut t.mix.pan, -1.0..=1.0).show_value(false))
                         .on_hover_text("Pan");
                     ui.toggle_value(&mut t.mix.mute, "Mute");
-                    ui.toggle_value(&mut t.mix.solo, "Solo");
+                    ui.horizontal(|ui| {
+                        ui.toggle_value(&mut t.mix.solo, "Solo");
+                        ui.toggle_value(&mut t.practice_mute, "🎧")
+                            .on_hover_text("Practice mute: silence this part to play it yourself");
+                    });
                     let label = match t.fx.len() {
                         0 => "FX".to_string(),
                         n => format!("FX ({n})"),
@@ -672,8 +693,8 @@ impl App {
                     }
                     rebuild |= take_picker(ui, i, t);
                     ui.end_row();
-                    if t.mix != before {
-                        changes.push((i, t.mix));
+                    if t.heard() != before {
+                        changes.push((i, t.heard()));
                     }
                 }
                 ui.label(RichText::new("Master").strong());
@@ -1129,6 +1150,14 @@ impl eframe::App for App {
                         ui.close();
                     }
                 });
+                ui.menu_button("Practice", |ui| {
+                    if ui.button("Tuner…").clicked() {
+                        self.tuner.open = true;
+                        let c = self.tuner.command();
+                        self.send(c);
+                        ui.close();
+                    }
+                });
                 ui.separator();
                 match &self.audio {
                     Audio::Running(r) => {
@@ -1185,6 +1214,17 @@ impl eframe::App for App {
         });
         self.device_window(&ctx);
         self.effects.manager_window(&ctx);
+        let inputs = match &self.audio {
+            Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
+            Audio::Stopped => 0,
+        };
+        if let Some(c) = self.tuner.window(&ctx, inputs) {
+            self.send(c);
+        }
+        self.tuner.update(&mut self.ctl, self.rate);
+        if self.tuner.open {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
         if let Some(i) = self.effects.open_track {
             match self.tracks.get_mut(i) {
                 Some(t) => {

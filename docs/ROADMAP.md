@@ -226,6 +226,12 @@ compensation glitches for that many frames where a loop wraps.*
   project), and the plugin's state is kept intact.
 
 ### 1.4 Practice tools (M)
+*Started 2026-10-28, at risk. Done so far: a chromatic tuner
+(Practice → Tuner) on any input channel, reading within a cent from a
+five-string bass's low B up, with the reference pitch setting (A = 400 to
+480 Hz); a per-track practice mute (🎧), kept apart from the mix's own
+mute. Speed, transpose and the tempo trainer wait for the speed-and-pitch
+choice (spike 0.6 listening). The reference pitch is not saved yet.*
 - Loop region, chosen quickly from sections and markers.
 - Pitch-preserving speed (50–150%) and transpose (±12 st), plus fine pitch
   in cents. **Tuning presets** for common shifts (e.g. "half step down →

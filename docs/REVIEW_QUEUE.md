@@ -151,6 +151,20 @@ plugin: `/mnt/project-files/screenshots/app-track-effects.png` and
       sample rate in Settings → Audio device. Pass: effects keep their
       settings and an open plugin window comes back.
 
+### Phase 1 app: practice
+
+Screenshot (a 220 Hz test tone standing in for a guitar):
+`/mnt/project-files/screenshots/app-tuner.png`.
+
+- [ ] **1.4 Tuner.** Practice → Tuner, Input set to your guitar's
+      channel. Tune each string, then check against a tuner you trust
+      (a clip-on or FL Studio's). Pass: same reading to within a couple
+      of cents, steady enough to tune by, and quick to settle after each
+      pluck. Try a bass's low E too if one is handy.
+- [ ] **1.4 Practice mute.** Load a backing with a guitar part on its own
+      track, press 🎧 on it and play along. Pass: that part goes silent and
+      comes back, and Mute still works separately.
+
 ## On other networks
 
 Spike 0.5, live sessions without a server

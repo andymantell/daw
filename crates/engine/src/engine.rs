@@ -50,6 +50,8 @@ pub enum Command {
     SetMetronome(Metronome),
     /// Records armed tracks whenever playing (after any count-in).
     SetRecording(bool),
+    /// Sends this input channel to the tuner; `None` stops.
+    SetTunerInput(Option<usize>),
 }
 
 /// Shared with the UI: where playback is, and peak levels since the UI
@@ -190,6 +192,7 @@ pub struct Controller {
     takes: Arc<Mutex<Vec<Take>>>,
     status: Arc<Status>,
     max_block: usize,
+    from_tuner: Consumer<f32>,
 }
 
 impl Controller {
@@ -228,6 +231,22 @@ impl Controller {
     /// Takes finished since the last call.
     pub fn finished_takes(&mut self) -> Vec<Take> {
         std::mem::take(&mut *self.takes.lock().unwrap())
+    }
+
+    /// Moves input samples sent to the tuner (see
+    /// [`Command::SetTunerInput`]) onto the end of `into`, keeping at
+    /// most `keep` of the newest.
+    pub fn take_tuner_samples(&mut self, into: &mut Vec<f32>, keep: usize) {
+        let n = self.from_tuner.slots();
+        if let Ok(chunk) = self.from_tuner.read_chunk(n) {
+            let (a, b) = chunk.as_slices();
+            into.extend_from_slice(a);
+            into.extend_from_slice(b);
+            chunk.commit_all();
+        }
+        if into.len() > keep {
+            into.drain(..into.len() - keep);
+        }
     }
 
     /// The block size graphs must be compiled for.
@@ -273,6 +292,8 @@ pub struct Engine {
     peaks: Vec<(f32, f32)>,
     recording: bool,
     to_recorder: Producer<RecBlock>,
+    tuner_input: Option<usize>,
+    to_tuner: Producer<f32>,
 }
 
 /// Commands that fit in the queue before `send` refuses more.
@@ -282,6 +303,9 @@ const DISK_QUEUE: usize = 4096;
 /// Recorded blocks in flight: about 20 seconds of one stereo track at
 /// 48 kHz, shared between armed tracks, before input is lost.
 const REC_QUEUE: usize = 8192;
+/// Tuner samples in flight: about a third of a second at 48 kHz, more
+/// than the UI needs between frames.
+const TUNER_QUEUE: usize = 16_384;
 
 /// Creates a connected controller and engine. `max_block` is the largest
 /// block the audio callback will ask for; larger ones are split.
@@ -299,6 +323,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let record_dir = Arc::new(Mutex::new(std::env::temp_dir().join("daw-takes")));
     let record_rate = Arc::new(Mutex::new(48_000));
     let takes = Arc::new(Mutex::new(Vec::new()));
+    let (tuner_tx, tuner_rx) = RingBuffer::new(TUNER_QUEUE);
     let recorder = Recorder::new(
         rec_rx,
         status.clone(),
@@ -318,6 +343,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             takes,
             status: status.clone(),
             max_block,
+            from_tuner: tuner_rx,
         },
         Engine {
             commands: cmd_rx,
@@ -337,6 +363,8 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             peaks: vec![(0.0, 0.0); MAX_TRACKS],
             recording: false,
             to_recorder: rec_tx,
+            tuner_input: None,
+            to_tuner: tuner_tx,
         },
     )
 }
@@ -422,6 +450,7 @@ impl Engine {
                 }
                 Command::SetMetronome(m) => self.metronome = m,
                 Command::SetRecording(on) => self.recording = on,
+                Command::SetTunerInput(ch) => self.tuner_input = ch,
             }
         }
     }
@@ -464,6 +493,19 @@ impl Engine {
             c.fill(0.0);
         }
         let n = left.len().min(right.len());
+        if let Some(ch) = self.tuner_input.filter(|&c| c < channels) {
+            // Whatever doesn't fit is dropped: the tuner only wants the
+            // newest audio.
+            let frames = (input.len() / channels).min(n);
+            let take = frames.min(self.to_tuner.slots());
+            if let Ok(mut chunk) = self.to_tuner.write_chunk(take) {
+                let (a, b) = chunk.as_mut_slices();
+                for (k, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
+                    *slot = input[(frames - take + k) * channels + ch];
+                }
+                chunk.commit_all();
+            }
+        }
         let inp = |range: std::ops::Range<usize>| InputBlock {
             data: input
                 .get(range.start * channels..(range.end * channels).min(input.len()))

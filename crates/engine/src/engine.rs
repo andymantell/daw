@@ -12,13 +12,14 @@
 //! A count-in plays clicks only, for a whole number of bars before the
 //! play position, then playback starts on the exact frame.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::graph::{Graph, MAX_TRACKS, Mix};
 use crate::metronome::{self, Metronome, Voice};
+use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
 use crate::time::{Frames, Ticks};
 
 /// Messages from the controller to the audio thread.
@@ -50,6 +51,12 @@ pub struct Status {
     position: AtomicI64,
     playing: AtomicBool,
     counting_in: AtomicBool,
+    loop_on: AtomicBool,
+    loop_start: AtomicI64,
+    loop_end: AtomicI64,
+    /// Frames of streamed audio played as silence because the disk had
+    /// not delivered them yet.
+    underruns: AtomicU64,
     /// Peak per track, left and right, as `f32` bits. Positive floats
     /// order the same as their bits, so `fetch_max` works on them.
     track_peaks: Vec<[AtomicU32; 2]>,
@@ -62,6 +69,10 @@ impl Status {
             position: AtomicI64::new(0),
             playing: AtomicBool::new(false),
             counting_in: AtomicBool::new(false),
+            loop_on: AtomicBool::new(false),
+            loop_start: AtomicI64::new(0),
+            loop_end: AtomicI64::new(0),
+            underruns: AtomicU64::new(0),
             track_peaks: (0..MAX_TRACKS)
                 .map(|_| [AtomicU32::new(0), AtomicU32::new(0)])
                 .collect(),
@@ -76,6 +87,23 @@ impl Status {
     /// True while playing, including during a count-in.
     pub fn playing(&self) -> bool {
         self.playing.load(Ordering::Relaxed)
+    }
+
+    /// Frames of streamed audio that were missing when played.
+    pub fn underruns(&self) -> u64 {
+        self.underruns.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn playhead(&self) -> Playhead {
+        Playhead {
+            position: self.position.load(Ordering::Relaxed),
+            looping: self.loop_on.load(Ordering::Relaxed).then(|| {
+                (
+                    self.loop_start.load(Ordering::Relaxed),
+                    self.loop_end.load(Ordering::Relaxed),
+                )
+            }),
+        }
     }
 
     /// True during a count-in.
@@ -101,6 +129,15 @@ fn take_pair(p: &[AtomicU32; 2]) -> (f32, f32) {
     )
 }
 
+/// Returns a chunk to the disk thread to be freed there. The queue is
+/// sized for every chunk in flight; if it is somehow full, leaking beats
+/// freeing on the audio thread.
+fn give_back(q: &mut Producer<Box<Chunk>>, c: Box<Chunk>) {
+    if let Err(rtrb::PushError::Full(c)) = q.push(c) {
+        std::mem::forget(c);
+    }
+}
+
 fn raise(slot: &AtomicU32, v: f32) {
     if v.is_finite() && v > 0.0 {
         slot.fetch_max(v.to_bits(), Ordering::Relaxed);
@@ -111,6 +148,8 @@ fn raise(slot: &AtomicU32, v: f32) {
 pub struct Controller {
     commands: Producer<Command>,
     retired: Consumer<Box<Graph>>,
+    placements: Arc<Mutex<Vec<Placement>>>,
+    streamer: Option<Streamer>,
     status: Arc<Status>,
     max_block: usize,
 }
@@ -121,6 +160,19 @@ impl Controller {
         self.commands
             .push(cmd)
             .map_err(|rtrb::PushError::Full(c)| c)
+    }
+
+    /// Sends a new graph, first telling the disk thread which files it
+    /// streams.
+    pub fn set_graph(&mut self, graph: Graph) -> Result<(), Command> {
+        *self.placements.lock().unwrap() = graph.placements();
+        self.send(Command::SetGraph(Box::new(graph)))
+    }
+
+    /// The disk thread's side, to run with [`Streamer::spawn`] or drive
+    /// by hand with [`Streamer::service`]. Can be taken once.
+    pub fn take_streamer(&mut self) -> Option<Streamer> {
+        self.streamer.take()
     }
 
     /// The block size graphs must be compiled for.
@@ -148,6 +200,8 @@ impl Controller {
 pub struct Engine {
     commands: Consumer<Command>,
     retired: Producer<Box<Graph>>,
+    from_disk: Consumer<ToAudio>,
+    to_disk: Producer<Box<Chunk>>,
     status: Arc<Status>,
     graph: Option<Box<Graph>>,
     max_block: usize,
@@ -166,6 +220,8 @@ pub struct Engine {
 
 /// Commands that fit in the queue before `send` refuses more.
 const QUEUE: usize = 1024;
+/// Chunk messages between the disk thread and the audio thread.
+const DISK_QUEUE: usize = 4096;
 
 /// Creates a connected controller and engine. `max_block` is the largest
 /// block the audio callback will ask for; larger ones are split.
@@ -175,16 +231,24 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let (ret_tx, ret_rx) = RingBuffer::new(QUEUE + 1);
     let status = Arc::new(Status::new());
     let max_block = max_block.max(1);
+    let (disk_tx, disk_rx) = RingBuffer::new(DISK_QUEUE);
+    let (back_tx, back_rx) = RingBuffer::new(DISK_QUEUE * 2);
+    let placements = Arc::new(Mutex::new(Vec::new()));
+    let streamer = Streamer::new(disk_tx, back_rx, status.clone(), placements.clone());
     (
         Controller {
             commands: cmd_tx,
             retired: ret_rx,
+            placements,
+            streamer: Some(streamer),
             status: status.clone(),
             max_block,
         },
         Engine {
             commands: cmd_rx,
             retired: ret_tx,
+            from_disk: disk_rx,
+            to_disk: back_tx,
             status,
             graph: None,
             max_block,
@@ -201,6 +265,33 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
 }
 
 impl Engine {
+    /// Takes in chunks from the disk thread, and gives back the ones it
+    /// asks for.
+    fn apply_disk(&mut self) {
+        while let Ok(msg) = self.from_disk.pop() {
+            match msg {
+                ToAudio::Loaded(c) => {
+                    let rejected = match &mut self.graph {
+                        Some(g) => g.insert_chunk(c),
+                        None => Some(c),
+                    };
+                    if let Some(c) = rejected {
+                        give_back(&mut self.to_disk, c);
+                    }
+                }
+                ToAudio::Drop { source, index } => {
+                    if let Some(c) = self
+                        .graph
+                        .as_mut()
+                        .and_then(|g| g.take_chunk(source, index))
+                    {
+                        give_back(&mut self.to_disk, c);
+                    }
+                }
+            }
+        }
+    }
+
     fn apply_commands(&mut self) {
         while let Ok(cmd) = self.commands.pop() {
             match cmd {
@@ -233,7 +324,11 @@ impl Engine {
                 Command::SetLoop(l) => {
                     self.looping = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
                 }
-                Command::SetGraph(g) => {
+                Command::SetGraph(mut g) => {
+                    if let Some(old) = &mut self.graph {
+                        let to_disk = &mut self.to_disk;
+                        g.adopt_chunks(old, |c| give_back(to_disk, c));
+                    }
                     if let Some(old) = self.graph.replace(g) {
                         // The queue has room for every graph in flight;
                         // if it is somehow full, leaking beats freeing here.
@@ -269,6 +364,7 @@ impl Engine {
     ) {
         debug_assert_eq!(left.len(), right.len());
         self.apply_commands();
+        self.apply_disk();
         left.fill(0.0);
         right.fill(0.0);
         if let Some(c) = click.as_deref_mut() {
@@ -327,6 +423,13 @@ impl Engine {
         }
         self.status.position.store(self.pos, Ordering::Relaxed);
         self.status.playing.store(self.playing, Ordering::Relaxed);
+        if let Some((a, b)) = self.looping {
+            self.status.loop_start.store(a, Ordering::Relaxed);
+            self.status.loop_end.store(b, Ordering::Relaxed);
+        }
+        self.status
+            .loop_on
+            .store(self.looping.is_some(), Ordering::Relaxed);
         self.status
             .counting_in
             .store(self.count_in_to.is_some(), Ordering::Relaxed);
@@ -353,7 +456,12 @@ impl Engine {
             return;
         };
         let tracks = g.track_count();
-        g.render(self.pos, [left, right], &mut self.peaks[..tracks]);
+        let missing = g.render(self.pos, [left, right], &mut self.peaks[..tracks]);
+        if missing > 0 {
+            self.status
+                .underruns
+                .fetch_add(missing as u64, Ordering::Relaxed);
+        }
         for (slot, p) in self.status.track_peaks.iter().zip(&self.peaks[..tracks]) {
             raise(&slot[0], p.0);
             raise(&slot[1], p.1);
@@ -366,15 +474,22 @@ impl Engine {
 }
 
 /// Renders a graph offline, through the same code as real-time playback,
-/// from `from` for `frames` frames. Used for export and tests.
+/// from `from` for `frames` frames. Used for export and tests. Streamed
+/// files are read before each block, so nothing is missing.
 pub fn render_offline(graph: Graph, from: Frames, frames: usize, block: usize) -> [Vec<f32>; 2] {
     let (mut ctl, mut eng) = new(block);
-    let _ = ctl.send(Command::SetGraph(Box::new(graph)));
+    let mut disk = ctl
+        .take_streamer()
+        .expect("a new controller has its streamer");
+    let _ = ctl.set_graph(graph);
     let _ = ctl.send(Command::Seek(from));
+    // Apply the commands so the disk thread sees the start position.
+    eng.process(&mut [], &mut []);
     let _ = ctl.send(Command::Play);
     let mut out = [vec![0.0; frames], vec![0.0; frames]];
     let [l, r] = &mut out;
     for (bl, br) in l.chunks_mut(block).zip(r.chunks_mut(block)) {
+        disk.service();
         eng.process(bl, br);
     }
     out

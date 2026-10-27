@@ -11,4 +11,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+hound = "3.5.1"
 rtrb = "0.4.1"
+

@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use crate::metronome::Clicks;
+use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::time::{Frames, TempoMap, Ticks};
 
 /// Most tracks a graph can hold; meters are sized to this up front.
@@ -33,23 +34,67 @@ impl AudioData {
     }
 }
 
+/// Where a clip's audio comes from.
+#[derive(Clone, Debug)]
+pub enum Source {
+    /// Decoded and held in memory (short sounds, tests).
+    Memory(Arc<AudioData>),
+    /// Streamed from a file on disk.
+    File(Arc<StreamSource>),
+}
+
+impl From<Arc<AudioData>> for Source {
+    fn from(d: Arc<AudioData>) -> Source {
+        Source::Memory(d)
+    }
+}
+
+impl From<Arc<StreamSource>> for Source {
+    fn from(s: Arc<StreamSource>) -> Source {
+        Source::File(s)
+    }
+}
+
+impl Source {
+    fn rate(&self) -> u32 {
+        match self {
+            Source::Memory(d) => d.rate,
+            Source::File(f) => f.rate,
+        }
+    }
+
+    fn channels(&self) -> usize {
+        match self {
+            Source::Memory(d) => d.channels.len(),
+            Source::File(f) => f.channels,
+        }
+    }
+
+    fn frames(&self) -> usize {
+        match self {
+            Source::Memory(d) => d.len(),
+            Source::File(f) => f.frames,
+        }
+    }
+}
+
 /// A clip placed on a track, in musical time.
 #[derive(Clone, Debug)]
 pub struct ClipSpec {
     pub start: Ticks,
-    pub data: Arc<AudioData>,
-    /// Where in `data` playback begins, in frames.
+    pub source: Source,
+    /// Where in the source playback begins, in frames.
     pub offset: usize,
-    /// How much of `data` plays, in frames; `None` for the rest of it.
+    /// How much of the source plays, in frames; `None` for the rest of it.
     pub len: Option<usize>,
     pub gain_db: f32,
 }
 
 impl ClipSpec {
-    pub fn new(start: Ticks, data: Arc<AudioData>) -> ClipSpec {
+    pub fn new(start: Ticks, source: impl Into<Source>) -> ClipSpec {
         ClipSpec {
             start,
-            data,
+            source: source.into(),
             offset: 0,
             len: None,
             gain_db: 0.0,
@@ -163,7 +208,13 @@ pub(crate) struct ClipNode {
     pub end: i64,
     pub offset: usize,
     pub gain: f32,
-    pub data: Arc<AudioData>,
+    pub src: NodeSrc,
+}
+
+pub(crate) enum NodeSrc {
+    Memory(Arc<AudioData>),
+    /// Index into `Graph::streams`.
+    Stream(usize),
 }
 
 pub(crate) struct TrackNode {
@@ -187,6 +238,16 @@ impl TrackNode {
     }
 }
 
+/// Adds `run` frames of a chunk, from frame `at`, into the two buffers.
+fn mix_chunk(ch: &Chunk, at: usize, run: usize, gain: f32, l: &mut [f32], r: &mut [f32]) {
+    let k = ch.channels;
+    let s = &ch.samples[at * k..(at + run) * k];
+    for (i, frame) in s.chunks_exact(k).enumerate() {
+        l[i] += frame[0] * gain;
+        r[i] += frame[k - 1] * gain;
+    }
+}
+
 /// The compiled, immutable-shape graph the audio thread plays.
 pub struct Graph {
     pub(crate) tempo: TempoMap,
@@ -196,6 +257,9 @@ pub struct Graph {
     /// Per-track scratch, two channels each, `max_block` long.
     pub(crate) scratch: Vec<[Vec<f32>; 2]>,
     pub(crate) clicks: Clicks,
+    pub(crate) streams: Vec<StreamNode>,
+    /// The file each stream reads, for the disk thread.
+    placements: Vec<Placement>,
 }
 
 impl Session {
@@ -214,30 +278,54 @@ impl Session {
         }
         let rate = self.tempo.sample_rate();
         let mut tracks = Vec::with_capacity(self.tracks.len());
+        let mut streams: Vec<StreamNode> = Vec::new();
+        let mut placements = Vec::new();
         for (ti, t) in self.tracks.iter().enumerate() {
             let mut clips = Vec::with_capacity(t.clips.len());
             let mut stereo = false;
             for c in &t.clips {
-                if c.data.rate != rate {
+                if c.source.rate() != rate {
                     return Err(CompileError::RateMismatch { track: ti });
                 }
-                match c.data.channels.len() {
+                match c.source.channels() {
                     1 => {}
                     2 => stereo = true,
                     _ => return Err(CompileError::BadChannelCount { track: ti }),
                 }
-                let avail = c.data.len().saturating_sub(c.offset);
+                let avail = c.source.frames().saturating_sub(c.offset);
                 let len = c.len.unwrap_or(avail).min(avail);
                 if len == 0 {
                     continue;
                 }
                 let start = self.tempo.frames_at(c.start).0;
+                let src = match &c.source {
+                    Source::Memory(d) => NodeSrc::Memory(d.clone()),
+                    Source::File(f) => {
+                        placements.push(Placement {
+                            source: f.clone(),
+                            start,
+                            end: start + len as i64,
+                            offset: c.offset,
+                        });
+                        let i = match streams.iter().position(|s| s.id == f.id) {
+                            Some(i) => i,
+                            None => {
+                                streams.push(StreamNode {
+                                    id: f.id,
+                                    slots: (0..f.chunks()).map(|_| None).collect(),
+                                });
+                                streams.len() - 1
+                            }
+                        };
+                        NodeSrc::Stream(i)
+                    }
+                };
                 clips.push(ClipNode {
                     start,
                     end: start + len as i64,
                     offset: c.offset,
                     gain: db_to_gain(c.gain_db),
-                    data: c.data.clone(),
+                    src,
                 });
             }
             clips.sort_by_key(|c| c.start);
@@ -263,6 +351,8 @@ impl Session {
             master: db_to_gain(self.master_db),
             any_solo,
             clicks: Clicks::new(rate),
+            streams,
+            placements,
         })
     }
 }
@@ -297,8 +387,15 @@ impl Graph {
     /// Plays frames `[pos, pos + n)` of every track into its scratch
     /// buffers, applies the mixer, and adds the tracks into `out`. Peak
     /// levels go to `peaks` (track by track, after the fader).
-    pub(crate) fn render(&mut self, pos: i64, out: [&mut [f32]; 2], peaks: &mut [(f32, f32)]) {
+    /// Returns how many frames of streamed audio were missing.
+    pub(crate) fn render(
+        &mut self,
+        pos: i64,
+        out: [&mut [f32]; 2],
+        peaks: &mut [(f32, f32)],
+    ) -> usize {
         let n = out[0].len();
+        let mut missing = 0;
         let [out_l, out_r] = out;
         for (ti, t) in self.tracks.iter_mut().enumerate() {
             let [sl, sr] = &mut self.scratch[ti];
@@ -319,11 +416,41 @@ impl Graph {
                 let dst = (from - pos) as usize;
                 let src = c.offset + (from - c.start) as usize;
                 let len = (to - from) as usize;
-                let chans = &c.data.channels;
-                let right = chans.get(1).unwrap_or(&chans[0]);
-                for i in 0..len {
-                    sl[dst + i] += chans[0][src + i] * c.gain;
-                    sr[dst + i] += right[src + i] * c.gain;
+                match &c.src {
+                    NodeSrc::Memory(d) => {
+                        let chans = &d.channels;
+                        let right = chans.get(1).unwrap_or(&chans[0]);
+                        for i in 0..len {
+                            sl[dst + i] += chans[0][src + i] * c.gain;
+                            sr[dst + i] += right[src + i] * c.gain;
+                        }
+                    }
+                    NodeSrc::Stream(si) => {
+                        let slots = &self.streams[*si].slots;
+                        let mut done = 0;
+                        // One chunk at a time.
+                        while done < len {
+                            let f = src + done;
+                            let (ci, within) = (f / CHUNK, f % CHUNK);
+                            let run = (len - done).min(CHUNK - within);
+                            match slots.get(ci).and_then(|s| s.as_deref()) {
+                                Some(ch) => {
+                                    let run = run.min(ch.frames().saturating_sub(within));
+                                    mix_chunk(
+                                        ch,
+                                        within,
+                                        run,
+                                        c.gain,
+                                        &mut sl[dst + done..],
+                                        &mut sr[dst + done..],
+                                    );
+                                    missing += (len - done).min(CHUNK - within) - run;
+                                }
+                                None => missing += run,
+                            }
+                            done += (len - done).min(CHUNK - within);
+                        }
+                    }
                 }
             }
 
@@ -354,6 +481,47 @@ impl Graph {
         }
         for s in out_l.iter_mut().chain(out_r.iter_mut()) {
             *s *= self.master;
+        }
+        missing
+    }
+
+    /// The streamed clips, for [`Streamer::set_placements`](crate::stream::Streamer::set_placements).
+    pub fn placements(&self) -> Vec<Placement> {
+        self.placements.clone()
+    }
+
+    /// Stores a chunk from the disk thread. Gives it back if no stream in
+    /// this graph wants it.
+    pub(crate) fn insert_chunk(&mut self, c: Box<Chunk>) -> Option<Box<Chunk>> {
+        let Some(s) = self.streams.iter_mut().find(|s| s.id == c.source) else {
+            return Some(c);
+        };
+        match s.slots.get_mut(c.index) {
+            Some(slot) => slot.replace(c),
+            None => Some(c),
+        }
+    }
+
+    pub(crate) fn take_chunk(&mut self, source: u64, index: usize) -> Option<Box<Chunk>> {
+        self.streams
+            .iter_mut()
+            .find(|s| s.id == source)?
+            .slots
+            .get_mut(index)?
+            .take()
+    }
+
+    /// Moves every loaded chunk out of `old` into this graph where it has
+    /// a slot for it; `give_back` gets the rest.
+    pub(crate) fn adopt_chunks(&mut self, old: &mut Graph, mut give_back: impl FnMut(Box<Chunk>)) {
+        for s in &mut old.streams {
+            for slot in &mut s.slots {
+                if let Some(c) = slot.take()
+                    && let Some(c) = self.insert_chunk(c)
+                {
+                    give_back(c);
+                }
+            }
         }
     }
 }

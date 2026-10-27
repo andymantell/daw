@@ -382,7 +382,9 @@ mod x11 {
         fn draw(&mut self) {
             let (w, h) = (self.rect.w.max(1) as i16, self.rect.h.max(1) as i16);
             let _ = self.conn.clear_area(false, self.win, 0, 0, 0, 0);
-            let _ = self.conn.change_gc(self.gc, &ChangeGCAux::new().line_width(2));
+            let _ = self
+                .conn
+                .change_gc(self.gc, &ChangeGCAux::new().line_width(2));
             let _ = self.conn.poly_rectangle(
                 self.win,
                 self.gc,

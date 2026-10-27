@@ -10,7 +10,7 @@ server**. Audio data is large; project structure is small and changes
 often.
 
 ## Decision (proposed)
-- **Document:** a CRDT (candidates: `yrs`, `automerge`, Loro) with a typed
+- **Document:** a CRDT (preferred: Loro; also tested: `yrs`) with a typed
   schema layer. Every merge path (live, bundle, shared folder) uses the same
   CRDT, so they all converge.
 - **Assets:** immutable, content-addressed audio files inside the project
@@ -36,6 +36,15 @@ back to bundle or shared folder.
 Should we offer an **optional relay that users run themselves** (e.g. a
 teacher's own small server)? That would keep "no server we operate" while
 helping hard networks. Decide by Phase 4.
+
+## Spike results so far (2026-10-27)
+The document half of spike 0.5 is done (`spikes/collab-doc`, results in
+`spikes/README.md`). Loro and yrs both pass the concurrent-edit,
+offline-merge, three-peer, per-user-undo and save/reload tests. **Loro is
+the preferred CRDT**: it has a native movable list for track and clip
+order, smaller incremental updates and slower history growth, and
+built-in per-peer undo. The live-connection half (NAT traversal across
+real networks) is still to do, so the decision stays proposed.
 
 ## Validation (spike 0.5)
 Concurrent edits, offline merge, per-user undo, document size for a

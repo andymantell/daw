@@ -250,13 +250,20 @@ impl ParamChanges {
                 })
             })
             .collect();
+        // Some platforms' mutexes allocate on first lock (macOS); take
+        // each once now so the audio thread never is the first.
+        for w in &wrappers {
+            drop(w.inner.lock());
+        }
+        let used = Mutex::new(0);
+        drop(used.lock());
         ParamChanges {
             pool: wrappers
                 .iter()
                 .map(|w| w.to_com_ptr::<IParamValueQueue>().unwrap())
                 .collect(),
             wrappers,
-            used: Mutex::new(0),
+            used,
         }
     }
 

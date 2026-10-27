@@ -62,6 +62,8 @@ pub struct Module {
     // Field order matters: the factory is released before the library is
     // unloaded.
     pub(crate) factory: ComPtr<IPluginFactory>,
+    // Only held on macOS, where bundle entry and exit are not called yet.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     lib: libloading::Library,
 }
 
@@ -152,21 +154,19 @@ impl Module {
 
 impl Drop for Module {
     fn drop(&mut self) {
-        unsafe {
-            #[cfg(windows)]
-            if let Ok(exit) = self
-                .lib
+        #[cfg(windows)]
+        if let Ok(exit) = unsafe {
+            self.lib
                 .get::<unsafe extern "system" fn() -> bool>(b"ExitDll\0")
-            {
-                exit();
-            }
-            #[cfg(target_os = "linux")]
-            if let Ok(exit) = self
-                .lib
+        } {
+            unsafe { exit() };
+        }
+        #[cfg(target_os = "linux")]
+        if let Ok(exit) = unsafe {
+            self.lib
                 .get::<unsafe extern "system" fn() -> bool>(b"ModuleExit\0")
-            {
-                exit();
-            }
+        } {
+            unsafe { exit() };
         }
     }
 }

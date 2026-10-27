@@ -91,6 +91,10 @@ is in the same download.
 - [ ] **0004 Collaboration model:** Loro is preferred for the project
       document (spike 0.5, first half). Accept once the network half has
       been tried on real home, mobile and school networks.
+- [ ] **Public STUN servers:** live sessions ask free public STUN servers,
+      run by others, for each machine's outside address. They see addresses
+      only, never project data. Confirm this fits "no server we operate", or
+      say if it should be optional (manual addresses only).
 - [ ] **0007 UI toolkit:** choose after the timeline run above. If egui is
       chosen, confirm that its bundled fonts (SIL Open Font Licence 1.1 and
       Ubuntu Font Licence 1.0) can ship, or choose replacement fonts.

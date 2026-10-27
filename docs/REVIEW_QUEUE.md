@@ -34,8 +34,9 @@ Spike 0.1 decides whether Rust is confirmed
       instruments) and fill gaps with free ones.
 - [ ] **B. Plugin checks.** `plugin-host check-all --editor` loads each
       plugin, processes audio, automates a parameter, restores its state
-      and opens its editor in our window. Note any editor that draws wrongly,
-      won't resize, or hangs.
+      and opens its editor in our window. Instruments are sent notes. Note any
+      editor that draws wrongly, won't resize, or hangs, and any instrument
+      the report calls SILENT.
 - [ ] **B. Plugins in separate processes.** Pick two effect plugins from
       the scan and run
       `plugin-host oop "<first>.vst3" "<second>.vst3" --block 128`.

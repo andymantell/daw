@@ -280,3 +280,86 @@ impl IParameterChangesTrait for ParamChanges {
         q.as_ptr()
     }
 }
+
+// ---------------------------------------------------------------------------
+
+/// Note events for one process() call.
+#[derive(Default)]
+pub struct EventList {
+    events: Mutex<Vec<Event>>,
+}
+
+impl EventList {
+    fn note(kind: u32, offset: i32, pitch: i16, velocity: f32) -> Event {
+        let mut e: Event = unsafe { std::mem::zeroed() };
+        e.sampleOffset = offset;
+        e.r#type = kind as u16;
+        if kind == Event_::EventTypes_::kNoteOnEvent as u32 {
+            e.__field0.noteOn = NoteOnEvent {
+                channel: 0,
+                pitch,
+                tuning: 0.0,
+                velocity,
+                length: 0,
+                noteId: -1,
+            };
+        } else {
+            e.__field0.noteOff = NoteOffEvent {
+                channel: 0,
+                pitch,
+                velocity,
+                noteId: -1,
+                tuning: 0.0,
+            };
+        }
+        e
+    }
+
+    pub fn note_on(self, offset: i32, pitch: i16, velocity: f32) -> Self {
+        let e = Self::note(
+            Event_::EventTypes_::kNoteOnEvent as u32,
+            offset,
+            pitch,
+            velocity,
+        );
+        self.events.lock().unwrap().push(e);
+        self
+    }
+
+    pub fn note_off(self, offset: i32, pitch: i16, velocity: f32) -> Self {
+        let e = Self::note(
+            Event_::EventTypes_::kNoteOffEvent as u32,
+            offset,
+            pitch,
+            velocity,
+        );
+        self.events.lock().unwrap().push(e);
+        self
+    }
+}
+
+impl Class for EventList {
+    type Interfaces = (IEventList,);
+}
+
+impl IEventListTrait for EventList {
+    unsafe fn getEventCount(&self) -> int32 {
+        self.events.lock().unwrap().len() as int32
+    }
+    unsafe fn getEvent(&self, index: int32, e: *mut Event) -> tresult {
+        match self.events.lock().unwrap().get(index as usize) {
+            Some(ev) if !e.is_null() => {
+                unsafe { *e = *ev };
+                kResultOk
+            }
+            _ => kInvalidArgument,
+        }
+    }
+    unsafe fn addEvent(&self, e: *mut Event) -> tresult {
+        if e.is_null() {
+            return kInvalidArgument;
+        }
+        self.events.lock().unwrap().push(unsafe { *e });
+        kResultOk
+    }
+}

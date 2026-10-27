@@ -8,7 +8,7 @@ use std::path::Path;
 
 use vst3::ComWrapper;
 
-use crate::com::ParamChanges;
+use crate::com::{EventList, ParamChanges};
 use crate::plugin::{Instance, Module, Result};
 
 pub const RATE: f64 = 48_000.0;
@@ -30,6 +30,8 @@ pub struct Report {
     pub state_bytes: usize,
     pub state_restores_identically: Option<bool>,
     pub editor: String,
+    /// For instruments: whether notes made any sound.
+    pub notes_sounded: Option<bool>,
     pub failures: Vec<String>,
 }
 
@@ -56,6 +58,17 @@ impl Report {
             self.output_peak,
             self.bad_samples
         );
+        if let Some(sounded) = self.notes_sounded {
+            let _ = writeln!(
+                s,
+                "  notes: {}",
+                if sounded {
+                    "played notes and it made sound"
+                } else {
+                    "played notes but it stayed SILENT (check by hand: it may need samples or a preset loaded)"
+                }
+            );
+        }
         let _ = writeln!(
             s,
             "  automation: {}",
@@ -94,10 +107,25 @@ fn sine(block: usize, start: usize) -> Vec<Vec<f32>> {
     vec![ch.clone(), ch]
 }
 
+/// Notes for block `b` of a run: an A3 every eight blocks, released
+/// four blocks later.
+pub fn notes_for_block(b: usize) -> Option<ComWrapper<EventList>> {
+    match b % 8 {
+        0 => Some(ComWrapper::new(EventList::default().note_on(0, 57, 0.8))),
+        4 => Some(ComWrapper::new(EventList::default().note_off(0, 57, 0.0))),
+        _ => None,
+    }
+}
+
 fn run_blocks(inst: &Instance, blocks: usize) -> Result<Vec<Vec<f32>>> {
     let mut all = Vec::new();
     for b in 0..blocks {
-        let out = inst.process(&sine(BLOCK, b * BLOCK), None)?;
+        let notes = if inst.has_event_input {
+            notes_for_block(b)
+        } else {
+            None
+        };
+        let out = inst.process_with_notes(&sine(BLOCK, b * BLOCK), None, notes.as_ref())?;
         if all.is_empty() {
             all = vec![Vec::new(); out.len()];
         }
@@ -162,6 +190,9 @@ fn check_inner(bundle: &Path, editor: bool, r: &mut Report) -> Result<()> {
             |m, &x| if x.is_finite() { m.max(x.abs()) } else { m },
         );
     r.bad_samples = out.iter().flatten().filter(|x| !x.is_finite()).count();
+    if inst.has_event_input {
+        r.notes_sounded = Some(r.output_peak > 1e-4);
+    }
     if r.bad_samples > 0 {
         r.failures
             .push(format!("{} non-finite output samples", r.bad_samples));

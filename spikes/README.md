@@ -228,8 +228,12 @@ plugin-host check-all --editor
 
 The report is saved as `plugin-host-report.txt`.
 
-Not covered yet: instrument plugins (they need note input) and sidechain
-buses.
+Instruments: plugins with a note input are sent an A3 every eight blocks
+during the processing checks, and the report says whether they made a
+sound. The test plugin now includes a test instrument, and CI checks that
+notes arrive on the exact sample they were sent for.
+
+Not covered yet: sidechain buses, MIDI controllers and note expression.
 
 ### Plugins in their own processes: `plugin-host oop`
 

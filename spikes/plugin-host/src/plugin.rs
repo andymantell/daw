@@ -11,7 +11,9 @@ use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{ComPtr, ComWrapper, Interface};
 
-use crate::com::{ComponentHandler, MemStream, ParamChanges, host_app, read_cstr, read_wstr};
+use crate::com::{
+    ComponentHandler, EventList, MemStream, ParamChanges, host_app, read_cstr, read_wstr,
+};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -290,6 +292,14 @@ impl Instance {
                     );
                 }
             }
+            if self.has_event_input {
+                self.component.activateBus(
+                    MediaTypes_::kEvent as MediaType,
+                    BusDirections_::kInput as BusDirection,
+                    0,
+                    1,
+                );
+            }
             check(self.component.setActive(1), "setActive")?;
             // Some plugins return kNotImplemented here; that's allowed.
             self.processor.setProcessing(1);
@@ -341,6 +351,16 @@ impl Instance {
         input: &[Vec<f32>],
         changes: Option<&ComWrapper<ParamChanges>>,
     ) -> Result<Vec<Vec<f32>>> {
+        self.process_with_notes(input, changes, None)
+    }
+
+    /// As [`Instance::process`], also sending note events to instruments.
+    pub fn process_with_notes(
+        &self,
+        input: &[Vec<f32>],
+        changes: Option<&ComWrapper<ParamChanges>>,
+        notes: Option<&ComWrapper<EventList>>,
+    ) -> Result<Vec<Vec<f32>>> {
         let n = self.block;
         let mut in_bufs: Vec<Vec<Vec<f32>>> = self
             .inputs
@@ -382,6 +402,7 @@ impl Instance {
         let mut outs: Vec<AudioBusBuffers> = out_ptrs.iter_mut().map(bus).collect();
 
         let changes_com = changes.map(|c| c.to_com_ptr::<IParameterChanges>().unwrap());
+        let notes_com = notes.map(|e| e.to_com_ptr::<IEventList>().unwrap());
         let out_changes = ComWrapper::new(ParamChanges::default());
         let out_changes_ptr = out_changes.to_com_ptr::<IParameterChanges>().unwrap();
 
@@ -403,7 +424,7 @@ impl Instance {
             },
             inputParameterChanges: changes_com.as_ref().map_or(ptr::null_mut(), |c| c.as_ptr()),
             outputParameterChanges: out_changes_ptr.as_ptr(),
-            inputEvents: ptr::null_mut(),
+            inputEvents: notes_com.as_ref().map_or(ptr::null_mut(), |e| e.as_ptr()),
             outputEvents: ptr::null_mut(),
             processContext: ptr::null_mut(),
         };

@@ -6,6 +6,11 @@
 //! plugin reports that latency, so the host's latency handling can be
 //! checked. The component's state is the gain as 8 little-endian bytes.
 //!
+//! A second class, [`SYNTH_NAME`], is a test instrument: no audio input,
+//! one note input. Each note-on writes a single sample of +velocity×gain
+//! at the event's exact sample offset and each note-off writes
+//! −velocity×gain, so the host's note timing can be checked to the sample.
+//!
 //! Written for this project from the public VST 3 interface definitions.
 
 #![allow(non_snake_case)]
@@ -28,6 +33,8 @@ pub const LATENCY: u32 = 64;
 pub const NAME: &str = "DAW Spike Test Gain";
 pub const PROCESSOR_CID: TUID = uid(0x5D4A_1C01, 0x9E3B_4F6A, 0x8C21_7B0D, 0x3E5F_A001);
 pub const CONTROLLER_CID: TUID = uid(0x5D4A_1C01, 0x9E3B_4F6A, 0x8C21_7B0D, 0x3E5F_A002);
+pub const SYNTH_NAME: &str = "DAW Spike Test Synth";
+pub const SYNTH_CID: TUID = uid(0x5D4A_1C01, 0x9E3B_4F6A, 0x8C21_7B0D, 0x3E5F_A003);
 
 fn write_cstr(dst: &mut [c_char], s: &str) {
     let n = s.len().min(dst.len().saturating_sub(1));
@@ -352,6 +359,183 @@ impl IEditControllerTrait for Controller {
 }
 
 // ---------------------------------------------------------------------------
+// Test instrument
+
+struct Synth {
+    gain: AtomicU64,
+}
+
+impl Class for Synth {
+    type Interfaces = (IComponent, IAudioProcessor);
+}
+
+impl IPluginBaseTrait for Synth {
+    unsafe fn initialize(&self, _context: *mut FUnknown) -> tresult {
+        kResultOk
+    }
+    unsafe fn terminate(&self) -> tresult {
+        kResultOk
+    }
+}
+
+impl IComponentTrait for Synth {
+    unsafe fn getControllerClassId(&self, class_id: *mut TUID) -> tresult {
+        unsafe { *class_id = CONTROLLER_CID };
+        kResultOk
+    }
+    unsafe fn setIoMode(&self, _mode: IoMode) -> tresult {
+        kResultOk
+    }
+    unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
+        let input = dir == BusDirections_::kInput as BusDirection;
+        if media == MediaTypes_::kEvent as MediaType {
+            input as i32
+        } else {
+            !input as i32
+        }
+    }
+    unsafe fn getBusInfo(
+        &self,
+        media: MediaType,
+        dir: BusDirection,
+        index: i32,
+        bus: *mut BusInfo,
+    ) -> tresult {
+        let input = dir == BusDirections_::kInput as BusDirection;
+        let bus = unsafe { &mut *bus };
+        if index != 0 {
+            return kInvalidArgument;
+        }
+        if media == MediaTypes_::kEvent as MediaType && input {
+            bus.mediaType = media;
+            bus.direction = dir;
+            bus.channelCount = 16;
+            write_wstr(&mut bus.name, "Notes");
+            bus.busType = BusTypes_::kMain as BusType;
+            bus.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
+            kResultOk
+        } else if media == MediaTypes_::kAudio as MediaType && !input {
+            fill_bus(bus, dir, "Output");
+            kResultOk
+        } else {
+            kInvalidArgument
+        }
+    }
+    unsafe fn getRoutingInfo(&self, _i: *mut RoutingInfo, _o: *mut RoutingInfo) -> tresult {
+        kNotImplemented
+    }
+    unsafe fn activateBus(&self, _m: MediaType, _d: BusDirection, _i: i32, _s: TBool) -> tresult {
+        kResultOk
+    }
+    unsafe fn setActive(&self, _state: TBool) -> tresult {
+        kResultOk
+    }
+    unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+        let mut b = [0u8; 8];
+        if !unsafe { read_exact(state, &mut b) } {
+            return kResultFalse;
+        }
+        self.gain
+            .store(f64::from_le_bytes(b).to_bits(), Ordering::Relaxed);
+        kResultOk
+    }
+    unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        let g = f64::from_bits(self.gain.load(Ordering::Relaxed));
+        if unsafe { write_all(state, &g.to_le_bytes()) } {
+            kResultOk
+        } else {
+            kResultFalse
+        }
+    }
+}
+
+impl IAudioProcessorTrait for Synth {
+    unsafe fn setBusArrangements(
+        &self,
+        _inputs: *mut SpeakerArrangement,
+        num_ins: i32,
+        outputs: *mut SpeakerArrangement,
+        num_outs: i32,
+    ) -> tresult {
+        let ok = num_ins == 0 && num_outs == 1 && unsafe { *outputs == SpeakerArr::kStereo };
+        if ok { kResultTrue } else { kResultFalse }
+    }
+    unsafe fn getBusArrangement(
+        &self,
+        dir: BusDirection,
+        index: i32,
+        arr: *mut SpeakerArrangement,
+    ) -> tresult {
+        if index != 0 || dir != BusDirections_::kOutput as BusDirection {
+            return kInvalidArgument;
+        }
+        unsafe { *arr = SpeakerArr::kStereo };
+        kResultOk
+    }
+    unsafe fn canProcessSampleSize(&self, size: i32) -> tresult {
+        if size == SymbolicSampleSizes_::kSample32 as i32 {
+            kResultOk
+        } else {
+            kNotImplemented
+        }
+    }
+    unsafe fn getLatencySamples(&self) -> u32 {
+        0
+    }
+    unsafe fn setupProcessing(&self, _setup: *mut ProcessSetup) -> tresult {
+        kResultOk
+    }
+    unsafe fn setProcessing(&self, _state: TBool) -> tresult {
+        kResultOk
+    }
+    unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+        let data = unsafe { &*data };
+        if data.numOutputs < 1 || data.numSamples <= 0 {
+            return kResultOk;
+        }
+        let n = data.numSamples as usize;
+        let outb = unsafe { &*data.outputs };
+        if outb.numChannels < 2 {
+            return kResultOk;
+        }
+        let outs = unsafe { slice::from_raw_parts(outb.__field0.channelBuffers32, 2) };
+        let gain = f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
+        for &o in outs {
+            unsafe { slice::from_raw_parts_mut(o, n) }.fill(0.0);
+        }
+        let Some(events) = (unsafe { ComRef::from_raw(data.inputEvents) }) else {
+            return kResultOk;
+        };
+        for i in 0..unsafe { events.getEventCount() } {
+            let mut e: Event = unsafe { std::mem::zeroed() };
+            if unsafe { events.getEvent(i, &mut e) } != kResultOk {
+                continue;
+            }
+            let at = e.sampleOffset;
+            if at < 0 || at as usize >= n {
+                continue;
+            }
+            let v = match e.r#type as u32 {
+                t if t == Event_::EventTypes_::kNoteOnEvent as u32 => unsafe {
+                    e.__field0.noteOn.velocity
+                },
+                t if t == Event_::EventTypes_::kNoteOffEvent as u32 => {
+                    -unsafe { e.__field0.noteOff.velocity }
+                }
+                _ => continue,
+            };
+            for &o in outs {
+                unsafe { *o.add(at as usize) += v * gain };
+            }
+        }
+        kResultOk
+    }
+    unsafe fn getTailSamples(&self) -> u32 {
+        0
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Factory and module entry points
 
 struct Factory;
@@ -370,19 +554,20 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        2
+        3
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
         let info = unsafe { &mut *info };
-        let (cid, category) = match index {
-            0 => (PROCESSOR_CID, "Audio Module Class"),
-            1 => (CONTROLLER_CID, "Component Controller Class"),
+        let (cid, category, name) = match index {
+            0 => (PROCESSOR_CID, "Audio Module Class", NAME),
+            1 => (CONTROLLER_CID, "Component Controller Class", NAME),
+            2 => (SYNTH_CID, "Audio Module Class", SYNTH_NAME),
             _ => return kInvalidArgument,
         };
         info.cid = cid;
         info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as i32;
         write_cstr(&mut info.category, category);
-        write_cstr(&mut info.name, NAME);
+        write_cstr(&mut info.name, name);
         kResultOk
     }
     unsafe fn createInstance(
@@ -397,6 +582,11 @@ impl IPluginFactoryTrait for Factory {
                 gain: AtomicU64::new(1.0f64.to_bits()),
                 delay: Mutex::new([[0.0; LATENCY as usize]; 2]),
                 pos: AtomicU64::new(0),
+            })
+            .to_com_ptr::<FUnknown>()
+        } else if cid == SYNTH_CID {
+            ComWrapper::new(Synth {
+                gain: AtomicU64::new(1.0f64.to_bits()),
             })
             .to_com_ptr::<FUnknown>()
         } else if cid == CONTROLLER_CID {

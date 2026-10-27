@@ -145,3 +145,34 @@ fn out_of_process_chain_matches_and_survives_a_crash() {
     assert_eq!(p1.restarts, 1);
     assert_eq!(p1.save_state().unwrap(), 0.5f64.to_le_bytes());
 }
+
+#[test]
+fn instrument_gets_notes_on_the_exact_sample() {
+    use plugin_host::com::EventList;
+    use vst3_test_plugin::SYNTH_CID;
+
+    let module = Module::load(&bundle()).unwrap();
+    let synth = Instance::new(&module, &SYNTH_CID, RATE, BLOCK).unwrap();
+    assert!(synth.has_event_input);
+    assert!(synth.inputs.is_empty());
+
+    let notes = ComWrapper::new(
+        EventList::default()
+            .note_on(17, 57, 0.75)
+            .note_off(200, 57, 0.25),
+    );
+    let out = synth.process_with_notes(&[], None, Some(&notes)).unwrap();
+    for ch in &out {
+        for (i, &x) in ch.iter().enumerate() {
+            let want = match i {
+                17 => 0.75,
+                200 => -0.25,
+                _ => 0.0,
+            };
+            assert_eq!(x, want, "sample {i}");
+        }
+    }
+    // No notes, no sound.
+    let quiet = synth.process_with_notes(&[], None, None).unwrap();
+    assert!(quiet.iter().flatten().all(|&x| x == 0.0));
+}

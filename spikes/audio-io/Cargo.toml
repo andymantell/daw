@@ -1,0 +1,16 @@
+[package]
+name = "audio-io"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+cpal = "0.18.2"
+rtrb = "0.4.1"
+spike-engine = { path = "../engine" }
+
+# ASIO on Windows. The build downloads Steinberg's ASIO SDK (used under its
+# GPLv3 option, decision 0001) and needs libclang for bindgen.
+[target.'cfg(windows)'.dependencies]
+cpal = { version = "0.18.2", features = ["asio"] }

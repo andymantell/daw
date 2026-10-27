@@ -6,7 +6,7 @@ Nothing here ships. Licence: GPL-3.0-or-later.
 
 | Test | Crate | Status |
 |---|---|---|
-| **A. Audio I/O** (ASIO on Windows) | — | Not started. Needs the owner's PC and interface. |
+| **A. Audio I/O** (ASIO on Windows) | `audio-io` | Built. Not yet run on the owner's PC and interface. |
 | **B. VST 3 hosting** | `vst3-scan` (step one: list installed plugins) | Scanner built. Loading plugins not started. |
 | **C. UI** | — | Not started. |
 | **D. Engine** | `engine` | Passing (see below). |
@@ -21,6 +21,30 @@ Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
 
 Test machine: Windows only for now, so the macOS (CoreAudio) half of A
 and B is still open.
+
+## A. Audio I/O: `audio-io`
+
+Opens one device for input and output at once (ASIO by default on
+Windows), plays input 1 straight back out on outputs 1 and 2 so you can
+hear the monitoring, and spends a fixed share of every callback on dummy
+DSP work. It counts every sign of a dropout: callbacks slower than real
+time, gaps between callbacks of more than 1.5 buffers, the output running
+out of input, and stream errors. It also reports the driver's own latency
+figures and any memory allocation on the audio threads.
+
+On the test PC (from the folder holding `audio-io.exe`):
+
+```
+audio-io --list
+audio-io --device UMC --buffer 128 --minutes 30 --load 0.5
+```
+
+The report is saved as `audio-spike-report.txt`. Pass criterion
+(ROADMAP 0.1 A): 30 minutes at 64–128 frames and 48 kHz with no dropouts.
+
+Checked so far only against Linux's null audio device in the cloud
+container, which isn't paced in real time, so it shows the detector working
+but says nothing about real drivers.
 
 ## D. Engine
 
@@ -54,8 +78,8 @@ arguments, and reads each bundle's `moduleinfo.json` for name, vendor,
 version and category. It only reads files and never loads plugin code.
 The report is saved as `vst3-scan-report.txt` in the current folder.
 
-Download it from the latest **spikes** workflow run on GitHub (artifact
-`spikes-windows-x64`).
+Download it, and `audio-io.exe`, from the latest **spikes** workflow run on
+GitHub (artifact `spikes-windows-x64`).
 
 ## 0.5, first half: `collab-doc`
 

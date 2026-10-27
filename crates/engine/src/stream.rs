@@ -273,29 +273,32 @@ impl Streamer {
         let frames = CHUNK.min(src.frames - start);
         r.seek(start as u32)
             .map_err(|e| format!("{}: {e}", src.path.display()))?;
-        let n = frames * src.channels;
-        let spec = r.spec();
-        let samples: Vec<f32> = match spec.sample_format {
-            hound::SampleFormat::Float => r
-                .samples::<f32>()
-                .take(n)
-                .collect::<Result<_, _>>()
-                .map_err(err)?,
-            hound::SampleFormat::Int => {
-                let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
-                r.samples::<i32>()
-                    .take(n)
-                    .map(|s| s.map(|v| v as f32 * scale))
-                    .collect::<Result<_, _>>()
-                    .map_err(err)?
-            }
-        };
+        let samples = read_samples(r, frames * src.channels).map_err(err)?;
         Ok(Box::new(Chunk {
             source: src.id,
             index,
             channels: src.channels,
             samples: samples.into_boxed_slice(),
         }))
+    }
+}
+
+/// Reads up to `n` samples from where the reader is, as floats in
+/// -1.0..1.0, whatever the file stores.
+pub(crate) fn read_samples<R: std::io::Read>(
+    r: &mut hound::WavReader<R>,
+    n: usize,
+) -> Result<Vec<f32>, hound::Error> {
+    let spec = r.spec();
+    match spec.sample_format {
+        hound::SampleFormat::Float => r.samples::<f32>().take(n).collect(),
+        hound::SampleFormat::Int => {
+            let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
+            r.samples::<i32>()
+                .take(n)
+                .map(|s| s.map(|v| v as f32 * scale))
+                .collect()
+        }
     }
 }
 

@@ -160,8 +160,10 @@ sample-accurate transport and loop, metronome with count-in and a
 separate click output, clips streamed from WAV files on disk, offline
 render (`crates/engine`), audio devices (`crates/audio-io`), and a first
 app window with a mixer, transport and device settings (`crates/app`).
-Still to do: measured latency in the settings panel (with 1.2), and
-importing files at other sample rates.*
+Files at other sample rates are converted on import, in the background,
+into a cache folder (to move into the project folder once projects
+are saved). Still to do: measured latency in the settings panel (with
+1.2).*
 - Audio device selection (driver, device, sample rate, buffer size) and a
   device-settings panel with measured latency.
 - Transport: play, stop, position, loop region, tempo, time signature

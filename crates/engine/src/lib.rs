@@ -3,6 +3,7 @@
 
 pub mod engine;
 pub mod graph;
+pub mod import;
 pub mod metronome;
 pub mod stream;
 pub mod time;

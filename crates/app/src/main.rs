@@ -3,15 +3,19 @@
 //! play them with a mixer, loop, metronome and count-in, and choose the
 //! audio device.
 //!
-//! Usage: `daw [file.wav ...]`, or drop WAV files on the window.
+//! Usage: `daw [file.wav ...]`, or drop WAV files on the window. Files at
+//! another sample rate from the device are converted in the background
+//! into a cache folder first.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running};
 use daw_engine::engine::{self, Command, Controller};
 use daw_engine::graph::{ClipSpec, Mix, Session, TrackSpec};
+use daw_engine::import;
 use daw_engine::metronome::Metronome;
 use daw_engine::stream::{StreamSource, StreamerThread};
 use daw_engine::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
@@ -19,10 +23,32 @@ use eframe::egui::{self, Color32, Key, RichText, Sense, Stroke, vec2};
 
 struct Track {
     name: String,
+    /// The file as imported; `source` may be a converted copy of it.
+    original: PathBuf,
     source: Arc<StreamSource>,
     mix: Mix,
     /// Peak levels shown on the meter, decaying.
     meter: (f32, f32),
+}
+
+/// A file being opened (and converted, if needed) on a thread of its own.
+struct Import {
+    path: PathBuf,
+    /// Replaces this track's audio, rather than adding a track.
+    track: Option<usize>,
+    rate: u32,
+    done: mpsc::Receiver<Result<Arc<StreamSource>, String>>,
+}
+
+/// Where converted copies of files go until projects have folders of
+/// their own.
+fn cache_dir() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("XDG_CACHE_HOME"))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("daw").join("converted")
 }
 
 /// What the audio side is doing.
@@ -37,6 +63,7 @@ enum Audio {
 
 struct App {
     tracks: Vec<Track>,
+    imports: Vec<Import>,
     tempo_bpm: f64,
     beats_per_bar: u32,
     rate: u32,
@@ -66,6 +93,7 @@ impl App {
         let disk = ctl.take_streamer().expect("new controller").spawn();
         let mut app = App {
             tracks: Vec::new(),
+            imports: Vec::new(),
             tempo_bpm: 120.0,
             beats_per_bar: 4,
             rate,
@@ -124,6 +152,14 @@ impl App {
         self.ctl = ctl;
         self._disk = disk;
         self.rate = self.profile.as_ref().map_or(self.rate, |p| p.rate);
+        // Tracks at the old rate are opened again at the new one.
+        let stale: Vec<_> = (self.tracks.iter().enumerate())
+            .filter(|(_, t)| t.source.rate != self.rate)
+            .map(|(i, t)| (i, t.original.clone()))
+            .collect();
+        for (i, path) in stale {
+            self.start_import(path, Some(i));
+        }
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
         self.send_loop();
@@ -139,24 +175,84 @@ impl App {
     }
 
     fn add_file(&mut self, path: &Path) {
-        match StreamSource::open(path) {
-            Ok(source) => self.tracks.push(Track {
-                name: path
-                    .file_stem()
-                    .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
-                source,
-                mix: Mix::default(),
-                meter: (0.0, 0.0),
-            }),
-            Err(e) => self.message = Some(e),
+        self.start_import(path.to_path_buf(), None);
+    }
+
+    fn start_import(&mut self, path: PathBuf, track: Option<usize>) {
+        let (tx, rx) = mpsc::channel();
+        let (p, rate) = (path.clone(), self.rate);
+        std::thread::spawn(move || {
+            let _ = tx.send(import::open_at_rate(&p, rate, &cache_dir()));
+        });
+        self.imports.push(Import {
+            path,
+            track,
+            rate,
+            done: rx,
+        });
+    }
+
+    /// Takes in files that have finished opening. Returns true if any did.
+    fn finish_imports(&mut self) -> bool {
+        let mut changed = false;
+        // New tracks are added in the order the files were given, so one
+        // waits for any earlier one still converting.
+        let mut waiting = false;
+        let mut i = 0;
+        while i < self.imports.len() {
+            let new_track = self.imports[i].track.is_none();
+            if new_track && waiting {
+                i += 1;
+                continue;
+            }
+            let result = match self.imports[i].done.try_recv() {
+                Ok(r) => r,
+                Err(mpsc::TryRecvError::Empty) => {
+                    waiting |= new_track;
+                    i += 1;
+                    continue;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => Err("the import stopped".into()),
+            };
+            let im = self.imports.remove(i);
+            match result {
+                // The device changed rate while this was converting: start
+                // again at the new one.
+                Ok(_) if im.rate != self.rate => self.start_import(im.path, im.track),
+                Ok(source) => {
+                    changed = true;
+                    match im.track.and_then(|t| self.tracks.get_mut(t)) {
+                        Some(t) => t.source = source,
+                        None => self.tracks.push(Track {
+                            name: im
+                                .path
+                                .file_stem()
+                                .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
+                            original: im.path,
+                            source,
+                            mix: Mix::default(),
+                            meter: (0.0, 0.0),
+                        }),
+                    }
+                }
+                Err(e) => self.message = Some(e),
+            }
         }
+        changed
     }
 
     /// Compiles the session and sends it to the engine.
     fn rebuild(&mut self) {
         let mut s = Session::new(self.tempo_map());
         for t in &self.tracks {
-            let mut spec = TrackSpec::new(vec![ClipSpec::new(Ticks(0), t.source.clone())]);
+            // A track still being converted to a new rate plays nothing
+            // until it is ready, but keeps its place in the mixer.
+            let clips = if t.source.rate == self.rate {
+                vec![ClipSpec::new(Ticks(0), t.source.clone())]
+            } else {
+                Vec::new()
+            };
+            let mut spec = TrackSpec::new(clips);
             spec.mix = t.mix;
             s.tracks.push(spec);
         }
@@ -164,12 +260,7 @@ impl App {
             Ok(g) => {
                 self.send_graph(g);
             }
-            Err(e) => {
-                self.message = Some(format!(
-                    "{e}. Files must match the device's sample rate ({} Hz) for now.",
-                    self.rate
-                ))
-            }
+            Err(e) => self.message = Some(e.to_string()),
         }
     }
 
@@ -546,11 +637,14 @@ impl eframe::App for App {
                 .filter(|p| !p.as_os_str().is_empty())
                 .collect()
         });
-        if !dropped.is_empty() {
-            for p in dropped {
-                self.add_file(&p);
-            }
+        for p in dropped {
+            self.add_file(&p);
+        }
+        if self.finish_imports() {
             self.rebuild();
+        }
+        if !self.imports.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Space))
@@ -578,6 +672,13 @@ impl eframe::App for App {
                     Audio::Silent(..) | Audio::Stopped => {
                         ui.colored_label(Color32::LIGHT_RED, "No audio device: playing silently");
                     }
+                }
+                if !self.imports.is_empty() {
+                    ui.spinner();
+                    ui.label(match self.imports.len() {
+                        1 => "Opening 1 file…".to_string(),
+                        n => format!("Opening {n} files…"),
+                    });
                 }
                 let under = self.ctl.status().underruns();
                 if under > 0 {

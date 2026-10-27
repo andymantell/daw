@@ -66,8 +66,9 @@ Spike 0.1 decides whether Rust is confirmed
 ### Phase 1 app (first window)
 
 The app itself, `daw.exe`, is in the **daw-windows-x64** artifact of the
-latest **ci** run (not the spikes run). It only reads WAV files at the
-same sample rate as the audio device for now.
+latest **ci** run (not the spikes run). It reads WAV files (mono or
+stereo); files at another sample rate from the device are converted
+first, which takes a moment for long files.
 
 - [ ] **1.1 Device and playback.** Open `daw.exe`, then Settings → Audio
       device. Check that ASIO and the UMC1820 are listed, choose them at
@@ -81,6 +82,12 @@ same sample rate as the audio device for now.
       beat against a backing track you know the tempo of. Try Eighths,
       Count-in, and Metronome output set to outputs 3/4 so the click is in
       the headphones only.
+- [ ] **1.1 Other sample rates.** Drop a 44.1 kHz WAV file (a CD rip,
+      say) next to a 48 kHz one. Pass: "Opening 1 file…" shows briefly,
+      then both play in time and at the right pitch. Then change the
+      device to 44100 Hz in Settings: both should still play correctly
+      after a moment. Converted copies are kept in
+      `%LOCALAPPDATA%\daw\converted`; say if that is the wrong place.
 
 ## On other networks
 

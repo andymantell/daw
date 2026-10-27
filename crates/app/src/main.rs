@@ -83,14 +83,15 @@ fn cache_dir() -> PathBuf {
     base.join("daw").join("converted")
 }
 
-/// Where recorded takes go until projects have folders of their own.
+/// Where takes go until the project is saved, when they move into the
+/// project's folder: a visible folder in the user's profile (the owner's
+/// choice, 2026-10-27), e.g. `C:\Users\<name>\DAW\Unsaved takes`.
 fn takes_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("XDG_DATA_HOME"))
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(std::env::temp_dir);
-    base.join("daw").join("takes")
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .join("DAW")
+        .join("Unsaved takes")
 }
 
 /// What the audio side is doing.

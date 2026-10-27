@@ -183,8 +183,10 @@ on the exact frame; one take file per pass, checkpointed every second so
 a crash keeps what was captured; takes kept per track, newest playing,
 older ones switchable; the recording offset per device profile (measured,
 or from the driver's reported latency); device input passed to the
-engine through a lock-free queue. Takes go to a fixed folder until
-projects are saved. Still to do: direct-monitoring option, and keeping
+engine through a lock-free queue. Until a project is saved, takes go in
+the user's profile under `DAW/Unsaved takes` (owner's choice,
+2026-10-27); saving the project moves them into its folder (to build
+with project saving). Still to do: direct-monitoring option, and keeping
 device settings between runs.*
 - Input channel selection per track, arm, record, count-in.
 - **Low-latency software monitoring** through the track's effect chain,

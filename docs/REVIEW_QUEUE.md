@@ -115,11 +115,8 @@ standing in for an interface):
       check the take lines up with the original to within a millisecond.
       Also say whether the driver-reported figure the app shows is close.
 - [ ] **1.2 Crash safety.** While recording, end the app from Task
-      Manager. Pass: the take file in `%LOCALAPPDATA%\daw\takes` opens in
+      Manager. Pass: the take file in `%USERPROFILE%\DAW\Unsaved takes` opens in
       another player and holds everything up to about a second before.
-- [ ] **Owner decision: where takes go** before projects exist. They are
-      in `%LOCALAPPDATA%\daw\takes` for now; once projects are saved they
-      go in the project folder (roadmap 1.2).
 
 ## On other networks
 

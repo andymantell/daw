@@ -47,7 +47,7 @@ end for what could not be verified.
 | Tempo detection / tempo map from free performance | 6 | M | |
 | Monophonic pitch editing (pitch, drift, vibrato, formant) | 7 | H | |
 | Plugin-based direct audio editing via ARA 2 | 7 | M | Open SDK (Apache 2.0). |
-| ML stem separation | 7 | H | Model weights *and* training data must be licensed for our use. |
+| ML stem separation on any audio clip/track (incl. video-file audio) | 7 | H | Model weights *and* training data must be licensed for our use. See [VIDEO_STEMS_REPITCH.md](VIDEO_STEMS_REPITCH.md). |
 | Audio-to-MIDI (mono, then poly); chord detection | 7 | H | Also drafts tab and drum notation from recordings. |
 | Spectral view and repair | 8 | H | |
 
@@ -57,6 +57,9 @@ end for what could not be verified.
 |---|---|---|---|
 | Loop a region / section | 1 | L | |
 | Speed change without pitch change; transpose without tempo change | 1 | M | Spike 0.6. |
+| Fine pitch (cents), tuning presets (e.g. half step down → standard), detected tuning offset | 1 | M | |
+| Play-along video clips: video files with full audio features | 3 | M | |
+| Online video links as synced reference clips | 3 | H | Platform terms forbid audio processing, caching and offline use. Needs an embedded web view. |
 | Chromatic tuner | 1 | L | |
 | Metronome with accents, subdivisions; tempo trainer | 1 | L | |
 | Comments pinned to time/track | 1 | L | |

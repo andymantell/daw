@@ -172,7 +172,11 @@ and leave each other time-pinned feedback in a shared project.
 
 ### 1.4 Practice tools (M)
 - Loop region, chosen quickly from sections and markers.
-- Pitch-preserving speed (50–150%) and transpose (±12 st).
+- Pitch-preserving speed (50–150%) and transpose (±12 st), plus fine pitch
+  in cents. **Tuning presets** for common shifts (e.g. "half step down →
+  standard" = +1 st), and a **detected tuning offset** from the reference
+  pitch that suggests the shift. Works on any audio clip, including the
+  audio of an imported video file.
 - Tempo trainer: speed increases by X% every N loops up to a target.
 - Chromatic tuner. Reference pitch setting.
 - Per-track "practice mute".
@@ -442,9 +446,28 @@ recording, loop and slow it down, and play along while the notation scrolls.
   font (the standard music-font layout). SIL OFL-licensed fonts can be
   bundled with their licence.
 
+### 3.9 Play-along video clips (L)
+**Goal:** video is a first-class timeline clip for playing along and song
+recreation. See [research/VIDEO_STEMS_REPITCH.md](research/VIDEO_STEMS_REPITCH.md).
+- **Video files** the user has the right to use: a video clip on the
+  timeline with a floating or docked picture. Its audio is an ordinary
+  audio clip, so speed, transpose, tuning presets, looping and (from
+  Phase 7) stem separation all apply.
+- **Online video links** as *reference* clips: the platform's own visible
+  embedded player, synced to the transport (play, pause, seek, loop) with a
+  manual offset. Within the platform's terms, only the speeds its player
+  supports are offered. No re-pitching, stems, mixer routing, caching or
+  offline playback. Collaborators get the link and offset, and each
+  streams the video themselves.
+- Needs an embedded web view (depends on decision 0007). A spike measures
+  sync accuracy between an embedded player and the engine.
+
 **Exit criteria (Phase 3)**
 - A song can be composed with built-in and third-party instruments.
 - A teacher can set an assignment and see the student's practice progress.
+- A student drops in a video file of a song, plays along at 75% speed after
+  shifting it +1 semitone to standard tuning, and an online video link
+  stays in sync with the transport as a reference.
 - A student imports a MusicXML or MIDI file of a song, sees guitar tab, bass
   tab and a drum staff lined up under the original recording, and loops and
   slows a section while the notation follows.
@@ -666,7 +689,13 @@ project, especially for guitarists and singers.
   and drum-piece classification, then reviewed and corrected by the user.
 - **Stem separation** (L): on-device inference, only with models whose
   weights *and* training data permit our use. Lesson use: remove the guitar
-  from a backing track. Each stem can go to its own track automatically.
+  from a backing track. Works on **any audio clip or track**, including the
+  audio of imported video files, but not online video reference clips
+  (platform terms forbid it, see 3.9). Each stem can go to its own track
+  automatically, and keeps the source's speed and pitch settings. The most
+  common open model's weights carry no stated licence, and its benchmark
+  training data is for education only, so we need a licensed model, our
+  own trained model, or a model the user loads.
 - **Note transformations** (M): strum, arpeggiate, ornament, humanise.
 - **Melodic pattern sequencer** (M).
 - **Modulators** (M): LFO, step, envelope (shaper), envelope follower
@@ -701,7 +730,8 @@ project, especially for guitarists and singers.
   lanes: all instruments, multi-staff scores, parts extraction and
   engraving-quality layout.
 - **Articulation/expression maps** (M). **Microtonal tuning** (M).
-- **Video track** (L): timecode and frame rates.
+- **Video track** (L): builds on the Phase 3 video clips with timecode,
+  frame rates and frame-accurate sync for post-production.
 - **Surround/immersive mixing** (XL): multichannel buses, panning, binaural
   monitoring. Format licensing reviewed before supporting any branded
   format.
@@ -775,4 +805,5 @@ Tracked in [`docs/decisions/`](decisions/):
 | 0009 | Notation data model and tab/drum formats | Proposed |
 | — | Product name and trademark search | Open — before public release |
 | — | Import of a proprietary tab-editor format via file-format study (see 0009, *Deferred*) | **Parked — revisit later** |
+| — | Processing audio from online video platforms (stems, re-pitch) — needs the platform's written approval (see research/VIDEO_STEMS_REPITCH.md) | **Parked — revisit later** |
 | — | Browser access to ASIO and other low-latency audio devices, e.g. for a web companion (see 0002 and 0006 for why browsers can't do this today) | **Parked — revisit later** |

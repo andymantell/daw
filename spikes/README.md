@@ -228,10 +228,43 @@ plugin-host check-all --editor
 
 The report is saved as `plugin-host-report.txt`.
 
-Not covered yet: instrument plugins (they need note input), sidechain
-buses, and running a plugin's audio processing in a separate process
-during playback (the roadmap asks for that to be prototyped for at least
-two plugins).
+Not covered yet: instrument plugins (they need note input) and sidechain
+buses.
+
+### Plugins in their own processes: `plugin-host oop`
+
+Each plugin runs in a child process of its own (`plugin-host serve`), so a
+plugin that crashes or hangs cannot take the engine down. Audio passes
+through a shared memory file. The host wakes the child with a futex on
+Linux or a named event on Windows, and waits for the answer up to a
+deadline. If the child is late, the host plays silence for that plugin.
+If the child has died, the host starts a new one and restores the
+plugin's last saved state. The child quits when the host's end of its
+stdin pipe closes, so plugin processes never outlive the host. Plugin
+processing threads ask for audio priority (MMCSS "Pro Audio" on Windows).
+
+```
+plugin-host oop first.vst3 second.vst3 --seconds 20 --block 256
+plugin-host oop first.vst3 second.vst3 --block 64 --no-kill
+```
+
+This plays the plugins as a chain at real-time pace, kills the first
+plugin's process halfway through, and reports round-trip times, deadline
+misses and how long recovery took. It also times the same chain inside
+one process for comparison. Report: `plugin-host-oop-report.txt`.
+
+Tested in CI with two copies of our test plugin: the chained output matches
+in-process hosting sample for sample, a killed process is noticed on the
+next block and played as silence, and a restart restores the saved gain.
+
+In the cloud container (shared machine, no audio priority allowed) a
+two-plugin chain added a median of about 0.3 ms per block, but the 99th
+percentile reached 1.5–4.5 ms and a few blocks missed the 5.3 ms budget at
+256 frames. More missed it at 64 frames. A shared machine says little
+about a desktop with audio priority, so the deciding run is on the
+owner's PC. If out-of-process hosting proves too costly per plugin, the
+usual fallback is to group several plugins in one helper process, or to
+offer it only for plugins the user marks as unstable.
 
 ## B, step one: `vst3-scan`
 

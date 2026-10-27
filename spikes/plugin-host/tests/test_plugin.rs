@@ -100,3 +100,48 @@ fn audio_automation_and_state_are_exact() {
     let out = other.process(&input, None).unwrap();
     assert_eq!(&out[0][l..], &expect[..]);
 }
+
+#[test]
+fn out_of_process_chain_matches_and_survives_a_crash() {
+    use plugin_host::oop::Remote;
+    use std::time::Duration;
+
+    let exe = Path::new(env!("CARGO_BIN_EXE_plugin-host"));
+    let b = bundle();
+    let mut p1 = Remote::spawn(exe, &b, BLOCK).unwrap();
+    let mut p2 = Remote::spawn(exe, &b, BLOCK).unwrap();
+    assert_eq!(p1.latency, LATENCY);
+
+    // Gain 0.5 on the first plugin, saved so a restart can restore it.
+    p1.load_state(&0.5f64.to_le_bytes()).unwrap();
+    assert_eq!(p1.save_state().unwrap(), 0.5f64.to_le_bytes());
+
+    let ramp: Vec<f32> = (0..BLOCK).map(|i| i as f32 / BLOCK as f32).collect();
+    let wait = Duration::from_secs(5);
+    let run = |p1: &mut Remote, p2: &mut Remote| {
+        let mut mid = [vec![0.0; BLOCK], vec![0.0; BLOCK]];
+        let mut out = [vec![0.0; BLOCK], vec![0.0; BLOCK]];
+        p1.process(&[&ramp, &ramp], &mut mid, wait).unwrap();
+        p2.process(&[&mid[0], &mid[1]], &mut out, wait).unwrap();
+        out
+    };
+    // Two blocks through both plugins: 128 frames of delay, gain 0.5.
+    run(&mut p1, &mut p2);
+    let out = run(&mut p1, &mut p2);
+    let d = 2 * LATENCY as usize;
+    let expect: Vec<f32> = ramp[BLOCK - d..].iter().map(|x| x * 0.5).collect();
+    assert_eq!(&out[0][..d], &expect[..]);
+
+    // Kill the first plugin's process: the host notices at once and plays
+    // silence for it instead of hanging.
+    p1.kill();
+    let mut mid = [vec![1.0; BLOCK], vec![1.0; BLOCK]];
+    let miss = p1.process(&[&ramp, &ramp], &mut mid, wait).unwrap_err();
+    assert_eq!(miss, plugin_host::oop::Miss::Died);
+    assert!(mid[0].iter().all(|&x| x == 0.0));
+
+    // Restart restores the saved gain.
+    p1.restart().unwrap();
+    assert_eq!(p1.restarts, 1);
+    assert_eq!(p1.save_state().unwrap(), 0.5f64.to_le_bytes());
+}

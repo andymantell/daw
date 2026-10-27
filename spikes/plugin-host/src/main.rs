@@ -3,6 +3,7 @@
 //!
 //!   plugin-host check <plugin.vst3> [--editor]
 //!   plugin-host check-all [folder...] [--editor]
+//!   plugin-host oop <plugin.vst3>... [--seconds 20] [--block 256] [--no-kill]
 //!
 //! `check-all` scans the standard VST 3 folders (plus any given) and checks
 //! each plugin in its own child process, so a crashing or hanging plugin
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use plugin_host::checks;
+use plugin_host::{checks, oop, oop_bench};
 
 const CHILD_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -128,6 +129,46 @@ fn main() {
             print!("{}", r.render());
             std::process::exit(if r.passed() { 0 } else { 1 });
         }
+        Some("serve") if args.len() == 5 => {
+            // Child process for out-of-process hosting; started by `oop`.
+            let block = args[4].parse().unwrap_or(256);
+            if let Err(e) = oop::serve(Path::new(&args[1]), Path::new(&args[2]), &args[3], block) {
+                eprintln!("plugin process: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("oop") => {
+            let mut o = oop_bench::Opts {
+                bundles: Vec::new(),
+                seconds: 20.0,
+                block: 256,
+                kill: true,
+            };
+            let mut it = args.iter().skip(1);
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--seconds" => {
+                        o.seconds = it.next().and_then(|v| v.parse().ok()).unwrap_or(20.0)
+                    }
+                    "--block" => o.block = it.next().and_then(|v| v.parse().ok()).unwrap_or(256),
+                    "--no-kill" => o.kill = false,
+                    b => o.bundles.push(PathBuf::from(b)),
+                }
+            }
+            if o.bundles.is_empty() {
+                eprintln!(
+                    "usage: plugin-host oop <plugin.vst3>... [--seconds 20] [--block 256] [--no-kill]"
+                );
+                std::process::exit(2);
+            }
+            let exe = std::env::current_exe().expect("own path");
+            let report = oop_bench::run(&exe, &o);
+            print!("{report}");
+            if std::fs::write("plugin-host-oop-report.txt", &report).is_ok() {
+                println!("Saved to plugin-host-oop-report.txt");
+            }
+            pause();
+        }
         Some("check-all") | None => {
             let mut folders = default_folders();
             folders.extend(rest.iter().map(PathBuf::from));
@@ -160,7 +201,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: plugin-host check <plugin.vst3> [--editor]\n       plugin-host check-all [folder...] [--editor]"
+                "usage: plugin-host check <plugin.vst3> [--editor]\n       plugin-host check-all [folder...] [--editor]\n       plugin-host oop <plugin.vst3>... [--seconds 20] [--block 256] [--no-kill]"
             );
             std::process::exit(2);
         }

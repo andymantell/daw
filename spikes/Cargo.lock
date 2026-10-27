@@ -3547,7 +3547,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "plugin-host"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "libloading",
+ "memmap2",
  "vst3",
  "vst3-test-plugin",
  "windows-sys 0.61.2",

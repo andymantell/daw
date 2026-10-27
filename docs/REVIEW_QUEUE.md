@@ -36,6 +36,11 @@ Spike 0.1 decides whether Rust is confirmed
       plugin, processes audio, automates a parameter, restores its state
       and opens its editor in our window. Note any editor that draws wrongly,
       won't resize, or hangs.
+- [ ] **B. Plugins in separate processes.** Pick two effect plugins from
+      the scan and run
+      `plugin-host oop "<first>.vst3" "<second>.vst3" --block 128`.
+      Pass: no blocks over budget or late, and "audio flowing again after
+      restart" after the deliberate crash.
 - [ ] **C. UI timeline.** `ui-timeline --bench 20`, then play with
       `ui-timeline` by hand: scroll, Ctrl+wheel zoom, drag clips, double-click
       to rename, Space to play. Pass: 99% of frames under 16.7 ms and at

@@ -9,4 +9,6 @@ pub mod checks;
 pub mod com;
 #[cfg(windows)]
 pub mod editor_win;
+pub mod oop;
+pub mod oop_bench;
 pub mod plugin;

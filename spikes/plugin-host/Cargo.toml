@@ -8,14 +8,20 @@ publish.workspace = true
 [dependencies]
 vst3 = "0.3.0"
 libloading = "0.8"
+memmap2 = "0.9.12"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
 
 [dev-dependencies]
 vst3-test-plugin = { path = "../vst3-test-plugin" }

@@ -7,7 +7,7 @@ Nothing here ships. Licence: GPL-3.0-or-later.
 | Test | Crate | Status |
 |---|---|---|
 | **A. Audio I/O** (ASIO on Windows) | `audio-io` | Built. Not yet run on the owner's PC and interface. |
-| **B. VST 3 hosting** | `vst3-scan` (step one: list installed plugins) | Scanner built. Loading plugins not started. |
+| **B. VST 3 hosting** | `vst3-scan`, `plugin-host`, `vst3-test-plugin` | Host passes its automated tests with our own test plugin on Linux and Windows CI. Not yet run against real plugins on the owner's PC. |
 | **C. UI** | — | Not started. |
 | **D. Engine** | `engine` | Passing (see below). |
 
@@ -70,6 +70,48 @@ UI thread.
 Limits: this runs without a sound card and faster than real time. Timing
 under a real driver callback is part of test A.
 
+## B. VST 3 hosting: `plugin-host`
+
+Written directly on the `vst3` Rust bindings (MIT/Apache-2.0), which is
+how the product's plugin host would be built. For each plugin it:
+
+1. loads the module and its factory, creates the processor, and creates and
+   connects a separate controller when the plugin has one;
+2. processes about a second of a 440 Hz tone and checks the output is
+   finite;
+3. reads the reported latency;
+4. sweeps the first automatable parameter through the processor's
+   parameter queue;
+5. saves the state, restores it into two fresh instances and checks they
+   then produce identical output;
+6. on Windows with `--editor`, opens the plugin's editor embedded in a
+   window we create, resizes it if the plugin allows, and closes it.
+
+`check-all` runs each plugin in its own child process, so a plugin that
+crashes or hangs (two-minute limit) is recorded as a failure instead of
+ending the run.
+
+`vst3-test-plugin` is our own small VST 3 effect (stereo gain, one
+automatable parameter, 64 samples of real and reported latency, 8-byte
+state), written from the public interface definitions. It lets CI test
+the host on every platform without third-party plugins:
+`cargo test --release -p plugin-host` checks the output sample for sample,
+including the latency delay, a mid-stream gain change and a state
+restore.
+
+On the test PC:
+
+```
+plugin-host check-all --editor
+```
+
+The report is saved as `plugin-host-report.txt`.
+
+Not covered yet: instrument plugins (they need note input), sidechain
+buses, and running a plugin's audio processing in a separate process
+during playback (the roadmap asks for that to be prototyped for at least
+two plugins).
+
 ## B, step one: `vst3-scan`
 
 Lists every `.vst3` in the standard folders (on Windows,
@@ -78,8 +120,8 @@ arguments, and reads each bundle's `moduleinfo.json` for name, vendor,
 version and category. It only reads files and never loads plugin code.
 The report is saved as `vst3-scan-report.txt` in the current folder.
 
-Download it, and `audio-io.exe`, from the latest **spikes** workflow run on
-GitHub (artifact `spikes-windows-x64`).
+Download it, with `audio-io.exe` and `plugin-host.exe`, from the latest
+**spikes** workflow run on GitHub (artifact `spikes-windows-x64`).
 
 ## 0.5, first half: `collab-doc`
 

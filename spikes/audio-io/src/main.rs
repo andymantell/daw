@@ -161,9 +161,7 @@ struct Stats {
 impl Stats {
     fn record_frames(&self, frames: u64) {
         self.max_frames.fetch_max(frames, Relaxed);
-        let _ = self.min_frames.fetch_update(Relaxed, Relaxed, |m| {
-            (m == 0 || frames < m).then_some(frames)
-        });
+        self.min_frames.fetch_min(frames, Relaxed);
     }
     fn counting(&self) -> bool {
         self.counting.load(Relaxed)
@@ -189,7 +187,10 @@ where
 {
     let period_ns = 1e9 * opts.buffer as f64 / opts.rate as f64;
     let burn_ns = (period_ns * opts.load) as u64;
-    let stats = Arc::new(Stats::default());
+    let stats = Arc::new(Stats {
+        min_frames: AtomicU64::new(u64::MAX),
+        ..Default::default()
+    });
 
     // Mono guitar signal from input to output. Pre-filled with two buffers
     // of silence, which covers drivers that run input and output callbacks
@@ -358,7 +359,7 @@ where
     let _ = writeln!(
         r,
         "  frames per callback seen: {}..{}",
-        g(&st.min_frames),
+        g(&st.min_frames).min(g(&st.max_frames)),
         g(&st.max_frames)
     );
     let _ = writeln!(

@@ -52,4 +52,5 @@ jobs:
           path: |
             spikes/target/release/vst3-scan.exe
             spikes/target/release/audio-io.exe
+            spikes/target/release/plugin-host.exe
           if-no-files-found: error

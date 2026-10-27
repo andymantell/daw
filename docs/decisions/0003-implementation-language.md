@@ -1,7 +1,7 @@
 # 0003 — Implementation language: Rust, with C++/JUCE as fallback
 
-- **Status:** Proposed. Decided by spike 0.1 (Roadmap Phase 0)
-- **Date:** 2026-10-24
+- **Status:** Proceeding with Rust at risk (2026-10-27). Final go/no-go still decided by spike 0.1
+- **Date:** 2026-10-24 (at-risk update 2026-10-27)
 
 ## Context
 A native DAW needs predictable real-time performance, solid VST 3 hosting
@@ -36,6 +36,25 @@ Rust, **conditional on spike 0.1** passing:
 
 **Fallback rule:** if B or C proves disproportionately hard, switch to
 C++/JUCE before product code exists, and re-run B and C to confirm.
+
+## At-risk update (2026-10-27)
+The owner chose to continue building in Rust before the on-device parts of
+spike 0.1 have run, because the only test machine is unavailable for a
+week. Status of the pass criteria:
+
+| Test | Status |
+|---|---|
+| A. Audio I/O | Not run. Needs the owner's Windows PC and interface. macOS untested (no Mac available). |
+| B. VST 3 hosting | Not run. A read-only plugin folder scanner is built. |
+| C. UI | Not run. |
+| D. Engine | **Passed** in CI on Windows and Linux (see `spikes/README.md`). |
+
+To limit the cost if B or C later fails and the fallback rule applies:
+- Build platform-independent parts first (project document and schema,
+  collaboration, timing maths, DSP, offline rendering). Their designs carry
+  over to C++ even if the code doesn't.
+- Hold back on UI and plugin-window code until tests B and C have run.
+- Revisit this record as soon as A–C have results.
 
 ## Sources
 Rust ecosystem survey (October 2026): docs for `vst3`, `vst3-host`,

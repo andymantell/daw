@@ -1,0 +1,17 @@
+[package]
+name = "daw-test-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# A tiny VST 3 effect (and test instrument) for the plugin host's automated
+# tests: stereo gain with one automatable parameter, a fixed reported
+# latency and saved state. Never shipped.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vst3 = "0.3.0"

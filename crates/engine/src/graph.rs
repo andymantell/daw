@@ -7,7 +7,13 @@
 //! and every buffer allocated up front. The audio thread only reads it.
 //!
 //! Phase 1 graph: audio clips and, when monitoring, the track's input →
-//! track (gain, pan, mute, solo) → master.
+//! the track's insert effects → track (gain, pan, mute, solo) → master.
+//!
+//! Insert effects ([`Insert`]) are made off the audio thread and live
+//! across graphs: a new graph takes them over from the one it replaces
+//! by id, so editing the session never restarts a plugin. A track whose
+//! effects add latency has its clips read that far ahead, so it stays in
+//! time with the others.
 
 use std::sync::Arc;
 
@@ -133,10 +139,30 @@ impl ClipSpec {
     }
 }
 
+/// An effect in a track's insert chain, run on the audio thread.
+pub trait Insert: Send {
+    /// Processes one block of stereo audio in place, at most the graph's
+    /// `max_block` frames. Must not allocate, lock or block.
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+}
+
+/// A slot in a track's insert chain. The effect itself is handed to
+/// [`Session::compile_with`] once, when first added, under this `id`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InsertSpec {
+    /// Unique for the life of the process.
+    pub id: u64,
+    pub bypass: bool,
+    /// Frames of delay the effect reports, compensated on the track.
+    pub latency: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct TrackSpec {
     pub clips: Vec<ClipSpec>,
     pub mix: Mix,
+    /// Effects, in processing order.
+    pub inserts: Vec<InsertSpec>,
     /// The audio input this track records from and monitors.
     pub input: Option<Input>,
     /// Records its input while the transport records.
@@ -150,6 +176,7 @@ impl TrackSpec {
         TrackSpec {
             clips,
             mix: Mix::default(),
+            inserts: Vec::new(),
             input: None,
             arm: false,
             monitor: false,
@@ -316,6 +343,19 @@ pub(crate) struct TrackNode {
     pub input: Option<Input>,
     pub arm: bool,
     pub monitor: bool,
+    pub inserts: Vec<InsertNode>,
+    /// Effects' total latency: clips are read this far ahead.
+    pub latency: i64,
+    /// The source is mono but the effects are stereo: copy left to right
+    /// before them.
+    pub widen: bool,
+}
+
+pub(crate) struct InsertNode {
+    pub id: u64,
+    pub bypass: bool,
+    /// Taken over from the previous graph, or handed in when new.
+    pub effect: Option<Box<dyn Insert>>,
 }
 
 impl TrackNode {
@@ -365,6 +405,17 @@ impl Session {
 
     /// Builds the graph. Allocates; never call on the audio thread.
     pub fn compile(&self, max_block: usize) -> Result<Graph, CompileError> {
+        self.compile_with(max_block, &mut Vec::new())
+    }
+
+    /// As [`compile`](Self::compile), taking newly made effects from
+    /// `new_effects` by insert id. Effects already playing are taken over
+    /// from the current graph when this one replaces it.
+    pub fn compile_with(
+        &self,
+        max_block: usize,
+        new_effects: &mut Vec<(u64, Box<dyn Insert>)>,
+    ) -> Result<Graph, CompileError> {
         if self.tracks.len() > MAX_TRACKS {
             return Err(CompileError::TooManyTracks);
         }
@@ -425,6 +476,27 @@ impl Session {
             if monitor && t.input.is_some_and(|i| i.stereo) {
                 stereo = true;
             }
+            let inserts: Vec<InsertNode> = t
+                .inserts
+                .iter()
+                .map(|i| InsertNode {
+                    id: i.id,
+                    bypass: i.bypass,
+                    effect: new_effects
+                        .iter()
+                        .position(|(id, _)| *id == i.id)
+                        .map(|k| new_effects.swap_remove(k).1),
+                })
+                .collect();
+            let latency = t
+                .inserts
+                .iter()
+                .filter(|i| !i.bypass)
+                .map(|i| i.latency as i64)
+                .sum();
+            // Effects work in stereo, so a mono track becomes stereo.
+            let widen = !stereo && !inserts.is_empty();
+            stereo |= !inserts.is_empty();
             tracks.push(TrackNode {
                 clips,
                 mix: t.mix,
@@ -433,6 +505,9 @@ impl Session {
                 input: t.input,
                 arm: t.arm && t.input.is_some(),
                 monitor,
+                inserts,
+                latency,
+                widen,
             });
         }
         let any_solo = tracks.iter().any(|t| t.mix.solo);
@@ -515,7 +590,9 @@ impl Graph {
                 }
             }
             // Clips are sorted by start; skip those that end before this
-            // block, stop at the first that starts after it.
+            // block, stop at the first that starts after it. They are
+            // read ahead by the effects' latency.
+            let pos = pos + t.latency;
             let clips = if play { &t.clips[..] } else { &[] };
             for c in clips {
                 if c.start >= pos + n as i64 {
@@ -564,6 +641,15 @@ impl Graph {
                             done += (len - done).min(CHUNK - within);
                         }
                     }
+                }
+            }
+
+            if t.widen {
+                sr.copy_from_slice(sl);
+            }
+            for i in &mut t.inserts {
+                if let (false, Some(fx)) = (i.bypass, &mut i.effect) {
+                    fx.process(sl, sr);
                 }
             }
 
@@ -622,6 +708,21 @@ impl Graph {
             .slots
             .get_mut(index)?
             .take()
+    }
+
+    /// Takes over the effects of `old` that this graph still uses. The
+    /// rest stay in `old`, to be dropped with it off the audio thread.
+    pub(crate) fn adopt_inserts(&mut self, old: &mut Graph) {
+        for t in &mut self.tracks {
+            for slot in t.inserts.iter_mut().filter(|s| s.effect.is_none()) {
+                slot.effect = old
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|o| o.inserts.iter_mut())
+                    .find(|o| o.id == slot.id)
+                    .and_then(|o| o.effect.take());
+            }
+        }
     }
 
     /// Moves every loaded chunk out of `old` into this graph where it has

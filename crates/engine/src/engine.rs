@@ -405,6 +405,7 @@ impl Engine {
                     if let Some(old) = &mut self.graph {
                         let to_disk = &mut self.to_disk;
                         g.adopt_chunks(old, |c| give_back(to_disk, c));
+                        g.adopt_inserts(old);
                     }
                     if let Some(old) = self.graph.replace(g) {
                         // The queue has room for every graph in flight;

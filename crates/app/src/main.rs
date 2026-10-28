@@ -15,6 +15,7 @@
 
 mod export;
 mod fx;
+mod latency;
 mod perf;
 mod project;
 mod share;
@@ -186,6 +187,7 @@ struct App {
     notes_open: bool,
     shortcuts_open: bool,
     proj: project::Proj,
+    latency: latency::Latency,
 }
 
 /// Every keyboard shortcut, for Help → Keyboard shortcuts. Letters work
@@ -301,6 +303,7 @@ impl App {
             notes_open: false,
             shortcuts_open: false,
             proj: project::Proj::new(),
+            latency: latency::Latency::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -1264,6 +1267,7 @@ impl App {
                     click: None,
                     input: None,
                     record_offset: None,
+                    measured_at: None,
                     direct_monitoring: false,
                 });
                 egui::Grid::new("device").num_columns(2).show(ui, |ui| {
@@ -1357,16 +1361,43 @@ impl App {
                     ui.end_row();
 
                     ui.label("Recording offset");
-                    ui.horizontal(|ui| {
-                        let mut manual = draft.record_offset.is_some();
-                        if ui.checkbox(&mut manual, "Measured").changed() {
-                            draft.record_offset = manual.then_some(0);
-                        }
-                        if let Some(o) = &mut draft.record_offset {
-                            ui.add(egui::DragValue::new(o).range(0..=48_000).suffix(" frames"));
-                            ui.label(format!("{:.2} ms", *o as f64 * 1000.0 / draft.rate as f64));
-                        } else {
-                            ui.label("from the driver's reported latency");
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            let mut manual = draft.record_offset.is_some();
+                            if ui.checkbox(&mut manual, "Measured").changed() {
+                                draft.record_offset = manual.then_some(0);
+                                draft.measured_at = None;
+                            }
+                            if let Some(o) = &mut draft.record_offset {
+                                if ui
+                                    .add(egui::DragValue::new(o).range(0..=48_000).suffix(" frames"))
+                                    .changed()
+                                {
+                                    draft.measured_at = None;
+                                }
+                                ui.label(format!("{:.2} ms", *o as f64 * 1000.0 / draft.rate as f64));
+                            } else {
+                                ui.label("from the driver's reported latency");
+                            }
+                            if ui
+                                .button("Measure…")
+                                .on_hover_text("Measure the round trip with a loopback cable")
+                                .clicked()
+                            {
+                                self.latency.open = true;
+                                self.latency.inputs = input_channels(&draft.host, draft.input.as_deref());
+                            }
+                        });
+                        if let Some((rate, buffer)) = draft.measured_at
+                            && (rate, buffer) != (draft.rate, draft.buffer)
+                        {
+                            ui.colored_label(
+                                Color32::from_rgb(230, 180, 60),
+                                format!(
+                                    "Measured at {rate} Hz, {}: measure again for these settings.",
+                                    buffer.map_or("driver default buffer".into(), |b| format!("{b} samples"))
+                                ),
+                            );
                         }
                     });
                     ui.end_row();
@@ -1438,7 +1469,7 @@ impl App {
                 }
                 ui.label(
                     RichText::new(
-                        "For exact alignment, measure the round trip with a loopback cable and the latency tool, and enter it as the measured recording offset.",
+                        "For exact alignment, measure the round trip with a loopback cable: Recording offset → Measure….",
                     )
                     .small()
                     .weak(),
@@ -1455,15 +1486,87 @@ impl App {
             });
         self.show_devices = open;
         if apply {
-            self.reconnect = None;
-            self.profile = self.draft.clone();
-            if let Some(p) = &self.profile {
-                self.saved.use_profile(p.clone());
-                if let Err(e) = save_settings(&self.saved) {
-                    self.message = Some(format!("Could not save the device settings: {e}"));
-                }
+            self.apply_draft();
+        }
+    }
+
+    /// Uses the settings in the device window, saves them and restarts
+    /// the audio.
+    fn apply_draft(&mut self) {
+        self.reconnect = None;
+        self.profile = self.draft.clone();
+        if let Some(p) = &self.profile {
+            self.saved.use_profile(p.clone());
+            if let Err(e) = save_settings(&self.saved) {
+                self.message = Some(format!("Could not save the device settings: {e}"));
             }
+        }
+        self.restart_audio();
+    }
+
+    /// What to measure latency on: the device in the device window, or,
+    /// with `DAW_TEST_LOOPBACK` set, the silent stand-in's simulated
+    /// cable.
+    fn measure_target(&self) -> Result<audio::latency::Target, String> {
+        let draft = self.draft.as_ref().ok_or("Choose an audio device first.")?;
+        match audio::SilentInput::from_env() {
+            input @ audio::SilentInput::Loopback { .. } => Ok(audio::latency::Target::Silent {
+                rate: draft.rate,
+                buffer: draft.buffer.unwrap_or(256),
+                input,
+            }),
+            _ if draft.device.is_empty() => Err("Choose an audio device first.".into()),
+            _ => Ok(audio::latency::Target::Device(draft.clone())),
+        }
+    }
+
+    /// Stops the app's audio and starts measuring on `target`.
+    fn start_measuring(&mut self, target: Result<audio::latency::Target, String>) {
+        let target = match target {
+            Ok(t) => t,
+            Err(e) => {
+                self.message = Some(e);
+                return;
+            }
+        };
+        self.reconnect = None;
+        // Frees the device for the measurement.
+        self.audio = Audio::Stopped;
+        if !self.latency.begin(target) {
             self.restart_audio();
+        }
+    }
+
+    fn latency_window(&mut self, ctx: &egui::Context) {
+        if let Some(done) = self.latency.poll() {
+            match (done, &mut self.draft) {
+                (Ok(m), Some(d)) => {
+                    d.record_offset = Some(m.frames);
+                    d.measured_at = Some((d.rate, d.buffer));
+                    self.apply_draft();
+                }
+                _ => self.restart_audio(),
+            }
+        }
+        if self.latency.busy() {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+        if !self.latency.open {
+            return;
+        }
+        let Some(draft) = self.draft.clone() else {
+            return;
+        };
+        match self.latency.window(ctx, &draft, self.recording) {
+            Some(latency::Action::Start) => {
+                let target = self.measure_target();
+                self.start_measuring(target);
+            }
+            Some(latency::Action::Cancel) => {
+                self.latency.cancel();
+                self.restart_audio();
+            }
+            None => {}
         }
     }
 }
@@ -1492,6 +1595,10 @@ fn load_settings() -> SavedProfiles {
 }
 
 fn save_settings(s: &SavedProfiles) -> std::io::Result<()> {
+    // Tests never touch the user's settings.
+    if cfg!(test) {
+        return Ok(());
+    }
     let path = settings_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -1512,6 +1619,15 @@ fn new_engine() -> (Controller, engine::Engine, StreamerThread, RecorderThread) 
 
 fn draft_host(p: &Option<DeviceProfile>) -> String {
     p.as_ref().map_or(String::new(), |p| p.host.clone())
+}
+
+/// Channels on the input device `name`, for choosing one; 2 if it can't
+/// be found (so the simulated cable has some).
+fn input_channels(host: &str, name: Option<&str>) -> usize {
+    audio::input_devices(host)
+        .into_iter()
+        .find(|d| Some(d.name.as_str()) == name)
+        .map_or(2, |d| d.input_channels as usize)
 }
 
 fn input_names(host: &str) -> Vec<String> {
@@ -1836,6 +1952,7 @@ impl eframe::App for App {
             });
         egui::CentralPanel::default().show(ui, |ui| self.timeline(ui));
         self.device_window(&ctx);
+        self.latency_window(&ctx);
         self.effects.manager_window(&ctx);
         let inputs = match &self.audio {
             Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,

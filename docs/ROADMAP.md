@@ -163,8 +163,12 @@ app window with a mixer, transport and device settings (`crates/app`).
 Files at other sample rates are converted on import, in the background,
 into a cache folder (to move into the project folder once projects
 are saved). If the device is unplugged, the app plays silently and
-starts again on it when it is back. Still to do: measured latency in the settings panel (with
-1.2).*
+starts again on it when it is back. Measured latency: Settings → Audio
+device → Recording offset → Measure… plays test chirps through a loopback
+cable, in the engine's place and through the same input queue, over three
+starts of the audio, and saves the round trip as the device profile's
+recording offset, noting the rate and buffer size it was measured at
+(simulated in the cloud; the owner's cable test is in the review queue).*
 - Audio device selection (driver, device, sample rate, buffer size) and a
   device-settings panel with measured latency.
 - Transport: play, stop, position, loop region, tempo, time signature

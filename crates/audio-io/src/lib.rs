@@ -16,6 +16,9 @@
 //! If the device is unplugged
 //! the stream reports it in [`StreamStatus::failed`] and stops; the app
 //! watches for the device with [`is_present`] and starts again.
+//!
+//! [`latency`] measures the recording offset with a loopback cable, by
+//! running a test in the engine's place through the same path.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,6 +31,35 @@ use rtrb::{Consumer, Producer, RingBuffer};
 /// The largest block the engine is asked for in one go. Device buffers
 /// bigger than this are processed in several calls.
 pub const MAX_BLOCK: usize = 4096;
+
+pub mod latency;
+
+/// What runs in the audio callback: the engine, or a stand-in such as
+/// the latency test. Called with each block's input and outputs, as
+/// [`Engine::process_duplex`] is.
+pub trait Duplex: Send + 'static {
+    fn process_duplex(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        left: &mut [f32],
+        right: &mut [f32],
+        click: Option<&mut [f32]>,
+    );
+}
+
+impl Duplex for Engine {
+    fn process_duplex(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        left: &mut [f32],
+        right: &mut [f32],
+        click: Option<&mut [f32]>,
+    ) {
+        Engine::process_duplex(self, input, channels, left, right, click);
+    }
+}
 
 /// Which device to use and how.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +81,9 @@ pub struct DeviceProfile {
     /// in frames: the interface's round trip, measured with a loopback
     /// cable. `None` uses the latency the driver reports instead.
     pub record_offset: Option<u32>,
+    /// The sample rate and buffer size `record_offset` was measured at,
+    /// if it was measured (rather than typed in): it changes with them.
+    pub measured_at: Option<(u32, Option<u32>)>,
     /// The player listens through the interface's own direct monitoring,
     /// so the app never plays inputs back (no doubled sound).
     pub direct_monitoring: bool,
@@ -149,6 +184,7 @@ pub fn default_profile() -> Option<DeviceProfile> {
         click: None,
         input,
         record_offset: None,
+        measured_at: None,
         direct_monitoring: false,
     })
 }
@@ -313,16 +349,62 @@ impl Drop for SilentThread {
 /// for machines without audio (such as build servers) and for trying the
 /// app out. Playback, meters and the playhead all behave as normal.
 ///
-/// With the environment variable `DAW_TEST_INPUT` set, it also feeds two
-/// input channels of test tone (220 Hz left, 330 Hz right), so recording
-/// can be tried without an interface.
-pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
-    let test_input = std::env::var_os("DAW_TEST_INPUT").is_some();
-    let in_ch: usize = if test_input { 2 } else { 0 };
+/// The input is chosen by environment variables, see [`SilentInput::from_env`].
+pub fn start_silent<P: Duplex>(rate: u32, buffer: u32, engine: P) -> Running {
+    start_silent_with(rate, buffer, engine, SilentInput::from_env())
+}
+
+/// What the silent stand-in feeds in as input.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SilentInput {
+    None,
+    /// Two channels of test tone (220 Hz left, 330 Hz right), so
+    /// recording can be tried without an interface.
+    Tones,
+    /// Two channels, each the main left output coming back `delay`
+    /// frames later (at least one buffer), as through a loopback cable:
+    /// for trying the latency measurement.
+    Loopback {
+        delay: u32,
+    },
+}
+
+impl SilentInput {
+    /// `DAW_TEST_LOOPBACK=<frames>` for [`Loopback`](Self::Loopback),
+    /// otherwise `DAW_TEST_INPUT` (set to anything) for
+    /// [`Tones`](Self::Tones).
+    pub fn from_env() -> SilentInput {
+        if let Some(delay) = std::env::var("DAW_TEST_LOOPBACK")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+        {
+            SilentInput::Loopback { delay }
+        } else if std::env::var_os("DAW_TEST_INPUT").is_some() {
+            SilentInput::Tones
+        } else {
+            SilentInput::None
+        }
+    }
+}
+
+/// [`start_silent`] with the input given.
+pub fn start_silent_with<P: Duplex>(
+    rate: u32,
+    buffer: u32,
+    mut engine: P,
+    input: SilentInput,
+) -> Running {
+    let in_ch: usize = if input == SilentInput::None { 0 } else { 2 };
     let status = Arc::new(StreamStatus::default());
     let stop = Arc::new(AtomicBool::new(false));
     let (s, st) = (status.clone(), stop.clone());
     let n = (buffer as usize).clamp(1, MAX_BLOCK);
+    let mut cable = match input {
+        SilentInput::Loopback { delay } => {
+            Some(latency::SimLoopback::new((delay as usize).max(n), 1.0))
+        }
+        _ => None,
+    };
     let handle = std::thread::Builder::new()
         .name("silent audio".into())
         .spawn(move || {
@@ -333,13 +415,21 @@ pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
             let mut next = std::time::Instant::now();
             while !st.load(Ordering::Relaxed) {
                 let t0 = std::time::Instant::now();
-                for frame in inp.chunks_mut(2) {
-                    let x = t as f32 / rate as f32 * std::f32::consts::TAU;
-                    frame[0] = (x * 220.0).sin() * 0.3;
-                    frame[1] = (x * 330.0).sin() * 0.3;
-                    t += 1;
+                match &mut cable {
+                    Some(c) => c.input(&mut inp, in_ch),
+                    None => {
+                        for frame in inp.chunks_mut(2) {
+                            let x = t as f32 / rate as f32 * std::f32::consts::TAU;
+                            frame[0] = (x * 220.0).sin() * 0.3;
+                            frame[1] = (x * 330.0).sin() * 0.3;
+                            t += 1;
+                        }
+                    }
                 }
                 engine.process_duplex(&inp, in_ch, &mut l, &mut r, None);
+                if let Some(c) = &mut cable {
+                    c.output(&l);
+                }
                 s.note_busy(t0.elapsed(), n, rate);
                 s.callbacks.fetch_add(1, Ordering::Relaxed);
                 s.last_frames.store(n as u64, Ordering::Relaxed);
@@ -363,7 +453,7 @@ pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
     }
 }
 
-pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String> {
+pub fn start<P: Duplex>(profile: &DeviceProfile, engine: P) -> Result<Running, String> {
     let (host, device) = find(profile)?;
     let supported = device
         .default_output_config()
@@ -407,10 +497,10 @@ pub fn start(profile: &DeviceProfile, engine: Engine) -> Result<Running, String>
         slack,
     };
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, &config, out, engine, &status),
-        SampleFormat::I16 => build::<i16>(&device, &config, out, engine, &status),
-        SampleFormat::I32 => build::<i32>(&device, &config, out, engine, &status),
-        SampleFormat::U16 => build::<u16>(&device, &config, out, engine, &status),
+        SampleFormat::F32 => build::<f32, P>(&device, &config, out, engine, &status),
+        SampleFormat::I16 => build::<i16, P>(&device, &config, out, engine, &status),
+        SampleFormat::I32 => build::<i32, P>(&device, &config, out, engine, &status),
+        SampleFormat::U16 => build::<u16, P>(&device, &config, out, engine, &status),
         f => Err(format!("unsupported sample format {f:?}")),
     }?;
     if let Some(i) = &in_stream {
@@ -515,11 +605,11 @@ struct Out<'a> {
     slack: usize,
 }
 
-fn build<T>(
+fn build<T, P: Duplex>(
     device: &Device,
     config: &StreamConfig,
     out: Out,
-    mut engine: Engine,
+    mut engine: P,
     status: &Arc<StreamStatus>,
 ) -> Result<cpal::Stream, String>
 where
@@ -655,6 +745,10 @@ impl SavedProfiles {
             if let Some(o) = p.record_offset {
                 s += &format!("record_offset = {o}\n");
             }
+            if let Some((rate, buffer)) = p.measured_at {
+                let b = buffer.map_or("default".into(), |b| b.to_string());
+                s += &format!("measured_at = {rate} {b}\n");
+            }
             if p.direct_monitoring {
                 s += "direct_monitoring = yes\n";
             }
@@ -681,6 +775,7 @@ impl SavedProfiles {
                     click: None,
                     input: None,
                     record_offset: None,
+                    measured_at: None,
                     direct_monitoring: false,
                 });
                 continue;
@@ -703,6 +798,12 @@ impl SavedProfiles {
                 "click" => p.click = v.parse().ok(),
                 "input" => p.input = Some(v.into()),
                 "record_offset" => p.record_offset = v.parse().ok(),
+                "measured_at" => {
+                    let mut it = v.split_whitespace();
+                    if let (Some(Ok(rate)), Some(b)) = (it.next().map(str::parse), it.next()) {
+                        p.measured_at = Some((rate, b.parse().ok()));
+                    }
+                }
                 "direct_monitoring" => p.direct_monitoring = v == "yes",
                 _ => {}
             }
@@ -727,6 +828,7 @@ mod tests {
             click: Some(3),
             input: Some(device.into()),
             record_offset: Some(271),
+            measured_at: Some((48_000, Some(128))),
             direct_monitoring: true,
         }
     }
@@ -740,6 +842,7 @@ mod tests {
         other.click = None;
         other.input = None;
         other.record_offset = None;
+        other.measured_at = None;
         other.direct_monitoring = false;
         s.use_profile(other.clone());
         let back = SavedProfiles::from_text(&s.to_text());

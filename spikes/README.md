@@ -20,7 +20,9 @@ Collaboration spike ([ROADMAP](../docs/ROADMAP.md) 0.5,
 | Live peer-to-peer connection | `collab-net` | Built and passing on one machine. Needs real home, mobile and school networks. |
 
 Latency spike ([ROADMAP](../docs/ROADMAP.md) 0.4): `latency`. Built;
-needs a loopback cable on the owner's interface.
+needs a loopback cable on the owner's interface. Its pulse search now
+also lives in the app (`crates/audio-io/src/latency.rs`, Settings →
+Audio device → Measure…).
 
 Speed and pitch spike ([ROADMAP](../docs/ROADMAP.md) 0.6): `stretch`.
 CPU and objective checks done; listening tests still to do (see below).

@@ -4,7 +4,10 @@
 
 use std::path::PathBuf;
 
-use daw_project::{Clip, Effect, EffectState, Marker, Project, ProjectDoc, ProjectFolder, Track};
+use daw_project::{
+    Clip, Effect, EffectState, Marker, Practice, Project, ProjectDoc, ProjectFolder, Track,
+    TrainerSettings,
+};
 
 fn clip(id: &str, start: i64) -> Clip {
     Clip {
@@ -226,6 +229,92 @@ fn track_order_merges_without_losing_or_doubling_tracks() {
     assert_eq!(g, b.get());
     let ids: Vec<&str> = g.tracks.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(ids, vec!["t2", "t1", "t3"]);
+}
+
+fn slow_practice() -> Practice {
+    Practice {
+        speed_pct: 70.0,
+        semitones: -1,
+        cents: 12,
+        looping: true,
+        muted: vec!["t1".into()],
+        trainer: TrainerSettings {
+            on: true,
+            step: 2.0,
+            every: 4,
+            target: 90.0,
+        },
+    }
+}
+
+#[test]
+fn practice_settings_come_back_after_saving() {
+    let mut d = ProjectDoc::new(1);
+    d.set(&song());
+    assert_eq!(d.practice("me"), None, "nothing saved yet");
+    let pr = slow_practice();
+    assert!(d.set_practice("me", &pr));
+    assert!(
+        !d.set_practice("me", &pr),
+        "setting it again changes nothing"
+    );
+    let back = ProjectDoc::from_bytes(&d.to_bytes(), 2).unwrap();
+    assert_eq!(back.practice("me"), Some(pr));
+    assert_eq!(back.get(), song(), "the song itself is untouched");
+}
+
+#[test]
+fn practice_mute_taken_off_is_gone_after_saving() {
+    let mut d = ProjectDoc::new(1);
+    let mut pr = slow_practice();
+    pr.muted = vec!["t1".into(), "t2".into()];
+    d.set_practice("me", &pr);
+    pr.muted = vec!["t2".into()];
+    d.set_practice("me", &pr);
+    let back = ProjectDoc::from_bytes(&d.to_bytes(), 2).unwrap();
+    assert_eq!(back.practice("me").unwrap().muted, vec!["t2".to_string()]);
+}
+
+#[test]
+fn practice_settings_are_not_undo_steps() {
+    let mut d = ProjectDoc::new(1);
+    let p0 = song();
+    d.set(&p0);
+    let mut p1 = p0.clone();
+    p1.tempo_bpm = 90.0;
+    d.set(&p1);
+    d.set_practice("me", &slow_practice());
+    assert!(d.undo(), "undo skips the practice settings");
+    assert_eq!(d.get(), p0, "and takes back the tempo change");
+    assert_eq!(d.practice("me"), Some(slow_practice()), "which stay as set");
+    let mut p2 = p0.clone();
+    p2.notes = "Next edit".into();
+    d.set(&p2);
+    assert!(d.undo(), "an edit after them is still undoable");
+    assert_eq!(d.get(), p0);
+}
+
+#[test]
+fn each_persons_practice_settings_are_their_own() {
+    let (mut a, mut b, _) = two_copies();
+    let teacher = Practice::default();
+    let student = slow_practice();
+    a.set_practice("teacher", &teacher);
+    b.set_practice("student", &student);
+    sync(&mut a, &mut b);
+    for d in [&a, &b] {
+        assert_eq!(d.practice("teacher"), Some(teacher.clone()));
+        assert_eq!(d.practice("student"), Some(student.clone()));
+    }
+}
+
+#[test]
+fn a_project_saved_before_practice_settings_still_opens() {
+    let mut d = ProjectDoc::new(1);
+    d.set(&song());
+    let back = ProjectDoc::from_bytes(&d.to_bytes(), 2).unwrap();
+    assert_eq!(back.practice("me"), None);
+    assert_eq!(back.get(), song());
 }
 
 fn temp(name: &str) -> PathBuf {

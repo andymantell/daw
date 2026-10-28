@@ -2,6 +2,7 @@
 //! The tempo trainer (roadmap 1.4): speed goes up by a step every few
 //! times round the loop, until it reaches a target.
 
+use daw_project::TrainerSettings;
 use eframe::egui;
 
 pub struct Trainer {
@@ -29,6 +30,27 @@ impl Default for Trainer {
 }
 
 impl Trainer {
+    /// The settings, as the project keeps them.
+    pub fn settings(&self) -> TrainerSettings {
+        TrainerSettings {
+            on: self.on,
+            step: self.step,
+            every: self.every,
+            target: self.target,
+        }
+    }
+
+    /// Takes on saved settings, counting loops afresh.
+    pub fn set(&mut self, s: &TrainerSettings) {
+        *self = Trainer {
+            on: s.on,
+            step: s.step,
+            every: s.every.max(1),
+            target: s.target,
+            since: None,
+        };
+    }
+
     /// Given the engine's loop count, raises `speed` (percent) when it
     /// is time. Returns true if it changed.
     pub fn update(&mut self, loops: u64, speed: &mut f64) -> bool {

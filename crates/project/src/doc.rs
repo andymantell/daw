@@ -7,7 +7,8 @@
 //! map from id to clip, an `fx` map from id to effect and the effect
 //! order in the movable list `fx_order`. Every field is its own map entry,
 //! so two people changing different fields of the same clip both keep
-//! their change.
+//! their change. A `practice` map holds each person's practice settings
+//! under their own key, which only they write.
 
 use std::collections::HashSet;
 
@@ -16,7 +17,7 @@ use loro::{
     UpdateOptions, VersionVector,
 };
 
-use crate::{Clip, Effect, EffectState, Marker, Project, Track};
+use crate::{Clip, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings};
 
 /// Commits with this origin (plugin state written at save time) are left
 /// out of undo.
@@ -134,6 +135,71 @@ impl ProjectDoc {
 
     fn notes(&self) -> LoroText {
         self.doc.get_text("notes")
+    }
+
+    /// Writes `who`'s practice settings where they differ. Not undoable:
+    /// they change as you play (the tempo trainer, say), not as edits.
+    /// True if anything changed.
+    pub fn set_practice(&mut self, who: &str, p: &Practice) -> bool {
+        let mut w = Writer::default();
+        let m = w.child(&self.doc.get_map("practice"), who);
+        w.put(&m, "speed_pct", p.speed_pct);
+        w.put(&m, "semitones", p.semitones as i64);
+        w.put(&m, "cents", p.cents as i64);
+        w.put(&m, "looping", p.looping);
+        let muted = w.fixed(&m, "muted");
+        let keep: HashSet<&str> = p.muted.iter().map(String::as_str).collect();
+        for id in keys(&muted) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&muted, &id);
+            }
+        }
+        for id in &p.muted {
+            w.put(&muted, id, true);
+        }
+        let t = &p.trainer;
+        w.put(&m, "trainer_on", t.on);
+        w.put(&m, "trainer_step", t.step);
+        w.put(&m, "trainer_every", t.every as i64);
+        w.put(&m, "trainer_target", t.target);
+        if w.changed {
+            self.doc.set_next_commit_origin(QUIET);
+            self.doc.commit();
+        }
+        w.changed
+    }
+
+    /// `who`'s practice settings, or `None` if they have none here yet.
+    pub fn practice(&self, who: &str) -> Option<Practice> {
+        let LoroValue::Map(all) = self.doc.get_map("practice").get_deep_value() else {
+            return None;
+        };
+        let Some(LoroValue::Map(m)) = all.get(who) else {
+            return None;
+        };
+        let d = Practice::default();
+        let dt = TrainerSettings::default();
+        let mut muted: Vec<String> = match m.get("muted") {
+            Some(LoroValue::Map(ids)) => (ids.iter())
+                .filter(|(_, v)| matches!(v, LoroValue::Bool(true)))
+                .map(|(id, _)| id.to_string())
+                .collect(),
+            _ => Vec::new(),
+        };
+        muted.sort();
+        Some(Practice {
+            speed_pct: float(m, "speed_pct").unwrap_or(d.speed_pct),
+            semitones: int(m, "semitones").map_or(d.semitones, |v| v as i32),
+            cents: int(m, "cents").map_or(d.cents, |v| v as i32),
+            looping: boolean(m, "looping").unwrap_or(d.looping),
+            muted,
+            trainer: TrainerSettings {
+                on: boolean(m, "trainer_on").unwrap_or(dt.on),
+                step: float(m, "trainer_step").unwrap_or(dt.step),
+                every: int(m, "trainer_every").map_or(dt.every, |v| v.max(1) as u64),
+                target: float(m, "trainer_target").unwrap_or(dt.target),
+            },
+        })
     }
 
     fn write(&mut self, p: &Project) -> bool {

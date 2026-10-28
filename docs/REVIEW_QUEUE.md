@@ -184,6 +184,13 @@ Screenshot (a 220 Hz test tone standing in for a guitar):
 - [ ] **1.4 Practice mute.** Load a backing with a guitar part on its own
       track, press 🎧 on it and play along. Pass: that part goes silent and
       comes back, and Mute still works separately.
+- [ ] **1.4 Practice settings in the project.** In a saved project, set
+      Speed 70%, transpose −1 and +15 cents, tick Loop bars, press 🎧 on
+      one track and set the Trainer to +3% every 4 loops up to 90%. Close
+      the app, start it again and reopen the project. Pass: all of it is
+      back as you left it, and File → New project starts at 100% with
+      none of it. Each computer keeps its own: if the project is shared,
+      the other computer's settings are not changed by yours.
 
 ### Phase 1 app: export
 
@@ -417,6 +424,12 @@ is in the same download.
       AAC off (most videos and M4A files would then not open).
 - [ ] **0.6 Speed and pitch:** choose a library or our own vocoder after
       listening.
+- [ ] **Whose practice settings:** speed, transpose, practice mute, loop
+      on/off and the tempo trainer are saved per computer, so a student
+      slowing a song down and muting the teacher's riff doesn't do that
+      for the teacher. The loop's bars stay shared with the song, as
+      before. Confirm, or say if the loop's bars should be per person too,
+      or if a teacher should be able to hand settings to a student.
 - [ ] **0.7 Windows signing:** ship unsigned test builds now, apply to a
       free open-source signing service after the first public release, and
       fall back to an OV certificate if refused. See

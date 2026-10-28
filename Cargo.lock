@@ -1014,6 +1014,7 @@ name = "daw-app"
 version = "0.0.0"
 dependencies = [
  "daw-audio-io",
+ "daw-collab",
  "daw-engine",
  "daw-plugins",
  "daw-project",
@@ -1035,6 +1036,10 @@ dependencies = [
 [[package]]
 name = "daw-collab"
 version = "0.0.0"
+dependencies = [
+ "daw-project",
+ "loro",
+]
 
 [[package]]
 name = "daw-engine"

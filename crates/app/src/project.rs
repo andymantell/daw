@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use daw_collab::watch::{Change, FolderWatch};
 use daw_engine::engine::Command;
 use daw_engine::graph::Mix;
 use daw_engine::import;
@@ -71,10 +72,19 @@ pub struct Proj {
     moved: HashMap<String, String>,
     /// Clips and effects that couldn't be loaded (audio missing, plugin
     /// not installed), by track: kept so saving doesn't lose them.
-    missing_clips: HashMap<String, Vec<daw_project::Clip>>,
+    pub(crate) missing_clips: HashMap<String, Vec<daw_project::Clip>>,
     missing_fx: HashMap<String, Vec<daw_project::Effect>>,
     loading: Option<mpsc::Receiver<Result<Loaded, String>>>,
     pub dialog: Option<Dialog>,
+    /// Watches the saved project's folder for other computers' changes.
+    pub(crate) watch: Option<(PathBuf, FolderWatch)>,
+    /// Changes from the folder waiting for an edit under way to finish.
+    pub(crate) incoming: Vec<Change>,
+    /// The document's version as last written to this computer's copy.
+    pub(crate) device_version: Vec<u8>,
+    pub(crate) last_device_write: Instant,
+    /// A bundle being written or read in the background.
+    pub(crate) bundle_job: Option<mpsc::Receiver<crate::share::Job>>,
     /// The next change written is not an edit (audio reopened at a new
     /// rate), so it is kept out of undo.
     pub quiet_next: bool,
@@ -99,6 +109,11 @@ impl Proj {
             missing_fx: HashMap::new(),
             loading: None,
             dialog: None,
+            watch: None,
+            incoming: Vec::new(),
+            device_version: Vec::new(),
+            last_device_write: Instant::now(),
+            bundle_job: None,
             quiet_next: false,
             may_close: false,
             title: String::new(),
@@ -444,9 +459,12 @@ impl App {
         }
         self.proj.doc.set_quietly(&p);
         self.proj.committed = self.project();
-        folder.save(&self.proj.doc.to_bytes())?;
+        let bytes = self.proj.doc.to_bytes();
+        folder.save(&bytes)?;
+        self.save_device_copy(&folder, &bytes)?;
         self.proj.dirty = false;
         self.proj.last_save = Instant::now();
+        self.watch_folder();
         Ok(())
     }
 
@@ -469,8 +487,10 @@ impl App {
         self.save(ctx)
     }
 
-    /// Saves a saved project now and then while it changes.
+    /// Saves a saved project now and then while it changes, and keeps
+    /// this computer's copy for others more up to date than that.
     pub(crate) fn autosave(&mut self, ctx: &egui::Context) {
+        self.share_soon(ctx);
         if self.proj.folder.is_some()
             && self.proj.dirty
             && !self.recording
@@ -532,8 +552,10 @@ impl App {
                 proj.doc = l.doc;
                 proj.folder = Some(l.folder);
                 proj.sources = l.sources;
+                proj.device_version = proj.doc.version();
                 self.proj = proj;
                 self.apply(self.proj.doc.get());
+                self.watch_folder();
                 if !l.failed.is_empty() {
                     self.message = Some(format!("Couldn't open {}", l.failed.join("; ")));
                 }
@@ -786,19 +808,10 @@ impl App {
 
 /// Reads a project and opens its audio, off the UI thread.
 fn load(path: &Path, rate: u32) -> Result<Loaded, String> {
-    let (folder, bytes) = ProjectFolder::open(path)?;
-    let peer = daw_project::new_peer();
-    let doc = match ProjectDoc::from_bytes(&bytes, peer) {
-        Ok(d) => d,
-        // The last save is damaged: the one before it.
-        Err(e) => folder
-            .backup()
-            .and_then(|b| ProjectDoc::from_bytes(&b, peer).ok())
-            .ok_or(e)?,
-    };
+    // Other computers' copies, if it is shared, are merged in.
+    let (folder, doc, mut failed) = daw_collab::open_doc(path, daw_project::new_peer())?;
     let p = doc.get();
     let mut sources = HashMap::new();
-    let mut failed = Vec::new();
     for c in p.tracks.iter().flat_map(|t| &t.clips) {
         if sources.contains_key(&c.asset) {
             continue;
@@ -824,7 +837,7 @@ fn load(path: &Path, rate: u32) -> Result<Loaded, String> {
 }
 
 /// Project folders in the projects folder, most recently saved first.
-fn find_projects() -> Vec<PathBuf> {
+pub(crate) fn find_projects() -> Vec<PathBuf> {
     let mut found: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(projects_dir())
         .into_iter()
         .flatten()

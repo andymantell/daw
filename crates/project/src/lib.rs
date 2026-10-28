@@ -13,7 +13,7 @@ mod folder;
 mod model;
 
 pub use doc::ProjectDoc;
-pub use folder::{ASSETS, DOC_FILE, ProjectFolder};
+pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
 pub use model::{Clip, Effect, EffectState, Marker, Project, Track};
 
 use std::sync::atomic::{AtomicU64, Ordering};

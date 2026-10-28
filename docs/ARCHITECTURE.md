@@ -71,9 +71,11 @@ My Lesson.project/              (folder; zipped into a single file as a bundle)
   into `assets/` once complete. Interrupted takes are recovered on next
   launch.
 - **Shared-folder mode:** when the folder sits in a cloud-synced
-  directory, the app watches for external changes. It merges incoming
-  CRDT updates, and writes its own updates as separate append-only
-  update files to avoid sync-conflict copies.
+  directory, the app watches for external changes. Each computer writes
+  its own copy of the document (`Devices/<device id>.daw`) that no other
+  computer writes, so there are no sync-conflict copies. It looks at the
+  other computers' copies every two seconds and merges them. Opening a
+  project merges every copy in the folder.
 
 ## 3. Project document (candidate CRDT: `yrs`, `automerge` or Loro)
 
@@ -175,8 +177,8 @@ Three ways to share, all over the same CRDT document:
 
 | Mode | How | Live? |
 |---|---|---|
-| **Bundle** | Export the project folder as one file. Import merges into an existing copy. | No |
-| **Shared folder** | The project folder sits in a cloud-synced directory. The app merges update files. | Near-live, at the provider's speed |
+| **Bundle** | Export the document and the audio it uses as one file (exports left out). Import merges into an existing copy, open or among the user's projects, found by shared document history; otherwise it becomes a new project. Everything in a bundle is checked: plain asset names only, lengths within the file, audio matching its hash. | No |
+| **Shared folder** | The project folder sits in a cloud-synced directory. Each computer writes its own copy of the document, and merges the others' as they arrive. | Near-live, at the provider's speed |
 | **Live session** | Teacher hosts. Student joins by invite code, peer-to-peer. | Yes |
 
 **Live session transport (candidates, chosen by spike 0.5):**

@@ -11,3 +11,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+daw-project = { path = "../project" }
+loro = "1.17.1"

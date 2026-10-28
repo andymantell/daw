@@ -17,6 +17,7 @@ mod export;
 mod fx;
 mod perf;
 mod project;
+mod share;
 mod timeline;
 mod trainer;
 mod tuner;
@@ -247,6 +248,8 @@ impl App {
             let f = PathBuf::from(f);
             if project::is_project(&f) {
                 app.open_project(f);
+            } else if daw_collab::bundle::is_bundle(&f) {
+                app.import_bundle(f);
             } else {
                 app.add_file(&f);
             }
@@ -1481,6 +1484,8 @@ impl eframe::App for App {
         for p in dropped {
             if project::is_project(&p) {
                 self.open_dropped(&ctx, p);
+            } else if daw_collab::bundle::is_bundle(&p) {
+                self.import_bundle(p);
             } else {
                 self.add_file(&p);
             }
@@ -1526,6 +1531,8 @@ impl eframe::App for App {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     self.project_menu(ui);
+                    ui.separator();
+                    self.share_menu(ui);
                     ui.separator();
                     if ui.button("Export…").clicked() {
                         self.export.open = true;
@@ -1710,6 +1717,7 @@ impl eframe::App for App {
         self.notes_window(&ctx);
         self.project_windows(&ctx);
         self.poll_loading(&ctx);
+        self.poll_sharing(&ctx);
         self.sync_doc(&ctx, false);
         self.autosave(&ctx);
         self.title(&ctx);

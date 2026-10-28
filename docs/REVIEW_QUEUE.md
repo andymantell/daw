@@ -343,3 +343,29 @@ is in the same download.
       with signature checking; no self-install in version 1.
 - [ ] **0.7 Linux packaging:** AppImage plus `.tar.gz` first; Flatpak after
       version 1.
+
+### Privacy and children's data (roadmap 1.8)
+
+From [PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md). It is not
+legal advice, and some questions it could not answer.
+
+- [ ] **Professional check before public release:** have a qualified person
+      confirm the review's conclusions before the lesson features
+      (sharing, live sessions, comments) are released publicly, especially
+      whether the UK Online Safety Act applies to a serverless app. Or say
+      the review is enough for now.
+- [ ] **Rule: no personal data reaches anything we run.** No accounts,
+      telemetry, hosted relay, directory or comment store; any hosted
+      feature needs a fresh privacy review first. Adopt as a written rule
+      (a decision record), or not.
+- [ ] **Address lookup asked first:** the public STUN item above, with the
+      review's proposal that the app asks before first use and always
+      offers manual addresses, since children may be on either end.
+- [ ] **Keys per project, not per install:** stops two projects being
+      linked to the same child by key, at the cost of a teacher not
+      recognising a student across projects by key alone. Accept, or keep
+      one key per install.
+- [ ] **Real deletion out of history:** deleting a comment, note or take
+      removes it from the saved file and bundles (save without old history,
+      or compact it). Confirm this joins the 1.6 work now, ahead of
+      comments.

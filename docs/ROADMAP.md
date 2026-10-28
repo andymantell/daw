@@ -314,7 +314,10 @@ was never saved.*
 - Privacy: everything stays local by default. Lesson users may include
   **children**, so review applicable child-data rules (e.g. UK Age
   Appropriate Design Code / GDPR, COPPA in the US) before public release,
-  even without a server.
+  even without a server. *Reviewed 2026-10-28 in
+  [research/PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md), with
+  design rules for 1.6 identity, live sessions and comments, and decisions
+  in [REVIEW_QUEUE.md](REVIEW_QUEUE.md).*
 
 ### 1.9 Quality bar (M, runs throughout)
 *Started 2026-10-28. The app measures its DSP load (time in the audio

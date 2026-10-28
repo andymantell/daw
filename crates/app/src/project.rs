@@ -44,7 +44,7 @@ pub enum After {
 
 pub enum Dialog {
     SaveAs { name: String, then: Option<After> },
-    Open { found: Vec<PathBuf>, path: String },
+    Open { found: Vec<PathBuf> },
     Unsaved { then: After },
 }
 
@@ -454,11 +454,16 @@ impl App {
         if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
             return Err("Choose a name without / \\ : * ? \" < > |".into());
         }
-        let dir = projects_dir().join(name);
+        self.save_in(ctx, &projects_dir().join(name))
+    }
+
+    /// Saves the project as a new folder at `dir`.
+    fn save_in(&mut self, ctx: &egui::Context, dir: &Path) -> Result<(), String> {
         if dir.exists() {
+            let name = dir.file_name().unwrap_or_default().to_string_lossy();
             return Err(format!("There is already a project called {name}."));
         }
-        self.proj.folder = Some(ProjectFolder::create(&dir)?);
+        self.proj.folder = Some(ProjectFolder::create(dir)?);
         self.save(ctx)
     }
 
@@ -580,7 +585,6 @@ impl App {
         if ui.button("Open project…").clicked() {
             self.proj.dialog = Some(Dialog::Open {
                 found: find_projects(),
-                path: String::new(),
             });
             ui.close();
         }
@@ -634,6 +638,7 @@ impl App {
         match dialog {
             Dialog::SaveAs { mut name, then } => {
                 let mut go = false;
+                let mut browse = false;
                 egui::Window::new("Save project")
                     .collapsible(false)
                     .resizable(false)
@@ -653,11 +658,29 @@ impl App {
                             if ui.button("Cancel").clicked() {
                                 keep = false;
                             }
+                            if ui.button("Somewhere else…").clicked() {
+                                browse = true;
+                            }
                         });
                     });
-                if go {
+                // The system's own Save window. The project is a folder,
+                // so the name chosen there becomes the folder's.
+                let chosen = browse
+                    .then(|| {
+                        rfd::FileDialog::new()
+                            .set_title("Save project")
+                            .set_directory(projects_dir())
+                            .set_file_name(name.trim())
+                            .save_file()
+                    })
+                    .flatten();
+                if go || chosen.is_some() {
                     let old = self.proj.folder.take();
-                    match self.save_as(ctx, &name) {
+                    let saved = match &chosen {
+                        Some(dir) => self.save_in(ctx, dir),
+                        None => self.save_as(ctx, &name),
+                    };
+                    match saved {
                         Ok(()) => {
                             keep = false;
                             if let Some(t) = then.clone() {
@@ -674,7 +697,7 @@ impl App {
                     self.proj.dialog = Some(Dialog::SaveAs { name, then });
                 }
             }
-            Dialog::Open { found, mut path } => {
+            Dialog::Open { found } => {
                 let mut pick = None;
                 egui::Window::new("Open project")
                     .collapsible(false)
@@ -703,14 +726,14 @@ impl App {
                                 }
                             });
                         ui.separator();
-                        ui.label("Or a project folder elsewhere:");
-                        ui.text_edit_singleline(&mut path);
                         ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(!path.trim().is_empty(), egui::Button::new("Open"))
-                                .clicked()
-                            {
-                                pick = Some(PathBuf::from(path.trim()));
+                            // The system's own window, for a project
+                            // folder anywhere else.
+                            if ui.button("Browse…").clicked() {
+                                pick = rfd::FileDialog::new()
+                                    .set_title("Open project folder")
+                                    .set_directory(projects_dir())
+                                    .pick_folder();
                             }
                             if ui.button("Cancel").clicked() {
                                 keep = false;
@@ -722,7 +745,7 @@ impl App {
                     self.then(ctx, After::Open(p));
                 }
                 if keep {
-                    self.proj.dialog = Some(Dialog::Open { found, path });
+                    self.proj.dialog = Some(Dialog::Open { found });
                 }
             }
             Dialog::Unsaved { then } => {

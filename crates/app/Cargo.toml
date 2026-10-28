@@ -21,4 +21,5 @@ daw-plugins = { path = "../plugins" }
 daw-project = { path = "../project" }
 eframe = "0.37.0"
 hound = "3.5.1"
+rfd = "0.17.2"
 vst3 = "0.3.0"

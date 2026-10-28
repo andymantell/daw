@@ -251,6 +251,11 @@ back) and `app-lesson-notes.png`. Projects live in
       File → Open project… and click it. Pass: everything comes back as
       it was, including the plugin's setting, and the window title shows
       the project's name.
+- [ ] **1.6 System file windows.** File → Open project… → Browse…, and
+      in the Save window, Somewhere else…. Pass: the normal Windows
+      folder and Save windows open (they could not be tried in the
+      cloud), a project folder picked anywhere opens, and a project
+      saved somewhere else becomes a folder of that name there.
 - [ ] **1.6 Audio in the folder.** Look in the project's folder. Pass:
       `project.daw`, `project.daw.bak` after a second save, and an
       `Audio` folder holding a copy of each imported file and the

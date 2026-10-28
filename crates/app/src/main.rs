@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The desktop application. Phase 1 so far: open WAV files as tracks,
-//! play them with a mixer, loop, metronome and count-in, choose the audio
-//! device, and record: per track input, arm and monitor, with takes kept
+//! The desktop application. Phase 1 so far: open audio files, and the
+//! sound of videos, as tracks; play them with a mixer, loop, metronome
+//! and count-in, choose the audio device, and record: per track input, arm and monitor, with takes kept
 //! and switchable; VST 3 effects as track inserts; a tuner and practice
 //! mute; export of the mix and stems to WAV; a timeline to edit clips
 //! and mark sections.
 //!
-//! Usage: `daw [file.wav ...]`, or drop WAV files on the window. Files at
-//! another sample rate from the device are converted in the background
-//! into a cache folder first.
+//! Usage: `daw [file ...]`, or drop audio or video files on the window:
+//! WAV, MP3, FLAC, OGG, AAC/M4A, AIFF, or the sound of an MP4, MOV or MKV
+//! video. Files in other formats or at another sample rate from the
+//! device are converted in the background into a cache folder first.
 //!
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
@@ -95,7 +96,9 @@ struct Import {
     /// than added as a track.
     reopen: bool,
     rate: u32,
-    done: mpsc::Receiver<Result<Arc<StreamSource>, String>>,
+    /// The file the clip plays (a video's sound is taken out into one of
+    /// its own), opened.
+    done: mpsc::Receiver<Result<(PathBuf, Arc<StreamSource>), String>>,
 }
 
 /// Where converted copies of files go until projects have folders of
@@ -417,7 +420,16 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let (p, rate) = (path.clone(), self.rate);
         std::thread::spawn(move || {
-            let _ = tx.send(import::open_at_rate(&p, rate, &cache_dir()));
+            let open = || {
+                let p = if reopen {
+                    p
+                } else {
+                    import::soundtrack(&p, &cache_dir())?
+                };
+                let s = import::open_at_rate(&p, rate, &cache_dir())?;
+                Ok((p, s))
+            };
+            let _ = tx.send(open());
         });
         self.imports.push(Import {
             path,
@@ -453,8 +465,8 @@ impl App {
             match result {
                 // The device changed rate while this was converting: start
                 // again at the new one.
-                Ok(_) if im.rate != self.rate => self.start_import(im.path, im.reopen),
-                Ok(source) => {
+                Ok((path, _)) if im.rate != self.rate => self.start_import(path, im.reopen),
+                Ok((path, source)) => {
                     changed = true;
                     if im.reopen {
                         // A new device rate, not an edit.
@@ -466,11 +478,10 @@ impl App {
                         }
                     } else {
                         let mut t = Track::new(
-                            im.path
-                                .file_stem()
+                            path.file_stem()
                                 .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
                         );
-                        t.clips.push(Clip::new(source, im.path, 0, None));
+                        t.clips.push(Clip::new(source, path, 0, None));
                         self.tracks.push(t);
                     }
                 }
@@ -1083,7 +1094,7 @@ impl App {
         if self.tracks.is_empty() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Drop WAV files here to add tracks.").size(18.0));
+                ui.label(RichText::new("Drop audio or video files here to add tracks.").size(18.0));
                 ui.add_space(8.0);
                 if ui.button("Or add an empty track to record on").clicked() {
                     self.tracks.push(Track::new("Track 1".into()));

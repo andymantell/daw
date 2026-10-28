@@ -231,6 +231,19 @@ was driven with mouse and keys; how it feels is for you.
       drag clips around a long song. Say if it is smooth enough and what
       feels wrong.
 
+- [ ] **1.5 Other file types.** Drop in an MP3, a FLAC, an OGG and an
+      M4A/AAC file (from FL Studio exports or your music library), and
+      one phone video (MP4 or MOV). Pass: each becomes a track named
+      after the file, plays at the right speed and pitch, and its
+      waveform shows. A long file takes a few seconds before it appears.
+      Save the project and look in its `Audio` folder: the video's entry
+      is a `.aac` file about the size of its sound, not the whole video.
+      Known limits: AAC sound (M4A files and most videos) starts about
+      0.02 s late, because the decoder keeps the encoder's start-up
+      frames; nudge the clip if it matters. Surround sound is mixed to
+      stereo. Opus sound (some WebM videos) and AVI files cannot be
+      opened yet; say if you have files like that.
+
 ### Phase 1 app: performance
 
 Screenshot: `/mnt/project-files/screenshots/app-performance-check.png`
@@ -369,6 +382,11 @@ is in the same download.
 - [ ] **0007 UI toolkit, egui fonts:** egui was chosen on 2026-10-27.
       Confirm that its bundled fonts (SIL Open Font Licence 1.1 and
       Ubuntu Font Licence 1.0) can ship, or choose replacement fonts.
+- [ ] **MP3 and AAC decoding:** the decoder library leaves its MP3 and
+      AAC decoders off by default because those formats are not
+      royalty-free open standards; they are on in the app so MP3s and
+      video sound open. Confirm that is fine for this app, or say to turn
+      AAC off (most videos and M4A files would then not open).
 - [ ] **0.6 Speed and pitch:** choose a library or our own vocoder after
       listening.
 - [ ] **0.7 Windows signing:** ship unsigned test builds now, apply to a

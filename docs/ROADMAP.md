@@ -258,7 +258,7 @@ with each track's clips and waveforms; select, move, trim, split and
 delete, snapped to beats or bars (Alt places freely); markers on bar
 lines, renamed by double-click, that name sections and loop them; zoom
 and scroll; recorded takes as clips, a new take muting older takes under
-it. Undo/redo now goes through the project document (1.6). Clips stay on their own track for now.*
+it. Undo/redo now goes through the project document (1.6). Clips stay on their own track for now. Import opens WAV, MP3, FLAC, OGG Vorbis, AAC/M4A, AIFF, ALAC and CAF, and the sound of MP4, MOV and MKV videos (AAC sound copied out as it is, so a project keeps only the audio); surround is mixed to stereo.*
 - Select, move, trim, split, delete clips. Snap to beat or bar.
 - Import audio files (drag and drop).
 - Markers and named sections.

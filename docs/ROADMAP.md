@@ -341,10 +341,15 @@ Scripted merge tests run people's edits through live updates, bundles
 checking that every copy agrees and nothing is lost. Every control has
 a screen-reader name, checked by a test that reads the accessibility
 tree; the transport works from the keyboard (Space, Home, R, L, K, C,
-Tab and Enter), listed under Help → Keyboard shortcuts. Known limits:
-clips and markers on the timeline are drawn, so a screen reader cannot
-read or select them yet, and the merge scripts run on the document,
-not yet through a real network session.*
+Tab and Enter), listed under Help → Keyboard shortcuts. Every clip and
+marker on the timeline is an entry in that tree too, named with its
+track and bars ("Take 2 on Guitar, bar 3 to bar 5"), reached with Tab,
+and edited with the arrow keys: move by a beat or bar, trim either
+edge, move to the track above or below, select, split and delete; a
+marker is moved, renamed, looped and deleted the same way. Clips can
+also be dragged to another track with the mouse. Known limit: the
+merge scripts run on the document, not yet through a real network
+session.*
 - No dropouts with 16 stereo tracks plus 8 plugin instances at a
   128-sample buffer on the reference laptop.
 - Golden-render audio tests. Automated plugin-host tests with a set of

@@ -237,6 +237,29 @@ pub fn snap(map: &TempoMap, frames: i64, snap: Snap) -> i64 {
     map.frames_at(Ticks(ticks)).0
 }
 
+/// `frames` moved by `n` beats, or bars, along the tempo map.
+pub fn step(map: &TempoMap, frames: i64, n: i64, bars: bool) -> i64 {
+    let t = map.ticks_at(Frames(frames));
+    let sig = map.signature_at(t);
+    let unit = if bars {
+        sig.bar_ticks()
+    } else {
+        sig.beat_ticks()
+    };
+    map.frames_at(Ticks((t.0 + n * unit).max(0))).0
+}
+
+/// A position as a screen reader should say it: "bar 3", or "bar 3
+/// beat 2" off the bar line.
+pub fn spoken(map: &TempoMap, frames: i64) -> String {
+    let bb = map.bar_beat(map.ticks_at(Frames(frames)));
+    if bb.beat == 1 && bb.tick == 0 {
+        format!("bar {}", bb.bar)
+    } else {
+        format!("bar {} beat {}", bb.bar, bb.beat)
+    }
+}
+
 /// A named point on a bar line: the start of a section, which runs to
 /// the next marker.
 #[derive(Clone, Debug, PartialEq)]
@@ -299,6 +322,76 @@ impl Song<'_> {
             .iter_mut()
             .flat_map(|l| l.clips.iter_mut())
             .find(|c| c.id == id)
+    }
+
+    fn find(&self, id: u64) -> Option<&Clip> {
+        self.lanes
+            .iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id == id)
+    }
+
+    /// Which track clip `id` is on.
+    pub fn lane_of(&self, id: u64) -> Option<usize> {
+        self.lanes
+            .iter()
+            .position(|l| l.clips.iter().any(|c| c.id == id))
+    }
+
+    /// Puts clip `id` on track `lane`, on top of that track's clips.
+    /// False if it is there already or there is no such track.
+    pub fn move_to_lane(&mut self, id: u64, lane: usize) -> bool {
+        let Some(from) = self.lane_of(id) else {
+            return false;
+        };
+        if from == lane || lane >= self.lanes.len() {
+            return false;
+        }
+        let i = self.lanes[from]
+            .clips
+            .iter()
+            .position(|c| c.id == id)
+            .expect("found above");
+        let c = self.lanes[from].clips.remove(i);
+        self.lanes[lane].clips.push(c);
+        true
+    }
+
+    /// A take that has left the track it was recorded on becomes an
+    /// ordinary clip, named after the take and the track, and plays.
+    fn detach_take(&mut self, id: u64, from: usize) {
+        let name = self.lanes.get(from).map(|l| l.name.to_string());
+        if let Some(c) = self.find_mut(id)
+            && c.take.is_some()
+        {
+            c.label = match name {
+                Some(track) => format!("{} from {track}", c.name()),
+                None => c.name(),
+            };
+            c.take = None;
+            c.muted = false;
+        }
+    }
+
+    /// Clips in Tab order: track by track, each in time order.
+    fn ordered(&self) -> Vec<u64> {
+        let mut out = Vec::new();
+        for l in &self.lanes {
+            let mut ids: Vec<(i64, u64)> = l.clips.iter().map(|c| (c.start, c.id)).collect();
+            ids.sort_unstable();
+            out.extend(ids.into_iter().map(|(_, id)| id));
+        }
+        out
+    }
+
+    /// The clip on track `lane` that starts nearest to `at`.
+    fn nearest_on(&self, lane: usize, at: i64) -> Option<u64> {
+        self.lanes
+            .get(lane)?
+            .clips
+            .iter()
+            .min_by_key(|c| ((c.start - at).abs(), c.id))
+            .map(|c| c.id)
     }
 
     /// The end of the last clip, in frames.
@@ -440,9 +533,29 @@ struct Drag {
     anchor: u64,
     /// Timeline frame under the pointer when pressed.
     from: i64,
-    /// The clips being dragged, as they were.
-    originals: Vec<Clip>,
+    /// The track under the pointer when pressed.
+    from_lane: usize,
+    /// The clips being dragged, as they were, with their tracks.
+    originals: Vec<(usize, Clip)>,
     moved: bool,
+}
+
+/// What has the keyboard on the timeline: a clip, or a marker by its
+/// id in the project document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Focus {
+    Clip(u64),
+    Marker(String),
+}
+
+impl Focus {
+    /// The widget id of the item's entry in the accessibility tree.
+    fn id(&self, ui: &egui::Ui) -> egui::Id {
+        match self {
+            Focus::Clip(c) => ui.scope_id().with(("clip", c)),
+            Focus::Marker(m) => ui.scope_id().with(("marker", m)),
+        }
+    }
 }
 
 pub struct Timeline {
@@ -464,6 +577,10 @@ pub struct Timeline {
     rename: Option<(usize, String)>,
     /// The rename field has been given the keyboard.
     rename_focused: bool,
+    /// The clip or marker with keyboard focus, and its widget id.
+    focus: Option<(Focus, egui::Id)>,
+    /// Give the keyboard to this item on the next frame.
+    focus_next: Option<Focus>,
 }
 
 impl Default for Timeline {
@@ -480,6 +597,8 @@ impl Default for Timeline {
             menu: None,
             rename: None,
             rename_focused: false,
+            focus: None,
+            focus_next: None,
         }
     }
 }
@@ -558,9 +677,160 @@ impl Timeline {
         Self::bar_at(map, song.end()) + 1
     }
 
-    /// Keyboard shortcuts, when no text field has the keyboard.
+    /// A clip or marker on the timeline has the keyboard, so letter
+    /// shortcuts still apply (unlike in a text field).
+    pub fn has_keyboard(&self, ctx: &egui::Context) -> bool {
+        self.focus
+            .as_ref()
+            .is_some_and(|(_, id)| ctx.memory(|m| m.has_focus(*id)))
+    }
+
+    /// The focused clip, if there is one.
+    fn focused_clip(&self) -> Option<u64> {
+        match &self.focus {
+            Some((Focus::Clip(id), _)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// The focused marker's index, if there is one.
+    fn focused_marker(&self, song: &Song) -> Option<usize> {
+        match &self.focus {
+            Some((Focus::Marker(id), _)) => song.markers.iter().position(|m| &m.id == id),
+            _ => None,
+        }
+    }
+
+    /// Keys act on the selection; a focused clip that isn't selected
+    /// becomes the selection first, as a dragged clip does.
+    fn select_focused(&mut self) {
+        if let Some(id) = self.focused_clip()
+            && !self.selected.contains(&id)
+        {
+            self.selected.clear();
+            self.selected.insert(id);
+        }
+    }
+
+    /// Moves the selected clips by `n` beats (or bars); none goes
+    /// before the start.
+    fn nudge(&mut self, song: &mut Song, map: &TempoMap, n: i64, bars: bool) -> bool {
+        self.select_focused();
+        let ids: Vec<u64> = song
+            .ordered()
+            .into_iter()
+            .filter(|id| self.selected.contains(id))
+            .collect();
+        if ids.is_empty() {
+            return false;
+        }
+        // Each lands where its own step takes it (the tempo may
+        // change between them); the move stops where the first would
+        // go before the start.
+        let moves: Vec<(u64, i64)> = ids
+            .iter()
+            .filter_map(|&id| song.find(id).map(|c| (id, step(map, c.start, n, bars))))
+            .collect();
+        if moves
+            .iter()
+            .any(|&(id, to)| n < 0 && song.find(id).is_some_and(|c| to == c.start))
+        {
+            return false;
+        }
+        for (id, to) in moves {
+            if let Some(c) = song.find_mut(id) {
+                c.start = to;
+            }
+        }
+        true
+    }
+
+    /// Moves the selected clips `by` tracks down (up if negative), as
+    /// far as they all fit.
+    fn shift_lane(&mut self, song: &mut Song, by: isize) -> bool {
+        self.select_focused();
+        let n = song.lanes.len() as isize;
+        let ids: Vec<(usize, u64)> = (self.selected.iter())
+            .filter_map(|&id| song.lane_of(id).map(|l| (l, id)))
+            .collect();
+        if ids.is_empty() {
+            return false;
+        }
+        let lo = ids.iter().map(|&(l, _)| l).min().unwrap_or(0) as isize;
+        let hi = ids.iter().map(|&(l, _)| l).max().unwrap_or(0) as isize;
+        let by = by.clamp(-lo, n - 1 - hi);
+        if by == 0 {
+            return false;
+        }
+        for (l, id) in ids {
+            let to = (l as isize + by) as usize;
+            song.move_to_lane(id, to);
+            song.detach_take(id, l);
+        }
+        true
+    }
+
+    /// Trims the focused clip's start or end edge by `n` beats (or
+    /// bars).
+    fn trim_focused(
+        &mut self,
+        song: &mut Song,
+        map: &TempoMap,
+        n: i64,
+        bars: bool,
+        end: bool,
+    ) -> bool {
+        let Some(id) = self.focused_clip() else {
+            return false;
+        };
+        let Some(c) = song.find_mut(id) else {
+            return false;
+        };
+        let was = (c.start, c.offset, c.len);
+        if end {
+            c.trim_end(step(map, c.end(), n, bars));
+        } else {
+            c.trim_start(step(map, c.start, n, bars));
+        }
+        (c.start, c.offset, c.len) != was
+    }
+
+    /// Moves the keyboard to the clip on the next track down (up if
+    /// negative) nearest in time to the focused one.
+    fn focus_lane(&mut self, song: &Song, by: isize) {
+        let Some(id) = self.focused_clip() else {
+            return;
+        };
+        let (Some(lane), Some(c)) = (song.lane_of(id), song.find(id)) else {
+            return;
+        };
+        let mut l = lane as isize + by;
+        while l >= 0 && l < song.lanes.len() as isize {
+            if let Some(next) = song.nearest_on(l as usize, c.start) {
+                self.focus_next = Some(Focus::Clip(next));
+                return;
+            }
+            l += by;
+        }
+    }
+
+    /// The item after (or before) the focused one in Tab order, to
+    /// take the keyboard when it is deleted.
+    fn neighbour(&self, song: &Song) -> Option<Focus> {
+        let id = self.focused_clip()?;
+        let order = song.ordered();
+        let i = order.iter().position(|&c| c == id)?;
+        let next = (i + 1..order.len())
+            .chain((0..i).rev())
+            .find(|&j| !self.selected.contains(&order[j]))?;
+        Some(Focus::Clip(order[next]))
+    }
+
+    /// Keyboard shortcuts, when no text field has the keyboard. With a
+    /// clip or marker focused, the arrow keys edit it.
     fn keys(&mut self, ctx: &egui::Context, song: &mut Song, view: &View, out: &mut Outcome) {
-        if ctx.egui_wants_keyboard_input() {
+        let focused = self.has_keyboard(ctx);
+        if ctx.egui_wants_keyboard_input() && !focused {
             return;
         }
         let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
@@ -576,9 +846,20 @@ impl Timeline {
             i.consume_key(Modifiers::NONE, Key::Delete)
                 || i.consume_key(Modifiers::NONE, Key::Backspace)
         }) {
-            out.changed |= self.delete_selected(song);
+            if let Some(i) = self.focused_marker(song).filter(|_| focused) {
+                song.markers.remove(i);
+            } else {
+                if focused {
+                    self.select_focused();
+                    self.focus_next = self.neighbour(song);
+                }
+                out.changed |= self.delete_selected(song);
+            }
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
+            if focused {
+                self.select_focused();
+            }
             out.changed |= self.split_at(song, view.playhead);
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
@@ -586,6 +867,86 @@ impl Timeline {
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             self.selected.clear();
+        }
+        if !focused {
+            return;
+        }
+
+        let end_bar = Self::end_bar(view.map, song);
+        let key = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
+        if let Some(i) = self.focused_marker(song) {
+            // Enter goes to the section; with Ctrl it loops it too.
+            if key(Modifiers::COMMAND, Key::Enter) {
+                out.loop_bars = Some(section(song.markers, i, end_bar));
+                out.seek = Some(
+                    view.map
+                        .frames_at(view.map.bar_start(song.markers[i].bar))
+                        .0,
+                );
+            } else if key(Modifiers::NONE, Key::Enter) {
+                out.seek = Some(
+                    view.map
+                        .frames_at(view.map.bar_start(song.markers[i].bar))
+                        .0,
+                );
+            }
+            if key(Modifiers::NONE, Key::F2) {
+                self.rename = Some((i, song.markers[i].name.clone()));
+                self.rename_focused = false;
+            }
+            // Arrows move the marker a bar, never onto another marker.
+            for (k, by) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
+                if key(Modifiers::NONE, k) {
+                    let bar = song.markers[i].bar + by;
+                    if bar >= 1 && !song.markers.iter().any(|m| m.bar == bar) {
+                        song.markers[i].bar = bar;
+                    }
+                }
+            }
+            return;
+        }
+        let Some(id) = self.focused_clip() else {
+            return;
+        };
+        if key(Modifiers::COMMAND, Key::Enter) {
+            if !self.selected.remove(&id) {
+                self.selected.insert(id);
+            }
+        } else if key(Modifiers::NONE, Key::Enter) {
+            self.selected.clear();
+            self.selected.insert(id);
+            if let Some(c) = song.find(id) {
+                out.seek = Some(c.start);
+            }
+        }
+        let shift = Modifiers::SHIFT;
+        for (k, n) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
+            // Plain arrows move the selection a beat, Shift a bar;
+            // Ctrl trims the start edge and Alt the end edge instead.
+            // (The fuller combinations first: egui lets a plain key
+            // match with Shift or Alt held.)
+            if key(Modifiers::COMMAND | shift, k) {
+                out.changed |= self.trim_focused(song, view.map, n, true, false);
+            } else if key(Modifiers::ALT | shift, k) {
+                out.changed |= self.trim_focused(song, view.map, n, true, true);
+            } else if key(Modifiers::COMMAND, k) {
+                out.changed |= self.trim_focused(song, view.map, n, false, false);
+            } else if key(Modifiers::ALT, k) {
+                out.changed |= self.trim_focused(song, view.map, n, false, true);
+            } else if key(shift, k) {
+                out.changed |= self.nudge(song, view.map, n, true);
+            } else if key(Modifiers::NONE, k) {
+                out.changed |= self.nudge(song, view.map, n, false);
+            }
+        }
+        for (k, by) in [(Key::ArrowUp, -1), (Key::ArrowDown, 1)] {
+            // Up and down move the keyboard to the next track's clips;
+            // with Ctrl they move the clips themselves.
+            if key(Modifiers::COMMAND, k) {
+                out.changed |= self.shift_lane(song, by);
+            } else if key(Modifiers::NONE, k) {
+                self.focus_lane(song, by);
+            }
         }
     }
 
@@ -679,7 +1040,6 @@ impl Timeline {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
-        self.keys(&ui.ctx().clone(), song, view, &mut out);
         self.toolbar(ui, song, view, &mut out);
 
         let size = vec2(
@@ -721,6 +1081,11 @@ impl Timeline {
         let x_of = move |f: i64| left + ((f as f64 / rate - scroll) * pps) as f32;
         let frame_of = move |x: f32| ((scroll + (x - left) as f64 / pps) * rate).round() as i64;
         let lane_top = |i: usize| rect.top() + RULER + i as f32 * lane_h - vscroll;
+        // The track at a height, held to the first and last.
+        let lane_at = move |y: f32| {
+            let l = ((y - rect.top() - RULER + vscroll) / lane_h).floor();
+            (l.max(0.0) as usize).min(lanes_n - 1)
+        };
 
         // Keep the playhead in view while playing.
         if view.playing && self.drag.is_none() {
@@ -807,26 +1172,29 @@ impl Timeline {
                         }
                         self.selected.insert(id);
                     }
-                    let held: Vec<Clip> = song
+                    let held: Vec<(usize, Clip)> = song
                         .lanes
                         .iter()
-                        .flat_map(|l| l.clips.iter())
-                        .filter(|c| {
+                        .enumerate()
+                        .flat_map(|(l, lane)| lane.clips.iter().map(move |c| (l, c)))
+                        .filter(|(_, c)| {
                             if zone == Zone::Body {
                                 self.selected.contains(&c.id)
                             } else {
                                 c.id == id
                             }
                         })
-                        .cloned()
+                        .map(|(l, c)| (l, c.clone()))
                         .collect();
                     self.drag = Some(Drag {
                         zone,
                         anchor: id,
                         from: frame_of(p.x),
+                        from_lane: lane_at(p.y),
                         originals: held,
                         moved: false,
                     });
+                    self.focus_next = Some(Focus::Clip(id));
                 }
                 Some(Hit::Ruler | Hit::Lane) if p.y < rect.top() + RULER => self.scrubbing = true,
                 _ => {}
@@ -841,14 +1209,25 @@ impl Timeline {
             && let Some(p) = resp.interact_pointer_pos()
         {
             let dx = frame_of(p.x) - d.from;
-            if let Some(anchor) = d.originals.iter().find(|c| c.id == d.anchor).cloned() {
+            if let Some(anchor) = d
+                .originals
+                .iter()
+                .find(|(_, c)| c.id == d.anchor)
+                .map(|(_, c)| c.clone())
+            {
                 match d.zone {
                     Zone::Body => {
                         // The held clip lands on the grid; the rest keep
-                        // their distance from it.
-                        let lowest = d.originals.iter().map(|c| c.start).min().unwrap_or(0);
+                        // their distance from it, in time and in tracks.
+                        let lowest = d.originals.iter().map(|(_, c)| c.start).min().unwrap_or(0);
                         let delta = (snap_to(anchor.start + dx) - anchor.start).max(-lowest);
-                        for o in &d.originals {
+                        let lo = d.originals.iter().map(|(l, _)| *l).min().unwrap_or(0) as isize;
+                        let hi = d.originals.iter().map(|(l, _)| *l).max().unwrap_or(0) as isize;
+                        let dl = (lane_at(p.y) as isize - d.from_lane as isize)
+                            .clamp(-lo, lanes_n as isize - 1 - hi);
+                        for (l, o) in &d.originals {
+                            let to = (*l as isize + dl) as usize;
+                            d.moved |= song.move_to_lane(o.id, to);
                             if let Some(c) = song.find_mut(o.id) {
                                 d.moved |= c.start != o.start + delta;
                                 c.start = o.start + delta;
@@ -879,6 +1258,12 @@ impl Timeline {
             if let Some(d) = self.drag.take()
                 && d.moved
             {
+                // A take dropped on another track stops being one.
+                for (l, o) in &d.originals {
+                    if song.lane_of(o.id) != Some(*l) {
+                        song.detach_take(o.id, *l);
+                    }
+                }
                 out.changed = true;
             }
         }
@@ -895,11 +1280,13 @@ impl Timeline {
                         self.selected.clear();
                         self.selected.insert(id);
                     }
+                    self.focus_next = Some(Focus::Clip(id));
                 }
                 Some(Hit::Marker(i)) => {
                     // To the start of its section.
                     let bar = view.map.bar_start(song.markers[i].bar);
                     out.seek = Some(view.map.frames_at(bar).0);
+                    self.focus_next = Some(Focus::Marker(song.markers[i].id.clone()));
                 }
                 Some(Hit::Ruler | Hit::Lane) => {
                     self.selected.clear();
@@ -926,6 +1313,94 @@ impl Timeline {
                 self.selected.insert(id);
             }
         }
+
+        // Every clip and marker is an entry in the accessibility tree,
+        // with a spoken name, that Tab reaches: track by track, each in
+        // time order, then the markers. The arrow keys stay with the
+        // focused item (egui would move the focus with them otherwise).
+        let arrows = egui::EventFilter {
+            horizontal_arrows: true,
+            vertical_arrows: true,
+            ..Default::default()
+        };
+        let focus_next = self.focus_next.take();
+        let mut focused = None;
+        let mut node = |ui: &mut egui::Ui, item: Focus, r: Rect, info: egui::WidgetInfo| {
+            let id = item.id(ui);
+            let resp = ui.interact(r, id, Sense::focusable_noninteractive());
+            resp.widget_info(|| info.clone());
+            if resp.has_focus() {
+                ui.memory_mut(|m| m.set_focus_lock_filter(id, arrows));
+                focused = Some((item.clone(), id));
+            }
+            if focus_next.as_ref() == Some(&item) {
+                resp.request_focus();
+            }
+        };
+        for (i, lane) in song.lanes.iter().enumerate() {
+            let top = lane_top(i);
+            let mut order: Vec<&Clip> = lane.clips.iter().collect();
+            order.sort_by_key(|c| (c.start, c.id));
+            for c in order {
+                let r = Rect::from_x_y_ranges(
+                    x_of(c.start)..=x_of(c.end()),
+                    top + 2.0..=top + lane_h - 2.0,
+                );
+                let name = format!(
+                    "{} on {}, {} to {}{}",
+                    c.name(),
+                    lane.name,
+                    spoken(view.map, c.start),
+                    spoken(view.map, c.end()),
+                    if c.muted { ", muted" } else { "" }
+                );
+                let selected = self.selected.contains(&c.id);
+                let info = egui::WidgetInfo::selected(egui::Role::Button, true, selected, name);
+                node(ui, Focus::Clip(c.id), r, info);
+            }
+        }
+        for m in song.markers.iter() {
+            let x = x_of(view.map.frames_at(view.map.bar_start(m.bar)).0);
+            let r = Rect::from_min_size(pos2(x, rect.top()), vec2(70.0, 14.0));
+            let name = format!("{}, marker at bar {}", m.name, m.bar);
+            let info = egui::WidgetInfo::labeled(egui::Role::Button, true, name);
+            node(ui, Focus::Marker(m.id.clone()), r, info);
+        }
+        if focused.is_some() && focused != self.focus {
+            // Newly focused: bring it into view.
+            let (start, lane) = match &focused {
+                Some((Focus::Clip(id), _)) => {
+                    let c = song.find(*id);
+                    (c.map_or(0, |c| c.start), song.lane_of(*id))
+                }
+                Some((Focus::Marker(id), _)) => {
+                    let bar = song
+                        .markers
+                        .iter()
+                        .find(|m| &m.id == id)
+                        .map_or(1, |m| m.bar);
+                    (view.map.frames_at(view.map.bar_start(bar)).0, None)
+                }
+                None => (0, None),
+            };
+            let x = x_of(start);
+            if x < left || x > rect.right() - 40.0 {
+                self.scroll =
+                    (start as f64 / rate - 0.1 * (rect.width() - HEADER) as f64 / pps).max(0.0);
+            }
+            if let Some(l) = lane {
+                let (top, bottom) = (lane_top(l), lane_top(l) + lane_h);
+                if top < rect.top() + RULER {
+                    self.vscroll -= rect.top() + RULER - top;
+                } else if bottom > rect.bottom() {
+                    self.vscroll += bottom - rect.bottom();
+                }
+                self.vscroll = self.vscroll.clamp(0.0, overflow);
+            }
+            ui.ctx().request_repaint();
+        }
+        self.focus = focused;
+        self.keys(&ui.ctx().clone(), song, view, &mut out);
 
         // Drawing.
         let painter = ui.painter_at(rect);
@@ -1075,6 +1550,19 @@ impl Timeline {
                 if selected {
                     lanes.rect_stroke(r, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Inside);
                 }
+                if self
+                    .focus
+                    .as_ref()
+                    .is_some_and(|(f, _)| *f == Focus::Clip(c.id))
+                {
+                    // The keyboard's ring, outside the selection's.
+                    lanes.rect_stroke(
+                        r.expand(1.0),
+                        4.0,
+                        Stroke::new(2.0, visuals.selection.stroke.color),
+                        StrokeKind::Outside,
+                    );
+                }
             }
         }
         if song.lanes.is_empty() {
@@ -1103,6 +1591,18 @@ impl Timeline {
             let label = Rect::from_min_size(pos2(x, rect.top()), g.size() + vec2(8.0, 2.0));
             painter.rect_filled(label, 2.0, flag);
             painter.galley(label.min + vec2(4.0, 1.0), g, Color32::BLACK);
+            if self
+                .focus
+                .as_ref()
+                .is_some_and(|(f, _)| *f == Focus::Marker(m.id.clone()))
+            {
+                painter.rect_stroke(
+                    label.expand(1.0),
+                    3.0,
+                    Stroke::new(2.0, visuals.selection.stroke.color),
+                    StrokeKind::Outside,
+                );
+            }
         }
 
         // Playhead.
@@ -1164,7 +1664,9 @@ impl Timeline {
                 .default_pos(rect.left_top() + vec2(HEADER + 40.0, RULER + 10.0))
                 .show(ui.ctx(), |ui| {
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                    let r = ui.text_edit_singleline(&mut text);
+                    let r = ui
+                        .text_edit_singleline(&mut text)
+                        .accessible_name("Marker name");
                     if !self.rename_focused {
                         r.request_focus();
                         self.rename_focused = true;
@@ -1193,13 +1695,13 @@ impl Timeline {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use daw_engine::time::{Tempo, TimeSignature};
 
     const RATE: u32 = 48_000;
 
-    fn source(frames: usize) -> Arc<StreamSource> {
+    pub(crate) fn source(frames: usize) -> Arc<StreamSource> {
         let dir = std::env::temp_dir().join(format!("daw-app-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // One file each: tests run in parallel.
@@ -1218,7 +1720,7 @@ mod tests {
         StreamSource::open(&path).unwrap()
     }
 
-    fn clip(start: i64, frames: usize) -> Clip {
+    pub(crate) fn clip(start: i64, frames: usize) -> Clip {
         let s = source(frames);
         let path = s.path.clone();
         Clip::new(s, path, start, None)

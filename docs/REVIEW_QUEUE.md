@@ -256,8 +256,36 @@ mean nothing).
       always playing.
 - [ ] **1.9 Screen reader.** Turn on Narrator (Ctrl+Win+Enter) and Tab
       through the transport and a track row. Pass: each control is read
-      with a clear name, such as "Arm Guitar for recording". The
-      timeline's clips are not read yet; say how much that matters.
+      with a clear name, such as "Arm Guitar for recording".
+
+Screenshots: `/mnt/project-files/screenshots/app-timeline-keyboard.png`
+(a clip focused by click, moved two beats and a bar with the arrow keys,
+then down a track with Ctrl+Down; the blue ring is the keyboard focus,
+the white one the selection) and `app-timeline-keyboard-marker.png`
+(Tab on to the marker, then away).
+
+- [ ] **1.9 Timeline by keyboard.** Drop two files in and press M for a
+      marker. Click a clip, then without the mouse: Left and Right move
+      it a beat, Shift+Left/Right a bar, Ctrl+Left/Right trim its start,
+      Alt+Left/Right trim its end, Ctrl+Down moves it to the track
+      below, Up and Down move between tracks, Enter selects it and
+      puts the playhead at its start, Space plays, S splits, Delete
+      deletes. Tab to the marker: Left and Right move it a bar, F2
+      renames it, Ctrl+Enter loops its section, Delete removes it.
+      Help → Keyboard shortcuts lists them. Pass: all of it works and
+      the focused item is easy to see. Say if Alt+arrows clash with
+      anything on your PC (Alt+Shift switches keyboard language on
+      some Windows setups).
+- [ ] **1.9 Timeline by screen reader.** With Narrator on, Tab through
+      the timeline. Pass: each clip is read with its track and bars,
+      such as "backing on Guitar, bar 1 to bar 2", a selected clip is
+      read as selected, and a marker as "Section A, marker at bar 3".
+      After an arrow key, Tab away and back to hear the new position.
+- [ ] **1.5 Clips between tracks.** Drag a clip from one track to
+      another with the mouse (it should stay snapped to the beat), and
+      drag a recorded take to another track: it becomes an ordinary
+      clip named "Take 2 from Guitar" and plays. Pass: both land where
+      dropped, and Ctrl+Z brings them back.
 
 ### Phase 1 app: projects
 

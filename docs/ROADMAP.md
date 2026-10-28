@@ -286,8 +286,11 @@ or right-click the timeline to pin a comment to a time or a stretch of
 time on a track or the whole song, with replies, resolve and play from
 there; pins show on the timeline. Deleting a comment, or changing its
 text, blanks the old words out of the saved history, the backup and
-bundles. Still to do: live sessions and identity (comments show "You" or
-"Someone else" until then).*
+bundles. Identity: the app asks once for a display name; each project
+gets its own key, worked out from a secret kept on the computer;
+whoever makes a project owns it, and changes from anyone else wait
+until the owner lets them edit or only comment (File → People…).
+Comments show their writer's name. Still to do: live sessions.*
 - **Project = a folder on disk**: a document file plus content-addressed
   audio assets.
 - **Project bundle** export and import: a single file to send by any means.

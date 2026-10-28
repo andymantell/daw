@@ -397,11 +397,24 @@ back) and `app-lesson-notes.png`. Projects live in
       limits: copies already sent, and another computer's file in the
       shared folder's `Devices`, keep the text until that computer opens
       the project and saves.
-- [ ] **1.6 Who wrote a comment.** Until identity lands, comments show
-      "You" for ones written on this computer and "Someone else" for the
-      rest, and anyone can edit or delete any comment. Identity will show
-      names and limit commenters to their own. Nothing to test yet; say
-      if this order is fine.
+- [ ] **1.6 Who wrote a comment.** With the two accounts from the
+      next check, write a comment on each. Pass: each shows the writer's
+      name, and after setting the second to Can comment, they can edit
+      and delete only their own comments.
+- [ ] **1.6 Your name and letting people in.** Screenshots:
+      `app-your-name.png` (asked once, at first start),
+      `app-someone-wants-to-join.png` (a second computer's changes
+      waiting) and `app-people.png` (after Let Pat edit; the Chorus
+      marker Pat added has merged). With the shared-folder or bundle set-up
+      above, using two Windows user accounts so each has its own
+      identity: give each a name when asked. Make a project on the
+      first, share it, add a marker on the second and let it reach the
+      first. Pass: the first asks whether to let the second in, nothing
+      of theirs appears until you say yes, and after Let … edit it does,
+      with later changes merging without asking. Then set them to Can
+      comment in File → People… and change the tempo on the second.
+      Pass: that change is refused on the first, with a message saying
+      why. Say if the wording of the windows is clear.
 - [ ] **1.7 Lesson notes.** Practice → Lesson notes…, type a few lines,
       save, reopen. Pass: the notes come back. They are plain text for
       now; say what you would want first: headings, tab blocks pinned
@@ -528,8 +541,9 @@ items.
       written rule (a decision record), or not.
 - [ ] **Address lookup asked first:** the public STUN item above, with the
       app asking before first use and always offering manual addresses.
-- [ ] **Keys per project, not per install:** stops two projects being
-      linked to one person by key. Accept, or keep one key per install.
+- [x] **Keys per project, not per install:** stops two projects being
+      linked to one person by key. Andy chose a key per project on
+      2026-10-28 (built in 1.6 identity).
 - [ ] **Real deletion out of history:** deleting a comment, note or take
       removes it from the saved file and bundles. Useful anyway; confirm it
       joins the 1.6 work, or leave it for later. *Done for comments on

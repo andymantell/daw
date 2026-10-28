@@ -73,6 +73,17 @@ impl StreamSource {
     pub fn chunks(&self) -> usize {
         self.frames.div_ceil(CHUNK)
     }
+
+    /// Reads up to `frames` frames from the start, mixed to mono. For
+    /// analysis off the audio thread.
+    pub fn read_mono(&self, frames: usize) -> Result<Vec<f32>, String> {
+        let mut r = hound::WavReader::open(&self.path)
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let s = read_samples(&mut r, frames * self.channels).map_err(|e| e.to_string())?;
+        Ok(s.chunks_exact(self.channels)
+            .map(|f| f.iter().sum::<f32>() / self.channels as f32)
+            .collect())
+    }
 }
 
 /// One chunk of a file: `channels` interleaved, up to [`CHUNK`] frames.

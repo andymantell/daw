@@ -171,6 +171,9 @@ struct App {
     semitones: i32,
     cents: i32,
     trainer: trainer::Trainer,
+    /// A track's tuning being measured, and the last result.
+    detecting: Option<(String, mpsc::Receiver<Option<f32>>)>,
+    detected: Option<(String, Option<f32>)>,
 }
 
 /// How often to look for a lost device.
@@ -218,6 +221,8 @@ impl App {
             semitones: 0,
             cents: 0,
             trainer: trainer::Trainer::default(),
+            detecting: None,
+            detected: None,
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -684,6 +689,8 @@ impl App {
             if changed {
                 self.send_loop();
             }
+            ui.separator();
+            self.trainer.controls(ui);
         });
         ui.horizontal(|ui| self.practice_controls(ui));
     }
@@ -745,14 +752,72 @@ impl App {
                         self.cents = 0;
                     }
                 }
+                ui.separator();
+                for t in &self.tracks {
+                    let source = t
+                        .active_take
+                        .and_then(|i| t.takes.get(i))
+                        .map(|k| k.source.clone())
+                        .or_else(|| t.file.as_ref().map(|(_, s)| s.clone()));
+                    let Some(src) = source else { continue };
+                    if ui
+                        .selectable_label(false, format!("Detect tuning of {}", t.name))
+                        .on_hover_text(
+                            "Measures how far the recording is from concert pitch \
+                             (A = the tuner's reference) and suggests a fine-pitch shift. \
+                             Whole-step tunings like E♭ read as in tune.",
+                        )
+                        .clicked()
+                    {
+                        let (tx, rx) = mpsc::channel();
+                        let a4 = self.tuner.a4;
+                        std::thread::spawn(move || {
+                            // The first minute and a half is plenty.
+                            let r = src
+                                .read_mono(90 * src.rate as usize)
+                                .ok()
+                                .and_then(|x| daw_engine::tuner::tuning_offset(&x, src.rate, a4));
+                            let _ = tx.send(r);
+                        });
+                        self.detecting = Some((t.name.clone(), rx));
+                        self.detected = None;
+                    }
+                }
             });
+        if let Some((name, rx)) = &self.detecting
+            && let Ok(r) = rx.try_recv()
+        {
+            self.detected = Some((name.clone(), r));
+            self.detecting = None;
+        }
+        if self.detecting.is_some() {
+            ui.spinner();
+        }
+        if let Some((name, r)) = self.detected.clone() {
+            match r {
+                Some(c) if c.abs() >= 2.0 => {
+                    ui.label(format!("{name} is {c:+.0} ¢ off"));
+                    if ui.button(format!("Shift {:+.0} ¢", -c)).clicked() {
+                        self.cents = (-c).round() as i32;
+                        self.detected = None;
+                    }
+                }
+                Some(_) => {
+                    ui.label(format!("{name} is at concert pitch"));
+                }
+                None => {
+                    ui.label(format!("{name}: no clear pitch to measure"));
+                }
+            }
+            if ui.small_button("✖").clicked() {
+                self.detected = None;
+            }
+        }
         if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
             && ui.button("Reset").clicked()
         {
             (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
         }
-        ui.separator();
-        self.trainer.controls(ui);
         let loops = self.ctl.status().loops();
         if self.looping && self.ctl.status().playing() {
             self.trainer.update(loops, &mut self.speed_pct);

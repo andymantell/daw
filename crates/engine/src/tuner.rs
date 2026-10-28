@@ -158,3 +158,84 @@ impl Smoother {
         self.hz
     }
 }
+
+/// How far a recording sits from concert pitch at reference `a4`, in
+/// cents (−50 to +50), judged from the spectral peaks of many frames: a
+/// song recorded at A = 432 Hz reads about −32. Whole-semitone tunings
+/// (E♭ standard, say) read as in tune, since every note still lands on a
+/// semitone. `None` if there is too little steady pitch to tell.
+///
+/// Each peak's distance from the nearest semitone is averaged on a circle
+/// (so +49 and −49 cents count as close), weighted by its level; the
+/// spread of the result says how sure it is.
+pub fn tuning_offset(samples: &[f32], rate: u32, a4: f32) -> Option<f32> {
+    use realfft::RealFftPlanner;
+    const N: usize = 8192;
+    const HOP: usize = 4096;
+    if samples.len() < N {
+        return None;
+    }
+    let fft = RealFftPlanner::<f32>::new().plan_fft_forward(N);
+    let window: Vec<f32> = (0..N)
+        .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / N as f32).cos())
+        .collect();
+    let mut frame = vec![0.0f32; N];
+    let mut spec = fft.make_output_vec();
+    let mut mag = vec![0.0f32; spec.len()];
+    let bin_hz = rate as f32 / N as f32;
+    let (lo, hi) = (
+        (80.0 / bin_hz) as usize,
+        ((2000.0 / bin_hz) as usize).min(mag.len() - 2),
+    );
+    let (mut sx, mut sy, mut total) = (0.0f64, 0.0f64, 0.0f64);
+    for start in (0..samples.len() - N).step_by(HOP) {
+        for (f, (x, w)) in frame.iter_mut().zip(samples[start..].iter().zip(&window)) {
+            *f = x * w;
+        }
+        fft.process(&mut frame, &mut spec).ok()?;
+        for (m, c) in mag.iter_mut().zip(&spec) {
+            *m = c.norm();
+        }
+        let loudest = mag[lo..hi].iter().fold(0.0f32, |a, &b| a.max(b));
+        if loudest < 1e-3 {
+            continue;
+        }
+        for k in lo.max(2)..hi {
+            let m = mag[k];
+            // Clear local peaks only: louder than both neighbours either side.
+            if m < loudest * 0.05
+                || m <= mag[k - 1]
+                || m < mag[k + 1]
+                || m <= mag[k - 2]
+                || m < mag[k + 2]
+            {
+                continue;
+            }
+            // Parabolic interpolation on log magnitude.
+            let (a, b, c) = (mag[k - 1].ln(), m.ln(), mag[k + 1].ln());
+            let d = a - 2.0 * b + c;
+            let shift = if d.abs() > 1e-9 {
+                0.5 * (a - c) / d
+            } else {
+                0.0
+            };
+            let hz = (k as f32 + shift) * bin_hz;
+            let semis = 12.0 * (hz / a4).log2();
+            let dev = (semis - semis.round()) as f64; // −0.5..0.5
+            let angle = dev * std::f64::consts::TAU;
+            let w = m as f64;
+            sx += w * angle.cos();
+            sy += w * angle.sin();
+            total += w;
+        }
+    }
+    if total <= 0.0 {
+        return None;
+    }
+    // How tightly the deviations agree: 1 is all the same.
+    let r = (sx * sx + sy * sy).sqrt() / total;
+    if r < 0.3 {
+        return None;
+    }
+    Some((sy.atan2(sx) / std::f64::consts::TAU * 100.0) as f32)
+}

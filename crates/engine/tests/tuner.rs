@@ -3,7 +3,7 @@
 //! bass range, note naming, and input reaching it from the engine.
 
 use daw_engine::engine::{self, Command};
-use daw_engine::tuner::{Detector, Note, window};
+use daw_engine::tuner::{Detector, Note, tuning_offset, window};
 
 const RATE: u32 = 48_000;
 
@@ -81,4 +81,51 @@ fn the_engine_sends_the_chosen_input_channel() {
     got.clear();
     ctl.take_tuner_samples(&mut got, 1000);
     assert!(got.is_empty());
+}
+
+/// A few seconds of chords: notes of an A major scale with harmonics,
+/// all `cents` off concert pitch, three at a time.
+fn song(cents: f32, seconds: f32) -> Vec<f32> {
+    let n = (RATE as f32 * seconds) as usize;
+    let scale = [57, 59, 61, 62, 64, 66, 68, 69];
+    let hz = |midi: i32| 440.0 * 2f32.powf((midi as f32 - 69.0 + cents / 100.0) / 12.0);
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / RATE as f32;
+            let chord = (t * 2.0) as usize;
+            (0..3)
+                .map(|v| {
+                    let f = hz(scale[(chord + 2 * v) % scale.len()]);
+                    (1..5)
+                        .map(|h| (std::f32::consts::TAU * f * h as f32 * t).sin() * 0.1 / h as f32)
+                        .sum::<f32>()
+                })
+                .sum()
+        })
+        .collect()
+}
+
+#[test]
+fn finds_how_far_a_recording_is_from_concert_pitch() {
+    for cents in [0.0, 31.8, -32.0, 15.0, -45.0] {
+        let got = tuning_offset(&song(cents, 6.0), RATE, 440.0).expect("an offset");
+        assert!((got - cents).abs() < 3.0, "{cents}: read {got}");
+    }
+    // Measured against A = 432, a 440 recording is about 32 cents sharp.
+    let got = tuning_offset(&song(0.0, 6.0), RATE, 432.0).unwrap();
+    assert!((got - 31.77).abs() < 3.0, "{got}");
+}
+
+#[test]
+fn noise_has_no_tuning() {
+    let mut x = 1u32;
+    let noise: Vec<f32> = (0..RATE * 4)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            (x as f32 / u32::MAX as f32 - 0.5) * 0.5
+        })
+        .collect();
+    assert_eq!(tuning_offset(&noise, RATE, 440.0), None);
 }

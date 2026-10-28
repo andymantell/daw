@@ -236,8 +236,11 @@ replace it if the 0.6 listening prefers one). Tracks stay in time with
 the transport, the metronome follows the slowed beat, and loops wrap
 smoothly; nothing records while speed or pitch is changed. A tempo
 trainer raises the speed by a step every N loops up to a target. Still
-to do: detected tuning offset, sections and markers for the loop (with
-1.5), and saving the practice settings (with projects).*
+to do: sections and markers for the loop (with 1.5), and saving the
+practice settings (with projects). Tuning presets can measure a track's
+offset from concert pitch (spectral peaks against the tuner's
+reference) and offer the fine-pitch shift that corrects it; whole-step
+tunings such as E♭ read as in tune, so those stay with the presets.*
 - Loop region, chosen quickly from sections and markers.
 - Pitch-preserving speed (50–150%) and transpose (±12 st), plus fine pitch
   in cents. **Tuning presets** for common shifts (e.g. "half step down →

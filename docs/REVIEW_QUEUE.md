@@ -170,6 +170,11 @@ Screenshot (a 220 Hz test tone standing in for a guitar):
       step down → standard" on a song in E♭ tuning and play along in
       standard. This is our own vocoder; compare it with the 0.6 listening
       files when choosing (Decisions below).
+- [ ] **1.4 Detected tuning.** On a recording known to be off concert
+      pitch (an old vinyl rip, or one at A = 432), Tuning presets →
+      "Detect tuning of …". Pass: it reports roughly the right number of
+      cents, and "Shift" makes it match your tuned guitar. On a normal
+      recording it should say "at concert pitch".
 - [ ] **1.4 Tempo trainer.** Loop a short passage at 70%, tick Trainer
       with +5% every 2 loops up to 100%, and play along. Pass: the speed
       box steps up on the loop, smoothly enough to keep playing.

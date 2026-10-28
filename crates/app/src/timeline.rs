@@ -500,6 +500,8 @@ pub struct Timeline {
     px_per_sec: f32,
     /// Seconds at the left edge of the lanes.
     scroll: f64,
+    /// Points scrolled down the lanes.
+    vscroll: f32,
     pub snap: Snap,
     pub selected: HashSet<u64>,
     pub history: History,
@@ -520,6 +522,7 @@ impl Default for Timeline {
         Timeline {
             px_per_sec: 40.0,
             scroll: 0.0,
+            vscroll: 0.0,
             snap: Snap::default(),
             selected: HashSet::new(),
             history: History::default(),
@@ -779,6 +782,8 @@ impl Timeline {
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let lanes_n = song.lanes.len().max(1);
         let lane_h = ((rect.height() - RULER) / lanes_n as f32).clamp(36.0, 80.0);
+        // Lanes that don't fit scroll up and down.
+        let overflow = (lanes_n as f32 * lane_h - (rect.height() - RULER)).max(0.0);
         let left = rect.left() + HEADER;
         let rate = view.rate as f64;
         let pps = self.px_per_sec as f64;
@@ -791,15 +796,24 @@ impl Timeline {
                 self.px_per_sec = (self.px_per_sec * zoom).clamp(1.0, 4000.0);
                 self.scroll = (at - (p.x - left) as f64 / self.px_per_sec as f64).max(0.0);
             } else if scroll != egui::Vec2::ZERO {
-                let d = if scroll.x != 0.0 { scroll.x } else { scroll.y };
-                self.scroll = (self.scroll - d as f64 / pps).max(0.0);
+                // The wheel scrolls the lanes if they overflow, or else
+                // along; Shift + wheel (or a sideways wheel) along.
+                let mut along = scroll.x;
+                if overflow > 0.0 {
+                    self.vscroll -= scroll.y;
+                } else {
+                    along += scroll.y;
+                }
+                self.scroll = (self.scroll - along as f64 / pps).max(0.0);
             }
         }
+        self.vscroll = self.vscroll.clamp(0.0, overflow);
+        let vscroll = self.vscroll;
         let pps = self.px_per_sec as f64;
         let scroll = self.scroll;
         let x_of = move |f: i64| left + ((f as f64 / rate - scroll) * pps) as f32;
         let frame_of = move |x: f32| ((scroll + (x - left) as f64 / pps) * rate).round() as i64;
-        let lane_top = |i: usize| rect.top() + RULER + i as f32 * lane_h;
+        let lane_top = |i: usize| rect.top() + RULER + i as f32 * lane_h - vscroll;
 
         // Keep the playhead in view while playing.
         if view.playing && self.drag.is_none() {
@@ -827,7 +841,7 @@ impl Timeline {
                 }
                 return Some(Hit::Ruler);
             }
-            let lane = ((pos.y - rect.top() - RULER) / lane_h) as usize;
+            let lane = ((pos.y - rect.top() - RULER + vscroll) / lane_h) as usize;
             let clips = &song.lanes.get(lane)?.clips;
             // Playing clips over muted ones; later ones on top.
             let order = clips
@@ -1062,19 +1076,23 @@ impl Timeline {
             bar += every;
         }
 
-        // Lanes and clips.
+        // Lanes and clips, under the ruler.
+        let lanes = painter.with_clip_rect(Rect::from_min_max(
+            pos2(rect.left(), rect.top() + RULER),
+            rect.max,
+        ));
         for (i, lane) in song.lanes.iter().enumerate() {
             let top = lane_top(i);
             let name_rect = Rect::from_min_size(pos2(rect.left(), top), vec2(HEADER, lane_h));
-            painter.rect_filled(name_rect, 0.0, visuals.faint_bg_color);
-            painter.text(
+            lanes.rect_filled(name_rect, 0.0, visuals.faint_bg_color);
+            lanes.text(
                 name_rect.left_center() + vec2(8.0, 0.0),
                 Align2::LEFT_CENTER,
                 lane.name,
                 FontId::proportional(13.0),
                 visuals.text_color(),
             );
-            painter.line_segment(
+            lanes.line_segment(
                 [
                     pos2(rect.left(), top + lane_h),
                     pos2(rect.right(), top + lane_h),
@@ -1098,14 +1116,14 @@ impl Timeline {
                 );
                 let selected = self.selected.contains(&c.id);
                 if c.muted {
-                    painter.rect_stroke(
+                    lanes.rect_stroke(
                         r,
                         3.0,
                         Stroke::new(1.0, colour.gamma_multiply(0.5)),
                         StrokeKind::Inside,
                     );
                 } else {
-                    painter.rect_filled(r, 3.0, colour.gamma_multiply(0.35));
+                    lanes.rect_filled(r, 3.0, colour.gamma_multiply(0.35));
                 }
                 if let Some(w) = self.waves.get(&c.source) {
                     let mid = r.center().y + 6.0;
@@ -1127,7 +1145,7 @@ impl Timeline {
                         );
                         if b > a {
                             let (lo, hi) = w.range(a, b);
-                            painter.line_segment(
+                            lanes.line_segment(
                                 [
                                     pos2(x + 0.5, mid - hi.min(1.0) * half),
                                     pos2(x + 0.5, mid - lo.max(-1.0) * half - 0.5),
@@ -1138,7 +1156,7 @@ impl Timeline {
                         x += 1.0;
                     }
                 }
-                painter.text(
+                lanes.text(
                     r.left_top() + vec2(4.0, 2.0),
                     Align2::LEFT_TOP,
                     c.name(),
@@ -1150,12 +1168,7 @@ impl Timeline {
                     },
                 );
                 if selected {
-                    painter.rect_stroke(
-                        r,
-                        3.0,
-                        Stroke::new(2.0, Color32::WHITE),
-                        StrokeKind::Inside,
-                    );
+                    lanes.rect_stroke(r, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Inside);
                 }
             }
         }

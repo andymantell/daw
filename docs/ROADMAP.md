@@ -307,6 +307,10 @@ metronome are left out, and clipping is reported.*
   even without a server.
 
 ### 1.9 Quality bar (M, runs throughout)
+*Started 2026-10-28. The app measures its DSP load (time in the audio
+callback against the buffer's length) and counts late buffers; Settings
+→ Performance check adds 16 generated stereo tracks and an effect on 8 of
+them to try the bar on real hardware.*
 - No dropouts with 16 stereo tracks plus 8 plugin instances at a
   128-sample buffer on the reference laptop.
 - Golden-render audio tests. Automated plugin-host tests with a set of

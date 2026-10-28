@@ -19,7 +19,5 @@ daw-audio-io = { path = "../audio-io" }
 daw-engine = { path = "../engine" }
 daw-plugins = { path = "../plugins" }
 eframe = "0.37.0"
-vst3 = "0.3.0"
-
-[dev-dependencies]
 hound = "3.5.1"
+vst3 = "0.3.0"

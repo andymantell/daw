@@ -15,6 +15,7 @@
 
 mod export;
 mod fx;
+mod perf;
 mod timeline;
 mod trainer;
 mod tuner;
@@ -91,7 +92,7 @@ struct Import {
 
 /// Where converted copies of files go until projects have folders of
 /// their own.
-fn cache_dir() -> PathBuf {
+pub(crate) fn cache_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .or_else(|| std::env::var_os("XDG_CACHE_HOME"))
         .map(PathBuf::from)
@@ -168,6 +169,7 @@ struct App {
     detected: Option<(String, Option<f32>)>,
     markers: Vec<Marker>,
     timeline: timeline::Timeline,
+    perf: perf::Perf,
 }
 
 /// How often to look for a lost device.
@@ -219,6 +221,7 @@ impl App {
             detected: None,
             markers: Vec::new(),
             timeline: timeline::Timeline::default(),
+            perf: perf::Perf::default(),
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -583,6 +586,54 @@ impl App {
             Clip::new(source, take.path.clone(), start, None),
         );
         Ok(())
+    }
+
+    /// The performance check, and its actions.
+    fn perf_window(&mut self, ctx: &egui::Context) {
+        let status = match &self.audio {
+            Audio::Running(r) | Audio::Silent(r, _) => r.status.clone(),
+            Audio::Stopped => return,
+        };
+        self.perf.update(&status);
+        if self.perf.open {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+        let overloads = status.overloads.load(Ordering::Relaxed);
+        let underruns = self.ctl.status().underruns();
+        let frames = status.last_frames.load(Ordering::Relaxed);
+        let buffer = (frames > 0).then_some((frames, self.rate));
+        let effects: Vec<_> = (self.effects.list.plugins().into_iter())
+            .filter(|p| p.enabled && !p.class.is_instrument())
+            .collect();
+        let now = perf::Now {
+            overloads,
+            underruns,
+            buffer,
+            tracks: self.tracks.len(),
+            rate: self.rate,
+        };
+        let action = self.perf.window(ctx, now, &effects);
+        match action {
+            Some(perf::Action::AddTracks(files)) => {
+                for f in files {
+                    self.add_file(&f);
+                }
+            }
+            Some(perf::Action::AddPlugin(a)) => {
+                for i in 0..perf::PLUGINS.min(self.tracks.len()) {
+                    match self.effects.create(&a, self.rate) {
+                        Ok(slot) => self.tracks[i].fx.push(slot),
+                        Err(e) => {
+                            self.message = Some(format!("{}: {e}", a.class.name));
+                            break;
+                        }
+                    }
+                }
+                self.rebuild();
+            }
+            Some(perf::Action::Reset) => self.perf.reset(overloads, underruns),
+            None => {}
+        }
     }
 
     /// Runs `f` on the timeline and the song it edits.
@@ -1472,6 +1523,10 @@ impl eframe::App for App {
                         self.effects.show_manager = true;
                         ui.close();
                     }
+                    if ui.button("Performance check…").clicked() {
+                        self.perf.open = true;
+                        ui.close();
+                    }
                 });
                 ui.menu_button("Practice", |ui| {
                     if ui.button("Tuner…").clicked() {
@@ -1489,6 +1544,16 @@ impl eframe::App for App {
                             self.profile.as_ref().map_or("", |p| &p.device),
                             r.rate
                         ));
+                        let load = self.perf.load();
+                        let text = format!("DSP {:.0}%", load * 100.0);
+                        let l = if load > 0.8 {
+                            ui.colored_label(Color32::LIGHT_RED, text)
+                        } else {
+                            ui.label(RichText::new(text).weak())
+                        };
+                        if l.on_hover_text("Settings → Performance check").clicked() {
+                            self.perf.open = true;
+                        }
                     }
                     Audio::Silent(..) | Audio::Stopped => {
                         ui.colored_label(Color32::LIGHT_RED, "No audio device: playing silently");
@@ -1578,6 +1643,7 @@ impl eframe::App for App {
                 None => self.effects.open_track = None,
             }
         }
+        self.perf_window(&ctx);
         if self.ctl.status().playing() {
             ctx.request_repaint();
         }

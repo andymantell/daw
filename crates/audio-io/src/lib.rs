@@ -229,6 +229,37 @@ pub struct StreamStatus {
     /// Set if the driver reported an error (for example the device was
     /// unplugged); playback has stopped.
     pub failed: AtomicBool,
+    /// Time spent in the callback, and the length of audio it made, both
+    /// in ns: their ratio is the DSP load.
+    pub busy_ns: AtomicU64,
+    pub audio_ns: AtomicU64,
+    /// The heaviest callback since last taken, as a fraction of its
+    /// buffer's length, in thousandths.
+    pub peak_permille: AtomicU64,
+    /// Callbacks that took longer than their buffer lasts: each is a
+    /// certain dropout.
+    pub overloads: AtomicU64,
+}
+
+impl StreamStatus {
+    /// Records one callback that took `busy` to make `frames` frames.
+    fn note_busy(&self, busy: std::time::Duration, frames: usize, rate: u32) {
+        let busy = busy.as_nanos() as u64;
+        let budget = (frames as u64 * 1_000_000_000 / rate.max(1) as u64).max(1);
+        self.busy_ns.fetch_add(busy, Ordering::Relaxed);
+        self.audio_ns.fetch_add(budget, Ordering::Relaxed);
+        self.peak_permille
+            .fetch_max(busy * 1000 / budget, Ordering::Relaxed);
+        if busy > budget {
+            self.overloads.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The heaviest callback since the last call, as a fraction of its
+    /// buffer's length (1.0 is a dropout).
+    pub fn take_peak_load(&self) -> f32 {
+        self.peak_permille.swap(0, Ordering::Relaxed) as f32 / 1000.0
+    }
 }
 
 /// A running device. Dropping it stops the audio.
@@ -301,6 +332,7 @@ pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
             let period = std::time::Duration::from_secs_f64(n as f64 / rate as f64);
             let mut next = std::time::Instant::now();
             while !st.load(Ordering::Relaxed) {
+                let t0 = std::time::Instant::now();
                 for frame in inp.chunks_mut(2) {
                     let x = t as f32 / rate as f32 * std::f32::consts::TAU;
                     frame[0] = (x * 220.0).sin() * 0.3;
@@ -308,6 +340,7 @@ pub fn start_silent(rate: u32, buffer: u32, mut engine: Engine) -> Running {
                     t += 1;
                 }
                 engine.process_duplex(&inp, in_ch, &mut l, &mut r, None);
+                s.note_busy(t0.elapsed(), n, rate);
                 s.callbacks.fetch_add(1, Ordering::Relaxed);
                 s.last_frames.store(n as u64, Ordering::Relaxed);
                 next += period;
@@ -493,6 +526,7 @@ where
     T: SizedSample + FromSample<f32> + Send + 'static,
 {
     let chans = config.channels as usize;
+    let rate = config.sample_rate;
     let (l_ch, r_ch, click_ch) = (out.profile.main.0, out.profile.main.1, out.profile.click);
     let (mut input, in_ch, slack) = (out.input, out.input_channels, out.slack);
     // Scratch, allocated here, never in the callback.
@@ -512,6 +546,7 @@ where
         .build_output_stream(
             *config,
             move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                let t0 = std::time::Instant::now();
                 let frames = data.len() / chans;
                 s.callbacks.fetch_add(1, Ordering::Relaxed);
                 s.last_frames.store(frames as u64, Ordering::Relaxed);
@@ -563,6 +598,7 @@ where
                         }
                     }
                 }
+                s.note_busy(t0.elapsed(), frames, rate);
             },
             on_error,
             None,

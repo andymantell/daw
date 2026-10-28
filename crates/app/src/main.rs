@@ -3,7 +3,8 @@
 //! play them with a mixer, loop, metronome and count-in, choose the audio
 //! device, and record: per track input, arm and monitor, with takes kept
 //! and switchable; VST 3 effects as track inserts; a tuner and practice
-//! mute; export of the mix and stems to WAV.
+//! mute; export of the mix and stems to WAV; a timeline to edit clips
+//! and mark sections.
 //!
 //! Usage: `daw [file.wav ...]`, or drop WAV files on the window. Files at
 //! another sample rate from the device are converted in the background
@@ -14,6 +15,7 @@
 
 mod export;
 mod fx;
+mod timeline;
 mod trainer;
 mod tuner;
 
@@ -30,19 +32,16 @@ use daw_engine::import;
 use daw_engine::metronome::Metronome;
 use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
-use daw_engine::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
+use daw_engine::time::{Frames, Tempo, TempoMap, TimeSignature};
 use eframe::egui::{self, Color32, Key, RichText, Sense, Stroke, vec2};
 use fx::{Effects, FxSlot};
+use timeline::{Clip, Lane, Marker, Song};
 
 struct Track {
     name: String,
-    /// An imported file: the original, and what streams (perhaps a
-    /// converted copy).
-    file: Option<(PathBuf, Arc<StreamSource>)>,
-    /// Recorded takes, oldest first.
-    takes: Vec<RecordedTake>,
-    /// The take that plays; `None` for none.
-    active_take: Option<usize>,
+    /// Imported files and recorded takes, in the order added (later ones
+    /// draw on top).
+    clips: Vec<Clip>,
     mix: Mix,
     input: Option<Input>,
     arm: bool,
@@ -68,9 +67,7 @@ impl Track {
     fn new(name: String) -> Track {
         Track {
             name,
-            file: None,
-            takes: Vec::new(),
-            active_take: None,
+            clips: Vec::new(),
             mix: Mix::default(),
             input: None,
             arm: false,
@@ -82,17 +79,12 @@ impl Track {
     }
 }
 
-struct RecordedTake {
-    source: Arc<StreamSource>,
-    /// Where it plays: captured position less the recording offset.
-    start: Frames,
-}
-
 /// A file being opened (and converted, if needed) on a thread of its own.
 struct Import {
     path: PathBuf,
-    /// Replaces this track's audio, rather than adding a track.
-    track: Option<usize>,
+    /// Opened again at a new rate for the clips already using it, rather
+    /// than added as a track.
+    reopen: bool,
     rate: u32,
     done: mpsc::Receiver<Result<Arc<StreamSource>, String>>,
 }
@@ -174,6 +166,8 @@ struct App {
     /// A track's tuning being measured, and the last result.
     detecting: Option<(String, mpsc::Receiver<Option<f32>>)>,
     detected: Option<(String, Option<f32>)>,
+    markers: Vec<Marker>,
+    timeline: timeline::Timeline,
 }
 
 /// How often to look for a lost device.
@@ -223,6 +217,8 @@ impl App {
             trainer: trainer::Trainer::default(),
             detecting: None,
             detected: None,
+            markers: Vec::new(),
+            timeline: timeline::Timeline::default(),
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -257,14 +253,15 @@ impl App {
         // Stop the old audio before starting the new.
         self.audio = Audio::Stopped;
         self.rate = self.profile.as_ref().map_or(self.rate, |p| p.rate);
-        // Files at the old rate are opened again at the new one.
-        let stale: Vec<_> = (self.tracks.iter().enumerate())
-            .filter_map(|(i, t)| Some((i, t.file.as_ref()?)))
-            .filter(|(_, (_, src))| src.rate != self.rate)
-            .map(|(i, (path, _))| (i, path.clone()))
+        // Files and takes at the old rate are opened again at the new one.
+        let mut stale: Vec<PathBuf> = (self.tracks.iter().flat_map(|t| &t.clips))
+            .filter(|c| c.source.rate != self.rate)
+            .map(|c| c.path.clone())
             .collect();
-        for (i, path) in stale {
-            self.start_import(path, Some(i));
+        stale.sort();
+        stale.dedup();
+        for path in stale {
+            self.start_import(path, true);
         }
         let eng = self.replace_engine();
         self.audio = self.open_device(eng);
@@ -347,10 +344,10 @@ impl App {
     }
 
     fn add_file(&mut self, path: &Path) {
-        self.start_import(path.to_path_buf(), None);
+        self.start_import(path.to_path_buf(), false);
     }
 
-    fn start_import(&mut self, path: PathBuf, track: Option<usize>) {
+    fn start_import(&mut self, path: PathBuf, reopen: bool) {
         let (tx, rx) = mpsc::channel();
         let (p, rate) = (path.clone(), self.rate);
         std::thread::spawn(move || {
@@ -358,7 +355,7 @@ impl App {
         });
         self.imports.push(Import {
             path,
-            track,
+            reopen,
             rate,
             done: rx,
         });
@@ -372,7 +369,7 @@ impl App {
         let mut waiting = false;
         let mut i = 0;
         while i < self.imports.len() {
-            let new_track = self.imports[i].track.is_none();
+            let new_track = !self.imports[i].reopen;
             if new_track && waiting {
                 i += 1;
                 continue;
@@ -390,20 +387,23 @@ impl App {
             match result {
                 // The device changed rate while this was converting: start
                 // again at the new one.
-                Ok(_) if im.rate != self.rate => self.start_import(im.path, im.track),
+                Ok(_) if im.rate != self.rate => self.start_import(im.path, im.reopen),
                 Ok(source) => {
                     changed = true;
-                    match im.track.and_then(|t| self.tracks.get_mut(t)) {
-                        Some(t) => t.file = Some((im.path, source)),
-                        None => {
-                            let mut t = Track::new(
-                                im.path
-                                    .file_stem()
-                                    .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
-                            );
-                            t.file = Some((im.path, source));
-                            self.tracks.push(t);
+                    if im.reopen {
+                        for c in self.tracks.iter_mut().flat_map(|t| &mut t.clips) {
+                            if c.path == im.path && c.source.rate != source.rate {
+                                c.reopened(source.clone());
+                            }
                         }
+                    } else {
+                        let mut t = Track::new(
+                            im.path
+                                .file_stem()
+                                .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
+                        );
+                        t.clips.push(Clip::new(source, im.path, 0, None));
+                        self.tracks.push(t);
                     }
                 }
                 Err(e) => self.message = Some(e),
@@ -428,18 +428,15 @@ impl App {
         let mut s = Session::new(self.tempo_map());
         for t in &self.tracks {
             // A file still being converted to a new rate plays nothing
-            // until it is ready, but the track keeps its place.
-            let mut clips = Vec::new();
-            if let Some((_, src)) = &t.file
-                && src.rate == self.rate
-            {
-                clips.push(ClipSpec::new(Ticks(0), src.clone()));
-            }
-            if let Some(take) = t.active_take.and_then(|i| t.takes.get(i))
-                && take.source.rate == self.rate
-            {
-                clips.push(ClipSpec::new(take.start, take.source.clone()));
-            }
+            // until it is ready, but keeps its place.
+            let clips = (t.clips.iter())
+                .filter(|c| !c.muted && c.source.rate == self.rate)
+                .map(|c| ClipSpec {
+                    offset: c.offset,
+                    len: Some(c.len),
+                    ..ClipSpec::new(Frames(c.start), c.source.clone())
+                })
+                .collect();
             let mut spec = TrackSpec::new(clips);
             spec.mix = t.heard();
             spec.input = t.input;
@@ -554,6 +551,10 @@ impl App {
             (Audio::Running(r), Some(p)) => r.record_offset(p),
             _ => 0,
         };
+        if takes.iter().any(|t| t.frames > 0) {
+            // Recording is an edit like any other: undo removes the take.
+            self.with_song(|tl, song| tl.will_edit(song));
+        }
         let mut any = false;
         for take in takes {
             if let Some(e) = &take.error {
@@ -576,12 +577,50 @@ impl App {
             .tracks
             .get_mut(take.track)
             .ok_or("a take arrived for a track that is gone")?;
-        t.takes.push(RecordedTake {
-            source,
-            start: take.clip_start(Frames(offset as i64)),
-        });
-        t.active_take = Some(t.takes.len() - 1);
+        let start = take.clip_start(Frames(offset as i64)).0;
+        timeline::add_take(
+            &mut t.clips,
+            Clip::new(source, take.path.clone(), start, None),
+        );
         Ok(())
+    }
+
+    /// Runs `f` on the timeline and the song it edits.
+    fn with_song<R>(&mut self, f: impl FnOnce(&mut timeline::Timeline, &mut Song) -> R) -> R {
+        let mut song = Song {
+            lanes: (self.tracks.iter_mut())
+                .map(|t| Lane {
+                    name: &t.name,
+                    clips: &mut t.clips,
+                })
+                .collect(),
+            markers: &mut self.markers,
+        };
+        f(&mut self.timeline, &mut song)
+    }
+
+    /// The timeline, with its outcome acted on.
+    fn timeline(&mut self, ui: &mut egui::Ui) {
+        let map = self.tempo_map();
+        let view = timeline::View {
+            map: &map,
+            rate: self.rate,
+            playhead: self.ctl.status().position().0,
+            playing: self.ctl.status().playing(),
+            loop_bars: self.looping.then_some(self.loop_bars),
+        };
+        let out = self.with_song(|tl, song| tl.show(ui, song, &view));
+        if out.changed {
+            self.rebuild();
+        }
+        if let Some(f) = out.seek {
+            self.send(Command::Seek(Frames(f)));
+        }
+        if let Some(bars) = out.loop_bars {
+            self.loop_bars = bars;
+            self.looping = true;
+            self.send_loop();
+        }
     }
 
     fn toggle_play(&mut self) {
@@ -754,12 +793,11 @@ impl App {
                 }
                 ui.separator();
                 for t in &self.tracks {
-                    let source = t
-                        .active_take
-                        .and_then(|i| t.takes.get(i))
-                        .map(|k| k.source.clone())
-                        .or_else(|| t.file.as_ref().map(|(_, s)| s.clone()));
-                    let Some(src) = source else { continue };
+                    // The newest clip that plays.
+                    let source = t.clips.iter().rev().find(|c| !c.muted);
+                    let Some(src) = source.map(|c| c.source.clone()) else {
+                        continue;
+                    };
                     if ui
                         .selectable_label(false, format!("Detect tuning of {}", t.name))
                         .on_hover_text(
@@ -854,6 +892,7 @@ impl App {
         let direct = self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
         let mut changes = Vec::new();
         let mut rebuild = false;
+        let mut chosen = None;
         egui::Grid::new("tracks")
             .num_columns(10)
             .spacing(vec2(10.0, 10.0))
@@ -868,8 +907,8 @@ impl App {
                 for (i, t) in self.tracks.iter_mut().enumerate() {
                     let before = t.heard();
                     let label = ui.label(&t.name);
-                    if let Some((path, _)) = &t.file {
-                        label.on_hover_text(path.display().to_string());
+                    if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
+                        label.on_hover_text(c.path.display().to_string());
                     }
                     rebuild |= input_picker(ui, i, &mut t.input, inputs);
                     ui.horizontal(|ui| {
@@ -926,7 +965,9 @@ impl App {
                     {
                         self.effects.open_track = (!open).then_some(i);
                     }
-                    rebuild |= take_picker(ui, i, t);
+                    if let Some(k) = take_picker(ui, i, t) {
+                        chosen = Some((i, k));
+                    }
                     ui.end_row();
                     if t.heard() != before {
                         changes.push((i, t.heard()));
@@ -945,6 +986,13 @@ impl App {
         }
         for (track, mix) in changes {
             self.send(Command::SetMix { track, mix });
+        }
+        if let Some((i, k)) = chosen {
+            self.with_song(|tl, song| {
+                tl.will_edit(song);
+                timeline::choose_take(song.lanes[i].clips, k);
+            });
+            rebuild = true;
         }
         if rebuild {
             self.rebuild();
@@ -1241,26 +1289,26 @@ fn input_picker(ui: &mut egui::Ui, track: usize, input: &mut Option<Input>, inpu
     *input != before
 }
 
-/// Chooses which take plays, newest first. Returns true if it changed.
-fn take_picker(ui: &mut egui::Ui, track: usize, t: &mut Track) -> bool {
-    if t.takes.is_empty() {
+/// Chooses which take plays, newest first. Returns the choice if one
+/// was made.
+fn take_picker(ui: &mut egui::Ui, track: usize, t: &Track) -> Option<Option<usize>> {
+    let n = timeline::take_count(&t.clips);
+    if n == 0 {
         ui.label("");
-        return false;
+        return None;
     }
-    let before = t.active_take;
+    let now = timeline::active_take(&t.clips);
+    let mut pick = now;
     egui::ComboBox::from_id_salt(("take", track))
         .width(70.0)
-        .selected_text(
-            t.active_take
-                .map_or("Off".into(), |i| format!("Take {}", i + 1)),
-        )
+        .selected_text(now.map_or("Off".into(), |i| format!("Take {}", i + 1)))
         .show_ui(ui, |ui| {
-            for i in (0..t.takes.len()).rev() {
-                ui.selectable_value(&mut t.active_take, Some(i), format!("Take {}", i + 1));
+            for i in (0..n).rev() {
+                ui.selectable_value(&mut pick, Some(i), format!("Take {}", i + 1));
             }
-            ui.selectable_value(&mut t.active_take, None, "Off");
+            ui.selectable_value(&mut pick, None, "Off");
         });
-    t.active_take != before
+    (pick != now).then_some(pick)
 }
 
 fn channel_picker(ui: &mut egui::Ui, id: &str, ch: &mut usize, outs: usize) {
@@ -1381,6 +1429,40 @@ impl eframe::App for App {
                         ui.close();
                     }
                 });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(self.timeline.can_undo(), egui::Button::new("Undo"))
+                        .clicked()
+                    {
+                        if self.with_song(|tl, song| tl.undo(song)) {
+                            self.rebuild();
+                        }
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(self.timeline.can_redo(), egui::Button::new("Redo"))
+                        .clicked()
+                    {
+                        if self.with_song(|tl, song| tl.redo(song)) {
+                            self.rebuild();
+                        }
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Split at playhead").clicked() {
+                        let at = self.ctl.status().position().0;
+                        if self.with_song(|tl, song| tl.split_at(song, at)) {
+                            self.rebuild();
+                        }
+                        ui.close();
+                    }
+                    if ui.button("Delete selected clips").clicked() {
+                        if self.with_song(|tl, song| tl.delete_selected(song)) {
+                            self.rebuild();
+                        }
+                        ui.close();
+                    }
+                });
                 ui.menu_button("Settings", |ui| {
                     if ui.button("Audio device…").clicked() {
                         self.show_devices = true;
@@ -1450,9 +1532,13 @@ impl eframe::App for App {
                 });
             });
         }
-        egui::CentralPanel::default().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| self.mixer(ui));
-        });
+        egui::Panel::bottom("mixer")
+            .resizable(true)
+            .default_size(260.0)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.mixer(ui));
+            });
+        egui::CentralPanel::default().show(ui, |ui| self.timeline(ui));
         self.device_window(&ctx);
         self.effects.manager_window(&ctx);
         let inputs = match &self.audio {

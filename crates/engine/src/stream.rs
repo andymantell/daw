@@ -84,6 +84,38 @@ impl StreamSource {
             .map(|f| f.iter().sum::<f32>() / self.channels as f32)
             .collect())
     }
+
+    /// The lowest and highest sample (of either channel) in each `hop`
+    /// frames of the whole file, for drawing its waveform. Reads a chunk
+    /// at a time, off the audio thread.
+    pub fn peaks(&self, hop: usize) -> Result<Vec<(f32, f32)>, String> {
+        let hop = hop.max(1);
+        let mut r = hound::WavReader::open(&self.path)
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        let mut out = Vec::with_capacity(self.frames.div_ceil(hop));
+        let (mut lo, mut hi, mut n) = (0.0f32, 0.0f32, 0);
+        loop {
+            let s = read_samples(&mut r, CHUNK * self.channels).map_err(|e| e.to_string())?;
+            if s.is_empty() {
+                break;
+            }
+            for f in s.chunks_exact(self.channels) {
+                for &x in f {
+                    lo = lo.min(x);
+                    hi = hi.max(x);
+                }
+                n += 1;
+                if n == hop {
+                    out.push((lo, hi));
+                    (lo, hi, n) = (0.0, 0.0, 0);
+                }
+            }
+        }
+        if n > 0 {
+            out.push((lo, hi));
+        }
+        Ok(out)
+    }
 }
 
 /// One chunk of a file: `channels` interleaved, up to [`CHUNK`] frames.

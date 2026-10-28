@@ -889,6 +889,7 @@ dependencies = [
  "daw-engine",
  "daw-plugins",
  "eframe",
+ "hound",
  "vst3",
 ]
 

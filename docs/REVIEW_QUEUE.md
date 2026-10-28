@@ -195,6 +195,34 @@ the exported mix matched the sum of the stems to within one step of
       included) and the stems line up when dropped into FL Studio.
       Say if you'd rather choose the folder each time.
 
+### Phase 1 app: editing
+
+Screenshots: `/mnt/project-files/screenshots/app-timeline.png` (split,
+trimmed and moved clips, three renamed markers, the Verse section
+looped) and `app-timeline-marker-menu.png`. In the cloud the timeline
+was driven with mouse and keys; how it feels is for you.
+
+- [ ] **1.5 Clip editing.** Drop in a backing and a guitar file. Click
+      the ruler to move the playhead, select a clip and press S to split,
+      drag a clip to move it, drag its edges to trim, Delete to remove.
+      Pass: playback follows each edit, edges and moves land on beats
+      (bars with Snap → Bar, anywhere with Alt held), and nothing clicks
+      or drops out at the cut points.
+- [ ] **1.5 Undo.** After a few edits, Ctrl+Z back to the start and
+      Ctrl+Shift+Z (or Ctrl+Y) forward again. Pass: each step is one
+      edit, and playback matches what you see.
+- [ ] **1.5 Sections.** Press M at the start of each part of a song,
+      double-click a marker to name it, right-click → Loop this section.
+      Pass: the loop covers that section only. Say if markers need to sit
+      between bar lines (they snap to bars for now).
+- [ ] **1.5 Takes on the timeline.** Record two takes over the same bars.
+      Pass: the newer one plays and the older one shows as an outline;
+      the Take menu brings the older one back; Ctrl+Z after recording
+      removes the take (its file stays in Unsaved takes).
+- [ ] **1.5 Feel.** Zoom with Ctrl + wheel, scroll with the wheel, and
+      drag clips around a long song. Say if it is smooth enough and what
+      feels wrong.
+
 ## On other networks
 
 Spike 0.5, live sessions without a server

@@ -212,3 +212,18 @@ fn streaming_never_allocates_on_the_audio_thread() {
     assert_eq!(audio.join().unwrap(), 0, "allocations on the audio thread");
     drop(disk);
 }
+
+#[test]
+fn peaks_cover_the_whole_file_across_chunks() {
+    let path = write_float_stereo("peaks.wav");
+    let src = StreamSource::open(&path).unwrap();
+    let hop = 1000;
+    let p = src.peaks(hop).unwrap();
+    assert_eq!(p.len(), LEN.div_ceil(hop));
+    for (k, &(lo, hi)) in p.iter().enumerate() {
+        // The last frame of each hop is its largest either way.
+        let last = ((k + 1) * hop).min(LEN) - 1;
+        assert!((hi - value(last)).abs() < 1e-9, "hop {k}: {hi}");
+        assert!((lo + value(last)).abs() < 1e-9, "hop {k}: {lo}");
+    }
+}

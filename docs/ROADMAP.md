@@ -235,9 +235,10 @@ presets, through our own phase vocoder from spike 0.6 (a library can
 replace it if the 0.6 listening prefers one). Tracks stay in time with
 the transport, the metronome follows the slowed beat, and loops wrap
 smoothly; nothing records while speed or pitch is changed. A tempo
-trainer raises the speed by a step every N loops up to a target. Still
-to do: sections and markers for the loop (with 1.5), and saving the
-practice settings (with projects). Tuning presets can measure a track's
+trainer raises the speed by a step every N loops up to a target.
+Markers name sections on the timeline, and a section can be looped from
+its marker's menu (1.5). Still to do: saving the practice settings (with
+projects). Tuning presets can measure a track's
 offset from concert pitch (spectral peaks against the tuner's
 reference) and offer the fine-pitch shift that corrects it; whole-step
 tunings such as E♭ read as in tune, so those stay with the presets.*
@@ -252,6 +253,14 @@ tunings such as E♭ read as in tune, so those stay with the presets.*
 - Per-track "practice mute".
 
 ### 1.5 Editing — minimal set (M)
+*Started 2026-10-28, at risk. Done so far: a timeline above the mixer
+with each track's clips and waveforms; select, move, trim, split and
+delete, snapped to beats or bars (Alt places freely); markers on bar
+lines, renamed by double-click, that name sections and loop them; zoom
+and scroll; recorded takes as clips, a new take muting older takes under
+it. Undo/redo is a local history of snapshots for now: making it work
+with merged collaborator edits waits for the project document (1.6,
+decision 0004). Clips stay on their own track for now.*
 - Select, move, trim, split, delete clips. Snap to beat or bar.
 - Import audio files (drag and drop).
 - Markers and named sections.

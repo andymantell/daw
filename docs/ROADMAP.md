@@ -322,7 +322,13 @@ it is saved, or a folder the user chooses). Rendering runs in the background
 with its own copies of any plugins; practice mute, live input and the
 metronome are left out, and clipping is reported. A saved project is
 autosaved every 30 seconds. No crash recovery yet for a project that
-was never saved.*
+was never saved. Unsigned installers ([RELEASING.md](RELEASING.md)): a
+Windows installer and .zip, a Linux AppImage and .tar.gz, built by a
+release workflow into draft releases. An opt-in daily update check reads
+a signed file list and only shows a note with a link. Internal errors
+(panics) write a crash report to a local folder, with names and paths
+taken out, shown at the next start; native crashes are not caught yet.
+No macOS release yet.*
 - Export mixdown as WAV, plus per-track stems.
 - Snapshots ("Lesson 3 end") and restore. Autosave. Crash recovery.
 - Signed, notarised installers for Windows and macOS. Linux build

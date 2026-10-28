@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DAW
+Comment=Record and practise music with your teacher
+Exec=daw %F
+Icon=daw
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;

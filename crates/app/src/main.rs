@@ -11,10 +11,13 @@
 //! video. Files in other formats or at another sample rate from the
 //! device are converted in the background into a cache folder first.
 //!
+//! `daw --version` prints the version.
+//!
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
 mod comments;
+mod crash;
 mod export;
 mod fx;
 mod latency;
@@ -25,6 +28,7 @@ mod share;
 mod timeline;
 mod trainer;
 mod tuner;
+mod update;
 
 #[cfg(test)]
 mod a11y;
@@ -196,6 +200,8 @@ struct App {
     shortcuts_open: bool,
     proj: project::Proj,
     latency: latency::Latency,
+    updates: update::Updates,
+    crashes: crash::Crashes,
 }
 
 /// Every keyboard shortcut, for Help → Keyboard shortcuts. Letters work
@@ -314,6 +320,12 @@ impl App {
             shortcuts_open: false,
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
+            updates: update::Updates::new((!cfg!(test)).then(|| config_dir().join("updates.txt"))),
+            crashes: crash::Crashes::new(if cfg!(test) {
+                std::env::temp_dir().join("daw-test-no-crash-reports")
+            } else {
+                crash::reports_dir()
+            }),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -1949,6 +1961,15 @@ impl eframe::App for App {
                         self.shortcuts_open = true;
                         ui.close();
                     }
+                    ui.separator();
+                    if ui.button("Check for updates…").clicked() {
+                        self.updates.open = true;
+                        ui.close();
+                    }
+                    if ui.button("Crash reports…").clicked() {
+                        self.crashes.open = true;
+                        ui.close();
+                    }
                 });
                 ui.separator();
                 match &self.audio {
@@ -2015,6 +2036,12 @@ impl eframe::App for App {
                 });
             });
         }
+        if self.crashes.new > 0 {
+            egui::Panel::bottom("crash note").show(ui, |ui| self.crashes.note(ui));
+        }
+        if self.updates.newer().is_some() {
+            egui::Panel::bottom("update note").show(ui, |ui| self.updates.note(ui));
+        }
         egui::Panel::bottom("mixer")
             .resizable(true)
             .default_size(260.0)
@@ -2076,6 +2103,10 @@ impl eframe::App for App {
         self.perf_window(&ctx);
         self.notes_window(&ctx);
         self.shortcuts_window(&ctx);
+        self.updates.poll(&ctx);
+        self.updates.window(&ctx);
+        self.updates.ask_window(&ctx);
+        self.crashes.window(&ctx);
         self.project_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
@@ -2096,6 +2127,13 @@ fn main() -> eframe::Result {
     {
         std::process::exit(daw_plugins::scan::child_main(bundle.as_ref()));
     }
+    if let [flag] = args.as_slice()
+        && flag == "--version"
+    {
+        println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    crash::install(crash::reports_dir());
     let files: Vec<String> = args
         .iter()
         .map(|a| a.to_string_lossy().into_owned())

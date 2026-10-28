@@ -245,7 +245,7 @@ impl Export {
     }
 }
 
-fn open_folder(path: &Path) {
+pub(crate) fn open_folder(path: &Path) {
     let program = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {

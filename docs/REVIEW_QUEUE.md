@@ -377,26 +377,19 @@ is in the same download.
 
 ### Privacy and children's data (roadmap 1.8)
 
-From [PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md). It is not
-legal advice, and some questions it could not answer.
+From [PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md). On
+2026-10-28 Andy said the app is for himself and his guitar teacher, open
+sourced but not promoted to schools or children. So no professional legal
+check is planned, and these are good-practice choices, not compliance
+items.
 
-- [ ] **Professional check before public release:** have a qualified person
-      confirm the review's conclusions before the lesson features
-      (sharing, live sessions, comments) are released publicly, especially
-      whether the UK Online Safety Act applies to a serverless app. Or say
-      the review is enough for now.
 - [ ] **Rule: no personal data reaches anything we run.** No accounts,
-      telemetry, hosted relay, directory or comment store; any hosted
-      feature needs a fresh privacy review first. Adopt as a written rule
-      (a decision record), or not.
+      telemetry, hosted relay, directory or comment store. Adopt as a
+      written rule (a decision record), or not.
 - [ ] **Address lookup asked first:** the public STUN item above, with the
-      review's proposal that the app asks before first use and always
-      offers manual addresses, since children may be on either end.
+      app asking before first use and always offering manual addresses.
 - [ ] **Keys per project, not per install:** stops two projects being
-      linked to the same child by key, at the cost of a teacher not
-      recognising a student across projects by key alone. Accept, or keep
-      one key per install.
+      linked to one person by key. Accept, or keep one key per install.
 - [ ] **Real deletion out of history:** deleting a comment, note or take
-      removes it from the saved file and bundles (save without old history,
-      or compact it). Confirm this joins the 1.6 work now, ahead of
-      comments.
+      removes it from the saved file and bundles. Useful anyway; confirm it
+      joins the 1.6 work, or leave it for later.

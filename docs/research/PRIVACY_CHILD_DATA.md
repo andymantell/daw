@@ -8,8 +8,14 @@ are also listed in [REVIEW_QUEUE.md](../REVIEW_QUEUE.md).
 
 **This is not legal advice.** It summarises what regulators' own pages
 say, and marks clearly where the pages are silent or where I am drawing an
-inference. Before a public release of the lesson features, a qualified
-person should check the conclusions (see the first owner decision below).
+inference.
+
+**Scope (2026-10-28):** the app is built for the owner and his guitar
+teacher, and published as open source, but not promoted to schools or
+children. No professional legal check is planned. The design implications
+below are kept as good practice, and this review should be revisited if
+the app is ever offered to schools or children, or if any hosted service
+is added.
 
 ## Summary
 

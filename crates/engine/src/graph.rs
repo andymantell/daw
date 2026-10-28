@@ -439,6 +439,40 @@ fn read_clips(
     missing
 }
 
+/// Adds the clips' audio for `l.len()` frames from `start` into `l` and
+/// `r`, where `start` is in unwrapped play time: past the loop end it
+/// goes back round the loop. Returns how many frames of streamed audio
+/// were missing.
+fn read_looped(
+    clips: &[ClipNode],
+    streams: &[StreamNode],
+    looping: Option<(i64, i64)>,
+    start: i64,
+    l: &mut [f32],
+    r: &mut [f32],
+) -> usize {
+    let mut missing = 0;
+    let mut done = 0;
+    while done < l.len() {
+        let u = start + done as i64;
+        // Where `u` falls on the timeline, and how far until the loop
+        // sends it back.
+        let (pos, run) = match looping {
+            Some((a, b)) if u >= b && b > a => {
+                let p = a + (u - b).rem_euclid(b - a);
+                (p, (b - p) as usize)
+            }
+            Some((_, b)) if u < b => (u, (b - u) as usize),
+            _ => (u, usize::MAX),
+        };
+        let run = run.min(l.len() - done);
+        let (sl, sr) = (&mut l[done..done + run], &mut r[done..done + run]);
+        missing += read_clips(clips, streams, pos, sl, sr);
+        done += run;
+    }
+    missing
+}
+
 /// A track's clips as the stretcher reads them: by position in
 /// unwrapped play time, which goes round the loop.
 struct TrackFeed<'a> {
@@ -452,24 +486,7 @@ impl Feed for TrackFeed<'_> {
     fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
         l.fill(0.0);
         r.fill(0.0);
-        let mut done = 0;
-        while done < l.len() {
-            let u = start + done as i64;
-            // Where `u` falls on the timeline, and how far until the
-            // loop sends it back.
-            let (pos, run) = match self.looping {
-                Some((a, b)) if u >= b && b > a => {
-                    let p = a + (u - b).rem_euclid(b - a);
-                    (p, (b - p) as usize)
-                }
-                Some((_, b)) if u < b => (u, (b - u) as usize),
-                _ => (u, usize::MAX),
-            };
-            let run = run.min(l.len() - done);
-            let (sl, sr) = (&mut l[done..done + run], &mut r[done..done + run]);
-            self.missing += read_clips(self.clips, self.streams, pos, sl, sr);
-            done += run;
-        }
+        self.missing += read_looped(self.clips, self.streams, self.looping, start, l, r);
     }
 }
 
@@ -480,7 +497,6 @@ pub(crate) struct Rate {
     pub u: f64,
     pub speed: f64,
     pub semitones: f64,
-    pub looping: Option<(i64, i64)>,
     /// Start the stretchers afresh at `u` (play started, seek, loop
     /// changed).
     pub reset: bool,
@@ -684,12 +700,15 @@ impl Graph {
     /// Plays frames `[pos, pos + n)` of every track into its scratch
     /// buffers, adds monitored input, applies the mixer, and adds the
     /// tracks into `out`. With `play` false (stopped, or counting in) only
-    /// monitored input sounds. Peak levels go to `peaks` (track by track,
-    /// after the fader). Returns how many frames of streamed audio were
-    /// missing.
+    /// monitored input sounds. `looping` is the loop region while
+    /// playing: effects' latency compensation reads ahead round it. Peak
+    /// levels go to `peaks` (track by track, after the fader). Returns
+    /// how many frames of streamed audio were missing.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render(
         &mut self,
         pos: i64,
+        looping: Option<(i64, i64)>,
         out: [&mut [f32]; 2],
         peaks: &mut [(f32, f32)],
         input: InputBlock,
@@ -726,14 +745,18 @@ impl Graph {
                         let mut feed = TrackFeed {
                             clips: &t.clips,
                             streams: &self.streams,
-                            looping: rate.looping,
+                            looping,
                             missing: 0,
                         };
                         st.process(&mut feed, sl, sr);
                         missing += feed.missing;
                     }
-                    // Read ahead by the effects' latency.
-                    None => missing += read_clips(&t.clips, &self.streams, pos + t.latency, sl, sr),
+                    // Read ahead by the effects' latency, round the loop
+                    // when that runs past its end.
+                    None => {
+                        missing +=
+                            read_looped(&t.clips, &self.streams, looping, pos + t.latency, sl, sr)
+                    }
                 }
             }
 

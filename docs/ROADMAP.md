@@ -213,8 +213,7 @@ changes, and are made again with the same settings when the device or
 sample rate changes. Effects and their settings are saved in the
 project (1.6). Still to do: frozen audio for missing plugins (with
 collaboration). Known limits: effects run inside the app, so a
-plugin that crashes while playing takes the app with it; latency
-compensation glitches for that many frames where a loop wraps.*
+plugin that crashes while playing takes the app with it.*
 - Plugin scanning, run out of process so a bad plugin can't crash the app.
   A plugin manager lets users enable, disable and rescan.
 - **VST 3 effects as track inserts** (instrument plugins come in Phase 3),

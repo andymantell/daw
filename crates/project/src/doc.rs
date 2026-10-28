@@ -26,16 +26,17 @@ use loro::{
     UpdateOptions, VersionVector,
 };
 
+use crate::identity::Me;
 use crate::{
     Clip, Comment, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
 /// out of undo.
-const QUIET: &str = "quiet";
+pub(crate) const QUIET: &str = "quiet";
 
 pub struct ProjectDoc {
-    doc: LoroDoc,
+    pub(crate) doc: LoroDoc,
     undo: UndoManager,
     /// Whether the history may hold comment text that comments no longer
     /// show, so saving has to scrub it.
@@ -45,6 +46,8 @@ pub struct ProjectDoc {
     dropped: bool,
     /// The last scrubbed copy, and the version it was made at.
     scrubbed: RefCell<Option<(VersionVector, Vec<u8>)>>,
+    /// Who is editing, once signed in (see [`crate::identity`]).
+    pub(crate) me: Option<Me>,
 }
 
 impl ProjectDoc {
@@ -81,6 +84,7 @@ impl ProjectDoc {
             scrub: false,
             dropped: false,
             scrubbed: RefCell::new(None),
+            me: None,
         }
     }
 
@@ -158,23 +162,16 @@ impl ProjectDoc {
             .map_err(|e| e.to_string())
     }
 
-    /// Merges changes or a whole document from another copy.
+    /// Merges changes or a whole document from another copy, unless
+    /// they include changes from people not allowed to make them
+    /// ([`check`](Self::check)), in which case nothing is merged.
     pub fn merge(&mut self, bytes: &[u8]) -> Result<(), String> {
-        let before = self.comments().get_deep_value();
-        if let Err(e) = self.doc.import(bytes) {
-            // A copy that was scrubbed, or wasn't when this one was, holds
-            // different values for changes both have, which Loro refuses
-            // as a clash. Take only the changes this copy lacks.
-            if !matches!(e, LoroError::UsedOpID { .. }) {
-                return Err(e.to_string());
-            }
-            let theirs = LoroDoc::new();
-            theirs.import(bytes).map_err(|e| e.to_string())?;
-            let new = theirs
-                .export(ExportMode::updates(&self.doc.oplog_vv()))
-                .map_err(|e| e.to_string())?;
-            self.doc.import(&new).map_err(|e| e.to_string())?;
+        let check = self.check(bytes)?;
+        if !check.ok() {
+            return Err(format!("not merged: {}", check.reason()));
         }
+        let before = self.comments().get_deep_value();
+        import_lenient(&self.doc, bytes)?;
         // Someone else may have deleted or changed a comment, or sent
         // history that still holds old text.
         if self.comments().get_deep_value() != before {
@@ -558,6 +555,25 @@ fn shown(doc: &LoroDoc) -> Vec<(String, LoroValue)> {
 
 fn opt_str(s: &Option<String>) -> LoroValue {
     s.as_deref().map_or(LoroValue::Null, LoroValue::from)
+}
+
+/// Imports another copy into `doc`. A copy that was scrubbed, or wasn't
+/// when this one was, holds different values for changes both have,
+/// which Loro refuses as a clash: then only the changes `doc` lacks are
+/// taken.
+pub(crate) fn import_lenient(doc: &LoroDoc, bytes: &[u8]) -> Result<(), String> {
+    if let Err(e) = doc.import(bytes) {
+        if !matches!(e, LoroError::UsedOpID { .. }) {
+            return Err(e.to_string());
+        }
+        let theirs = LoroDoc::new();
+        theirs.import(bytes).map_err(|e| e.to_string())?;
+        let new = theirs
+            .export(ExportMode::updates(&doc.oplog_vv()))
+            .map_err(|e| e.to_string())?;
+        doc.import(&new).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {

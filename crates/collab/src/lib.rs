@@ -30,7 +30,8 @@ pub fn related(a: &ProjectDoc, b: &ProjectDoc) -> bool {
 /// Opens the document in a project folder, edited as `peer`: the saved
 /// document (or its backup, if damaged) with every computer's copy in
 /// `Devices` merged in. Copies that can't be read are named in the
-/// second value.
+/// second value; copies with changes from people not let in are left
+/// out.
 pub fn open_doc(
     folder_path: &Path,
     peer: u64,
@@ -46,9 +47,15 @@ pub fn open_doc(
     };
     let mut failed = Vec::new();
     for f in folder.device_files() {
-        let merged = std::fs::read(&f)
-            .map_err(|e| e.to_string())
-            .and_then(|b| doc.merge(&b));
+        let merged = std::fs::read(&f).map_err(|e| e.to_string()).and_then(|b| {
+            // Copies with changes from people the owner hasn't let in are
+            // left for the app to ask about as it watches the folder.
+            if doc.check(&b)?.ok() {
+                doc.merge(&b)
+            } else {
+                Ok(())
+            }
+        });
         if let Err(e) = merged {
             failed.push(format!("{}: {e}", f.display()));
         }

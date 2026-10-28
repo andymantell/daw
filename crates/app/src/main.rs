@@ -21,6 +21,7 @@ mod crash;
 mod export;
 mod fx;
 mod latency;
+mod people;
 mod perf;
 mod practice;
 mod project;
@@ -202,6 +203,9 @@ struct App {
     latency: latency::Latency,
     updates: update::Updates,
     crashes: crash::Crashes,
+    /// This install's identity, and the people windows.
+    me: daw_project::Identity,
+    people: people::People,
 }
 
 /// Every keyboard shortcut, for Help → Keyboard shortcuts. Letters work
@@ -326,11 +330,17 @@ impl App {
             } else {
                 crash::reports_dir()
             }),
+            me: people::load_identity(),
+            people: people::People::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
         }
         app.audio = app.open_device(eng);
+        app.sign_in();
+        if people::ask_name_at_start(&app.me) {
+            app.ask_name();
+        }
         // The empty project as it starts is not an edit.
         let start = app.project();
         app.proj.doc.set_quietly(&start);
@@ -782,7 +792,7 @@ impl App {
         if cfg!(test) {
             "me".into()
         } else {
-            share::device_id().to_string()
+            self.proj.doc.my_key().unwrap_or_default().to_string()
         }
     }
 
@@ -794,6 +804,12 @@ impl App {
             .collect();
         let at = |bar: i64| map.frames_at(map.bar_start(bar)).0;
         let me = self.my_author_id();
+        let members = self.proj.doc.members();
+        // Commenters, and people not let in yet, change only their own.
+        let any = match self.proj.doc.my_role() {
+            Some(r) => r != daw_project::Role::Commenter,
+            None => members.is_empty(),
+        };
         let cx = comments::Ctx {
             map: &map,
             playhead: self.ctl.status().position().0,
@@ -802,6 +818,8 @@ impl App {
                 .then(|| (at(self.loop_bars.0), at(self.loop_bars.1))),
             tracks: &tracks,
             me: &me,
+            members: &members,
+            may_change_any: any,
         };
         let out = self.comment_ui.panel(ui, &mut self.comments, &cx);
         if let Some(f) = out.play_from {
@@ -1888,6 +1906,14 @@ impl eframe::App for App {
                     self.project_menu(ui);
                     ui.separator();
                     self.share_menu(ui);
+                    if ui
+                        .button("People…")
+                        .on_hover_text("Who has this project, and what they may change")
+                        .clicked()
+                    {
+                        self.people.open = true;
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button("Export…").clicked() {
                         self.export.open = true;
@@ -2108,6 +2134,7 @@ impl eframe::App for App {
         self.updates.ask_window(&ctx);
         self.crashes.window(&ctx);
         self.project_windows(&ctx);
+        self.people_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.sync_doc(&ctx, false);

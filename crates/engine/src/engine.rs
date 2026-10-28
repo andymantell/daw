@@ -754,7 +754,6 @@ impl Engine {
                 u: self.u,
                 speed,
                 semitones: self.semitones,
-                looping: self.looping,
                 reset: std::mem::take(&mut self.stretch_reset),
             });
             self.render(
@@ -849,6 +848,7 @@ impl Engine {
         let tracks = g.track_count();
         let missing = g.render(
             self.pos,
+            self.looping,
             [left, right],
             &mut self.peaks[..tracks],
             input,

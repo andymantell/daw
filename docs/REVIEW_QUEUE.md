@@ -161,6 +161,9 @@ Screenshot (a 220 Hz test tone standing in for a guitar):
       (a clip-on or FL Studio's). Pass: same reading to within a couple
       of cents, steady enough to tune by, and quick to settle after each
       pluck. Try a bass's low E too if one is handy.
+- [ ] **1.4 Reference pitch in the project.** Set the tuner's A to 442,
+      save, start a new project, then reopen the first. Pass: the new
+      project starts at 440 and the reopened one is back at 442.
 - [ ] **1.4 Speed and transpose.** Screenshot:
       `/mnt/project-files/screenshots/app-speed-transpose.png`. Loop a
       tricky bar of a real song, set Speed to 75% then 50%, with the

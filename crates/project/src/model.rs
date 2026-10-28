@@ -12,6 +12,8 @@ pub struct Project {
     /// Bars, counted from 1: the loop runs from the start of the first
     /// to the start of the second.
     pub loop_bars: (i64, i64),
+    /// The tuner's reference: the pitch of the A above middle C, in Hz.
+    pub reference_hz: f64,
     pub tracks: Vec<Track>,
     /// In bar order.
     pub markers: Vec<Marker>,
@@ -26,6 +28,7 @@ impl Default for Project {
             tempo_bpm: 120.0,
             beats_per_bar: 4,
             loop_bars: (1, 5),
+            reference_hz: 440.0,
             tracks: Vec::new(),
             markers: Vec::new(),
             notes: String::new(),

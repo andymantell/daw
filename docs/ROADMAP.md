@@ -229,7 +229,7 @@ compensation glitches for that many frames where a loop wraps.*
 *Started 2026-10-28, at risk. Done so far: a chromatic tuner
 (Practice → Tuner) on any input channel, reading within a cent from a
 five-string bass's low B up, with the reference pitch setting (A = 400 to
-480 Hz); a per-track practice mute (🎧), kept apart from the mix's own
+480 Hz, saved in the project); a per-track practice mute (🎧), kept apart from the mix's own
 mute; speed 50–150% and transpose ±12 semitones plus cents, with tuning
 presets, through our own phase vocoder from spike 0.6 (a library can
 replace it if the 0.6 listening prefers one). Tracks stay in time with

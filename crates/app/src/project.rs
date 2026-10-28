@@ -119,6 +119,7 @@ impl App {
             tempo_bpm: self.tempo_bpm,
             beats_per_bar: self.beats_per_bar,
             loop_bars: self.loop_bars,
+            reference_hz: self.tuner.a4 as f64,
             notes: self.notes.clone(),
             markers: (self.markers.iter())
                 .map(|m| daw_project::Marker {
@@ -273,6 +274,7 @@ impl App {
         self.tempo_bpm = p.tempo_bpm;
         self.beats_per_bar = p.beats_per_bar;
         self.loop_bars = p.loop_bars;
+        self.tuner.a4 = p.reference_hz as f32;
         self.notes = p.notes.clone();
         self.markers = (p.markers.iter())
             .map(|m| Marker {

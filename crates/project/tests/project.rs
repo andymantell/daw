@@ -46,6 +46,7 @@ fn song() -> Project {
             name: "Verse".into(),
         }],
         notes: "Watch the bends in bar 7.".into(),
+        reference_hz: 442.0,
         ..Project::default()
     }
 }

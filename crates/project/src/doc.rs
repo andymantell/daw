@@ -144,6 +144,7 @@ impl ProjectDoc {
         w.put(&song, "beats_per_bar", p.beats_per_bar as i64);
         w.put(&song, "loop_from", p.loop_bars.0);
         w.put(&song, "loop_to", p.loop_bars.1);
+        w.put(&song, "reference_hz", p.reference_hz);
 
         let tracks = self.tracks();
         let keep: HashSet<&str> = p.tracks.iter().map(|t| t.id.as_str()).collect();
@@ -194,6 +195,7 @@ impl ProjectDoc {
                 int(s, "loop_from").unwrap_or(p.loop_bars.0),
                 int(s, "loop_to").unwrap_or(p.loop_bars.1),
             );
+            p.reference_hz = float(s, "reference_hz").unwrap_or(p.reference_hz);
         }
         let empty = LoroMapValue::default();
         let tracks = match root.get("tracks") {

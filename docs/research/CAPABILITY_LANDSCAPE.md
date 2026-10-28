@@ -43,7 +43,8 @@ end for what could not be verified.
 | Offline processing (normalise, reverse, gain) creating new assets | 2 | L | |
 | Audio follows project tempo (stretch) | 6 | H | Quality vs CPU; licence-sensitive. |
 | Stretch markers; transient detection; slicing | 6 | M | |
-| Audio quantise to grid | 6 | M | |
+| Fix timing of a take by slicing at attacks and snapping slices to the grid (auto with strength, or drag) | 2 | M | No stretching; best for percussive parts. Onset detection from published literature. |
+| Audio quantise to grid with stretch markers (auto or drag attacks onto beats) | 6 | M | Works on sustained parts; grouped tracks share markers. |
 | Tempo detection / tempo map from free performance | 6 | M | |
 | Monophonic pitch editing (pitch, drift, vibrato, formant) | 7 | H | |
 | Plugin-based direct audio editing via ARA 2 | 7 | M | Open SDK (Apache 2.0). |

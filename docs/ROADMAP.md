@@ -377,6 +377,14 @@ from audio.
 - Group editing across tracks (edit multiple drum mics together).
 - Customisable key commands with a searchable command palette.
 - Offline processing (normalise, reverse, gain) creates new assets.
+- **Fix a badly timed take, first cut** (M): detect attacks (transients) in
+  a clip, using onset-detection methods from published literature, and show
+  them as markers with a sensitivity control. Then **slice and move**: cut
+  at each attack and snap the slices to the grid, either all at once (with
+  strength, so a take can be tightened without becoming robotic) or by
+  dragging single attacks onto the beat. Crossfades cover the gaps. No time
+  stretching, so it suits percussive parts best. Works across grouped
+  tracks so multi-mic drums stay in phase. Non-destructive and undoable.
 
 ### 2.2 Recording depth (M)
 - Punch in/out (manual and range-based), pre-roll and post-roll.
@@ -442,6 +450,8 @@ from audio.
   automation and exported with no dropouts at a 128-sample buffer on the
   reference machine.
 - Delay compensation is verified by automated null tests.
+- A sloppy multi-mic drum take is tightened to the grid at 70% strength,
+  and the drum mics stay in phase.
 
 ---
 
@@ -791,12 +801,23 @@ project, especially for guitarists and singers.
 - **Stretch markers** (M), **transient detection and slicing** (M),
   **audio quantise** (M), **tempo detection / tempo map from a free
   performance** (M).
+  - **Fit a take to the beat, full version:** detected attacks become
+    stretch markers. Drag an attack onto a beat and the audio either side
+    stretches to fit, with no gaps or doubled attacks, so sustained parts
+    (strummed guitar, bass, vocals) work too. **Automatic quantise** to the
+    grid or a groove template, with strength, a window ("only move notes
+    within X ms of a beat") and a preview before applying. Add, move or
+    delete markers by hand where detection gets it wrong. Grouped tracks
+    share markers so they stay phase-locked.
 
 **Exit criteria**
 - Loops at foreign tempos follow tempo changes at ±20% with no obvious
   artefacts.
 - A student's free-tempo recording becomes a tempo map the metronome
   follows.
+- A loosely played strummed guitar take is fitted to the grid
+  automatically, then two attacks are corrected by dragging, with no
+  audible gaps or doubled attacks.
 
 ---
 

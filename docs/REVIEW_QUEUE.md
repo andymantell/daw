@@ -109,11 +109,21 @@ standing in for an interface):
       press Record (or the R key), then Space. Play along for a minute
       and stop. Pass: a Take 1 appears and plays back in time with the
       backing. Record again: Take 2 plays, and Take 1 can be chosen back.
-- [ ] **1.2 Recording offset.** Run the loopback test from the latency
-      spike (review item above) and enter its round trip as the measured
-      recording offset. Record a click track through a loopback cable and
-      check the take lines up with the original to within a millisecond.
-      Also say whether the driver-reported figure the app shows is close.
+- [ ] **1.2 Recording offset, measured in the app.** Connect output 1 to
+      input 1 of the UMC1820 with a short jack cable, input 1's gain low,
+      monitors down, direct monitoring off. Settings → Audio device, choose
+      128 samples, then Recording offset → **Measure…**, Input 1, **Start
+      measuring** (about ten seconds of chirps). Pass: it shows a round
+      trip and says it was the same every time the audio started, and the
+      offset field now holds it. Repeat at 64 and 256 samples. Then record
+      a click track through the same cable and check the take lines up
+      with the original to within a millisecond. Also say whether the
+      driver-reported figure the app shows is close, and whether the
+      result matches the 0.4 spike's report (it should be a little larger:
+      the app's figure includes its own input queue).
+      Simulated in the cloud (a software cable of 271 frames, measured as
+      271): `/mnt/project-files/screenshots/app-latency-measuring.png`,
+      `app-latency-measured.png`.
 - [ ] **1.2 Settings kept, and direct monitoring.** Apply the UMC1820
       at 128 samples, close the app and open it again: it should come
       back on the same device and settings. Then tick Monitoring → Direct

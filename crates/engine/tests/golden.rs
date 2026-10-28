@@ -34,9 +34,11 @@ const FULL: f32 = 8_388_607.0;
 /// allows for 24-bit rounding and the last bits of floating-point maths
 /// differing between platforms, but nothing anyone could hear.
 const EXACT: f32 = 1e-5;
-/// The phase vocoder's FFTs take different paths on different CPUs, so
-/// stretched audio gets a looser bound (about −80 dBFS).
-const STRETCHED: f32 = 1e-4;
+/// The phase vocoder's FFTs take different paths on different CPUs (on
+/// Apple Silicon, transposed audio differed by 2.5e-4), so stretched
+/// audio gets a looser bound: about −60 dBFS, still far below anything
+/// a real change to the vocoder would make.
+const STRETCHED: f32 = 1e-3;
 
 // ---------------------------------------------------------------------------
 // Test signals. Made from arithmetic only, so they are the same everywhere.

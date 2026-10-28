@@ -16,6 +16,7 @@
 mod export;
 mod fx;
 mod perf;
+mod project;
 mod timeline;
 mod trainer;
 mod tuner;
@@ -39,6 +40,8 @@ use fx::{Effects, FxSlot};
 use timeline::{Clip, Lane, Marker, Song};
 
 struct Track {
+    /// The track's id in the project document.
+    key: String,
     name: String,
     /// Imported files and recorded takes, in the order added (later ones
     /// draw on top).
@@ -67,6 +70,7 @@ impl Track {
 
     fn new(name: String) -> Track {
         Track {
+            key: daw_project::new_id(),
             name,
             clips: Vec::new(),
             mix: Mix::default(),
@@ -109,11 +113,14 @@ const APP_NAME: &str = "DAW";
 /// project's folder: a visible folder in the user's profile (the owner's
 /// choice, 2026-10-27), e.g. `C:\Users\<name>\DAW\Unsaved takes`.
 fn takes_dir() -> PathBuf {
+    user_dir().join(APP_NAME).join("Unsaved takes")
+}
+
+/// The user's own folder: `C:\Users\<name>` on Windows.
+fn user_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map_or_else(std::env::temp_dir, PathBuf::from)
-        .join(APP_NAME)
-        .join("Unsaved takes")
 }
 
 /// What the audio side is doing.
@@ -170,6 +177,10 @@ struct App {
     markers: Vec<Marker>,
     timeline: timeline::Timeline,
     perf: perf::Perf,
+    /// Lesson notes, and whether their window is open.
+    notes: String,
+    notes_open: bool,
+    proj: project::Proj,
 }
 
 /// How often to look for a lost device.
@@ -222,11 +233,23 @@ impl App {
             markers: Vec::new(),
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
+            notes: String::new(),
+            notes_open: false,
+            proj: project::Proj::new(),
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
+        // The empty project as it starts is not an edit.
+        let start = app.project();
+        app.proj.doc.set_quietly(&start);
+        app.apply(start);
         for f in files {
-            app.add_file(Path::new(&f));
+            let f = PathBuf::from(f);
+            if project::is_project(&f) {
+                app.open_project(f);
+            } else {
+                app.add_file(&f);
+            }
         }
         app.rebuild();
         app
@@ -347,7 +370,9 @@ impl App {
     }
 
     fn add_file(&mut self, path: &Path) {
-        self.start_import(path.to_path_buf(), false);
+        // In full, so the project can find it from anywhere.
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        self.start_import(path, false);
     }
 
     fn start_import(&mut self, path: PathBuf, reopen: bool) {
@@ -394,6 +419,8 @@ impl App {
                 Ok(source) => {
                     changed = true;
                     if im.reopen {
+                        // A new device rate, not an edit.
+                        self.proj.quiet_next = true;
                         for c in self.tracks.iter_mut().flat_map(|t| &mut t.clips) {
                             if c.path == im.path && c.source.rate != source.rate {
                                 c.reopened(source.clone());
@@ -512,11 +539,7 @@ impl App {
                 });
             }
         }
-        let base = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map_or_else(std::env::temp_dir, PathBuf::from)
-            .join(APP_NAME)
-            .join("Exports");
+        let base = user_dir().join(APP_NAME).join("Exports");
         self.export.start(&base, parts, plugins, from, frames)
     }
 
@@ -554,10 +577,6 @@ impl App {
             (Audio::Running(r), Some(p)) => r.record_offset(p),
             _ => 0,
         };
-        if takes.iter().any(|t| t.frames > 0) {
-            // Recording is an edit like any other: undo removes the take.
-            self.with_song(|tl, song| tl.will_edit(song));
-        }
         let mut any = false;
         for take in takes {
             if let Some(e) = &take.error {
@@ -636,6 +655,26 @@ impl App {
         }
     }
 
+    /// Lesson notes: plain text kept with the project (roadmap 1.7).
+    fn notes_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.notes_open;
+        egui::Window::new("Lesson notes")
+            .open(&mut open)
+            .default_size([380.0, 300.0])
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.notes)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(14)
+                            .hint_text("What to practise, chord shapes, tab…")
+                            .font(egui::TextStyle::Monospace),
+                    );
+                });
+            });
+        self.notes_open = open;
+    }
+
     /// Runs `f` on the timeline and the song it edits.
     fn with_song<R>(&mut self, f: impl FnOnce(&mut timeline::Timeline, &mut Song) -> R) -> R {
         let mut song = Song {
@@ -659,8 +698,16 @@ impl App {
             playhead: self.ctl.status().position().0,
             playing: self.ctl.status().playing(),
             loop_bars: self.looping.then_some(self.loop_bars),
+            can_undo: self.can_undo(),
+            can_redo: self.can_redo(),
         };
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
+        if out.undo {
+            self.undo(ui.ctx());
+        }
+        if out.redo {
+            self.redo(ui.ctx());
+        }
         if out.changed {
             self.rebuild();
         }
@@ -1039,10 +1086,7 @@ impl App {
             self.send(Command::SetMix { track, mix });
         }
         if let Some((i, k)) = chosen {
-            self.with_song(|tl, song| {
-                tl.will_edit(song);
-                timeline::choose_take(song.lanes[i].clips, k);
-            });
+            timeline::choose_take(&mut self.tracks[i].clips, k);
             rebuild = true;
         }
         if rebuild {
@@ -1436,7 +1480,11 @@ impl eframe::App for App {
                 .collect()
         });
         for p in dropped {
-            self.add_file(&p);
+            if project::is_project(&p) {
+                self.open_dropped(&ctx, p);
+            } else {
+                self.add_file(&p);
+            }
         }
         let mut rebuild = self.finish_imports() | self.finish_takes();
         for t in &mut self.tracks {
@@ -1471,10 +1519,15 @@ impl eframe::App for App {
             self.recording = !self.recording;
             self.send(Command::SetRecording(self.recording));
         }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
+            self.save_or_ask(&ctx);
+        }
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    self.project_menu(ui);
+                    ui.separator();
                     if ui.button("Export…").clicked() {
                         self.export.open = true;
                         ui.close();
@@ -1482,21 +1535,19 @@ impl eframe::App for App {
                 });
                 ui.menu_button("Edit", |ui| {
                     if ui
-                        .add_enabled(self.timeline.can_undo(), egui::Button::new("Undo"))
+                        .add_enabled(self.can_undo(), egui::Button::new("Undo"))
+                        .on_hover_text("Ctrl+Z")
                         .clicked()
                     {
-                        if self.with_song(|tl, song| tl.undo(song)) {
-                            self.rebuild();
-                        }
+                        self.undo(&ctx);
                         ui.close();
                     }
                     if ui
-                        .add_enabled(self.timeline.can_redo(), egui::Button::new("Redo"))
+                        .add_enabled(self.can_redo(), egui::Button::new("Redo"))
+                        .on_hover_text("Ctrl+Shift+Z")
                         .clicked()
                     {
-                        if self.with_song(|tl, song| tl.redo(song)) {
-                            self.rebuild();
-                        }
+                        self.redo(&ctx);
                         ui.close();
                     }
                     ui.separator();
@@ -1535,6 +1586,10 @@ impl eframe::App for App {
                         self.send(c);
                         ui.close();
                     }
+                    if ui.button("Lesson notes…").clicked() {
+                        self.notes_open = true;
+                        ui.close();
+                    }
                 });
                 ui.separator();
                 match &self.audio {
@@ -1562,6 +1617,10 @@ impl eframe::App for App {
                 if let Some(s) = self.effects.scanning() {
                     ui.spinner();
                     ui.label(s);
+                }
+                if self.proj.loading() {
+                    ui.spinner();
+                    ui.label("Opening project…");
                 }
                 if !self.imports.is_empty() {
                     ui.spinner();
@@ -1644,6 +1703,13 @@ impl eframe::App for App {
             }
         }
         self.perf_window(&ctx);
+        self.notes_window(&ctx);
+        self.project_windows(&ctx);
+        self.poll_loading(&ctx);
+        self.sync_doc(&ctx, false);
+        self.autosave(&ctx);
+        self.title(&ctx);
+        self.on_close(&ctx);
         if self.ctl.status().playing() {
             ctx.request_repaint();
         }

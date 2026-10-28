@@ -237,8 +237,8 @@ the transport, the metronome follows the slowed beat, and loops wrap
 smoothly; nothing records while speed or pitch is changed. A tempo
 trainer raises the speed by a step every N loops up to a target.
 Markers name sections on the timeline, and a section can be looped from
-its marker's menu (1.5). Still to do: saving the practice settings (with
-projects). Tuning presets can measure a track's
+its marker's menu (1.5). Still to do: saving the practice settings in
+projects. Tuning presets can measure a track's
 offset from concert pitch (spectral peaks against the tuner's
 reference) and offer the fine-pitch shift that corrects it; whole-step
 tunings such as E♭ read as in tune, so those stay with the presets.*
@@ -258,15 +258,20 @@ with each track's clips and waveforms; select, move, trim, split and
 delete, snapped to beats or bars (Alt places freely); markers on bar
 lines, renamed by double-click, that name sections and loop them; zoom
 and scroll; recorded takes as clips, a new take muting older takes under
-it. Undo/redo is a local history of snapshots for now: making it work
-with merged collaborator edits waits for the project document (1.6,
-decision 0004). Clips stay on their own track for now.*
+it. Undo/redo now goes through the project document (1.6). Clips stay on their own track for now.*
 - Select, move, trim, split, delete clips. Snap to beat or bar.
 - Import audio files (drag and drop).
 - Markers and named sections.
 - Undo/redo that works correctly with merged collaborator edits.
 
 ### 1.6 Collaboration — serverless (L)
+*Started 2026-10-28 after decision 0004 was accepted. Done so far: a
+project is a folder holding `project.daw` (a Loro document, with a
+`.bak` of the previous save) and `Audio/`, each file named by the hash
+of its content. Saving copies imported files in and moves takes in from
+`Unsaved takes`. Undo and redo are the document's own, per user, so
+they will work with merged edits. Still to do: bundles, shared-folder
+sync, live sessions, comments and identity.*
 - **Project = a folder on disk**: a document file plus content-addressed
   audio assets.
 - **Project bundle** export and import: a single file to send by any means.
@@ -287,6 +292,8 @@ decision 0004). Clips stay on their own track for now.*
   owner grants editor or commenter roles.
 
 ### 1.7 Lesson notes & tab (S)
+*Started 2026-10-28: Practice → Lesson notes… keeps plain-text notes in
+the project document. Rich text and tab blocks are still to do.*
 - Rich-text lesson notes per project. Plain-text tab blocks pinned to
   sections.
 
@@ -296,7 +303,9 @@ optionally each track as a stem, as 24-bit WAV at the session's rate,
 for the whole song or the loop, into a new numbered folder under
 `DAW\Exports` in the user's profile. Rendering runs in the background
 with its own copies of any plugins; practice mute, live input and the
-metronome are left out, and clipping is reported.*
+metronome are left out, and clipping is reported. A saved project is
+autosaved every 30 seconds. No crash recovery yet for a project that
+was never saved.*
 - Export mixdown as WAV, plus per-track stems.
 - Snapshots ("Lesson 3 end") and restore. Autosave. Crash recovery.
 - Signed, notarised installers for Windows and macOS. Linux build

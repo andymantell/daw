@@ -2,10 +2,8 @@
 //! The timeline (roadmap 1.5): each track's clips on a lane, with their
 //! waveforms. Select, move, trim, split and delete clips, snapped to
 //! beats or bars; markers on bar lines name the song's sections, and a
-//! section can be looped. Edits can be undone.
-//!
-//! Undo here is a plain history of snapshots, kept until the project
-//! model (decision 0004) brings its own.
+//! section can be looped. Undo belongs to the project document; the
+//! timeline only asks for it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -31,10 +29,18 @@ fn next_id() -> u64 {
 pub struct Clip {
     /// Unique for the life of the process; selection follows it.
     pub id: u64,
+    /// The clip's id in the project document.
+    pub key: String,
+    /// Its audio in the project document: an asset's name once saved,
+    /// the file's full path before.
+    pub asset: String,
     pub source: Arc<StreamSource>,
     /// The file as given: the original of a converted copy, or the take.
     /// Opened again if the device changes rate.
     pub path: PathBuf,
+    /// What the file was called when it came in; the saved copy is named
+    /// by its content.
+    pub label: String,
     /// Where it plays on the timeline, in frames.
     pub start: i64,
     /// The first frame of the source that plays.
@@ -56,6 +62,11 @@ impl Clip {
     pub fn new(source: Arc<StreamSource>, path: PathBuf, start: i64, take: Option<usize>) -> Clip {
         let mut c = Clip {
             id: next_id(),
+            key: daw_project::new_id(),
+            asset: path.to_string_lossy().into_owned(),
+            label: path
+                .file_stem()
+                .map_or(String::new(), |s| s.to_string_lossy().into_owned()),
             len: source.frames,
             source,
             path,
@@ -113,6 +124,7 @@ impl Clip {
         a.len = first;
         let mut b = self.clone();
         b.id = next_id();
+        b.key = daw_project::new_id();
         b.start = at;
         b.offset += first;
         b.len -= first;
@@ -130,13 +142,9 @@ impl Clip {
     }
 
     pub fn name(&self) -> String {
-        let stem = self
-            .path
-            .file_stem()
-            .map_or(String::new(), |s| s.to_string_lossy().into_owned());
         match self.take {
             Some(t) => format!("Take {}", t + 1),
-            None => stem,
+            None => self.label.clone(),
         }
     }
 }
@@ -233,6 +241,7 @@ pub fn snap(map: &TempoMap, frames: i64, snap: Snap) -> i64 {
 /// the next marker.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Marker {
+    pub id: String,
     /// Counted from 1.
     pub bar: i64,
     pub name: String,
@@ -248,6 +257,7 @@ pub fn add_marker(markers: &mut Vec<Marker>, bar: i64) -> bool {
             markers.insert(
                 i,
                 Marker {
+                    id: daw_project::new_id(),
                     bar,
                     name: section_name(markers.len()),
                 },
@@ -271,54 +281,6 @@ pub fn section(markers: &[Marker], i: usize, end_bar: i64) -> (i64, i64) {
     (from, to.max(from + 1))
 }
 
-/// The clips of every track and the markers, as they were before an edit.
-#[derive(Clone)]
-pub struct Snapshot {
-    clips: Vec<Vec<Clip>>,
-    markers: Vec<Marker>,
-}
-
-/// Edits to undo and redo.
-#[derive(Default)]
-pub struct History {
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
-}
-
-/// Edits remembered for undo.
-const HISTORY: usize = 200;
-
-impl History {
-    /// Records the state before an edit.
-    pub fn push(&mut self, before: Snapshot) {
-        self.undo.push(before);
-        if self.undo.len() > HISTORY {
-            self.undo.remove(0);
-        }
-        self.redo.clear();
-    }
-
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
-    }
-
-    fn undo(&mut self, now: Snapshot) -> Option<Snapshot> {
-        let s = self.undo.pop()?;
-        self.redo.push(now);
-        Some(s)
-    }
-
-    fn redo(&mut self, now: Snapshot) -> Option<Snapshot> {
-        let s = self.redo.pop()?;
-        self.undo.push(now);
-        Some(s)
-    }
-}
-
 /// One track as the timeline sees it.
 pub struct Lane<'a> {
     pub name: &'a str,
@@ -332,21 +294,6 @@ pub struct Song<'a> {
 }
 
 impl Song<'_> {
-    pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            clips: self.lanes.iter().map(|l| l.clips.clone()).collect(),
-            markers: self.markers.clone(),
-        }
-    }
-
-    /// Puts a snapshot back. Tracks added since keep their clips.
-    fn restore(&mut self, s: Snapshot) {
-        for (lane, clips) in self.lanes.iter_mut().zip(s.clips) {
-            *lane.clips = clips;
-        }
-        *self.markers = s.markers;
-    }
-
     fn find_mut(&mut self, id: u64) -> Option<&mut Clip> {
         self.lanes
             .iter_mut()
@@ -372,6 +319,8 @@ pub struct View<'a> {
     pub playhead: i64,
     pub playing: bool,
     pub loop_bars: Option<(i64, i64)>,
+    pub can_undo: bool,
+    pub can_redo: bool,
 }
 
 /// What the app should do after the timeline is drawn.
@@ -382,6 +331,8 @@ pub struct Outcome {
     pub seek: Option<i64>,
     /// Loop these bars.
     pub loop_bars: Option<(i64, i64)>,
+    pub undo: bool,
+    pub redo: bool,
 }
 
 /// Frames between waveform peaks at the finest level.
@@ -489,7 +440,6 @@ struct Drag {
     anchor: u64,
     /// Timeline frame under the pointer when pressed.
     from: i64,
-    before: Snapshot,
     /// The clips being dragged, as they were.
     originals: Vec<Clip>,
     moved: bool,
@@ -504,7 +454,6 @@ pub struct Timeline {
     vscroll: f32,
     pub snap: Snap,
     pub selected: HashSet<u64>,
-    pub history: History,
     drag: Option<Drag>,
     /// Scrubbing the playhead along the ruler.
     scrubbing: bool,
@@ -525,7 +474,6 @@ impl Default for Timeline {
             vscroll: 0.0,
             snap: Snap::default(),
             selected: HashSet::new(),
-            history: History::default(),
             drag: None,
             scrubbing: false,
             waves: Waveforms::default(),
@@ -552,38 +500,9 @@ const COLOURS: [Color32; 6] = [
 ];
 
 impl Timeline {
-    pub fn can_undo(&self) -> bool {
-        self.history.can_undo()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.history.can_redo()
-    }
-
-    pub fn undo(&mut self, song: &mut Song) -> bool {
-        match self.history.undo(song.snapshot()) {
-            Some(s) => {
-                song.restore(s);
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub fn redo(&mut self, song: &mut Song) -> bool {
-        match self.history.redo(song.snapshot()) {
-            Some(s) => {
-                song.restore(s);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Splits the selected clips at `at`, or, with none selected, every
     /// playing clip there. True if any were split.
     pub fn split_at(&mut self, song: &mut Song, at: i64) -> bool {
-        let before = song.snapshot();
         let mut any = false;
         let all = self.selected.is_empty();
         for lane in &mut song.lanes {
@@ -607,9 +526,6 @@ impl Timeline {
                 i += 1;
             }
         }
-        if any {
-            self.history.push(before);
-        }
         any
     }
 
@@ -618,7 +534,6 @@ impl Timeline {
         if self.selected.is_empty() {
             return false;
         }
-        let before = song.snapshot();
         let mut any = false;
         for lane in &mut song.lanes {
             let n = lane.clips.len();
@@ -626,24 +541,11 @@ impl Timeline {
             any |= lane.clips.len() != n;
         }
         self.selected.clear();
-        if any {
-            self.history.push(before);
-        }
         any
     }
 
-    /// Adds a marker at `bar`, undoably.
     pub fn add_marker(&mut self, song: &mut Song, bar: i64) {
-        let before = song.snapshot();
-        if add_marker(song.markers, bar) {
-            self.history.push(before);
-        }
-    }
-
-    /// Records the song as it is before an edit made elsewhere (a new
-    /// take, say), so it can be undone.
-    pub fn will_edit(&mut self, song: &Song) {
-        self.history.push(song.snapshot());
+        add_marker(song.markers, bar);
     }
 
     /// The bar the playhead is in.
@@ -665,10 +567,10 @@ impl Timeline {
         if ctx.input_mut(|i| {
             i.consume_key(shift_cmd, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y)
         }) {
-            out.changed |= self.redo(song);
+            out.redo = true;
         }
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Z)) {
-            out.changed |= self.undo(song);
+            out.undo = true;
         }
         if ctx.input_mut(|i| {
             i.consume_key(Modifiers::NONE, Key::Delete)
@@ -749,18 +651,18 @@ impl Timeline {
             }
             ui.separator();
             if ui
-                .add_enabled(self.can_undo(), egui::Button::new("↶"))
+                .add_enabled(view.can_undo, egui::Button::new("↶"))
                 .on_hover_text("Undo (Ctrl+Z)")
                 .clicked()
             {
-                out.changed |= self.undo(song);
+                out.undo = true;
             }
             if ui
-                .add_enabled(self.can_redo(), egui::Button::new("↷"))
+                .add_enabled(view.can_redo, egui::Button::new("↷"))
                 .on_hover_text("Redo (Ctrl+Shift+Z)")
                 .clicked()
             {
-                out.changed |= self.redo(song);
+                out.redo = true;
             }
         });
     }
@@ -917,7 +819,6 @@ impl Timeline {
                         zone,
                         anchor: id,
                         from: frame_of(p.x),
-                        before: song.snapshot(),
                         originals: held,
                         moved: false,
                     });
@@ -973,7 +874,6 @@ impl Timeline {
             if let Some(d) = self.drag.take()
                 && d.moved
             {
-                self.history.push(d.before);
                 out.changed = true;
             }
         }
@@ -1233,7 +1133,6 @@ impl Timeline {
                     ui.close();
                 }
                 if ui.button("Delete marker").clicked() {
-                    self.history.push(song.snapshot());
                     song.markers.remove(i);
                     ui.close();
                 }
@@ -1275,7 +1174,6 @@ impl Timeline {
             if keep && done {
                 let name = text.trim().to_string();
                 if !name.is_empty() && song.markers[i].name != name {
-                    self.history.push(song.snapshot());
                     song.markers[i].name = name;
                 }
             } else if keep {
@@ -1407,8 +1305,8 @@ mod tests {
     }
 
     #[test]
-    fn undo_and_redo_restore_clips_and_markers() {
-        let mut clips = vec![clip(0, 10_000)];
+    fn splitting_at_the_playhead_takes_the_selection_or_everything() {
+        let mut clips = vec![clip(0, 10_000), clip(20_000, 10_000)];
         let mut markers = Vec::new();
         let mut tl = Timeline::default();
         let mut song = Song {
@@ -1419,20 +1317,18 @@ mod tests {
             markers: &mut markers,
         };
         assert!(tl.split_at(&mut song, 5000));
-        tl.add_marker(&mut song, 3);
-        assert_eq!(song.lanes[0].clips.len(), 2);
-        assert!(tl.undo(&mut song));
-        assert!(song.markers.is_empty());
-        assert!(tl.undo(&mut song));
-        assert_eq!(song.lanes[0].clips.len(), 1);
-        assert!(!tl.undo(&mut song));
-        assert!(tl.redo(&mut song));
-        assert_eq!(song.lanes[0].clips.len(), 2);
-        // A new edit forgets what could be redone.
-        tl.selected.insert(song.lanes[0].clips[0].id);
+        assert_eq!(song.lanes[0].clips.len(), 3);
+        let keys: HashSet<&str> = song.lanes[0].clips.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(keys.len(), 3, "the new half has its own key");
+        tl.selected.insert(song.lanes[0].clips[2].id);
+        assert!(
+            !tl.split_at(&mut song, 2000),
+            "only the selected clip, which isn't there"
+        );
         assert!(tl.delete_selected(&mut song));
-        assert!(!tl.can_redo());
-        assert_eq!(song.lanes[0].clips.len(), 1);
+        assert_eq!(song.lanes[0].clips.len(), 2);
+        tl.add_marker(&mut song, 3);
+        assert_eq!(song.markers.len(), 1);
     }
 
     #[test]

@@ -237,6 +237,39 @@ mean nothing).
       the DSP load is well under 100%. Note the load and peak figures
       either way, and try 64 if 128 passes easily.
 
+### Phase 1 app: projects
+
+Screenshots: `/mnt/project-files/screenshots/app-save-project.png`,
+`app-open-project.png`, `app-project-reopened.png` (tracks, split clips,
+the Section A marker, a recorded take and a plugin's gain all came
+back) and `app-lesson-notes.png`. Projects live in
+`%USERPROFILE%\DAW\Projects`, one folder each.
+
+- [ ] **1.6 Save and open.** Drop in a backing and a guitar file, record
+      a take, split a clip, add a marker and a plugin with a changed
+      setting, then Ctrl+S and give it a name. File → New project, then
+      File → Open project… and click it. Pass: everything comes back as
+      it was, including the plugin's setting, and the window title shows
+      the project's name.
+- [ ] **1.6 Audio in the folder.** Look in the project's folder. Pass:
+      `project.daw`, `project.daw.bak` after a second save, and an
+      `Audio` folder holding a copy of each imported file and the
+      recorded takes (moved out of `DAW\Unsaved takes`, which is left
+      empty). Say if a take was copied rather than moved: on Windows a
+      file still open for playback may not move.
+- [ ] **1.6 Autosave and quitting.** Make an edit to a saved project, wait
+      30 seconds, and check `project.daw`'s modified time. Then make an
+      edit and close the window. Pass: the file updates by itself, and
+      closing an unsaved new project asks to save, discard or cancel.
+- [ ] **1.6 Undo through the document.** Repeat the 1.5 Undo check on a
+      saved project, then save, reopen and undo. Pass: undo works as
+      before; after reopening there is nothing to undo (history is per
+      run of the app, as decision 0004 says).
+- [ ] **1.7 Lesson notes.** Practice → Lesson notes…, type a few lines,
+      save, reopen. Pass: the notes come back. They are plain text for
+      now; say what you would want first: headings, tab blocks pinned
+      to sections, or something else.
+
 ## On other networks
 
 Spike 0.5, live sessions without a server

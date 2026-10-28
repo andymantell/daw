@@ -21,6 +21,8 @@ pub struct FxSlot {
     editor: Option<daw_plugins::editor_win::EditorWindow>,
     /// Matches the engine's insert id.
     pub id: u64,
+    /// The effect's id in the project document.
+    pub key: String,
     pub name: String,
     pub bundle: PathBuf,
     pub cid: vst3::Steinberg::TUID,
@@ -32,6 +34,20 @@ pub struct FxSlot {
 }
 
 impl FxSlot {
+    /// The plugin's own settings, for saving.
+    pub fn state(&self) -> Option<daw_project::EffectState> {
+        let s = self.plugin.save_state().ok()?;
+        Some(daw_project::EffectState {
+            component: s.component,
+            controller: s.controller,
+        })
+    }
+
+    /// The class id as bytes, for the project document.
+    pub fn class(&self) -> Vec<u8> {
+        self.cid.iter().map(|&b| b as u8).collect()
+    }
+
     pub fn spec(&self) -> InsertSpec {
         InsertSpec {
             id: self.id,
@@ -209,9 +225,19 @@ impl Effects {
     /// Makes a new effect; its audio side waits in `pending` for the
     /// next graph.
     pub fn create(&mut self, a: &Available, rate: u32) -> Result<FxSlot, String> {
-        let module = self.module(&a.bundle)?;
+        self.make(&a.bundle, a.class.cid, &a.class.name, rate)
+    }
+
+    fn make(
+        &mut self,
+        bundle: &Path,
+        cid: vst3::Steinberg::TUID,
+        name: &str,
+        rate: u32,
+    ) -> Result<FxSlot, String> {
+        let module = self.module(bundle)?;
         let (plugin, processor) =
-            daw_plugins::instantiate(module, &a.class.cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
+            daw_plugins::instantiate(module, &cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
         let id = self.next_id;
         self.next_id += 1;
         self.pending.push((id, Box::new(processor)));
@@ -219,14 +245,49 @@ impl Effects {
             #[cfg(windows)]
             editor: None,
             id,
-            name: a.class.name.clone(),
-            bundle: a.bundle.clone(),
-            cid: a.class.cid,
+            key: daw_project::new_id(),
+            name: name.to_string(),
+            bundle: bundle.to_path_buf(),
+            cid,
             bypass: false,
             latency: plugin.latency(),
             show_params: false,
             plugin,
         })
+    }
+
+    /// Makes an effect saved in a project, with its settings. The plugin
+    /// is found by its class id among those installed here, or else
+    /// where it was when saved.
+    pub fn restore(&mut self, e: &daw_project::Effect, rate: u32) -> Result<FxSlot, String> {
+        let mut cid: vst3::Steinberg::TUID = Default::default();
+        if e.class.len() != cid.len() {
+            return Err("its plugin id is damaged".into());
+        }
+        for (c, &b) in cid.iter_mut().zip(&e.class) {
+            *c = b as _;
+        }
+        let bundle = self
+            .list
+            .plugins()
+            .into_iter()
+            .find(|a| a.class.cid == cid)
+            .map(|a| a.bundle)
+            .unwrap_or_else(|| PathBuf::from(&e.bundle));
+        if !bundle.exists() {
+            return Err("its plugin isn't installed on this computer".into());
+        }
+        let mut slot = self.make(&bundle, cid, &e.name, rate)?;
+        slot.key = e.id.clone();
+        slot.bypass = e.bypass;
+        if let Some(s) = &e.state {
+            slot.plugin.load_state(&daw_plugins::PluginState {
+                component: s.component.clone(),
+                controller: s.controller.clone(),
+            })?;
+            slot.latency = slot.plugin.latency();
+        }
+        Ok(slot)
     }
 
     /// Makes `slot`'s plugin again for a new engine or sample rate,

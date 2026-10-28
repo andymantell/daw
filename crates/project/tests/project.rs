@@ -285,4 +285,10 @@ fn audio_is_stored_once_by_content_and_takes_are_moved_in() {
     let t = f.add_asset(&other, true).unwrap();
     assert!(!other.exists(), "takes are moved");
     assert_eq!(std::fs::read(f.asset(&t)).unwrap(), b"a take");
+    assert!(f.has_asset(&t));
+    assert!(
+        !f.has_asset(&other.to_string_lossy()),
+        "a path elsewhere is not an asset"
+    );
+    assert!(!f.has_asset("missing.wav"));
 }

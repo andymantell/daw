@@ -85,6 +85,12 @@ impl ProjectFolder {
         self.dir.join(ASSETS).join(name)
     }
 
+    /// Whether `name` is an asset in this project: a plain file name
+    /// (not a path to somewhere else) that is there.
+    pub fn has_asset(&self, name: &str) -> bool {
+        Path::new(name).file_name().is_some_and(|n| n == name) && self.asset(name).exists()
+    }
+
     /// Brings `src` into the project's audio, copied (or moved, if
     /// `take` is set and it can be renamed), and returns its asset name.
     pub fn add_asset(&self, src: &Path, take: bool) -> Result<String, String> {

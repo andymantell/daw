@@ -1016,6 +1016,7 @@ dependencies = [
  "daw-audio-io",
  "daw-engine",
  "daw-plugins",
+ "daw-project",
  "eframe",
  "hound",
  "vst3",

@@ -60,3 +60,13 @@ and a comparison with WebRTC data channels.
 Concurrent edits, offline merge, per-user undo, document size for a
 200-track project, and connection success rates across home broadband,
 mobile hotspot and a strict network.
+
+## Follow-up: real deletion (2026-10-28)
+The document keeps its whole history, so deleted text could be read back
+from a saved file. For comments, saving now blanks out of the history
+every value a comment no longer shows (all of a deleted comment, and the
+earlier text of a changed one), in the project file, its backup and
+bundles. Changes keep their ids, so scrubbed and unscrubbed copies still
+merge; Loro refuses an import whose already-known changes hold different
+values, so merging falls back to taking only the changes this copy lacks.
+Lesson notes and takes are still to do.

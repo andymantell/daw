@@ -147,6 +147,7 @@ impl App {
                 })
                 .collect(),
             tracks: self.tracks.iter().map(|t| self.track_value(t)).collect(),
+            comments: self.comments.clone(),
         }
     }
 
@@ -295,6 +296,7 @@ impl App {
         self.loop_bars = p.loop_bars;
         self.tuner.a4 = p.reference_hz as f32;
         self.notes = p.notes.clone();
+        self.comments = p.comments.clone();
         self.markers = (p.markers.iter())
             .map(|m| Marker {
                 id: m.id.clone(),
@@ -464,7 +466,11 @@ impl App {
         self.proj.doc.set_quietly(&p);
         self.proj.committed = self.project();
         let bytes = self.proj.doc.to_bytes();
-        folder.save(&bytes)?;
+        if self.proj.doc.take_dropped() {
+            folder.save_dropping_backup(&bytes)?;
+        } else {
+            folder.save(&bytes)?;
+        }
         self.save_device_copy(&folder, &bytes)?;
         self.proj.dirty = false;
         self.proj.last_save = Instant::now();

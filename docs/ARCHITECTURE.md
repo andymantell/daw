@@ -84,6 +84,11 @@ My Lesson.project/              (folder; a tar of it is a bundle)
 - Stable unique IDs for all entities. Ordering uses CRDT lists or
   fractional indices.
 - **Per-user undo**, scoped to the user's own changes.
+- **Real deletion:** saved files and bundles blank out of the history
+  the text of deleted comments and the earlier text of changed ones, so
+  it can't be read back. Changes keep their ids, so a scrubbed copy
+  still merges with one that wasn't; when the two disagree on a value
+  both already have, the merge takes only the changes it lacks.
 - **Ephemeral state** (presence, playheads, selections, follow mode) is
   sent over the session channel and not stored.
 - **Time:** musical positions in integer ticks (**960 PPQ**), absolute

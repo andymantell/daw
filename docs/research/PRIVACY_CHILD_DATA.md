@@ -280,7 +280,10 @@ owner decisions.
     history, so this needs a way to save without the old history (or to
     compact it), and bundles must be built the same way. This is the
     biggest gap for the right to erasure. Note it in decision 0004's
-    follow-up work.
+    follow-up work. *Done for comments (2026-10-28): saving blanks the
+    values of deleted comments, and earlier text of edited ones, out of
+    the history; every change keeps its id, so scrubbed copies still
+    merge with copies that weren't. Notes and takes are still to do.*
 12. **Per-person data tools.** The owner can list, export and delete
     everything one member contributed to a project (takes, comments, notes,
     their name in history). A member can see the same list for themselves.

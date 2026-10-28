@@ -281,8 +281,13 @@ and its audio), and importing one
 merges it into the user's copy of that project, or makes a new project.
 Shared-folder sync: each computer writes its own copy of the document
 into the folder's `Devices` folder within seconds of an edit and merges
-other computers' copies as they arrive. Still to do: live sessions,
-comments and identity.*
+other computers' copies as they arrive. Comments: Practice → Comments…
+or right-click the timeline to pin a comment to a time or a stretch of
+time on a track or the whole song, with replies, resolve and play from
+there; pins show on the timeline. Deleting a comment, or changing its
+text, blanks the old words out of the saved history, the backup and
+bundles. Still to do: live sessions and identity (comments show "You" or
+"Someone else" until then).*
 - **Project = a folder on disk**: a document file plus content-addressed
   audio assets.
 - **Project bundle** export and import: a single file to send by any means.

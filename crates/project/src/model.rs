@@ -19,6 +19,8 @@ pub struct Project {
     pub markers: Vec<Marker>,
     /// Lesson notes, plain text.
     pub notes: String,
+    /// Pinned comments and their replies, oldest first.
+    pub comments: Vec<Comment>,
 }
 
 impl Default for Project {
@@ -32,6 +34,7 @@ impl Default for Project {
             tracks: Vec::new(),
             markers: Vec::new(),
             notes: String::new(),
+            comments: Vec::new(),
         }
     }
 }
@@ -162,4 +165,27 @@ impl Default for TrainerSettings {
             target: 100.0,
         }
     }
+}
+
+/// A comment pinned to a time on a track or the whole timeline, or a
+/// reply to one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Comment {
+    pub id: String,
+    /// Who wrote it: the member's public key, as hex. Empty when written
+    /// before the project had members.
+    pub author: String,
+    /// The comment this replies to, or `None` for the first comment of a
+    /// thread. A reply's own track, times and `resolved` are not used.
+    pub parent: Option<String>,
+    /// The track it is pinned to, or `None` for the whole timeline.
+    pub track: Option<String>,
+    /// Where it is pinned, in frames at the project's rate: a point, or
+    /// a range when `end` is set.
+    pub start: i64,
+    pub end: Option<i64>,
+    pub text: String,
+    pub resolved: bool,
+    /// When it was written, in milliseconds since 1970, for ordering.
+    pub created: i64,
 }

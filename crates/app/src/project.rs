@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Projects in the app (roadmap 1.6 and 1.8): the project document kept
 //! in step with what is on screen, undo and redo through it, saving into
-//! a project folder (takes and imported audio move in), opening, and
-//! autosave.
+//! a project folder (takes and imported audio move in), opening,
+//! autosave, and crash recovery for a project never saved.
 //!
 //! Edits are made to the app's own model as before. Each frame, once no
 //! button is held and no text is being typed, the model is compared with
 //! what was last written to the document, and any difference is written
 //! as one undoable edit. A drag or a burst of typing is one step.
+//!
+//! A project with no folder yet is written now and then to a recovery
+//! file in the user's profile, and removed again once it is saved or
+//! deliberately left. If the app stops without doing either (a crash, a
+//! power cut), the next start offers to bring it back. Its audio is
+//! named by full path (takes stay in `Unsaved takes` until a save), so
+//! it comes back with it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -30,9 +37,22 @@ use crate::{APP_NAME, App, Track, cache_dir, takes_dir, user_dir};
 /// How often a saved project is saved again while it changes.
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(30);
 
+/// How often a project never saved is written to the recovery file
+/// while it changes: more often than autosave, as nothing else holds it.
+const RECOVER_EVERY: Duration = Duration::from_secs(10);
+
 /// Where new projects go: e.g. `C:\Users\<name>\DAW\Projects`.
 pub fn projects_dir() -> PathBuf {
     user_dir().join(APP_NAME).join("Projects")
+}
+
+/// Where a project never saved is kept in case the app stops: e.g.
+/// `C:\Users\<name>\DAW\Recovery\Unsaved project.daw`.
+pub fn recovery_file() -> PathBuf {
+    user_dir()
+        .join(APP_NAME)
+        .join("Recovery")
+        .join("Unsaved project.daw")
 }
 
 /// What to do once unsaved changes are dealt with.
@@ -41,6 +61,17 @@ pub enum After {
     New,
     Open(PathBuf),
     Quit,
+    /// Bring back the project found in the recovery file.
+    Recover,
+}
+
+/// A project found in the recovery file at start, waiting for the user
+/// to restore or discard it.
+pub struct Found {
+    doc: ProjectDoc,
+    /// How long ago it was last written, and what it holds.
+    pub age: Duration,
+    pub summary: String,
 }
 
 pub enum Dialog {
@@ -93,6 +124,15 @@ pub struct Proj {
     /// The window may close: unsaved changes have been dealt with.
     may_close: bool,
     title: String,
+    /// Where a project never saved is kept in case the app stops; none
+    /// in tests, which must not touch the user's own.
+    pub(crate) recovery: Option<PathBuf>,
+    /// The document's version as last written there.
+    recovery_version: Vec<u8>,
+    last_recovery: Instant,
+    /// What was found there at start, until the user decides. Nothing
+    /// is written there meanwhile, so it isn't lost.
+    pub(crate) found: Option<Found>,
 }
 
 impl Proj {
@@ -120,6 +160,10 @@ impl Proj {
             quiet_next: false,
             may_close: false,
             title: String::new(),
+            recovery: (!cfg!(test)).then(recovery_file),
+            recovery_version: Vec::new(),
+            last_recovery: Instant::now(),
+            found: None,
         }
     }
 
@@ -456,7 +500,25 @@ impl App {
             self.proj.moved.insert(old, name);
         }
         self.rebuild();
-        // Not an edit: kept out of undo.
+        self.write_plugin_states();
+        let bytes = self.proj.doc.to_bytes();
+        if self.proj.doc.take_dropped() {
+            folder.save_dropping_backup(&bytes)?;
+        } else {
+            folder.save(&bytes)?;
+        }
+        self.save_device_copy(&folder, &bytes)?;
+        // Saved now, so nothing to recover.
+        self.discard_recovery();
+        self.proj.dirty = false;
+        self.proj.last_save = Instant::now();
+        self.watch_folder();
+        Ok(())
+    }
+
+    /// Reads each plugin's settings into the document. Not an edit:
+    /// kept out of undo.
+    fn write_plugin_states(&mut self) {
         let mut p = self.project();
         for (pt, t) in p.tracks.iter_mut().zip(&self.tracks) {
             for (pe, s) in pt.effects.iter_mut().zip(&t.fx) {
@@ -465,17 +527,6 @@ impl App {
         }
         self.proj.doc.set_quietly(&p);
         self.proj.committed = self.project();
-        let bytes = self.proj.doc.to_bytes();
-        if self.proj.doc.take_dropped() {
-            folder.save_dropping_backup(&bytes)?;
-        } else {
-            folder.save(&bytes)?;
-        }
-        self.save_device_copy(&folder, &bytes)?;
-        self.proj.dirty = false;
-        self.proj.last_save = Instant::now();
-        self.watch_folder();
-        Ok(())
     }
 
     /// Makes a project folder called `name` and saves into it.
@@ -513,6 +564,128 @@ impl App {
             // Try again later either way.
             self.proj.last_save = Instant::now();
         }
+        if self.proj.folder.is_none()
+            && self.proj.dirty
+            && !self.recording
+            && self.proj.last_recovery.elapsed() >= RECOVER_EVERY
+            && !ctx.input(|i| i.pointer.any_down())
+        {
+            if let Err(e) = self.write_recovery() {
+                self.message = Some(format!("Couldn't keep a recovery copy: {e}"));
+            }
+            self.proj.last_recovery = Instant::now();
+        }
+        // The window only redraws when something happens, so ask to be
+        // woken when the next save or recovery copy is due.
+        if self.proj.dirty {
+            let (every, last) = match self.proj.folder {
+                Some(_) => (AUTOSAVE_EVERY, self.proj.last_save),
+                None => (RECOVER_EVERY, self.proj.last_recovery),
+            };
+            let due = every.saturating_sub(last.elapsed());
+            ctx.request_repaint_after(due.max(Duration::from_millis(500)));
+        }
+    }
+
+    /// Writes a project never saved to the recovery file, if it changed
+    /// since last time, whole or not at all.
+    pub(crate) fn write_recovery(&mut self) -> Result<(), String> {
+        if self.proj.found.is_some() || self.proj.loading() {
+            return Ok(());
+        }
+        let Some(path) = self.proj.recovery.clone() else {
+            return Ok(());
+        };
+        self.write_plugin_states();
+        let version = self.proj.doc.version();
+        if version == self.proj.recovery_version {
+            return Ok(());
+        }
+        let err = |e: std::io::Error| format!("{}: {e}", path.display());
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(err)?;
+        }
+        let tmp = path.with_extension("daw.tmp");
+        std::fs::write(&tmp, self.proj.doc.to_bytes()).map_err(err)?;
+        std::fs::rename(&tmp, &path).map_err(err)?;
+        self.proj.recovery_version = version;
+        Ok(())
+    }
+
+    /// Removes the recovery file: the project in it was saved or
+    /// deliberately left. Kept while the user hasn't yet decided about
+    /// one found at start.
+    fn discard_recovery(&mut self) {
+        if self.proj.found.is_some() {
+            return;
+        }
+        if let Some(path) = &self.proj.recovery {
+            let _ = std::fs::remove_file(path);
+        }
+        self.proj.recovery_version.clear();
+    }
+
+    /// Looks for a project left in the recovery file by a run of the app
+    /// that stopped without saving or leaving it, to offer it back.
+    pub(crate) fn look_for_recovery(&mut self) {
+        let Some(path) = &self.proj.recovery else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let age = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .unwrap_or_default();
+        let Ok(doc) = ProjectDoc::from_bytes(&bytes, daw_project::new_peer()) else {
+            // Damaged, perhaps cut off mid-write by the crash itself:
+            // kept for the curious, but not offered.
+            let _ = std::fs::rename(path, path.with_extension("daw.damaged"));
+            return;
+        };
+        let p = doc.get();
+        if p.tracks.is_empty() && p.markers.is_empty() && p.notes.trim().is_empty() {
+            let _ = std::fs::remove_file(path);
+            return;
+        }
+        let clips = p.tracks.iter().map(|t| t.clips.len()).sum::<usize>();
+        let summary = format!(
+            "{} {}, {} {}",
+            p.tracks.len(),
+            if p.tracks.len() == 1 {
+                "track"
+            } else {
+                "tracks"
+            },
+            clips,
+            if clips == 1 { "clip" } else { "clips" },
+        );
+        self.proj.found = Some(Found { doc, age, summary });
+    }
+
+    /// Brings back the project found in the recovery file, unsaved.
+    fn recover(&mut self) {
+        let Some(found) = self.proj.found.take() else {
+            return;
+        };
+        self.send(Command::Stop);
+        self.send(Command::Seek(Frames(0)));
+        self.tracks.clear();
+        self.timeline.selected.clear();
+        let mut proj = Proj::new();
+        proj.recovery = self.proj.recovery.take();
+        proj.doc = found.doc;
+        proj.recovery_version = proj.doc.version();
+        self.proj = proj;
+        self.sign_in();
+        self.apply(self.proj.doc.get());
+        // Unsaved, so it asks before being left and stays recoverable.
+        self.proj.dirty = true;
+        if self.message.is_none() {
+            self.message = Some("Brought back the unsaved project. Save it to keep it.".into());
+        }
     }
 
     /// Starts afresh with an empty, unsaved project.
@@ -520,7 +693,10 @@ impl App {
         self.send(Command::Stop);
         self.send(Command::Seek(Frames(0)));
         self.tracks.clear();
-        self.proj = Proj::new();
+        let mut proj = Proj::new();
+        proj.found = self.proj.found.take();
+        proj.recovery = self.proj.recovery.take();
+        self.proj = proj;
         self.sign_in();
         self.apply(Project {
             rate: self.rate,
@@ -561,6 +737,8 @@ impl App {
                 self.tracks.clear();
                 self.timeline.selected.clear();
                 let mut proj = Proj::new();
+                proj.found = self.proj.found.take();
+                proj.recovery = self.proj.recovery.take();
                 proj.doc = l.doc;
                 proj.folder = Some(l.folder);
                 proj.sources = l.sources;
@@ -598,9 +776,14 @@ impl App {
     }
 
     fn go(&mut self, ctx: &egui::Context, then: After) {
+        // The project being left was saved or let go on purpose.
+        if self.proj.folder.is_none() && !matches!(then, After::Recover) {
+            self.discard_recovery();
+        }
         match then {
             After::New => self.new_project(),
             After::Open(p) => self.open_project(p),
+            After::Recover => self.recover(),
             After::Quit => {
                 self.proj.may_close = true;
                 ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -670,8 +853,45 @@ impl App {
         }
     }
 
-    /// The save, open and unsaved-changes windows.
+    /// The offer to bring back a project found in the recovery file.
+    fn recovery_window(&mut self, ctx: &egui::Context) {
+        let Some(found) = &self.proj.found else {
+            return;
+        };
+        let mut restore = false;
+        let mut discard = false;
+        egui::Window::new("Recover unsaved project")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "{APP_NAME} closed without saving a project you were working on."
+                ));
+                ui.label(format!("Last kept {}: {}.", ago(found.age), found.summary));
+                ui.label(RichText::new("Restored, it is still unsaved until you save it.").weak());
+                ui.horizontal(|ui| {
+                    restore = ui.button("Restore").clicked();
+                    discard = ui.button("Discard").clicked();
+                });
+            });
+        if restore {
+            self.then(ctx, After::Recover);
+        } else if discard {
+            self.proj.found = None;
+            if let Some(path) = &self.proj.recovery {
+                let _ = std::fs::remove_file(path);
+            }
+            // The project open now is written there afresh.
+            self.proj.recovery_version.clear();
+        }
+    }
+
+    /// The save, open, unsaved-changes and recovery windows.
     pub(crate) fn project_windows(&mut self, ctx: &egui::Context) {
+        if self.proj.dialog.is_none() {
+            self.recovery_window(ctx);
+        }
         let Some(dialog) = self.proj.dialog.take() else {
             return;
         };
@@ -821,6 +1041,18 @@ impl App {
     }
 }
 
+/// How long ago, in words: "just now", "5 minutes ago", "2 days ago".
+fn ago(d: Duration) -> String {
+    let s = d.as_secs();
+    let (n, unit) = match s {
+        0..60 => return "just now".into(),
+        60..3600 => (s / 60, "minute"),
+        3600..86400 => (s / 3600, "hour"),
+        _ => (s / 86400, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
 /// Reads a project and opens its audio, off the UI thread.
 fn load(path: &Path, rate: u32) -> Result<Loaded, String> {
     // Other computers' copies, if it is shared, are merged in.
@@ -876,5 +1108,177 @@ pub fn is_project(path: &Path) -> bool {
 impl App {
     pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, path: PathBuf) {
         self.then(ctx, After::Open(path));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use eframe::egui;
+    use egui_kittest::Harness;
+
+    use super::After;
+    use crate::App;
+
+    /// An empty folder of its own for each test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("daw-recovery-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The app, keeping its recovery file at `file`, and having looked
+    /// there as it does at start.
+    fn app(file: &Path) -> Harness<'static, App> {
+        let file = file.to_path_buf();
+        let mut h = Harness::builder()
+            .with_size([1400.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(move |_cc| {
+                let mut app = App::new(Vec::new());
+                app.proj.recovery = Some(file.clone());
+                app.look_for_recovery();
+                app
+            });
+        h.run();
+        h
+    }
+
+    /// A second of quiet audio at the app's rate.
+    fn wav(dir: &Path, rate: u32) -> PathBuf {
+        let path = dir.join("guitar.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..rate {
+            w.write_sample(((i % 100) as i16 - 50) * 10).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    /// The app with an imported file on a track and a marker, unsaved.
+    fn with_work(h: &mut Harness<'_, App>, dir: &Path) {
+        let rate = h.state().rate;
+        h.state_mut().add_file(&wav(dir, rate));
+        for _ in 0..200 {
+            h.step();
+            if !h.state().tracks.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(h.state().tracks.len(), 1, "the file was imported");
+        h.state_mut().markers.push(crate::timeline::Marker {
+            id: daw_project::new_id(),
+            bar: 2,
+            name: "Chorus".into(),
+        });
+        h.run();
+        assert!(h.state().proj.dirty);
+        assert!(h.state().proj.folder.is_none());
+    }
+
+    fn ctx(h: &Harness<'_, App>) -> egui::Context {
+        h.ctx.clone()
+    }
+
+    #[test]
+    fn unsaved_work_comes_back_after_a_crash() {
+        let dir = scratch("crash");
+        let file = dir.join("Recovery").join("Unsaved project.daw");
+        let mut h = app(&file);
+        assert!(h.state().proj.found.is_none(), "nothing to recover yet");
+        with_work(&mut h, &dir);
+        // Kept by itself once a while has passed.
+        h.run();
+        assert!(!file.exists(), "not yet");
+        h.state_mut().proj.last_recovery = (std::time::Instant::now())
+            .checked_sub(super::RECOVER_EVERY)
+            .unwrap();
+        h.run();
+        assert!(file.exists());
+        // The app stops here without saving or quitting.
+        drop(h);
+
+        let mut h = app(&file);
+        let found = h.state().proj.found.as_ref().expect("offered back");
+        assert_eq!(found.summary, "1 track, 1 clip");
+        assert!(h.state().tracks.is_empty());
+        // Nothing is written over it while the offer is open.
+        h.state_mut().write_recovery().unwrap();
+        assert!(file.exists());
+        let ctx = ctx(&h);
+        h.state_mut().then(&ctx, After::Recover);
+        h.run();
+        let app = h.state();
+        assert!(app.proj.found.is_none());
+        assert_eq!(app.tracks.len(), 1);
+        assert_eq!(app.tracks[0].clips.len(), 1);
+        assert_eq!(app.tracks[0].clips[0].len, app.rate as usize);
+        assert_eq!(app.markers.len(), 1);
+        assert_eq!(app.markers[0].name, "Chorus");
+        assert!(app.proj.dirty, "still unsaved");
+        assert!(app.proj.folder.is_none());
+        assert!(file.exists(), "kept until saved or let go");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_or_letting_go_removes_the_recovery_file() {
+        let dir = scratch("save");
+        let file = dir.join("Recovery").join("Unsaved project.daw");
+        let mut h = app(&file);
+        with_work(&mut h, &dir);
+        h.state_mut().write_recovery().unwrap();
+        assert!(file.exists());
+        let ctx = ctx(&h);
+        h.state_mut().save_in(&ctx, &dir.join("Song")).unwrap();
+        assert!(!file.exists(), "saved, so nothing to recover");
+
+        // A new project, worked on and then deliberately not saved.
+        h.state_mut().then(&ctx, After::New);
+        with_work(&mut h, &dir);
+        h.state_mut().write_recovery().unwrap();
+        assert!(file.exists());
+        h.state_mut().then(&ctx, After::New);
+        assert!(matches!(
+            h.state().proj.dialog,
+            Some(super::Dialog::Unsaved { .. })
+        ));
+        h.state_mut().proj.dialog = None;
+        h.state_mut().go(&ctx, After::New);
+        assert!(!file.exists(), "\"Don't save\" lets it go");
+        drop(h);
+        let h = app(&file);
+        assert!(h.state().proj.found.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_recovery_file_is_set_aside() {
+        let dir = scratch("damaged");
+        let file = dir.join("Unsaved project.daw");
+        std::fs::write(&file, b"not a project").unwrap();
+        let h = app(&file);
+        assert!(h.state().proj.found.is_none());
+        assert!(!file.exists());
+        assert!(file.with_extension("daw.damaged").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ages_read_as_words() {
+        use std::time::Duration;
+        assert_eq!(super::ago(Duration::from_secs(5)), "just now");
+        assert_eq!(super::ago(Duration::from_secs(60)), "1 minute ago");
+        assert_eq!(super::ago(Duration::from_secs(7300)), "2 hours ago");
+        assert_eq!(super::ago(Duration::from_secs(3 * 86400)), "3 days ago");
     }
 }

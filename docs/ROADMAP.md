@@ -324,8 +324,10 @@ project's `Exports` folder (`DAW\Exports` in the user's profile before
 it is saved, or a folder the user chooses). Rendering runs in the background
 with its own copies of any plugins; practice mute, live input and the
 metronome are left out, and clipping is reported. A saved project is
-autosaved every 30 seconds. No crash recovery yet for a project that
-was never saved. Unsigned installers ([RELEASING.md](RELEASING.md)): a
+autosaved every 30 seconds. A project never saved is copied every 10
+seconds to `DAW\Recovery` in the user's profile, and the next start
+offers it back if the app stopped without saving or leaving it.
+Unsigned installers ([RELEASING.md](RELEASING.md)): a
 Windows installer and .zip, a Linux AppImage and .tar.gz, built by a
 release workflow into draft releases. An opt-in daily update check reads
 a signed file list and only shows a note with a link. Internal errors

@@ -210,9 +210,9 @@ plugin's parameters and, on Windows, the plugin's own editor window;
 latency compensated by reading the track's clips ahead; monitoring runs
 through the effects; effects carry over unchanged when the session
 changes, and are made again with the same settings when the device or
-sample rate changes. Still to do: saving effects and their state in the
-project (with project saving), and frozen audio for missing plugins
-(with collaboration). Known limits: effects run inside the app, so a
+sample rate changes. Effects and their settings are saved in the
+project (1.6). Still to do: frozen audio for missing plugins (with
+collaboration). Known limits: effects run inside the app, so a
 plugin that crashes while playing takes the app with it; latency
 compensation glitches for that many frames where a loop wraps.*
 - Plugin scanning, run out of process so a bad plugin can't crash the app.
@@ -330,7 +330,21 @@ was never saved.*
 *Started 2026-10-28. The app measures its DSP load (time in the audio
 callback against the buffer's length) and counts late buffers; Settings
 → Performance check adds 16 generated stereo tracks and an effect on 8 of
-them to try the bar on real hardware.*
+them to try the bar on real hardware. Golden-render tests compare nine
+short mixes (metronome, loop, a 44.1 kHz clip, speed and transpose, a
+tempo change) with reference renders kept in the repository. The
+plugin host is tested against our own test plugin and broken builds of
+it that crash or hang while loading, refuse to set up, or get damaged
+state, and an effect's settings are checked through a saved project.
+Scripted merge tests run people's edits through live updates, bundles
+(late and repeated) and a shared project file, plus 100 random scripts,
+checking that every copy agrees and nothing is lost. Every control has
+a screen-reader name, checked by a test that reads the accessibility
+tree; the transport works from the keyboard (Space, Home, R, L, K, C,
+Tab and Enter), listed under Help → Keyboard shortcuts. Known limits:
+clips and markers on the timeline are drawn, so a screen reader cannot
+read or select them yet, and the merge scripts run on the document,
+not yet through a real network session.*
 - No dropouts with 16 stereo tracks plus 8 plugin instances at a
   128-sample buffer on the reference laptop.
 - Golden-render audio tests. Automated plugin-host tests with a set of

@@ -538,7 +538,9 @@ impl Effects {
                             if effects.is_empty() {
                                 ui.label("No effects found. See Settings → Plugins.");
                             }
-                        });
+                        })
+                        .response
+                        .accessible_name("Add effect");
                     if let Some(p) = pick {
                         match self.create(&p, rate) {
                             Ok(slot) => {

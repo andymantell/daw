@@ -245,6 +245,20 @@ mean nothing).
       the DSP load is well under 100%. Note the load and peak figures
       either way, and try 64 if 128 passes easily.
 
+### Phase 1 app: keyboard and screen reader
+
+- [ ] **1.9 Keyboard only.** Without the mouse: Tab to a track's input
+      and pick one with Enter, Tab to its Arm button and press Enter,
+      then press R and Space to record and Space to stop. Try Home, L
+      (loop), K (metronome) and C (count-in), and Help → Keyboard
+      shortcuts. Pass: all of it works, and the focused control is easy
+      to see. Say if Space should press a focused button instead of
+      always playing.
+- [ ] **1.9 Screen reader.** Turn on Narrator (Ctrl+Win+Enter) and Tab
+      through the transport and a track row. Pass: each control is read
+      with a clear name, such as "Arm Guitar for recording". The
+      timeline's clips are not read yet; say how much that matters.
+
 ### Phase 1 app: projects
 
 Screenshots: `/mnt/project-files/screenshots/app-save-project.png`,

@@ -22,6 +22,9 @@ mod timeline;
 mod trainer;
 mod tuner;
 
+#[cfg(test)]
+mod a11y;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -181,21 +184,50 @@ struct App {
     /// Lesson notes, and whether their window is open.
     notes: String,
     notes_open: bool,
+    shortcuts_open: bool,
     proj: project::Proj,
 }
+
+/// Every keyboard shortcut, for Help → Keyboard shortcuts. Letters work
+/// when no text field has the keyboard.
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("Space", "Play or stop"),
+    ("Home", "Back to the start"),
+    ("R", "Record on or off: armed tracks record while playing"),
+    ("L", "Loop on or off"),
+    ("K", "Metronome on or off"),
+    ("C", "Count-in on or off"),
+    ("Tab, Shift+Tab", "Move between controls"),
+    (
+        "Enter",
+        "Press the focused button, or open the focused list",
+    ),
+    ("Ctrl+S", "Save the project"),
+    ("Ctrl+Z", "Undo"),
+    ("Ctrl+Shift+Z, Ctrl+Y", "Redo"),
+    ("S", "Split clips at the playhead"),
+    ("Delete", "Delete the selected clips"),
+    ("M", "Mark a section at the playhead's bar"),
+    ("Esc", "Clear the clip selection"),
+];
 
 /// How often to look for a lost device.
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 
 impl App {
     fn new(files: Vec<String>) -> App {
-        // The device used last time, if it is still there.
-        let saved = load_settings();
+        // The device used last time, if it is still there. Tests run
+        // without settings or a device.
+        let saved = if cfg!(test) {
+            SavedProfiles::default()
+        } else {
+            load_settings()
+        };
         let profile = saved
             .current()
             .filter(|p| audio::is_present(p))
             .cloned()
-            .or_else(audio::default_profile);
+            .or_else(|| (!cfg!(test)).then(audio::default_profile).flatten());
         let rate = profile.as_ref().map_or(48_000, |p| p.rate);
         let (ctl, eng, disk, recorder) = new_engine();
         let mut app = App {
@@ -236,9 +268,12 @@ impl App {
             perf: perf::Perf::default(),
             notes: String::new(),
             notes_open: false,
+            shortcuts_open: false,
             proj: project::Proj::new(),
         };
-        app.effects.start_scan();
+        if !cfg!(test) {
+            app.effects.start_scan();
+        }
         app.audio = app.open_device(eng);
         // The empty project as it starts is not an edit.
         let start = app.project();
@@ -733,6 +768,55 @@ impl App {
         }
     }
 
+    /// The transport's keys, which work anywhere except while typing.
+    /// Space always plays or stops; Enter presses the focused control.
+    fn keys(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
+            self.save_or_ask(ctx);
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let key = |k| ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+        if key(Key::Space) {
+            self.toggle_play();
+        }
+        if key(Key::Home) {
+            self.send(Command::Seek(Frames(0)));
+        }
+        if key(Key::R) {
+            self.recording = !self.recording;
+            self.send(Command::SetRecording(self.recording));
+        }
+        if key(Key::L) {
+            self.looping = !self.looping;
+            self.send_loop();
+        }
+        if key(Key::K) {
+            self.metronome.enabled = !self.metronome.enabled;
+            self.send(Command::SetMetronome(self.metronome));
+        }
+        if key(Key::C) {
+            self.count_in = !self.count_in;
+        }
+    }
+
+    /// Help → Keyboard shortcuts.
+    fn shortcuts_window(&mut self, ctx: &egui::Context) {
+        egui::Window::new("Keyboard shortcuts")
+            .open(&mut self.shortcuts_open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::Grid::new("shortcuts").striped(true).show(ui, |ui| {
+                    for (keys, what) in SHORTCUTS {
+                        ui.strong(*keys);
+                        ui.label(*what);
+                        ui.end_row();
+                    }
+                });
+            });
+    }
+
     fn transport(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let playing = self.ctl.status().playing();
@@ -743,7 +827,12 @@ impl App {
             {
                 self.toggle_play();
             }
-            if ui.button("⏮").on_hover_text("Back to the start").clicked() {
+            if ui
+                .button("⏮")
+                .accessible_name("Back to the start")
+                .on_hover_text("Back to the start (Home)")
+                .clicked()
+            {
                 self.send(Command::Seek(Frames(0)));
             }
             let rec = RichText::new("⏺ Record").color(if self.recording {
@@ -771,14 +860,18 @@ impl App {
             ui.separator();
 
             ui.label("Tempo");
-            let t = ui.add(
-                egui::DragValue::new(&mut self.tempo_bpm)
-                    .range(20.0..=300.0)
-                    .speed(0.2)
-                    .suffix(" BPM"),
-            );
+            let t = ui
+                .add(
+                    egui::DragValue::new(&mut self.tempo_bpm)
+                        .range(20.0..=300.0)
+                        .speed(0.2)
+                        .suffix(" BPM"),
+                )
+                .accessible_name("Tempo");
             ui.label("Beats per bar");
-            let b = ui.add(egui::DragValue::new(&mut self.beats_per_bar).range(1..=12));
+            let b = ui
+                .add(egui::DragValue::new(&mut self.beats_per_bar).range(1..=12))
+                .accessible_name("Beats per bar");
             if t.changed() || b.changed() {
                 self.rebuild();
                 self.send_loop();
@@ -786,7 +879,7 @@ impl App {
         });
         ui.horizontal(|ui| {
             let mut m = self.metronome;
-            ui.checkbox(&mut m.enabled, "Metronome");
+            ui.checkbox(&mut m.enabled, "Metronome").on_hover_text("K");
             egui::ComboBox::from_id_salt("subdivision")
                 .width(90.0)
                 .selected_text(match m.subdivision {
@@ -804,23 +897,32 @@ impl App {
                     ] {
                         ui.selectable_value(&mut m.subdivision, n, label);
                     }
-                });
+                })
+                .response
+                .accessible_name("Clicks per beat");
             ui.label("Click level");
-            ui.add(egui::Slider::new(&mut m.level_db, -40.0..=0.0).suffix(" dB"));
+            ui.add(egui::Slider::new(&mut m.level_db, -40.0..=0.0).suffix(" dB"))
+                .accessible_name("Click level");
             if m != self.metronome {
                 self.metronome = m;
                 self.send(Command::SetMetronome(m));
             }
-            ui.checkbox(&mut self.count_in, "Count-in");
+            ui.checkbox(&mut self.count_in, "Count-in")
+                .on_hover_text("One bar of clicks before playing (C)");
             ui.separator();
 
-            let mut changed = ui.checkbox(&mut self.looping, "Loop bars").changed();
+            let mut changed = ui
+                .checkbox(&mut self.looping, "Loop bars")
+                .on_hover_text("L")
+                .changed();
             changed |= ui
                 .add(egui::DragValue::new(&mut self.loop_bars.0).range(1..=999))
+                .accessible_name("Loop from bar")
                 .changed();
             ui.label("to");
             changed |= ui
                 .add(egui::DragValue::new(&mut self.loop_bars.1).range(2..=1000))
+                .accessible_name("Loop to bar")
                 .changed();
             if self.loop_bars.1 <= self.loop_bars.0 {
                 self.loop_bars.1 = self.loop_bars.0 + 1;
@@ -852,6 +954,7 @@ impl App {
                 .fixed_decimals(0)
                 .suffix(" %"),
         )
+        .accessible_name("Speed")
         .on_hover_text("Slow down or speed up without changing pitch");
         for pct in [50.0, 75.0, 100.0] {
             if ui
@@ -868,12 +971,14 @@ impl App {
                 .range(-12..=12)
                 .suffix(" st"),
         )
+        .accessible_name("Transpose, semitones")
         .on_hover_text("Semitones, without changing speed");
         ui.add(
             egui::DragValue::new(&mut self.cents)
                 .range(-50..=50)
                 .suffix(" ¢"),
         )
+        .accessible_name("Fine pitch, cents")
         .on_hover_text("Fine pitch, in cents");
         egui::ComboBox::from_id_salt("tuning-preset")
             .width(200.0)
@@ -921,7 +1026,9 @@ impl App {
                         self.detected = None;
                     }
                 }
-            });
+            })
+            .response
+            .accessible_name("Tuning presets");
         if let Some((name, rx)) = &self.detecting
             && let Ok(r) = rx.try_recv()
         {
@@ -947,7 +1054,7 @@ impl App {
                     ui.label(format!("{name}: no clear pitch to measure"));
                 }
             }
-            if ui.small_button("✖").clicked() {
+            if ui.small_button("✖").accessible_name("Dismiss").clicked() {
                 self.detected = None;
             }
         }
@@ -1006,11 +1113,12 @@ impl App {
                 ui.end_row();
                 for (i, t) in self.tracks.iter_mut().enumerate() {
                     let before = t.heard();
+                    let name = t.name.clone();
                     let label = ui.label(&t.name);
                     if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
                         label.on_hover_text(c.path.display().to_string());
                     }
-                    rebuild |= input_picker(ui, i, &mut t.input, inputs);
+                    rebuild |= input_picker(ui, i, &t.name, &mut t.input, inputs);
                     ui.horizontal(|ui| {
                         ui.add_enabled_ui(t.input.is_some(), |ui| {
                             let arm = RichText::new("R").color(if t.arm {
@@ -1020,10 +1128,12 @@ impl App {
                             });
                             rebuild |= ui
                                 .toggle_value(&mut t.arm, arm)
-                                .on_hover_text("Arm for recording")
+                                .accessible_name(format!("Arm {name} for recording"))
+                                .on_hover_text("Arm for recording (R records)")
                                 .changed();
-                            let m =
-                                ui.add_enabled(!direct, egui::Button::selectable(t.monitor, "M"));
+                            let m = ui
+                                .add_enabled(!direct, egui::Button::selectable(t.monitor, "M"))
+                                .accessible_name(format!("Monitor {name}"));
                             if m.clicked() {
                                 t.monitor = !t.monitor;
                                 rebuild = true;
@@ -1035,17 +1145,23 @@ impl App {
                         });
                     });
                     meter(ui, t.meter);
-                    ui.add(
-                        egui::Slider::new(&mut t.mix.gain_db, -60.0..=12.0)
-                            .suffix(" dB")
-                            .step_by(0.1),
-                    );
+                    ui.name_inputs(format!("{name} volume"), |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut t.mix.gain_db, -60.0..=12.0)
+                                .suffix(" dB")
+                                .step_by(0.1),
+                        )
+                    });
                     ui.add(egui::Slider::new(&mut t.mix.pan, -1.0..=1.0).show_value(false))
+                        .accessible_name(format!("{name} pan"))
                         .on_hover_text("Pan");
-                    ui.toggle_value(&mut t.mix.mute, "Mute");
+                    ui.toggle_value(&mut t.mix.mute, "Mute")
+                        .accessible_name(format!("Mute {name}"));
                     ui.horizontal(|ui| {
-                        ui.toggle_value(&mut t.mix.solo, "Solo");
+                        ui.toggle_value(&mut t.mix.solo, "Solo")
+                            .accessible_name(format!("Solo {name}"));
                         ui.toggle_value(&mut t.practice_mute, "🎧")
+                            .accessible_name(format!("Practice mute {name}"))
                             .on_hover_text("Practice mute: silence this part to play it yourself");
                     });
                     let label = match t.fx.len() {
@@ -1055,6 +1171,7 @@ impl App {
                     let open = self.effects.open_track == Some(i);
                     if ui
                         .selectable_label(open, label)
+                        .accessible_name(format!("Effects on {name}"))
                         .on_hover_text(
                             t.fx.iter()
                                 .map(|f| f.name.as_str())
@@ -1125,7 +1242,9 @@ impl App {
                             for h in &self.hosts {
                                 ui.selectable_value(&mut draft.host, h.name.clone(), &h.name);
                             }
-                        });
+                        })
+.response
+.accessible_name("Driver");
                     ui.end_row();
 
                     let host = self.hosts.iter().find(|h| h.name == draft.host);
@@ -1144,7 +1263,9 @@ impl App {
                                     *draft = p.clone();
                                 }
                             }
-                        });
+                        })
+.response
+.accessible_name("Device");
                     ui.end_row();
 
                     let dev = host.and_then(|h| h.devices.iter().find(|d| d.name == draft.device));
@@ -1156,7 +1277,9 @@ impl App {
                             for r in rates {
                                 ui.selectable_value(&mut draft.rate, r, format!("{r} Hz"));
                             }
-                        });
+                        })
+.response
+.accessible_name("Sample rate");
                     ui.end_row();
 
                     ui.label("Buffer size");
@@ -1174,14 +1297,16 @@ impl App {
                                     ui.selectable_value(&mut draft.buffer, Some(b), format!("{b} samples"));
                                 }
                             }
-                        });
+                        })
+.response
+.accessible_name("Buffer size");
                     ui.end_row();
 
                     let outs = dev.map_or(2, |d| d.output_channels as usize).max(1);
                     ui.label("Main outputs");
                     ui.horizontal(|ui| {
-                        channel_picker(ui, "main-l", &mut draft.main.0, outs);
-                        channel_picker(ui, "main-r", &mut draft.main.1, outs);
+                        channel_picker(ui, "main-l", "Main output, left", &mut draft.main.0, outs);
+                        channel_picker(ui, "main-r", "Main output, right", &mut draft.main.1, outs);
                     });
                     ui.end_row();
 
@@ -1194,7 +1319,9 @@ impl App {
                             for d in &self.input_devices {
                                 ui.selectable_value(&mut draft.input, Some(d.clone()), d);
                             }
-                        });
+                        })
+.response
+.accessible_name("Input device");
                     ui.end_row();
 
                     ui.label("Recording offset");
@@ -1225,7 +1352,9 @@ impl App {
                             for c in 0..outs {
                                 ui.selectable_value(&mut draft.click, Some(c), format!("Output {}", c + 1));
                             }
-                        });
+                        })
+.response
+.accessible_name("Metronome output");
                     ui.end_row();
                 });
                 ui.separator();
@@ -1362,7 +1491,13 @@ fn input_names(host: &str) -> Vec<String> {
 
 /// Chooses a track's input: none, one channel, or a stereo pair.
 /// Returns true if it changed.
-fn input_picker(ui: &mut egui::Ui, track: usize, input: &mut Option<Input>, inputs: usize) -> bool {
+fn input_picker(
+    ui: &mut egui::Ui,
+    track: usize,
+    track_name: &str,
+    input: &mut Option<Input>,
+    inputs: usize,
+) -> bool {
     let name = |i: &Option<Input>| match i {
         None => "None".to_string(),
         Some(i) if i.stereo => format!("In {}+{}", i.first + 1, i.first + 2),
@@ -1382,7 +1517,9 @@ fn input_picker(ui: &mut egui::Ui, track: usize, input: &mut Option<Input>, inpu
                 let i = Some(Input::stereo(c));
                 ui.selectable_value(input, i, name(&i));
             }
-        });
+        })
+        .response
+        .accessible_name(format!("Input for {track_name}"));
     *input != before
 }
 
@@ -1404,11 +1541,13 @@ fn take_picker(ui: &mut egui::Ui, track: usize, t: &Track) -> Option<Option<usiz
                 ui.selectable_value(&mut pick, Some(i), format!("Take {}", i + 1));
             }
             ui.selectable_value(&mut pick, None, "Off");
-        });
+        })
+        .response
+        .accessible_name(format!("Take on {}", t.name));
     (pick != now).then_some(pick)
 }
 
-fn channel_picker(ui: &mut egui::Ui, id: &str, ch: &mut usize, outs: usize) {
+fn channel_picker(ui: &mut egui::Ui, id: &str, name: &str, ch: &mut usize, outs: usize) {
     egui::ComboBox::from_id_salt(id)
         .width(60.0)
         .selected_text(format!("{}", *ch + 1))
@@ -1416,7 +1555,9 @@ fn channel_picker(ui: &mut egui::Ui, id: &str, ch: &mut usize, outs: usize) {
             for c in 0..outs {
                 ui.selectable_value(ch, c, format!("{}", c + 1));
             }
-        });
+        })
+        .response
+        .accessible_name(name);
 }
 
 /// A stereo peak meter, −60 dB to 0 dB.
@@ -1512,20 +1653,7 @@ impl eframe::App for App {
         if !self.imports.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        if !ctx.egui_wants_keyboard_input()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Space))
-        {
-            self.toggle_play();
-        }
-        if !ctx.egui_wants_keyboard_input()
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::R))
-        {
-            self.recording = !self.recording;
-            self.send(Command::SetRecording(self.recording));
-        }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
-            self.save_or_ask(&ctx);
-        }
+        self.keys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -1594,6 +1722,12 @@ impl eframe::App for App {
                     }
                     if ui.button("Lesson notes…").clicked() {
                         self.notes_open = true;
+                        ui.close();
+                    }
+                });
+                ui.menu_button("Help", |ui| {
+                    if ui.button("Keyboard shortcuts…").clicked() {
+                        self.shortcuts_open = true;
                         ui.close();
                     }
                 });
@@ -1715,6 +1849,7 @@ impl eframe::App for App {
         }
         self.perf_window(&ctx);
         self.notes_window(&ctx);
+        self.shortcuts_window(&ctx);
         self.project_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);

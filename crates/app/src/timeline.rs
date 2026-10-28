@@ -601,10 +601,12 @@ impl Timeline {
                     }
                 })
                 .response
+                .accessible_name("Snap")
                 .on_hover_text("Hold Alt while dragging to place freely");
             ui.separator();
             if ui
                 .button("−")
+                .accessible_name("Zoom out")
                 .on_hover_text("Zoom out (Ctrl + wheel)")
                 .clicked()
             {
@@ -612,6 +614,7 @@ impl Timeline {
             }
             if ui
                 .button("+")
+                .accessible_name("Zoom in")
                 .on_hover_text("Zoom in (Ctrl + wheel)")
                 .clicked()
             {
@@ -652,6 +655,7 @@ impl Timeline {
             ui.separator();
             if ui
                 .add_enabled(view.can_undo, egui::Button::new("↶"))
+                .accessible_name("Undo")
                 .on_hover_text("Undo (Ctrl+Z)")
                 .clicked()
             {
@@ -659,6 +663,7 @@ impl Timeline {
             }
             if ui
                 .add_enabled(view.can_redo, egui::Button::new("↷"))
+                .accessible_name("Redo")
                 .on_hover_text("Redo (Ctrl+Shift+Z)")
                 .clicked()
             {

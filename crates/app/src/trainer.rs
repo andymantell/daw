@@ -57,13 +57,15 @@ impl Trainer {
                     .fixed_decimals(0)
                     .prefix("+")
                     .suffix(" %"),
-            );
+            )
+            .accessible_name("Trainer step, percent");
             ui.label("every");
             ui.add(
                 egui::DragValue::new(&mut self.every)
                     .range(1..=32)
                     .suffix(" loops"),
-            );
+            )
+            .accessible_name("Trainer, loops between steps");
             ui.label("up to");
             ui.add(
                 egui::DragValue::new(&mut self.target)
@@ -71,7 +73,8 @@ impl Trainer {
                     .speed(0.5)
                     .fixed_decimals(0)
                     .suffix(" %"),
-            );
+            )
+            .accessible_name("Trainer target speed, percent");
         });
     }
 }

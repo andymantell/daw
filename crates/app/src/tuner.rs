@@ -87,7 +87,9 @@ impl Tuner {
                                         format!("In {}", c + 1),
                                     );
                                 }
-                            });
+                            })
+                            .response
+                            .accessible_name("Tuner input");
                     }
                     ui.separator();
                     ui.label("A =");

@@ -24,3 +24,6 @@ eframe = "0.37.0"
 hound = "3.5.1"
 rfd = "0.17.2"
 vst3 = "0.3.0"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37.0", features = ["eframe"] }

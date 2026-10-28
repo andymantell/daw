@@ -188,7 +188,9 @@ impl Perf {
                                 if effects.is_empty() {
                                     ui.label("No effects found. See Settings → Plugins.");
                                 }
-                            });
+                            })
+                            .response
+                            .accessible_name("Effect for the test tracks");
                     });
                 });
                 ui.label(

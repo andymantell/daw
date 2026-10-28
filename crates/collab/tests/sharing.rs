@@ -112,6 +112,41 @@ fn importing_a_bundle_of_the_same_project_merges_it() {
     assert!(!daw_collab::related(&mine, &stranger));
 }
 
+/// A tar file holding `entries` as given, names unchecked.
+fn raw_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data) in entries {
+        let mut h = tar::Header::new_old();
+        let n = name.as_bytes();
+        h.as_old_mut().name[..n.len()].copy_from_slice(n);
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, *data).unwrap();
+    }
+    b.into_inner().unwrap()
+}
+
+#[test]
+fn a_bundle_is_a_plain_tar_of_the_project_folder() {
+    let dir = temp("tar");
+    let (f, d, p) = project(&dir);
+    let file = dir.join("Song.dawbundle");
+    bundle::write(&file, "Song", &d.to_bytes(), &f, &assets(&p)).unwrap();
+    let mut tar = tar::Archive::new(std::fs::File::open(&file).unwrap());
+    let names: Vec<String> = (tar.entries().unwrap())
+        .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "Song/project.daw".to_string(),
+            format!("Song/Audio/{}", assets(&p)[0]),
+        ]
+    );
+}
+
 #[test]
 fn damaged_or_foreign_bundles_are_refused() {
     let dir = temp("damaged");
@@ -119,7 +154,12 @@ fn damaged_or_foreign_bundles_are_refused() {
     let file = dir.join("Song.dawbundle");
     bundle::write(&file, "Song", &d.to_bytes(), &f, &assets(&p)).unwrap();
     let good = std::fs::read(&file).unwrap();
+    let audio_at = good
+        .windows(13)
+        .position(|w| w == b"backing audio")
+        .unwrap();
     let into = ProjectFolder::create(&dir.join("Into")).unwrap();
+    let asset = &assets(&p)[0];
 
     let not_one = dir.join("notes.dawbundle");
     std::fs::write(&not_one, b"just some text").unwrap();
@@ -127,45 +167,46 @@ fn damaged_or_foreign_bundles_are_refused() {
 
     // Cut short partway through the audio.
     let short = dir.join("short.dawbundle");
-    std::fs::write(&short, &good[..good.len() - 4]).unwrap();
+    std::fs::write(&short, &good[..audio_at + 5]).unwrap();
     assert!(bundle::unpack(&short, &into).is_err());
+    assert!(!into.has_asset(asset));
 
     // Audio that doesn't match its name.
     let mut bad = good.clone();
-    let n = bad.len();
-    bad[n - 1] ^= 0xff;
+    bad[audio_at] ^= 0x20;
     let tampered = dir.join("tampered.dawbundle");
     std::fs::write(&tampered, &bad).unwrap();
     assert!(bundle::unpack(&tampered, &into).is_err());
-    assert!(!into.has_asset(&assets(&p)[0]));
+    assert!(!into.has_asset(asset));
 
-    // A name that tries to reach outside the folder.
-    let evil = dir.join("evil.dawbundle");
-    let mut e = Vec::new();
-    e.extend_from_slice(b"DAWBUNDL");
-    e.extend_from_slice(&1u32.to_le_bytes());
-    e.extend_from_slice(&1u16.to_le_bytes());
-    e.extend_from_slice(b"x");
+    // Names that try to reach outside the folder are never used.
     let doc = d.to_bytes();
-    e.extend_from_slice(&(doc.len() as u64).to_le_bytes());
-    e.extend_from_slice(&doc);
-    e.extend_from_slice(&1u32.to_le_bytes());
-    let name = b"../../escape.wav";
-    e.extend_from_slice(&(name.len() as u16).to_le_bytes());
-    e.extend_from_slice(name);
-    e.extend_from_slice(&3u64.to_le_bytes());
-    e.extend_from_slice(b"bad");
-    std::fs::write(&evil, &e).unwrap();
+    let evil = dir.join("evil.dawbundle");
+    let wav: &[u8] = b"bad";
+    std::fs::write(
+        &evil,
+        raw_tar(&[
+            ("x/project.daw", &doc),
+            ("x/Audio/../../escape.wav", wav),
+            ("../escape.wav", wav),
+        ]),
+    )
+    .unwrap();
     assert!(bundle::unpack(&evil, &into).is_err());
     assert!(!dir.join("escape.wav").exists());
+    assert!(!into.dir.join("escape.wav").exists());
 
-    // A length far beyond the file.
-    let mut huge = good[..12].to_vec();
-    huge.extend_from_slice(&0u16.to_le_bytes());
-    huge.extend_from_slice(&u64::MAX.to_le_bytes());
-    let liar = dir.join("liar.dawbundle");
-    std::fs::write(&liar, &huge).unwrap();
-    assert!(bundle::peek(&liar).is_err());
+    // Two projects in one file, or none.
+    let two = dir.join("two.dawbundle");
+    std::fs::write(
+        &two,
+        raw_tar(&[("a/project.daw", &doc), ("b/project.daw", &doc)]),
+    )
+    .unwrap();
+    assert!(bundle::unpack(&two, &into).is_err());
+    let none = dir.join("none.dawbundle");
+    std::fs::write(&none, raw_tar(&[("a/readme.txt", b"hi")])).unwrap();
+    assert!(bundle::peek(&none).is_err());
 }
 
 #[test]

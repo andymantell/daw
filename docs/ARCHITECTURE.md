@@ -55,7 +55,7 @@ Rules that hold everywhere:
 ## 2. Project on disk
 
 ```
-My Lesson.project/              (folder; zipped into a single file as a bundle)
+My Lesson.project/              (folder; a tar of it is a bundle)
   project.doc                   CRDT document (binary) + schema version
   assets/ab/abcdef….flac        content-addressed audio (SHA-256)
   peaks/abcdef….peaks           multi-resolution waveform data
@@ -177,7 +177,7 @@ Three ways to share, all over the same CRDT document:
 
 | Mode | How | Live? |
 |---|---|---|
-| **Bundle** | Export the document and the audio it uses as one file (exports left out). Import merges into an existing copy, open or among the user's projects, found by shared document history; otherwise it becomes a new project. Everything in a bundle is checked: plain asset names only, lengths within the file, audio matching its hash. | No |
+| **Bundle** | Export the document and the audio it uses as one uncompressed tar file of the project folder (exports left out). Import merges into an existing copy, open or among the user's projects, found by shared document history; otherwise it becomes a new project. Everything in a bundle is checked: plain asset names only, lengths within the file, audio matching its hash. | No |
 | **Shared folder** | The project folder sits in a cloud-synced directory. Each computer writes its own copy of the document, and merges the others' as they arrive. | Near-live, at the provider's speed |
 | **Live session** | Teacher hosts. Student joins by invite code, peer-to-peer. | Yes |
 

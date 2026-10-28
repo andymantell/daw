@@ -5,36 +5,33 @@
 //! anything else in the folder). Importing one into a copy of the same
 //! project merges it, so nothing either side did is lost.
 //!
-//! The file, all numbers little-endian:
+//! The file is a plain tar archive (the owner's choice, 2026-10-28), so
+//! ordinary tar tools open it and give back a project folder:
 //!
 //! ```text
-//! "DAWBUNDL"  u32 format (1)
-//! u16 length, name        the project's name, UTF-8
-//! u64 length, document    a Loro snapshot
-//! u32 count, then for each audio file:
-//!   u16 length, name      <hash>.<ext>, as in the project's Audio folder
-//!   u64 length, contents
+//! <project name>/project.daw          the document, first
+//! <project name>/Audio/<hash>.<ext>   the audio it uses
 //! ```
-//! Audio is stored as it is: it barely compresses. A bundle comes from
-//! outside, so everything in it is checked: names must be plain asset
-//! names, lengths must fit the file, and each audio file must match the
-//! hash it is named by before it is used.
+//! It isn't compressed: audio barely compresses, and big bundles would
+//! only be slower to make and read. A bundle comes from outside, so
+//! everything in it is checked: one top folder, only those two kinds of
+//! file, plain asset names, and each audio file must match the hash it
+//! is named by before it is used. Anything else in it (other files,
+//! links) is ignored.
 
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use daw_project::{ProjectFolder, is_asset_name};
+use daw_project::{ASSETS, DOC_FILE, ProjectFolder, is_asset_name};
 
 /// The extension bundles are saved with.
 pub const EXT: &str = "dawbundle";
 
-const MAGIC: &[u8; 8] = b"DAWBUNDL";
-const FORMAT: u32 = 1;
-/// Far beyond any real document; stops a damaged length asking for
-/// all memory.
+/// Far beyond any real document; stops a damaged size asking for all
+/// memory.
 const MAX_DOC: u64 = 1 << 30;
-const MAX_ASSETS: u32 = 100_000;
 
 /// What a bundle holds, apart from its audio.
 pub struct Bundle {
@@ -63,29 +60,36 @@ pub fn write(
         .collect();
     assets.sort();
     assets.dedup();
+    let root = top_folder(name);
     let tmp = dest.with_extension(format!("{EXT}.part"));
     let err = |e: std::io::Error| format!("could not write {}: {e}", dest.display());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let written = (|| {
-        let mut out = BufWriter::new(File::create(&tmp)?);
-        out.write_all(MAGIC)?;
-        out.write_all(&FORMAT.to_le_bytes())?;
-        put_str(&mut out, name)?;
-        out.write_all(&(doc.len() as u64).to_le_bytes())?;
-        out.write_all(doc)?;
-        out.write_all(&(assets.len() as u32).to_le_bytes())?;
+        let mut tar = tar::Builder::new(BufWriter::new(File::create(&tmp)?));
+        let mut add = |path: String, len: u64, data: &mut dyn Read| {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(len);
+            h.set_mode(0o644);
+            h.set_mtime(now);
+            h.set_entry_type(tar::EntryType::Regular);
+            tar.append_data(&mut h, path, data)
+        };
+        add(
+            format!("{root}/{DOC_FILE}"),
+            doc.len() as u64,
+            &mut &doc[..],
+        )?;
         for a in &assets {
             let mut f = File::open(folder.asset(a))?;
             let len = f.metadata()?.len();
-            put_str(&mut out, a)?;
-            out.write_all(&len.to_le_bytes())?;
-            let copied = std::io::copy(&mut (&mut f).take(len), &mut out)?;
-            if copied != len {
-                return Err(std::io::Error::other(format!(
-                    "{a} changed while being read"
-                )));
-            }
+            add(format!("{root}/{ASSETS}/{a}"), len, &mut (&mut f).take(len))?;
         }
-        out.into_inner().map_err(|e| e.into_error())?.sync_all()
+        tar.into_inner()?
+            .into_inner()
+            .map_err(|e| e.into_error())?
+            .sync_all()
     })();
     if let Err(e) = written {
         let _ = fs::remove_file(&tmp);
@@ -96,118 +100,94 @@ pub fn write(
 
 /// Reads a bundle's name and document, without its audio.
 pub fn peek(path: &Path) -> Result<Bundle, String> {
-    let (b, _) = open(path)?;
-    Ok(b)
+    read(path, None)
 }
 
 /// Reads a bundle, putting its audio into `folder`'s (files already
 /// there are kept), and returns its name and document. Stops at the
 /// first problem; audio taken in before it stays, as it was checked.
 pub fn unpack(path: &Path, folder: &ProjectFolder) -> Result<Bundle, String> {
-    let (b, mut r) = open(path)?;
-    let bad = |what: &str| format!("{} is damaged: {what}", path.display());
-    let count = r.u32().map_err(|_| bad("no audio list"))?;
-    if count > MAX_ASSETS {
-        return Err(bad("too many audio files"));
-    }
-    for _ in 0..count {
-        let name = r
-            .str()
-            .map_err(|_| bad("an audio file's name is cut short"))?;
-        let len = r
-            .u64()
-            .map_err(|_| bad("an audio file's length is cut short"))?;
-        if len > r.left {
-            return Err(bad("an audio file is cut short"));
-        }
-        let mut body = (&mut r.inner).take(len);
-        folder.receive_asset(&name, &mut body)?;
-        if body.limit() != 0 {
-            return Err(bad("an audio file is cut short"));
-        }
-        r.left -= len;
-    }
-    Ok(b)
+    read(path, Some(folder))
 }
 
-/// Opens a bundle and reads up to its audio.
-fn open(path: &Path) -> Result<(Bundle, Reader), String> {
+fn read(path: &Path, into: Option<&ProjectFolder>) -> Result<Bundle, String> {
     let f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let left = f.metadata().map_err(|e| e.to_string())?.len();
-    let mut r = Reader {
-        inner: BufReader::new(f),
-        left,
-    };
     let bad = |what: &str| format!("{} is not a bundle, or is damaged: {what}", path.display());
-    let mut magic = [0u8; 8];
-    r.bytes(&mut magic).map_err(|_| bad("too short"))?;
-    if &magic != MAGIC {
-        return Err(bad("wrong kind of file"));
-    }
-    let format = r.u32().map_err(|_| bad("too short"))?;
-    if format != FORMAT {
-        return Err(format!(
-            "{} was made by a newer version (bundle format {format})",
-            path.display()
-        ));
-    }
-    let name = r.str().map_err(|_| bad("no name"))?;
-    let len = r.u64().map_err(|_| bad("no document"))?;
-    if len > MAX_DOC || len > r.left {
-        return Err(bad("the document is cut short"));
-    }
-    let mut doc = vec![0u8; len as usize];
-    r.bytes(&mut doc)
-        .map_err(|_| bad("the document is cut short"))?;
-    Ok((Bundle { name, doc }, r))
-}
-
-fn put_str(out: &mut impl Write, s: &str) -> std::io::Result<()> {
-    let b = s.as_bytes();
-    let len = u16::try_from(b.len()).map_err(|_| std::io::Error::other("name too long"))?;
-    out.write_all(&len.to_le_bytes())?;
-    out.write_all(b)
-}
-
-/// Reads the file, keeping count of what is left so that no length read
-/// from it can ask for more than is there.
-struct Reader {
-    inner: BufReader<File>,
-    left: u64,
-}
-
-impl Reader {
-    fn bytes(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        if buf.len() as u64 > self.left {
-            return Err(std::io::ErrorKind::UnexpectedEof.into());
+    let mut tar = tar::Archive::new(BufReader::new(f));
+    let entries = tar.entries().map_err(|e| bad(&e.to_string()))?;
+    let mut root: Option<String> = None;
+    let mut doc: Option<Vec<u8>> = None;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| bad(&e.to_string()))?;
+        let kind = entry.header().entry_type();
+        let name = String::from_utf8(entry.path_bytes().into_owned())
+            .map_err(|_| bad("a file name isn't text"))?;
+        let parts: Vec<&str> = name.trim_end_matches('/').split('/').collect();
+        let top = parts[0];
+        if top.is_empty() || top == "." || top == ".." || top.contains('\\') {
+            return Err(bad(&format!("{name:?} is not inside a project folder")));
         }
-        self.inner.read_exact(buf)?;
-        self.left -= buf.len() as u64;
-        Ok(())
+        match &root {
+            None => root = Some(top.to_string()),
+            Some(r) if r != top => return Err(bad("it holds more than one project")),
+            Some(_) => {}
+        }
+        // Links, folders and anything else are never followed or used.
+        if !kind.is_file() {
+            continue;
+        }
+        match parts[1..] {
+            [DOC_FILE] => {
+                if doc.is_some() {
+                    return Err(bad("it holds two documents"));
+                }
+                let len = entry.header().size().map_err(|e| bad(&e.to_string()))?;
+                if len > MAX_DOC {
+                    return Err(bad("the document is far too big"));
+                }
+                let mut d = Vec::with_capacity(len as usize);
+                entry
+                    .read_to_end(&mut d)
+                    .map_err(|_| bad("the document is cut short"))?;
+                if d.len() as u64 != len {
+                    return Err(bad("the document is cut short"));
+                }
+                doc = Some(d);
+                if into.is_none() {
+                    break;
+                }
+            }
+            [ASSETS, asset] if is_asset_name(asset) => {
+                if let Some(folder) = into {
+                    folder.receive_asset(asset, &mut entry)?;
+                }
+            }
+            _ => {}
+        }
     }
-
-    fn u16(&mut self) -> std::io::Result<u16> {
-        let mut b = [0u8; 2];
-        self.bytes(&mut b)?;
-        Ok(u16::from_le_bytes(b))
+    match (root, doc) {
+        (Some(name), Some(doc)) => Ok(Bundle { name, doc }),
+        _ => Err(bad("no project document")),
     }
+}
 
-    fn u32(&mut self) -> std::io::Result<u32> {
-        let mut b = [0u8; 4];
-        self.bytes(&mut b)?;
-        Ok(u32::from_le_bytes(b))
-    }
-
-    fn u64(&mut self) -> std::io::Result<u64> {
-        let mut b = [0u8; 8];
-        self.bytes(&mut b)?;
-        Ok(u64::from_le_bytes(b))
-    }
-
-    fn str(&mut self) -> std::io::Result<String> {
-        let len = self.u16()?;
-        let mut b = vec![0u8; len as usize];
-        self.bytes(&mut b)?;
-        String::from_utf8(b).map_err(std::io::Error::other)
+/// The bundle's top folder: the project's name, made safe for a folder
+/// name on any system.
+fn top_folder(name: &str) -> String {
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let clean = clean.trim().trim_matches('.').trim();
+    if clean.is_empty() {
+        "Project".into()
+    } else {
+        clean.into()
     }
 }

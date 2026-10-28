@@ -206,9 +206,40 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Z", "Undo"),
     ("Ctrl+Shift+Z, Ctrl+Y", "Redo"),
     ("S", "Split clips at the playhead"),
-    ("Delete", "Delete the selected clips"),
+    ("Delete", "Delete the selected clips, or the focused marker"),
     ("M", "Mark a section at the playhead's bar"),
     ("Esc", "Clear the clip selection"),
+    ("Tab", "Move through the timeline's clips and markers"),
+    (
+        "Enter",
+        "On a clip: select it and go to its start. On a marker: go to its section",
+    ),
+    (
+        "Ctrl+Enter",
+        "On a clip: add it to or take it out of the selection. On a marker: loop its section",
+    ),
+    (
+        "Left, Right",
+        "Move the selected clips a beat earlier or later; a marker a bar",
+    ),
+    ("Shift+Left, Shift+Right", "Move the selected clips a bar"),
+    (
+        "Ctrl+Left, Ctrl+Right",
+        "Trim the focused clip's start a beat (with Shift, a bar)",
+    ),
+    (
+        "Alt+Left, Alt+Right",
+        "Trim the focused clip's end a beat (with Shift, a bar)",
+    ),
+    (
+        "Up, Down",
+        "Move to the nearest clip on the track above or below",
+    ),
+    (
+        "Ctrl+Up, Ctrl+Down",
+        "Move the selected clips to the track above or below",
+    ),
+    ("F2", "Rename the focused marker"),
 ];
 
 /// How often to look for a lost device.
@@ -774,7 +805,8 @@ impl App {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
             self.save_or_ask(ctx);
         }
-        if ctx.egui_wants_keyboard_input() {
+        // A clip or marker holding the keyboard is not a text field.
+        if ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx) {
             return;
         }
         let key = |k| ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));

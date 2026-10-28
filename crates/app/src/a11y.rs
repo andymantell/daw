@@ -2,7 +2,7 @@
 //! Keyboard and screen-reader access (roadmap 1.9), tested through the
 //! accessibility tree that screen readers read.
 
-use eframe::egui::{self, Key};
+use eframe::egui::{self, Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 
@@ -179,4 +179,212 @@ fn tab_and_enter_reach_and_press_controls() {
     h.key_press(Key::Enter);
     h.run();
     assert!(h.state().recording, "Enter presses Record");
+}
+
+/// Two tracks, a one-bar clip at the start of Guitar (120 BPM, 4/4: a
+/// beat is 24,000 frames, a bar 96,000) and a marker at bar 3.
+fn with_a_clip() -> Harness<'static, App> {
+    let mut h = with_tracks();
+    let app = h.state_mut();
+    let mut c = crate::timeline::tests::clip(0, 96_000);
+    c.label = "backing".into();
+    app.tracks[0].clips.push(c);
+    crate::timeline::add_marker(&mut app.markers, 3);
+    app.rebuild();
+    h.run();
+    h
+}
+
+fn clip_of(app: &App, track: usize) -> &crate::timeline::Clip {
+    &app.tracks[track].clips[0]
+}
+
+/// Focuses the control whose name contains `label` and settles for a
+/// frame, so the arrow keys then stay with it.
+fn focus(h: &mut Harness<'_, App>, label: &str) {
+    h.get_by_label_contains(label).focus();
+    h.run();
+    h.run();
+    assert!(
+        h.get_by_label_contains(label).is_focused(),
+        "{label} focused"
+    );
+}
+
+#[test]
+fn clips_and_markers_are_read_and_edited_from_the_keyboard() {
+    let mut h = with_a_clip();
+    let spoken = names(&h);
+    assert!(
+        spoken
+            .iter()
+            .any(|n| n == "backing on Guitar, bar 1 to bar 2"),
+        "{spoken:?}"
+    );
+    assert!(spoken.iter().any(|n| n == "Section A, marker at bar 3"));
+
+    focus(&mut h, "backing on Guitar");
+    h.key_press(Key::ArrowRight);
+    h.run();
+    assert_eq!(clip_of(h.state(), 0).start, 24_000, "Right: a beat later");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowRight);
+    h.run();
+    assert_eq!(clip_of(h.state(), 0).start, 120_000, "Shift+Right: a bar");
+    assert!(
+        h.query_by_label("backing on Guitar, bar 2 beat 2 to bar 3 beat 2")
+            .is_some(),
+        "the name follows the clip: {:?}",
+        names(&h)
+    );
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
+    h.run();
+    let c = clip_of(h.state(), 0);
+    assert_eq!(
+        (c.start, c.offset, c.len),
+        (144_000, 24_000, 72_000),
+        "Ctrl+Right trims the start"
+    );
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowLeft);
+    h.run();
+    assert_eq!(clip_of(h.state(), 0).len, 48_000, "Alt+Left trims the end");
+    h.key_press(Key::ArrowLeft);
+    h.run();
+    assert_eq!(clip_of(h.state(), 0).start, 120_000, "Left: a beat earlier");
+
+    h.key_press(Key::Enter);
+    h.run();
+    let id = clip_of(h.state(), 0).id;
+    assert!(h.state().timeline.selected.contains(&id), "Enter selects");
+    assert!(
+        wait_for(&mut h, |a| a.ctl.status().position().0 == 120_000),
+        "and goes to the clip's start"
+    );
+    assert_eq!(
+        h.get_by_label_contains("backing on Guitar")
+            .accesskit_node()
+            .toggled(),
+        Some(egui::accesskit::Toggled::True),
+        "a screen reader hears that it is selected"
+    );
+    h.key_press(Key::Space);
+    assert!(
+        wait_for(&mut h, playing),
+        "Space still plays with a clip focused"
+    );
+    h.key_press(Key::Space);
+    assert!(wait_for(&mut h, |a| !playing(a)));
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowDown);
+    h.run();
+    assert!(
+        h.state().tracks[0].clips.is_empty(),
+        "Ctrl+Down moves it to Bass"
+    );
+    assert_eq!(clip_of(h.state(), 1).start, 120_000);
+    assert!(h.query_by_label_contains("backing on Bass").is_some());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state().tracks[1].clips.len(), 1, "no track below Bass");
+
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().tracks[1].clips.is_empty(), "Delete removes it");
+    assert!(h.query_by_label_contains("backing on").is_none());
+}
+
+#[test]
+fn up_and_down_move_between_tracks_and_a_take_moved_becomes_a_clip() {
+    let mut h = with_a_clip();
+    let app = h.state_mut();
+    let take = crate::timeline::tests::clip(48_000, 48_000);
+    crate::timeline::add_take(&mut app.tracks[1].clips, take);
+    app.rebuild();
+    h.run();
+    assert!(
+        h.query_by_label("Take 1 on Bass, bar 1 beat 3 to bar 2")
+            .is_some()
+    );
+
+    focus(&mut h, "backing on Guitar");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.run();
+    assert!(
+        h.get_by_label_contains("Take 1 on Bass").is_focused(),
+        "Down reaches the nearest clip on Bass"
+    );
+    h.key_press(Key::ArrowUp);
+    h.run();
+    h.run();
+    assert!(h.get_by_label_contains("backing on Guitar").is_focused());
+
+    focus(&mut h, "Take 1 on Bass");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowUp);
+    h.run();
+    let guitar = &h.state().tracks[0].clips;
+    assert_eq!(guitar.len(), 2);
+    let moved = guitar.iter().find(|c| c.start == 48_000).unwrap();
+    assert_eq!(
+        (moved.take, moved.name()),
+        (None, "Take 1 from Bass".into())
+    );
+}
+
+#[test]
+fn markers_are_moved_renamed_looped_and_deleted_from_the_keyboard() {
+    let mut h = with_a_clip();
+    focus(&mut h, "Section A, marker");
+    h.key_press(Key::ArrowRight);
+    h.run();
+    assert_eq!(h.state().markers[0].bar, 4, "Right: a bar later");
+    h.key_press(Key::ArrowLeft);
+    h.key_press(Key::ArrowLeft);
+    h.key_press(Key::ArrowLeft);
+    h.run();
+    assert_eq!(h.state().markers[0].bar, 1, "Left stops at bar 1");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Enter);
+    h.run();
+    assert!(h.state().looping, "Ctrl+Enter loops the section");
+    assert_eq!(h.state().loop_bars, (1, 3), "to the end of the song");
+
+    h.key_press(Key::F2);
+    h.run();
+    h.run();
+    let field = h.get_by_role(egui::accesskit::Role::TextInput);
+    assert!(
+        field.is_focused(),
+        "F2 opens the rename with the field focused"
+    );
+    field.type_text(" verse");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().markers[0].name, "Section A verse");
+
+    focus(&mut h, "Section A verse, marker");
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().markers.is_empty(), "Delete removes the marker");
+}
+
+#[test]
+fn a_clip_can_be_dragged_to_another_track() {
+    let mut h = with_a_clip();
+    let from = h.get_by_label_contains("backing on Guitar").rect();
+    let to = h.get_by_label_contains("Bass volume").rect();
+    let start = from.center();
+    let end = egui::pos2(start.x + 30.0, to.center().y);
+    assert!(end.y > from.bottom(), "Bass's lane is below Guitar's");
+    h.drag_at(start);
+    h.run();
+    for i in 1..=4 {
+        h.hover_at(start.lerp(end, i as f32 / 4.0));
+        h.run();
+    }
+    h.drop_at(end);
+    h.run();
+    assert!(h.state().tracks[0].clips.is_empty(), "left Guitar");
+    assert_eq!(h.state().tracks[1].clips.len(), 1, "landed on Bass");
+    assert!(h.query_by_label_contains("backing on Bass").is_some());
 }

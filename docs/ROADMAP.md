@@ -270,7 +270,8 @@ project is a folder holding `project.daw` (a Loro document, with a
 of its content. Saving copies imported files in and moves takes in from
 `Unsaved takes`. Undo and redo are the document's own, per user, so
 they will work with merged edits. Bundles: File → Export bundle… writes
-one `.dawbundle` file (the document and its audio), and importing one
+one `.dawbundle` file (a plain tar of the project folder: the document
+and its audio), and importing one
 merges it into the user's copy of that project, or makes a new project.
 Shared-folder sync: each computer writes its own copy of the document
 into the folder's `Devices` folder within seconds of an edit and merges

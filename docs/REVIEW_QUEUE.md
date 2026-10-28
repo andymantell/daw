@@ -338,7 +338,9 @@ back) and `app-lesson-notes.png`. Projects live in
       bundle… and save it (the Windows Save window could not be tried in
       the cloud). Then rename the project's folder in `DAW\Projects`, so
       the app doesn't find it, and drop the `.dawbundle` file on the
-      window. Pass: it opens as a new project with its audio. Rename
+      window. Pass: it opens as a new project with its audio. A bundle is a
+      plain tar file: `tar -tf <file>.dawbundle` in a terminal lists a
+      project folder. Rename
       the folder back, open it, add a marker, export a bundle, then make
       a different change in the first copy and import the bundle there
       (File → Import bundle…). Pass: both changes are there.
@@ -352,10 +354,6 @@ back) and `app-lesson-notes.png`. Projects live in
       the folder syncing (the take once its audio arrives, after the next
       save), nothing is lost, and the storage leaves no conflict copies.
       Each computer adds a file under the project's `Devices` folder.
-- [ ] **1.6 Bundle file type (question).** Bundles are our own simple
-      file (`.dawbundle`), not a zip, because audio barely compresses and
-      a simple format is easy to check. Say if you'd rather be able to
-      open one with ordinary zip tools.
 - [ ] **1.7 Lesson notes.** Practice → Lesson notes…, type a few lines,
       save, reopen. Pass: the notes come back. They are plain text for
       now; say what you would want first: headings, tab blocks pinned

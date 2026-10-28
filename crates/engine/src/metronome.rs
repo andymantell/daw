@@ -124,19 +124,31 @@ pub(crate) fn render(
     from: i64,
     out: &mut [f32],
 ) {
+    render_at(map, clicks, m, voice, from as f64, 1.0, out);
+}
+
+/// Adds clicks into `out`, where output frame `i` plays timeline
+/// position `from + i × step`: `step` is the practice speed, so clicks
+/// follow a slowed or quickened song while each click sounds as usual.
+pub(crate) fn render_at(
+    map: &TempoMap,
+    clicks: &Clicks,
+    m: &Metronome,
+    voice: &mut Option<Voice>,
+    from: f64,
+    step: f64,
+    out: &mut [f32],
+) {
     let gain = db_to_gain(m.level_db);
-    let n = out.len() as i64;
-    let mut next = next_click(map, m.subdivision, m.accent, from);
+    let mut next = next_click(map, m.subdivision, m.accent, from.ceil() as i64);
     for (i, s) in out.iter_mut().enumerate() {
-        let f = from + i as i64;
-        if f == next.0 {
+        let end = from + (i + 1) as f64 * step;
+        if (next.0 as f64) < end {
             *voice = Some(Voice {
                 kind: next.1,
                 at: 0,
             });
-            if f + 1 < from + n {
-                next = next_click(map, m.subdivision, m.accent, f + 1);
-            }
+            next = next_click(map, m.subdivision, m.accent, next.0 + 1);
         }
         if let Some(v) = voice {
             let snd = clicks.sound(v.kind);

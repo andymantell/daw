@@ -31,6 +31,9 @@ use rtrb::{Consumer, Producer};
 pub const CHUNK: usize = 32_768;
 /// How far ahead of the playhead to keep loaded, in chunks.
 const AHEAD: usize = 5;
+/// Frames kept loaded behind the play position: the practice stretcher
+/// reads a little before where it plays.
+const BEHIND: i64 = 8192;
 
 /// A file the engine can stream: probed once, on import or load.
 #[derive(Debug)]
@@ -182,7 +185,7 @@ impl Streamer {
     fn wanted(&self, at: Playhead) -> HashSet<(u64, usize)> {
         let mut want = HashSet::new();
         let span = (AHEAD * CHUNK) as i64;
-        let mut windows = vec![(at.position, at.position + span)];
+        let mut windows = vec![(at.position - BEHIND, at.position + span)];
         if let Some((s, e)) = at.looping {
             windows.push((s, (s + span).min(e)));
             if at.position >= s && at.position < e && at.position + span > e {

@@ -13,5 +13,6 @@ workspace = true
 [dependencies]
 hound = "3.5.1"
 rtrb = "0.4.1"
+realfft = "3.5.1"
 rubato = "5.0.1"
 

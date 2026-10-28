@@ -910,6 +910,7 @@ name = "daw-engine"
 version = "0.0.0"
 dependencies = [
  "hound",
+ "realfft",
  "rtrb",
  "rubato",
 ]

@@ -8,5 +8,6 @@ pub mod import;
 pub mod metronome;
 pub mod record;
 pub mod stream;
+pub mod stretch;
 pub mod time;
 pub mod tuner;

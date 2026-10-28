@@ -161,6 +161,15 @@ Screenshot (a 220 Hz test tone standing in for a guitar):
       (a clip-on or FL Studio's). Pass: same reading to within a couple
       of cents, steady enough to tune by, and quick to settle after each
       pluck. Try a bass's low E too if one is handy.
+- [ ] **1.4 Speed and transpose.** Screenshot:
+      `/mnt/project-files/screenshots/app-speed-transpose.png`. Loop a
+      tricky bar of a real song, set Speed to 75% then 50%, with the
+      metronome on. Pass: it sounds usable for learning (some softening
+      of pick attacks is expected), the clicks stay on the slowed beat,
+      and the loop joins without a bump. Then try Tuning presets → "Half
+      step down → standard" on a song in E♭ tuning and play along in
+      standard. This is our own vocoder; compare it with the 0.6 listening
+      files when choosing (Decisions below).
 - [ ] **1.4 Practice mute.** Load a backing with a guitar part on its own
       track, press 🎧 on it and play along. Pass: that part goes silent and
       comes back, and Mute still works separately.

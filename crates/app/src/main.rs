@@ -165,6 +165,10 @@ struct App {
     effects: Effects,
     tuner: tuner::Tuner,
     export: export::Export,
+    /// Practice speed, percent, and transpose.
+    speed_pct: f64,
+    semitones: i32,
+    cents: i32,
 }
 
 /// How often to look for a lost device.
@@ -208,6 +212,9 @@ impl App {
             effects: Effects::new(config_dir().join("plugins.txt")),
             tuner: tuner::Tuner::new(rate),
             export: export::Export::default(),
+            speed_pct: 100.0,
+            semitones: 0,
+            cents: 0,
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -287,6 +294,7 @@ impl App {
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
         self.send(self.tuner.command());
+        self.send(self.practice());
         self.send_loop();
         self.send(Command::Seek(pos));
         eng
@@ -674,6 +682,82 @@ impl App {
                 self.send_loop();
             }
         });
+        ui.horizontal(|ui| self.practice_controls(ui));
+    }
+
+    fn practice(&self) -> Command {
+        Command::SetPractice {
+            speed: self.speed_pct / 100.0,
+            semitones: self.semitones as f64 + self.cents as f64 / 100.0,
+        }
+    }
+
+    /// Speed, transpose and tuning presets.
+    fn practice_controls(&mut self, ui: &mut egui::Ui) {
+        let before = (self.speed_pct, self.semitones, self.cents);
+        ui.label("Speed");
+        ui.add(
+            egui::DragValue::new(&mut self.speed_pct)
+                .range(50.0..=150.0)
+                .speed(0.5)
+                .fixed_decimals(0)
+                .suffix(" %"),
+        )
+        .on_hover_text("Slow down or speed up without changing pitch");
+        for pct in [50.0, 75.0, 100.0] {
+            if ui
+                .selectable_label(self.speed_pct == pct, format!("{pct:.0}%"))
+                .clicked()
+            {
+                self.speed_pct = pct;
+            }
+        }
+        ui.separator();
+        ui.label("Transpose");
+        ui.add(
+            egui::DragValue::new(&mut self.semitones)
+                .range(-12..=12)
+                .suffix(" st"),
+        )
+        .on_hover_text("Semitones, without changing speed");
+        ui.add(
+            egui::DragValue::new(&mut self.cents)
+                .range(-50..=50)
+                .suffix(" ¢"),
+        )
+        .on_hover_text("Fine pitch, in cents");
+        egui::ComboBox::from_id_salt("tuning-preset")
+            .width(200.0)
+            .selected_text("Tuning presets")
+            .show_ui(ui, |ui| {
+                for (label, st) in [
+                    ("As recorded", 0),
+                    ("Half step down → standard (+1)", 1),
+                    ("Whole step down → standard (+2)", 2),
+                    ("Standard → half step down (−1)", -1),
+                    ("Standard → whole step down (−2)", -2),
+                ] {
+                    if ui.selectable_label(false, label).clicked() {
+                        self.semitones = st;
+                        self.cents = 0;
+                    }
+                }
+            });
+        if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
+            && ui.button("Reset").clicked()
+        {
+            (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
+        }
+        if (self.speed_pct, self.semitones, self.cents) != before {
+            let c = self.practice();
+            self.send(c);
+        }
+        if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
+            ui.colored_label(
+                Color32::YELLOW,
+                "Recording waits for normal speed and pitch",
+            );
+        }
     }
 
     fn mixer(&mut self, ui: &mut egui::Ui) {

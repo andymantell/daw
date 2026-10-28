@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::metronome::Clicks;
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
+use crate::stretch::{Feed, Stretcher};
 use crate::time::{Frames, TempoMap, Ticks};
 
 /// Most tracks a graph can hold; meters are sized to this up front.
@@ -344,6 +345,8 @@ pub(crate) struct TrackNode {
     pub arm: bool,
     pub monitor: bool,
     pub inserts: Vec<InsertNode>,
+    /// Practice speed and transpose; used only when either is set.
+    pub stretch: Box<Stretcher>,
     /// Effects' total latency: clips are read this far ahead.
     pub latency: i64,
     /// The source is mono but the effects are stereo: copy left to right
@@ -371,6 +374,118 @@ impl TrackNode {
 }
 
 /// Adds `run` frames of a chunk, from frame `at`, into the two buffers.
+/// Adds the clips' audio for frames `[pos, pos + l.len())` into `l` and
+/// `r`. Returns how many frames of streamed audio were missing.
+fn read_clips(
+    clips: &[ClipNode],
+    streams: &[StreamNode],
+    pos: i64,
+    sl: &mut [f32],
+    sr: &mut [f32],
+) -> usize {
+    let n = sl.len();
+    let mut missing = 0;
+    // Clips are sorted by start; skip those that end before this
+    // block, stop at the first that starts after it.
+    for c in clips {
+        if c.start >= pos + n as i64 {
+            break;
+        }
+        if c.end <= pos {
+            continue;
+        }
+        let from = c.start.max(pos);
+        let to = c.end.min(pos + n as i64);
+        let dst = (from - pos) as usize;
+        let src = c.offset + (from - c.start) as usize;
+        let len = (to - from) as usize;
+        match &c.src {
+            NodeSrc::Memory(d) => {
+                let chans = &d.channels;
+                let right = chans.get(1).unwrap_or(&chans[0]);
+                for i in 0..len {
+                    sl[dst + i] += chans[0][src + i] * c.gain;
+                    sr[dst + i] += right[src + i] * c.gain;
+                }
+            }
+            NodeSrc::Stream(si) => {
+                let slots = &streams[*si].slots;
+                let mut done = 0;
+                // One chunk at a time.
+                while done < len {
+                    let f = src + done;
+                    let (ci, within) = (f / CHUNK, f % CHUNK);
+                    let run = (len - done).min(CHUNK - within);
+                    match slots.get(ci).and_then(|s| s.as_deref()) {
+                        Some(ch) => {
+                            let run = run.min(ch.frames().saturating_sub(within));
+                            mix_chunk(
+                                ch,
+                                within,
+                                run,
+                                c.gain,
+                                &mut sl[dst + done..],
+                                &mut sr[dst + done..],
+                            );
+                            missing += (len - done).min(CHUNK - within) - run;
+                        }
+                        None => missing += run,
+                    }
+                    done += (len - done).min(CHUNK - within);
+                }
+            }
+        }
+    }
+    missing
+}
+
+/// A track's clips as the stretcher reads them: by position in
+/// unwrapped play time, which goes round the loop.
+struct TrackFeed<'a> {
+    clips: &'a [ClipNode],
+    streams: &'a [StreamNode],
+    looping: Option<(i64, i64)>,
+    missing: usize,
+}
+
+impl Feed for TrackFeed<'_> {
+    fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
+        l.fill(0.0);
+        r.fill(0.0);
+        let mut done = 0;
+        while done < l.len() {
+            let u = start + done as i64;
+            // Where `u` falls on the timeline, and how far until the
+            // loop sends it back.
+            let (pos, run) = match self.looping {
+                Some((a, b)) if u >= b && b > a => {
+                    let p = a + (u - b).rem_euclid(b - a);
+                    (p, (b - p) as usize)
+                }
+                Some((_, b)) if u < b => (u, (b - u) as usize),
+                _ => (u, usize::MAX),
+            };
+            let run = run.min(l.len() - done);
+            let (sl, sr) = (&mut l[done..done + run], &mut r[done..done + run]);
+            self.missing += read_clips(self.clips, self.streams, pos, sl, sr);
+            done += run;
+        }
+    }
+}
+
+/// Practice speed and transpose for one block of [`Graph::render`].
+pub(crate) struct Rate {
+    /// Play position at the block's first frame, in unwrapped play time:
+    /// it runs on past the loop end, which the feed maps back.
+    pub u: f64,
+    pub speed: f64,
+    pub semitones: f64,
+    pub looping: Option<(i64, i64)>,
+    /// Start the stretchers afresh at `u` (play started, seek, loop
+    /// changed).
+    pub reset: bool,
+}
+
 fn mix_chunk(ch: &Chunk, at: usize, run: usize, gain: f32, l: &mut [f32], r: &mut [f32]) {
     let k = ch.channels;
     let s = &ch.samples[at * k..(at + run) * k];
@@ -509,6 +624,7 @@ impl Session {
                 inserts,
                 latency,
                 widen,
+                stretch: Box::new(Stretcher::new(max_block)),
             });
         }
         let any_solo = tracks.iter().any(|t| t.mix.solo);
@@ -578,6 +694,7 @@ impl Graph {
         peaks: &mut [(f32, f32)],
         input: InputBlock,
         play: bool,
+        rate: Option<Rate>,
     ) -> usize {
         let n = out[0].len();
         let mut missing = 0;
@@ -596,58 +713,27 @@ impl Graph {
                     sr[i] += input.get(i, right);
                 }
             }
-            // Clips are sorted by start; skip those that end before this
-            // block, stop at the first that starts after it. They are
-            // read ahead by the effects' latency.
-            let pos = pos + t.latency;
-            let clips = if play { &t.clips[..] } else { &[] };
-            for c in clips {
-                if c.start >= pos + n as i64 {
-                    break;
-                }
-                if c.end <= pos {
-                    continue;
-                }
-                let from = c.start.max(pos);
-                let to = c.end.min(pos + n as i64);
-                let dst = (from - pos) as usize;
-                let src = c.offset + (from - c.start) as usize;
-                let len = (to - from) as usize;
-                match &c.src {
-                    NodeSrc::Memory(d) => {
-                        let chans = &d.channels;
-                        let right = chans.get(1).unwrap_or(&chans[0]);
-                        for i in 0..len {
-                            sl[dst + i] += chans[0][src + i] * c.gain;
-                            sr[dst + i] += right[src + i] * c.gain;
+            if play {
+                match &rate {
+                    Some(rate) => {
+                        let st = &mut t.stretch;
+                        st.set(rate.speed, rate.semitones);
+                        if rate.reset {
+                            // Effects' latency: read that far ahead, in
+                            // input time.
+                            st.reset(rate.u + t.latency as f64 * rate.speed);
                         }
+                        let mut feed = TrackFeed {
+                            clips: &t.clips,
+                            streams: &self.streams,
+                            looping: rate.looping,
+                            missing: 0,
+                        };
+                        st.process(&mut feed, sl, sr);
+                        missing += feed.missing;
                     }
-                    NodeSrc::Stream(si) => {
-                        let slots = &self.streams[*si].slots;
-                        let mut done = 0;
-                        // One chunk at a time.
-                        while done < len {
-                            let f = src + done;
-                            let (ci, within) = (f / CHUNK, f % CHUNK);
-                            let run = (len - done).min(CHUNK - within);
-                            match slots.get(ci).and_then(|s| s.as_deref()) {
-                                Some(ch) => {
-                                    let run = run.min(ch.frames().saturating_sub(within));
-                                    mix_chunk(
-                                        ch,
-                                        within,
-                                        run,
-                                        c.gain,
-                                        &mut sl[dst + done..],
-                                        &mut sr[dst + done..],
-                                    );
-                                    missing += (len - done).min(CHUNK - within) - run;
-                                }
-                                None => missing += run,
-                            }
-                            done += (len - done).min(CHUNK - within);
-                        }
-                    }
+                    // Read ahead by the effects' latency.
+                    None => missing += read_clips(&t.clips, &self.streams, pos + t.latency, sl, sr),
                 }
             }
 
@@ -719,6 +805,14 @@ impl Graph {
 
     /// Takes over the effects of `old` that this graph still uses. The
     /// rest stay in `old`, to be dropped with it off the audio thread.
+    /// Takes over the stretchers of `old`, track by track, so a graph
+    /// change while playing slowed does not restart them.
+    pub(crate) fn adopt_stretchers(&mut self, old: &mut Graph) {
+        for (t, o) in self.tracks.iter_mut().zip(&mut old.tracks) {
+            std::mem::swap(&mut t.stretch, &mut o.stretch);
+        }
+    }
+
     pub(crate) fn adopt_inserts(&mut self, old: &mut Graph) {
         for t in &mut self.tracks {
             for slot in t.inserts.iter_mut().filter(|s| s.effect.is_none()) {

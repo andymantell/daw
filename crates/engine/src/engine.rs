@@ -21,10 +21,11 @@ use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::graph::{Graph, InputBlock, MAX_TRACKS, Mix};
+use crate::graph::{Graph, InputBlock, MAX_TRACKS, Mix, Rate};
 use crate::metronome::{self, Metronome, Voice};
 use crate::record::{BLOCK_FRAMES, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
+use crate::stretch;
 use crate::time::{Frames, Ticks};
 
 /// Messages from the controller to the audio thread.
@@ -52,6 +53,13 @@ pub enum Command {
     SetRecording(bool),
     /// Sends this input channel to the tuner; `None` stops.
     SetTunerInput(Option<usize>),
+    /// Practice speed (1 is normal, 0.5 to 1.5) and transpose in
+    /// semitones (±12, fractions for cents), keeping pitch and tempo
+    /// apart. Nothing records while either is changed.
+    SetPractice {
+        speed: f64,
+        semitones: f64,
+    },
 }
 
 /// Shared with the UI: where playback is, and peak levels since the UI
@@ -294,6 +302,14 @@ pub struct Engine {
     to_recorder: Producer<RecBlock>,
     tuner_input: Option<usize>,
     to_tuner: Producer<f32>,
+    speed: f64,
+    semitones: f64,
+    /// While stretching: the play position, fractional, and the same in
+    /// unwrapped play time (not sent back round the loop).
+    posf: f64,
+    u: f64,
+    /// The stretchers must start afresh at `u`.
+    stretch_reset: bool,
 }
 
 /// Commands that fit in the queue before `send` refuses more.
@@ -365,6 +381,11 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             to_recorder: rec_tx,
             tuner_input: None,
             to_tuner: tuner_tx,
+            speed: 1.0,
+            semitones: 0.0,
+            posf: 0.0,
+            u: 0.0,
+            stretch_reset: true,
         },
     )
 }
@@ -423,17 +444,20 @@ impl Engine {
                 }
                 Command::Seek(f) => {
                     self.pos = f.0;
+                    self.stretch_reset = true;
                     self.count_in_to = None;
                     self.voice = None;
                 }
                 Command::SetLoop(l) => {
                     self.looping = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
+                    self.stretch_reset = true;
                 }
                 Command::SetGraph(mut g) => {
                     if let Some(old) = &mut self.graph {
                         let to_disk = &mut self.to_disk;
                         g.adopt_chunks(old, |c| give_back(to_disk, c));
                         g.adopt_inserts(old);
+                        g.adopt_stretchers(old);
                     }
                     if let Some(old) = self.graph.replace(g) {
                         // The queue has room for every graph in flight;
@@ -451,6 +475,10 @@ impl Engine {
                 Command::SetMetronome(m) => self.metronome = m,
                 Command::SetRecording(on) => self.recording = on,
                 Command::SetTunerInput(ch) => self.tuner_input = ch,
+                Command::SetPractice { speed, semitones } => {
+                    self.speed = speed.clamp(stretch::SPEED_RANGE.0, stretch::SPEED_RANGE.1);
+                    self.semitones = semitones.clamp(-stretch::SEMITONES, stretch::SEMITONES);
+                }
             }
         }
     }
@@ -523,9 +551,18 @@ impl Engine {
                     &mut left[r.clone()],
                     &mut right[r.clone()],
                     false,
+                    None,
                 );
                 done = r.end;
             }
+        }
+        if !self.playing || !self.stretching() {
+            self.stretch_reset = true;
+        }
+        if self.playing && self.stretching() {
+            self.play_stretched(input, channels, left, right, click);
+            self.publish();
+            return;
         }
         let mut done = 0;
         while self.playing && done < n {
@@ -548,6 +585,7 @@ impl Engine {
                 &mut left[range.clone()],
                 &mut right[range.clone()],
                 !counting,
+                None,
             );
             if !counting && self.recording {
                 self.record(block, len);
@@ -584,21 +622,7 @@ impl Engine {
                 self.pos = start;
             }
         }
-        self.status.position.store(self.pos, Ordering::Relaxed);
-        self.status.playing.store(self.playing, Ordering::Relaxed);
-        if let Some((a, b)) = self.looping {
-            self.status.loop_start.store(a, Ordering::Relaxed);
-            self.status.loop_end.store(b, Ordering::Relaxed);
-        }
-        self.status
-            .loop_on
-            .store(self.looping.is_some(), Ordering::Relaxed);
-        self.status
-            .counting_in
-            .store(self.count_in_to.is_some(), Ordering::Relaxed);
-        self.status
-            .recording
-            .store(self.recording, Ordering::Relaxed);
+        self.publish();
     }
 
     /// Sends `len` frames of each armed track's input, from `pos`, to the
@@ -653,6 +677,139 @@ impl Engine {
     }
 
     /// Renders `len` frames of clicks from `pos` into `click_buf`.
+    fn stretching(&self) -> bool {
+        self.speed != 1.0 || self.semitones != 0.0
+    }
+
+    /// Shares the transport state with the UI.
+    fn publish(&self) {
+        self.status.position.store(self.pos, Ordering::Relaxed);
+        self.status.playing.store(self.playing, Ordering::Relaxed);
+        if let Some((a, b)) = self.looping {
+            self.status.loop_start.store(a, Ordering::Relaxed);
+            self.status.loop_end.store(b, Ordering::Relaxed);
+        }
+        self.status
+            .loop_on
+            .store(self.looping.is_some(), Ordering::Relaxed);
+        self.status
+            .counting_in
+            .store(self.count_in_to.is_some(), Ordering::Relaxed);
+        self.status
+            .recording
+            .store(self.recording, Ordering::Relaxed);
+    }
+
+    /// Plays one callback's block at the practice speed and transpose.
+    /// Output frame `i` plays timeline position `posf + i × speed`; tracks
+    /// read through their stretchers, clicks follow the slowed beat, and
+    /// nothing records.
+    fn play_stretched(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        left: &mut [f32],
+        right: &mut [f32],
+        mut click: Option<&mut [f32]>,
+    ) {
+        let n = left.len().min(right.len());
+        let speed = self.speed;
+        if self.stretch_reset {
+            self.posf = self.pos as f64;
+            self.u = self.posf;
+        }
+        let mut done = 0;
+        while self.playing && done < n {
+            let mut len = (n - done).min(self.max_block);
+            let counting = self.count_in_to.is_some();
+            // Output frames until `to` on the timeline, at least one.
+            let until = |to: i64, at: f64| (((to as f64 - at) / speed).ceil() as usize).max(1);
+            if let Some(to) = self.count_in_to {
+                len = len.min(until(to, self.posf));
+            } else if let Some((start, end)) = self.looping {
+                if self.posf >= end as f64 {
+                    self.posf = start as f64;
+                    self.u = self.posf;
+                    self.stretch_reset = true;
+                }
+                len = len.min(until(end, self.posf));
+            }
+            let range = done..done + len;
+            let block = InputBlock {
+                data: input
+                    .get(range.start * channels..(range.end * channels).min(input.len()))
+                    .unwrap_or(&[]),
+                channels,
+            };
+            let rate = (!counting).then(|| Rate {
+                u: self.u,
+                speed,
+                semitones: self.semitones,
+                looping: self.looping,
+                reset: std::mem::take(&mut self.stretch_reset),
+            });
+            self.render(
+                block,
+                &mut left[range.clone()],
+                &mut right[range.clone()],
+                !counting,
+                rate,
+            );
+            if counting || self.metronome.enabled {
+                let buf = &mut self.click_buf[..len];
+                buf.fill(0.0);
+                if let Some(g) = &self.graph {
+                    metronome::render_at(
+                        g.tempo(),
+                        &g.clicks,
+                        &self.metronome,
+                        &mut self.voice,
+                        self.posf,
+                        speed,
+                        buf,
+                    );
+                }
+                let clicks = &self.click_buf[..len];
+                match click.as_deref_mut() {
+                    Some(c) if self.metronome.separate_output => {
+                        for (o, x) in c[range].iter_mut().zip(clicks) {
+                            *o += x;
+                        }
+                    }
+                    _ => {
+                        for ((l, r), x) in left[range.clone()]
+                            .iter_mut()
+                            .zip(&mut right[range])
+                            .zip(clicks)
+                        {
+                            *l += x;
+                            *r += x;
+                        }
+                    }
+                }
+            }
+            let step = len as f64 * speed;
+            self.posf += step;
+            self.u += step;
+            done += len;
+            if let Some(to) = self.count_in_to
+                && self.posf >= to as f64
+            {
+                self.posf = to as f64;
+                self.u = self.posf;
+                self.count_in_to = None;
+                self.stretch_reset = true;
+            } else if let Some((start, end)) = self.looping
+                && !counting
+                && self.posf >= end as f64
+            {
+                // The stretchers carry on round the loop by themselves.
+                self.posf = start as f64 + (self.posf - end as f64);
+            }
+            self.pos = self.posf.floor() as i64;
+        }
+    }
+
     fn clicks(&mut self, len: usize) {
         let buf = &mut self.click_buf[..len];
         buf.fill(0.0);
@@ -668,7 +825,14 @@ impl Engine {
         }
     }
 
-    fn render(&mut self, input: InputBlock, left: &mut [f32], right: &mut [f32], play: bool) {
+    fn render(
+        &mut self,
+        input: InputBlock,
+        left: &mut [f32],
+        right: &mut [f32],
+        play: bool,
+        rate: Option<Rate>,
+    ) {
         let Some(g) = &mut self.graph else {
             return;
         };
@@ -679,6 +843,7 @@ impl Engine {
             &mut self.peaks[..tracks],
             input,
             play,
+            rate,
         );
         if missing > 0 {
             self.status

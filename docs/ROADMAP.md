@@ -230,8 +230,12 @@ compensation glitches for that many frames where a loop wraps.*
 (Practice → Tuner) on any input channel, reading within a cent from a
 five-string bass's low B up, with the reference pitch setting (A = 400 to
 480 Hz); a per-track practice mute (🎧), kept apart from the mix's own
-mute. Speed, transpose and the tempo trainer wait for the speed-and-pitch
-choice (spike 0.6 listening). The reference pitch is not saved yet.*
+mute; speed 50–150% and transpose ±12 semitones plus cents, with tuning
+presets, through our own phase vocoder from spike 0.6 (a library can
+replace it if the 0.6 listening prefers one). Tracks stay in time with
+the transport, the metronome follows the slowed beat, and loops wrap
+smoothly; nothing records while speed or pitch is changed. Still to do:
+tempo trainer, detected tuning offset, and saving the reference pitch.*
 - Loop region, chosen quickly from sections and markers.
 - Pitch-preserving speed (50–150%) and transpose (±12 st), plus fine pitch
   in cents. **Tuning presets** for common shifts (e.g. "half step down →

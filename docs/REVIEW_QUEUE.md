@@ -378,7 +378,7 @@ is in the same download.
 ### Privacy and children's data (roadmap 1.8)
 
 From [PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md). On
-2026-10-28 Andy said the app is for himself and his guitar teacher, open
+2026-10-28 Andy said the app is for the owner and their guitar teacher, open
 sourced but not promoted to schools or children. So no professional legal
 check is planned, and these are good-practice choices, not compliance
 items.

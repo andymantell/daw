@@ -322,7 +322,7 @@ was never saved.*
   even without a server. *Reviewed 2026-10-28 in
   [research/PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md), with
   design rules for 1.6 identity, live sessions and comments, and decisions
-  in [REVIEW_QUEUE.md](REVIEW_QUEUE.md). The app is for the owner and his
+  in [REVIEW_QUEUE.md](REVIEW_QUEUE.md). The app is for the owner and their
   teacher and not promoted to schools, so these are good practice;
   revisit if that changes or a hosted service is added.*
 

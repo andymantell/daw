@@ -10,7 +10,7 @@ are also listed in [REVIEW_QUEUE.md](../REVIEW_QUEUE.md).
 say, and marks clearly where the pages are silent or where I am drawing an
 inference.
 
-**Scope (2026-10-28):** the app is built for the owner and his guitar
+**Scope (2026-10-28):** the app is built for the owner and their guitar
 teacher, and published as open source, but not promoted to schools or
 children. No professional legal check is planned. The design implications
 below are kept as good practice, and this review should be revisited if

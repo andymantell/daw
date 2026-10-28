@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! The DAW test plugin laid out as `.vst3` bundles for the host's tests:
+//! the working one, and broken builds of it (see its Cargo features).
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Mutex;
+
+/// The working test plugin, in a folder of its own.
+pub fn bundle() -> PathBuf {
+    build("DawTestGain", None)
+}
+
+/// A broken build of the test plugin, made with Cargo feature `feature`
+/// and named `name`, in a folder of its own.
+#[allow(dead_code)]
+pub fn broken(name: &'static str, feature: &'static str) -> PathBuf {
+    build(name, Some(feature))
+}
+
+/// Builds once per test run for each name. The builds share a target
+/// dir and overwrite each other's output, so they take turns.
+fn build(name: &'static str, feature: Option<&'static str>) -> PathBuf {
+    static BUILT: Mutex<Option<HashMap<&'static str, PathBuf>>> = Mutex::new(None);
+    let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    let built = built.get_or_insert_with(HashMap::new);
+    if let Some(p) = built.get(name) {
+        return p.clone();
+    }
+    let release = !cfg!(debug_assertions);
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args(["build", "-p", "daw-test-plugin"]);
+    if release {
+        cmd.arg("--release");
+    }
+    if let Some(f) = feature {
+        cmd.args(["--features", f]);
+    }
+    // A separate target dir avoids waiting on the lock held by `cargo test`.
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-plugin");
+    cmd.arg("--target-dir").arg(&target);
+    assert!(
+        cmd.status().expect("run cargo").success(),
+        "building the test plugin failed"
+    );
+    let profile = if release { "release" } else { "debug" };
+    let (lib, sub, file) = if cfg!(windows) {
+        (
+            "daw_test_plugin.dll",
+            "x86_64-win".to_owned(),
+            format!("{name}.vst3"),
+        )
+    } else if cfg!(target_os = "macos") {
+        (
+            "libdaw_test_plugin.dylib",
+            "MacOS".to_owned(),
+            name.to_owned(),
+        )
+    } else {
+        (
+            "libdaw_test_plugin.so",
+            format!("{}-linux", std::env::consts::ARCH),
+            format!("{name}.so"),
+        )
+    };
+    let root = target
+        .join(format!("plugins-{name}"))
+        .join(format!("{name}.vst3"));
+    let dir = root.join("Contents").join(sub);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(target.join(profile).join(lib), dir.join(file)).unwrap();
+    built.insert(name, root.clone());
+    root
+}

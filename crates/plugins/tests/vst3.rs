@@ -3,14 +3,16 @@
 //! parameters, state, and the engine running it as a track insert.
 //! Needs no third-party plugins, so it runs on every CI platform.
 
+#[path = "common/bundle.rs"]
+mod bundle;
 #[path = "../../engine/tests/common/rt_check.rs"]
 mod rt_check;
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
+use bundle::bundle;
 use daw_engine::graph::{AudioData, ClipSpec, Insert, InsertSpec, Session, TrackSpec};
 use daw_engine::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
 use daw_plugins::scan::{self, PluginList};
@@ -19,46 +21,6 @@ use daw_test_plugin::{LATENCY, NAME, PROCESSOR_CID, SYNTH_NAME};
 
 const RATE: u32 = 48_000;
 const BLOCK: usize = 256;
-
-/// The test plugin laid out as a `.vst3` bundle in a folder of its own,
-/// built once per test run.
-fn bundle() -> PathBuf {
-    static BUNDLE: OnceLock<PathBuf> = OnceLock::new();
-    BUNDLE.get_or_init(build_bundle).clone()
-}
-
-fn build_bundle() -> PathBuf {
-    let release = !cfg!(debug_assertions);
-    let mut cmd = Command::new(env!("CARGO"));
-    cmd.args(["build", "-p", "daw-test-plugin"]);
-    if release {
-        cmd.arg("--release");
-    }
-    // A separate target dir avoids waiting on the lock held by `cargo test`.
-    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-plugin");
-    cmd.arg("--target-dir").arg(&target);
-    assert!(
-        cmd.status().expect("run cargo").success(),
-        "building the test plugin failed"
-    );
-    let profile = if release { "release" } else { "debug" };
-    let (lib, sub, file) = if cfg!(windows) {
-        ("daw_test_plugin.dll", "x86_64-win", "DawTestGain.vst3")
-    } else if cfg!(target_os = "macos") {
-        ("libdaw_test_plugin.dylib", "MacOS", "DawTestGain")
-    } else {
-        (
-            "libdaw_test_plugin.so",
-            &*format!("{}-linux", std::env::consts::ARCH).leak(),
-            "DawTestGain.so",
-        )
-    };
-    let root = target.join("plugins").join("DawTestGain.vst3");
-    let dir = root.join("Contents").join(sub);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(target.join(profile).join(lib), dir.join(file)).unwrap();
-    root
-}
 
 fn ramp() -> Vec<f32> {
     (0..BLOCK).map(|i| (i + 1) as f32 / BLOCK as f32).collect()

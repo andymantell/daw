@@ -25,4 +25,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+daw-project = { path = "../project" }
 daw-test-plugin = { path = "../test-plugin" }

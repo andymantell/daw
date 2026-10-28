@@ -11,6 +11,9 @@
 //! at the event's exact sample offset and each note-off writes
 //! −velocity×gain, so the host's note timing can be checked to the sample.
 //!
+//! Cargo features build broken variants (crash or hang on load, refuse
+//! processing setup) for testing how the host copes.
+//!
 //! Written for this project from the public VST 3 interface definitions.
 
 #![allow(non_snake_case)]
@@ -210,6 +213,9 @@ impl IAudioProcessorTrait for Processor {
         LATENCY
     }
     unsafe fn setupProcessing(&self, _setup: *mut ProcessSetup) -> tresult {
+        if cfg!(feature = "refuse-setup") {
+            return kResultFalse;
+        }
         kResultOk
     }
     unsafe fn setProcessing(&self, _state: TBool) -> tresult {
@@ -675,6 +681,14 @@ extern "system" fn ModuleExit() -> bool {
 
 #[unsafe(no_mangle)]
 extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
+    if cfg!(feature = "crash-on-load") {
+        std::process::abort();
+    }
+    if cfg!(feature = "hang-on-load") {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
     ComWrapper::new(Factory)
         .to_com_ptr::<IPluginFactory>()
         .map_or(ptr::null_mut(), |p| p.into_raw())

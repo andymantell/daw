@@ -1051,6 +1051,7 @@ name = "daw-plugins"
 version = "0.0.0"
 dependencies = [
  "daw-engine",
+ "daw-project",
  "daw-test-plugin",
  "libloading",
  "rtrb",

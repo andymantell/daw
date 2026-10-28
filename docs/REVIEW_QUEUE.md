@@ -310,6 +310,14 @@ is in the same download.
       75% speed and at −1 semitone. Pick a favourite, or say which are
       unacceptable. Results go in [spikes/README.md](../spikes/README.md).
 
+- [ ] **1.9 Golden renders.** The engine's reference renders are in
+      `crates/engine/tests/golden/` (also in the project files under
+      `golden-renders/`): a small mix, solo, a loop, the metronome with a
+      count-in, a 44.1 kHz clip, three speed and transpose settings, and
+      a tempo change. Each is half a second to a second. Listen once.
+      Pass: none clicks, crackles or sounds wrong. The tests only prove
+      the sound has not changed, so a fault already in them would stay.
+
 ## Decisions to accept
 
 - [ ] **0003 Implementation language:** confirm Rust once A, B and C pass,

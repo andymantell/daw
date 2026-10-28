@@ -84,6 +84,8 @@ pub struct Status {
     recording: AtomicBool,
     /// Recorded frames lost because the recording thread fell behind.
     rec_dropped: AtomicU64,
+    /// Times playback has gone round the loop.
+    loops: AtomicU64,
 }
 
 impl Status {
@@ -105,6 +107,7 @@ impl Status {
                 .collect(),
             recording: AtomicBool::new(false),
             rec_dropped: AtomicU64::new(0),
+            loops: AtomicU64::new(0),
         }
     }
 
@@ -114,6 +117,11 @@ impl Status {
     }
 
     /// Frames of recorded input lost because the disk fell behind.
+    /// Times playback has gone round the loop since the engine started.
+    pub fn loops(&self) -> u64 {
+        self.loops.load(Ordering::Relaxed)
+    }
+
     pub fn rec_dropped(&self) -> u64 {
         self.rec_dropped.load(Ordering::Relaxed)
     }
@@ -620,6 +628,7 @@ impl Engine {
                 && self.pos == end
             {
                 self.pos = start;
+                self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
         }
         self.publish();
@@ -805,6 +814,7 @@ impl Engine {
             {
                 // The stretchers carry on round the loop by themselves.
                 self.posf = start as f64 + (self.posf - end as f64);
+                self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
             self.pos = self.posf.floor() as i64;
         }

@@ -170,6 +170,9 @@ Screenshot (a 220 Hz test tone standing in for a guitar):
       step down → standard" on a song in E♭ tuning and play along in
       standard. This is our own vocoder; compare it with the 0.6 listening
       files when choosing (Decisions below).
+- [ ] **1.4 Tempo trainer.** Loop a short passage at 70%, tick Trainer
+      with +5% every 2 loops up to 100%, and play along. Pass: the speed
+      box steps up on the loop, smoothly enough to keep playing.
 - [ ] **1.4 Practice mute.** Load a backing with a guitar part on its own
       track, press 🎧 on it and play along. Pass: that part goes silent and
       comes back, and Mute still works separately.

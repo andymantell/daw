@@ -234,8 +234,10 @@ mute; speed 50–150% and transpose ±12 semitones plus cents, with tuning
 presets, through our own phase vocoder from spike 0.6 (a library can
 replace it if the 0.6 listening prefers one). Tracks stay in time with
 the transport, the metronome follows the slowed beat, and loops wrap
-smoothly; nothing records while speed or pitch is changed. Still to do:
-tempo trainer, detected tuning offset, and saving the reference pitch.*
+smoothly; nothing records while speed or pitch is changed. A tempo
+trainer raises the speed by a step every N loops up to a target. Still
+to do: detected tuning offset, sections and markers for the loop (with
+1.5), and saving the practice settings (with projects).*
 - Loop region, chosen quickly from sections and markers.
 - Pitch-preserving speed (50–150%) and transpose (±12 st), plus fine pitch
   in cents. **Tuning presets** for common shifts (e.g. "half step down →

@@ -156,8 +156,10 @@ fn loops_wrap_and_clicks_follow_the_slower_beat() {
         let gap = w[1] - w[0];
         assert!(gap.abs_diff(30_000) <= 1, "{onsets:?}");
     }
-    // Round the loop at least once and still inside it.
+    // 256,000 output frames at 80% is 204,800 of timeline: round the
+    // 96,000-frame loop twice, and still inside it.
     assert!(rig.pos() < 96_000);
+    assert_eq!(rig.ctl.status().loops(), 2);
 }
 
 #[test]

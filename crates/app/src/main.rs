@@ -14,6 +14,7 @@
 
 mod export;
 mod fx;
+mod trainer;
 mod tuner;
 
 use std::path::{Path, PathBuf};
@@ -169,6 +170,7 @@ struct App {
     speed_pct: f64,
     semitones: i32,
     cents: i32,
+    trainer: trainer::Trainer,
 }
 
 /// How often to look for a lost device.
@@ -215,6 +217,7 @@ impl App {
             speed_pct: 100.0,
             semitones: 0,
             cents: 0,
+            trainer: trainer::Trainer::default(),
         };
         app.effects.start_scan();
         app.audio = app.open_device(eng);
@@ -747,6 +750,12 @@ impl App {
             && ui.button("Reset").clicked()
         {
             (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
+        }
+        ui.separator();
+        self.trainer.controls(ui);
+        let loops = self.ctl.status().loops();
+        if self.looping && self.ctl.status().playing() {
+            self.trainer.update(loops, &mut self.speed_pct);
         }
         if (self.speed_pct, self.semitones, self.cents) != before {
             let c = self.practice();

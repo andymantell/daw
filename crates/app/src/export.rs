@@ -27,6 +27,8 @@ pub struct Part {
 pub struct Request {
     pub loop_only: bool,
     pub stems: bool,
+    /// Where the new numbered folder goes.
+    pub folder: PathBuf,
 }
 
 struct Job {
@@ -45,6 +47,11 @@ pub struct Export {
     pub open: bool,
     loop_only: bool,
     stems: bool,
+    /// Where exports go unless the user chooses: the project's own
+    /// Exports folder once it is saved.
+    default_dir: PathBuf,
+    /// A folder the user chose for this project instead.
+    chosen: Option<PathBuf>,
     job: Option<Job>,
     /// The last export's folder, and a line about each file.
     result: Option<(PathBuf, Lines)>,
@@ -75,6 +82,19 @@ pub fn file_name(name: &str) -> String {
 }
 
 impl Export {
+    /// Sets where exports go by default. A folder the user chose is
+    /// forgotten when this changes (another project was opened).
+    pub fn set_default_dir(&mut self, dir: PathBuf) {
+        if dir != self.default_dir {
+            self.default_dir = dir;
+            self.chosen = None;
+        }
+    }
+
+    fn dir(&self) -> &Path {
+        self.chosen.as_deref().unwrap_or(&self.default_dir)
+    }
+
     pub fn busy(&self) -> bool {
         self.job.is_some()
     }
@@ -153,6 +173,22 @@ impl Export {
                         .small()
                         .weak(),
                     );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(format!("Into {}", self.dir().display())).small());
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Choose folder…").clicked()
+                            && let Some(d) = rfd::FileDialog::new()
+                                .set_title("Export into")
+                                .set_directory(self.dir())
+                                .pick_folder()
+                        {
+                            self.chosen = Some(d);
+                        }
+                        if self.chosen.is_some() && ui.button("Back to the usual folder").clicked() {
+                            self.chosen = None;
+                        }
+                    });
                 });
                 ui.add_space(6.0);
                 match &self.job {
@@ -170,6 +206,7 @@ impl Export {
                             request = Some(Request {
                                 loop_only: self.loop_only,
                                 stems: self.stems,
+                                folder: self.dir().to_path_buf(),
                             });
                         }
                     }

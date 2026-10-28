@@ -539,8 +539,7 @@ impl App {
                 });
             }
         }
-        let base = user_dir().join(APP_NAME).join("Exports");
-        self.export.start(&base, parts, plugins, from, frames)
+        self.export.start(&req.folder, parts, plugins, from, frames)
     }
 
     fn send_graph(&mut self, g: daw_engine::graph::Graph) {
@@ -1673,6 +1672,11 @@ impl eframe::App for App {
         if self.export.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        let exports = match &self.proj.folder {
+            Some(f) => f.dir.join("Exports"),
+            None => user_dir().join(APP_NAME).join("Exports"),
+        };
+        self.export.set_default_dir(exports);
         let loop_text = format!("bars {} to {}", self.loop_bars.0, self.loop_bars.1);
         if let Some(req) = self.export.window(&ctx, &loop_text)
             && let Err(e) = self.start_export(req)

@@ -189,11 +189,16 @@ the exported mix matched the sum of the stems to within one step of
 24-bit, with a plugin on one track.
 
 - [ ] **1.8 Export.** With a backing, a take and an effect on the take's
-      track, File → Export with stems ticked. Pass: a new folder under
-      `%USERPROFILE%\DAW\Exports` holds Mix.wav and one file per track,
-      they open in another player, the mix sounds like playback (effects
-      included) and the stems line up when dropped into FL Studio.
-      Say if you'd rather choose the folder each time.
+      track, File → Export with stems ticked. Pass: a new `Mix N` folder
+      holds Mix.wav and one file per track, they open in another player,
+      the mix sounds like playback (effects included) and the stems line
+      up when dropped into FL Studio.
+- [ ] **1.8 Export folder.** Export from a saved project, then from a
+      new unsaved one, then use Choose folder…. Pass: the saved project's
+      mixes land in its own `Exports` folder, the unsaved one's in
+      `%USERPROFILE%\DAW\Exports`, and Choose folder… opens the Windows
+      folder window and exports there (screenshot:
+      `app-export-into-project.png`).
 
 ### Phase 1 app: editing
 

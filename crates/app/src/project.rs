@@ -500,6 +500,8 @@ impl App {
 
     /// Opens the project at `path` in the background.
     pub(crate) fn open_project(&mut self, path: PathBuf) {
+        // Given on the command line, it may be relative.
+        let path = std::path::absolute(&path).unwrap_or(path);
         let (tx, rx) = mpsc::channel();
         let rate = self.rate;
         std::thread::spawn(move || {

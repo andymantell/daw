@@ -1,6 +1,7 @@
 # 0004 — Collaboration: CRDT document, peer-to-peer, no server we operate
 
-- **Status:** Proposed (validated by spike 0.5)
+- **Status:** Accepted 2026-10-28 by the owner (Loro). Connection success
+  rates on real networks are still to be measured (spike 0.5).
 - **Date:** 2026-10-24 (revised for the desktop pivot)
 
 ## Context
@@ -9,9 +10,8 @@ and often offline. The owner has decided there will be **no backend
 server**. Audio data is large; project structure is small and changes
 often.
 
-## Decision (proposed)
-- **Document:** a CRDT (preferred: Loro; also tested: `yrs`) with a typed
-  schema layer. Every merge path (live, bundle, shared folder) uses the same
+## Decision
+- **Document:** the Loro CRDT, with a typed schema layer (`crates/project`). Every merge path (live, bundle, shared folder) uses the same
   CRDT, so they all converge.
 - **Assets:** immutable, content-addressed audio files inside the project
   folder.

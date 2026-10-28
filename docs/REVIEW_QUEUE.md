@@ -268,9 +268,9 @@ is in the same download.
 
 - [ ] **0003 Implementation language:** confirm Rust once A, B and C pass,
       or fall back to C++ if B or C were a struggle.
-- [ ] **0004 Collaboration model:** Loro is preferred for the project
-      document (spike 0.5, first half). Accept once the network half has
-      been tried on real home, mobile and school networks.
+- [x] **0004 Collaboration model:** Loro accepted on 2026-10-28. The
+      network half is still to be tried on real home, mobile and school
+      networks (see "On other networks").
 - [ ] **Public STUN servers:** live sessions ask free public STUN servers,
       run by others, for each machine's outside address. They see addresses
       only, never project data. Confirm this fits "no server we operate", or

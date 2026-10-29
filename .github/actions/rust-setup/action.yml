@@ -31,4 +31,4 @@ runs:
     # of the repository's cache space; pull requests read main's.
     - uses: Swatinem/rust-cache@v2
       with:
-        save-if: true # TEMP: measuring a warm run on the PR
+        save-if: ${{ github.ref == 'refs/heads/main' }}

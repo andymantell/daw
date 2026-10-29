@@ -50,9 +50,18 @@ day.
 | `reactor-hall-r1` | [R1 Nuclear Reactor Hall](https://www.openair.hosted.york.ac.uk/?page_id=626) | Audiolab, University of York (OpenAIR) | `stereo/r1_ortf-48k.wav` |
 | `tunnel-innocent-railway` | [Innocent Railway Tunnel, Edinburgh](https://www.openair.hosted.york.ac.uk/?page_id=525) | Andrew Chadwick and Simon Shelley (OpenAIR) | `b-format/middle_tunnel_1way_bformat.wav` |
 | `mausoleum-hamilton` | [Hamilton Mausoleum, Hamilton, Scotland](https://www.openair.hosted.york.ac.uk/?page_id=502) | Audiolab, University of York: Damian T. Murphy (OpenAIR) | `stereo/hm2_000_ortf_48k.wav` |
+| `hall-spokane` | [Spokane Woman's Club hall, Spokane](https://www.openair.hosted.york.ac.uk/?page_id=659) | James Cadwallader (OpenAIR) | `stereo/spokane_womans_club_ir.wav` |
+| `tennis-court-falkland` | [Royal Tennis Court, Falkland Palace, Fife](https://www.openair.hosted.york.ac.uk/?page_id=476) | Audiolab, University of York: Damian T. Murphy (OpenAIR) | `stereo/falkland_tennis_court_ortf.wav` |
+| `forest-koli` | [Forest in Koli National Park, Finland, in summer](https://www.openair.hosted.york.ac.uk/?page_id=577) | Andrew Chadwick and Simon Shelley (OpenAIR) | `b-format/koli_summer_site1_1way_bformat.wav` |
+| `gorge-trollers-gill` | [Troller's Gill, Yorkshire Dales](https://www.openair.hosted.york.ac.uk/?page_id=745) | Andrew Chadwick and Simon Shelley (OpenAIR) | `b-format/dales_site3_1way_bformat.wav` |
+| `cave-creswell-crags` | [Creswell Crags caves](https://www.openair.hosted.york.ac.uk/?page_id=441) | Francis Stevens and Joe Rees-Jones (OpenAIR) | `b-format/1_r_rhcbottom_s_rhc_bottom.wav` |
+| `mine-gill-heads` | [Gill Heads Mine, Yorkshire Dales](https://www.openair.hosted.york.ac.uk/?page_id=494) | Andrew Chadwick and Simon Shelley (OpenAIR) | `b-format/mine_site1_1way_bformat.wav` |
 | `spring-ak-springer` | [AKIR Springer, setting 10](https://www.adventurekid.se/akrt/free-reverb-impulse-responses/) | Adventure Kid | `AKIR_Springer.zip: AKIR_Springer_10.wav` |
 | `spring-ak-smooth` | [AKIR Smooth Springer, setting 10](https://www.adventurekid.se/akrt/free-reverb-impulse-responses/) | Adventure Kid | `AKIR_SmSpringer.zip: AKIR_SmSpringer_10.wav` |
 | `spring-ak-dual` | [AKIR Dual Springer, setting 8](https://www.adventurekid.se/akrt/free-reverb-impulse-responses/) | Adventure Kid | `AKIR_DualSpringer.zip: AKIR_DualSpringer_08.wav` |
+
+The six outdoor and unusual spaces (wooden hall to mine) were added the
+same day, after Andy asked for a wider range, and checked the same way.
 
 Adventure Kid spring reverbs: the [free reverb impulse responses page](https://www.adventurekid.se/akrt/free-reverb-impulse-responses/)
 marks each pack "licensed under a Creative Commons Attribution 4.0
@@ -68,6 +77,12 @@ they are not captures of another maker's hardware.
 - **Adventure Kid speakers and amps:** cabinet captures, not rooms. Left for
   the amp simulator work to decide.
 - **Usina del Arte Symphony Hall (OpenAIR):** its page shows no licence.
+- **Maes Howe, Falkland Palace Bottle Dungeon, Slinky IR and Theatre@41
+  (OpenAIR):** on the day, Maes Howe's page showed no licence, the other
+  pages could not be read, and Theatre@41's own notes name no licence.
+  Any of them can be added once its page shows an allowed licence.
+- **A small studio live room:** none in OpenAIR with a readable licence;
+  the drum-kit live room is measured per drum, not as a room.
 - **Aachen Impulse Response database (MIT):** the download server refused
   connections from our build machine on the day. It can be added later; copy
   the copyright line from the LICENSE file in the download.
@@ -75,7 +90,7 @@ they are not captures of another maker's hardware.
   of York" because its page lists no names.
 
 ## Consequences
-- The library adds about 13 MB (15 rooms, 48 kHz 16-bit stereo, at most 10 s each) to the app.
+- The library adds about 16 MB (21 rooms, 48 kHz 16-bit stereo, at most 10 s each) to the app.
 - Adding a room means: check the licence on its source page, convert it with
   `convert_room`, add a `library.rs` entry, and add a row above.
 

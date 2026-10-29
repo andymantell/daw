@@ -16,7 +16,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Pull requests that only touch docs skip the build and licence jobs.
+  # Skipped jobs count as passed, so a docs-only PR can still merge.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            echo code=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
+          echo "$files"
+          if echo "$files" | grep -qvE '^docs/|\.md$|^LICENSE$'; then
+            echo code=true >> "$GITHUB_OUTPUT"
+          else
+            echo "Docs-only change: skipping build and licence checks."
+            echo code=false >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +100,8 @@ jobs:
           cargo build --workspace --target x86_64-apple-darwin
 
   licences:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

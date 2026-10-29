@@ -5,7 +5,8 @@
 //! markers; fade their ends, crossfade where they meet, and set their
 //! volume with a line of points. Ripple editing closes the gaps that
 //! deleting and trimming leave. Markers on bar lines name the song's
-//! sections, and a section can be looped. Comments show as pins. Undo
+//! sections, and a section can be looped. Clips can be normalised,
+//! reversed or have their gain changed. Comments show as pins. Undo
 //! belongs to the project document; the timeline only asks for it.
 
 use std::collections::{HashMap, HashSet};
@@ -16,6 +17,7 @@ use std::sync::mpsc;
 
 use daw_engine::fade::{Curve, Fade, GainPoint, Shape, envelope_db};
 use daw_engine::graph::db_to_gain;
+use daw_engine::process::Process;
 use daw_engine::stream::StreamSource;
 use daw_engine::time::{Frames, TempoMap, Ticks};
 use eframe::egui::{
@@ -698,7 +700,12 @@ pub struct Outcome {
     pub tab_for: Option<String>,
     /// Add a tempo or time-signature change, or open their window.
     pub tempo: Option<crate::tempo::Ask>,
+    /// Process the selected clips into new audio.
+    pub process: Option<Process>,
 }
+
+/// The amounts, in dB, the clip menu's Change gain offers.
+const GAIN_STEPS: [f32; 6] = [6.0, 3.0, 1.0, -1.0, -3.0, -6.0];
 
 /// Frames between waveform peaks at the finest level.
 const BASE_HOP: usize = 256;
@@ -2736,6 +2743,23 @@ impl Timeline {
                     }
                     ui.close();
                 }
+                ui.separator();
+                if ui.button("Normalise").clicked() {
+                    out.process = Some(Process::Normalise);
+                    ui.close();
+                }
+                if ui.button("Reverse").clicked() {
+                    out.process = Some(Process::Reverse);
+                    ui.close();
+                }
+                ui.menu_button("Change gain", |ui| {
+                    for db in GAIN_STEPS {
+                        if ui.button(Process::Gain(db).label()).clicked() {
+                            out.process = Some(Process::Gain(db));
+                            ui.close();
+                        }
+                    }
+                });
                 ui.separator();
                 if ui.button("Add comment here…").clicked() {
                     out.comment_at = Some((self.menu_lane, snap_to(at)));

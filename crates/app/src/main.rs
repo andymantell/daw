@@ -27,6 +27,7 @@ mod notes;
 mod people;
 mod perf;
 mod practice;
+mod process;
 mod project;
 mod recording;
 mod remote;
@@ -202,6 +203,7 @@ struct App {
     tuner: tuner::Tuner,
     export: export::Export,
     freezer: freeze::Freezer,
+    processing: process::Processing,
     /// Practice speed, percent, and transpose.
     speed_pct: f64,
     semitones: i32,
@@ -291,6 +293,7 @@ impl App {
             tuner: tuner::Tuner::new(rate),
             export: export::Export::default(),
             freezer: freeze::Freezer::default(),
+            processing: process::Processing::default(),
             speed_pct: 100.0,
             semitones: 0,
             cents: 0,
@@ -909,6 +912,10 @@ impl App {
                 start: at,
                 end: None,
             });
+        }
+        if let Some(how) = out.process {
+            self.processing
+                .start(&self.tracks, &self.timeline.selected, how);
         }
         if out.undo {
             self.undo(ui.ctx());
@@ -1900,6 +1907,7 @@ impl eframe::App for App {
             }
         }
         let mut rebuild = self.finish_imports() | self.finish_takes();
+        rebuild |= self.processing.finish(&mut self.tracks, &mut self.message);
         for t in &mut self.tracks {
             for slot in &mut t.fx {
                 rebuild |= slot.poll();
@@ -1918,7 +1926,7 @@ impl eframe::App for App {
             // Input meters move while stopped.
             ctx.request_repaint_after(Duration::from_millis(30));
         }
-        if !self.imports.is_empty() {
+        if !self.imports.is_empty() || self.processing.busy() > 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.command_keys(&ctx);
@@ -2044,6 +2052,13 @@ impl eframe::App for App {
                     ui.label(match self.imports.len() {
                         1 => "Opening 1 file…".to_string(),
                         n => format!("Opening {n} files…"),
+                    });
+                }
+                if self.processing.busy() > 0 {
+                    ui.spinner();
+                    ui.label(match self.processing.busy() {
+                        1 => "Processing 1 clip…".to_string(),
+                        n => format!("Processing {n} clips…"),
                     });
                 }
                 let lost = self.ctl.status().rec_dropped();

@@ -21,6 +21,10 @@ lesson project in each look, so they could be compared side by side.
 | Tube Trace | Glow: near-black, waveforms as glowing traces, needle meters | Not chosen |
 | Workshop | Calm: warm matte greys, copper, layered panels with shadows | **Chosen** |
 
+Mock-ups: a page of the four directions, one of Valve Glow variations, one
+of Drafting Table variations and one of six new themes, kept outside the
+repository.
+
 ## Round 3: variations on Drafting Table
 
 | Variation | Pushes | Verdict |
@@ -30,11 +34,30 @@ lesson project in each look, so they could be compared side by side.
 | Instrument Panel | Same drawing on dark graphite, colour only as data | Not chosen |
 | Ledger | Black ink on white, print-like, no track colour | Not chosen |
 
+## Round 4: six new themes
+
+| Theme | Feel | Verdict |
+|---|---|---|
+| Observatory | Deep night blue, faint stars, pale cyan accent | Not chosen |
+| Foundry | Charcoal, square corners, uppercase type, molten orange | Not chosen |
+| Tidal | Pale sea-glass, very rounded, friendly typeface, single-line waveforms | **Chosen** |
+| Letterpress | Cream card, deep ink, oxblood, halftone-dot waveforms | Not chosen |
+| Phosphor | Green phosphor terminal, one green, scanlines | Not chosen |
+| Chalkboard | Slate green, handwritten chalk text, dashed clip outlines | Not chosen (a possible lesson-mode look later) |
+
 ## Decision so far (2026-10-29)
 
-Ship **Valve Glow**, **Workshop** and **Vellum** first, each with a light
-and a dark variant, switchable at runtime. The owner wants more themes to
-choose from; a further round of ideas is in progress.
+Ship **Valve Glow**, **Workshop**, **Vellum** and **Tidal** first, each
+with a light and a dark variant, switchable at runtime.
+
+## Still to design
+
+The mock-ups cover the timeline, transport bar and a row of mixer strips
+only. Before the themes are built, each one needs the rest of the app
+designed in it: the full mixer window, plugin and effect panels, the note
+and notation editors, the browser, settings, dialogs and the phone remote.
+Dense views are where a theme's spacing, line weights and contrast are
+really tested.
 
 ## What a theme must define
 

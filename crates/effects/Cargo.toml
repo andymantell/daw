@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 daw-engine = { path = "../engine" }
+hound = "3.5.1"
 realfft = "3.5.1"

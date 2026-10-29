@@ -1135,6 +1135,7 @@ name = "daw-effects"
 version = "0.0.0"
 dependencies = [
  "daw-engine",
+ "hound",
  "realfft",
 ]
 

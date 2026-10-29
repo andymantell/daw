@@ -49,6 +49,7 @@ pub(crate) enum Cmd {
     FindCommand,
     CheckUpdates,
     CrashReports,
+    SoundCredits,
 }
 
 /// A key with the modifiers held for it. Ctrl means Cmd on a Mac.
@@ -328,6 +329,14 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Crash reports…",
         &[],
     ),
+    info(
+        Cmd::SoundCredits,
+        "sound-credits",
+        "Help",
+        "Sound credits…",
+        &[],
+    )
+    .words("reverb rooms licence attribution"),
 ];
 
 impl Cmd {
@@ -1120,6 +1129,7 @@ impl App {
             }
             Cmd::CheckUpdates => self.updates.open = true,
             Cmd::CrashReports => self.crashes.open = true,
+            Cmd::SoundCredits => self.effects.show_credits = true,
             Cmd::Split | Cmd::Delete | Cmd::Marker | Cmd::ClearSelection => {}
         }
     }

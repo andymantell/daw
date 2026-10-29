@@ -736,6 +736,9 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
             for (k, v) in &e.params {
                 w.put(&pm, k, *v);
             }
+            if !e.response.is_empty() || em.get("response").is_some() {
+                w.put(&em, "response", e.response.as_str());
+            }
         }
         if let Some(s) = &e.state {
             w.put(&em, "component", s.component.clone());
@@ -827,6 +830,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 bypass: boolean(e, "bypass").unwrap_or(false),
                 state,
                 builtin: string(e, "builtin").unwrap_or_default(),
+                response: string(e, "response").unwrap_or_default(),
                 params: match e.get("params") {
                     Some(LoroValue::Map(pm)) => {
                         let mut v: Vec<(String, f64)> = (pm.keys())

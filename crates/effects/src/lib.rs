@@ -8,8 +8,8 @@
 //! method here is written from published methods (see each module); none
 //! is taken from another product.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use daw_engine::graph::Insert;
 
@@ -18,7 +18,11 @@ mod convolution;
 mod delay;
 mod dynamics;
 mod eq;
+pub mod library;
+pub mod response;
 mod reverb;
+
+pub use response::Response;
 
 /// The most settings any effect has.
 const MAX_PARAMS: usize = 16;
@@ -233,6 +237,20 @@ struct Shared {
 pub struct Effect {
     kind: Kind,
     shared: Arc<Shared>,
+    /// For the convolution reverb, the response it uses instead of one
+    /// made here.
+    source: Mutex<Source>,
+}
+
+/// Where a convolution reverb's response comes from.
+#[derive(Clone, Debug, Default)]
+struct Source {
+    /// As the project saves it: empty for the rooms made here, a
+    /// recorded room's [`library::reference`], or a sound file (an asset
+    /// name, or a full path until the project is saved).
+    reference: String,
+    /// The response, if it could be read.
+    response: Option<Arc<Response>>,
 }
 
 impl Effect {
@@ -249,7 +267,49 @@ impl Effect {
             }),
             reduction: AtomicU32::new(0f32.to_bits()),
         });
-        Effect { kind, shared }
+        Effect {
+            kind,
+            shared,
+            source: Mutex::default(),
+        }
+    }
+
+    /// Where its response comes from, as the project saves it (see
+    /// [`Effect::set_response`]).
+    pub fn response_ref(&self) -> String {
+        self.source
+            .lock()
+            .map(|s| s.reference.clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether a response named by [`Effect::response_ref`] couldn't be
+    /// read, so a room made here plays instead.
+    pub fn response_missing(&self) -> bool {
+        self.source
+            .lock()
+            .is_ok_and(|s| !s.reference.is_empty() && s.response.is_none())
+    }
+
+    /// Gives the response's file a new name (once it has come into the
+    /// project), keeping what was read from it.
+    pub fn rename_response(&self, reference: String) {
+        if let Ok(mut s) = self.source.lock() {
+            s.reference = reference;
+        }
+    }
+
+    /// Uses `response` (read from what `reference` names) instead of the
+    /// rooms made here. An empty `reference` goes back to them. A
+    /// `reference` whose response couldn't be read is kept, so saving
+    /// doesn't lose it. Takes effect in the next [`Processor`] made.
+    pub fn set_response(&self, reference: String, response: Option<Arc<Response>>) {
+        if let Ok(mut s) = self.source.lock() {
+            *s = Source {
+                reference,
+                response,
+            };
+        }
     }
 
     pub fn kind(&self) -> Kind {
@@ -304,7 +364,12 @@ impl Effect {
             Kind::Limiter => Box::new(dynamics::Limiter::new(rate)),
             Kind::Delay => Box::new(delay::Delay::new(rate)),
             Kind::Reverb => Box::new(reverb::Reverb::new(rate)),
-            Kind::Convolution => Box::new(convolution::Convolution::new(rate)),
+            Kind::Convolution => {
+                let loaded = (self.source.lock().ok())
+                    .and_then(|s| s.response.clone())
+                    .map(|r| r.at_rate(rate as u32));
+                Box::new(convolution::Convolution::new(rate, loaded))
+            }
         };
         let mut p = Processor {
             params: self.kind.params(),

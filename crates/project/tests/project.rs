@@ -172,6 +172,30 @@ fn sync(a: &mut ProjectDoc, b: &mut ProjectDoc) {
 }
 
 #[test]
+fn a_reverb_response_is_saved_and_its_file_kept_with_the_project() {
+    let mut d = ProjectDoc::new(1);
+    let mut p = song();
+    let mut reverb = Effect {
+        id: "e3".into(),
+        name: "Room reverb".into(),
+        builtin: "convolution".into(),
+        response: "0123abcd.wav".into(),
+        ..Default::default()
+    };
+    p.tracks[1].effects.push(reverb.clone());
+    d.set(&p);
+    let back = ProjectDoc::from_bytes(&d.to_bytes(), 2).unwrap();
+    assert_eq!(back.get(), p);
+    assert!(back.assets_in_use().contains(&"0123abcd.wav".to_string()));
+    // A recorded room that comes with the app is no file of ours.
+    reverb.response = "room:york-minster".into();
+    p.tracks[1].effects[0] = reverb;
+    d.set(&p);
+    assert_eq!(d.get(), p);
+    assert!(!d.assets_in_use().iter().any(|a| a.starts_with("room:")));
+}
+
+#[test]
 fn settings_of_a_built_in_effect_changed_apart_both_survive() {
     let (mut a, mut b, p) = two_copies();
     let mut pa = p.clone();

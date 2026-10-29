@@ -139,6 +139,7 @@ impl ProjectDoc {
             v.extend(p.tracks.iter().flat_map(|t| {
                 (t.clips.iter().map(|c| c.asset.clone()))
                     .chain(t.frozen.iter().map(|f| f.asset.clone()))
+                    .chain(t.effects.iter().filter_map(|e| e.asset().map(String::from)))
             }))
         };
         add(&self.get());

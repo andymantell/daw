@@ -72,6 +72,7 @@ impl FxSlot {
             SlotKind::Builtin(b) => {
                 e.builtin = b.kind().id().into();
                 e.params = b.values();
+                e.response = b.response_ref();
                 // In the order the document reads them back.
                 e.params.sort_by(|a, b| a.0.cmp(&b.0));
             }
@@ -84,6 +85,22 @@ impl FxSlot {
     pub fn set_params(&mut self, params: &[(String, f64)]) {
         if let SlotKind::Builtin(b) = &self.kind {
             b.load(params);
+        }
+    }
+
+    /// A built-in reverb's response, as the project saves it.
+    pub fn response_ref(&self) -> String {
+        match &self.kind {
+            SlotKind::Builtin(b) => b.response_ref(),
+            SlotKind::Plugin { .. } => String::new(),
+        }
+    }
+
+    /// Renames the response file it uses, once the file has come into
+    /// the project, keeping what was read from it.
+    pub fn rename_response(&self, name: &str) {
+        if let SlotKind::Builtin(b) = &self.kind {
+            b.rename_response(name.to_string());
         }
     }
 
@@ -165,6 +182,22 @@ pub struct Effects {
     pub open_track: Option<usize>,
     /// The effect being picked in the "Add" menu.
     filter: String,
+    /// The project's folder, where reverb response files are kept once
+    /// saved.
+    pub folder: Option<PathBuf>,
+    /// Responses read so far, by reference.
+    responses: HashMap<String, Arc<daw_effects::Response>>,
+    /// The list of recorded rooms' credits is open.
+    pub show_credits: bool,
+}
+
+/// A room picked for a convolution reverb.
+enum RoomPick {
+    /// One made here, by index.
+    Made(usize),
+    Recorded(&'static daw_effects::library::Room),
+    /// A sound file, to be chosen.
+    File,
 }
 
 impl Effects {
@@ -183,6 +216,9 @@ impl Effects {
             show_manager: false,
             open_track: None,
             filter: String::new(),
+            folder: None,
+            responses: HashMap::new(),
+            show_credits: false,
         }
     }
 
@@ -343,6 +379,12 @@ impl Effects {
                 .ok_or("it comes with a newer version of the app")?;
             let effect = daw_effects::Effect::new(kind);
             effect.load(&e.params);
+            if !e.response.is_empty() {
+                // A file that can't be read is kept in the project; one of
+                // the rooms made here plays meanwhile.
+                let read = self.read_response(&e.response).ok();
+                effect.set_response(e.response.clone(), read);
+            }
             let mut slot = self.builtin(effect, rate);
             slot.key = e.id.clone();
             slot.bypass = e.bypass;
@@ -380,6 +422,67 @@ impl Effects {
             slot.latency = plugin.latency();
         }
         Ok(slot)
+    }
+
+    /// The response `reference` names, read (once) from the rooms that
+    /// come with the app or a sound file.
+    fn read_response(&mut self, reference: &str) -> Result<Arc<daw_effects::Response>, String> {
+        if let Some(r) = self.responses.get(reference) {
+            return Ok(r.clone());
+        }
+        let r = match daw_effects::library::find(reference) {
+            Some(room) => room.response()?,
+            None if reference.starts_with(daw_effects::library::PREFIX) => {
+                return Err("that recorded room comes with a newer version of the app".into());
+            }
+            None => {
+                let path = match &self.folder {
+                    Some(dir)
+                        if daw_project::ProjectFolder { dir: dir.clone() }.has_asset(reference) =>
+                    {
+                        daw_project::ProjectFolder { dir: dir.clone() }.asset(reference)
+                    }
+                    _ => PathBuf::from(reference),
+                };
+                daw_effects::Response::from_file(&path)?
+            }
+        };
+        let r = Arc::new(r);
+        self.responses.insert(reference.to_string(), r.clone());
+        Ok(r)
+    }
+
+    /// Knows the response read from `old` by its new name.
+    pub fn remember_as(&mut self, old: &str, new: &str) {
+        if let Some(r) = self.responses.get(old).cloned() {
+            self.responses.insert(new.to_string(), r);
+        }
+    }
+
+    /// Points a built-in reverb at the response `reference` names (empty
+    /// for its own rooms), making its audio side again. A file that can't
+    /// be read is still kept, and the error returned.
+    pub fn set_response(
+        &mut self,
+        slot: &mut FxSlot,
+        reference: &str,
+        rate: u32,
+    ) -> Result<(), String> {
+        let SlotKind::Builtin(b) = &slot.kind else {
+            return Ok(());
+        };
+        let read = if reference.is_empty() {
+            Ok(None)
+        } else {
+            self.read_response(reference).map(Some)
+        };
+        let (response, result) = match read {
+            Ok(r) => (r, Ok(())),
+            Err(e) => (None, Err(e)),
+        };
+        b.set_response(reference.to_string(), response);
+        self.reload(slot, rate)?;
+        result
     }
 
     /// Makes `slot`'s effect again for a new engine or sample rate,
@@ -430,6 +533,38 @@ impl Effects {
             daw_plugins::instantiate(module, cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
         plugin.load_state(&state)?;
         Ok((Some(plugin), Box::new(processor)))
+    }
+
+    /// The credits of the recorded rooms that come with the app.
+    pub fn credits_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.show_credits;
+        egui::Window::new("Sound credits")
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    "The Room reverb's recorded spaces were recorded by these people, who share \
+                     them under the licences shown.",
+                );
+                ui.separator();
+                let rooms = daw_effects::library::ROOMS;
+                if rooms.is_empty() {
+                    ui.label(
+                        RichText::new("No recorded spaces come with this version yet.").weak(),
+                    );
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        for room in rooms {
+                            ui.strong(room.name);
+                            ui.label(room.credit());
+                            ui.hyperlink_to(room.licence.name(), room.licence.url());
+                            ui.add_space(6.0);
+                        }
+                    });
+            });
+        self.show_credits = open;
     }
 
     /// The window listing installed plugins.
@@ -569,6 +704,7 @@ impl Effects {
         let mut changed = false;
         let mut remove = None;
         let mut swap = None;
+        let mut picks = Vec::new();
         egui::Window::new(format!("Effects: {track}"))
             .id(egui::Id::unique("track-fx"))
             .open(&mut open)
@@ -626,8 +762,10 @@ impl Effects {
                             remove = Some(i);
                         }
                     });
-                    if s.show_params {
-                        params(ui, s);
+                    if s.show_params
+                        && let Some(pick) = params(ui, s)
+                    {
+                        picks.push((i, pick));
                     }
                     ui.separator();
                 }
@@ -706,6 +844,26 @@ impl Effects {
                     ui.label(RichText::new(line).weak());
                 }
             });
+        for (i, pick) in picks {
+            let reference = match pick {
+                RoomPick::Made(_) => String::new(),
+                RoomPick::Recorded(room) => daw_effects::library::reference(room),
+                RoomPick::File => {
+                    let Some(path) = rfd::FileDialog::new()
+                        .set_title("Choose a room's impulse response")
+                        .add_filter("Sound files", &["wav", "flac", "aif", "aiff", "mp3", "ogg"])
+                        .pick_file()
+                    else {
+                        continue;
+                    };
+                    path.to_string_lossy().into_owned()
+                }
+            };
+            if let Err(e) = self.set_response(&mut slots[i], &reference, rate) {
+                *message = Some(format!("Couldn't use that response: {e}"));
+            }
+            changed = true;
+        }
         if let Some((a, b)) = swap {
             slots.swap(a, b);
             changed = true;
@@ -724,19 +882,111 @@ impl Effects {
 
 /// The settings of an effect: a built-in effect's own, or the host's
 /// controls for a plugin's parameters.
-fn params(ui: &mut egui::Ui, s: &mut FxSlot) {
+fn params(ui: &mut egui::Ui, s: &mut FxSlot) -> Option<RoomPick> {
     match &s.kind {
         SlotKind::Builtin(b) => builtin_params(ui, s.id, b),
-        SlotKind::Plugin { plugin, .. } => plugin_params(ui, s.id, plugin),
+        SlotKind::Plugin { plugin, .. } => {
+            plugin_params(ui, s.id, plugin);
+            None
+        }
     }
 }
 
-fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) {
+/// The room list of a convolution reverb: the rooms made here, the
+/// recorded rooms that come with the app, and a file of the user's own.
+fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<RoomPick> {
+    use daw_effects::library;
+    let reference = b.response_ref();
+    let made = daw_effects::Kind::Convolution.params()[0];
+    let now = if reference.is_empty() {
+        made.text(b.get(0))
+    } else if let Some(room) = library::find(&reference) {
+        room.name.to_string()
+    } else {
+        Path::new(&reference)
+            .file_name()
+            .map_or(reference.clone(), |n| n.to_string_lossy().into_owned())
+    };
+    let mut pick = None;
+    egui::ComboBox::from_id_salt(("room", id))
+        .selected_text(now)
+        .width(200.0)
+        .show_ui(ui, |ui| {
+            ui.label(RichText::new("Made here").small().weak());
+            for (i, name) in made.choices.iter().enumerate() {
+                let on = reference.is_empty() && b.get(0) as usize == i;
+                if ui.selectable_label(on, *name).clicked() {
+                    pick = Some(RoomPick::Made(i));
+                }
+            }
+            if !library::ROOMS.is_empty() {
+                ui.separator();
+                ui.label(RichText::new("Recorded spaces").small().weak());
+                for room in library::ROOMS {
+                    let on = library::find(&reference).is_some_and(|r| r.id == room.id);
+                    if ui
+                        .selectable_label(on, room.name)
+                        .on_hover_text(room.credit())
+                        .clicked()
+                    {
+                        pick = Some(RoomPick::Recorded(room));
+                    }
+                }
+            }
+            ui.separator();
+            if ui
+                .selectable_label(false, "Your own file…")
+                .on_hover_text("A room's impulse response: WAV with 1, 2 or 4 (B-format) channels")
+                .clicked()
+            {
+                pick = Some(RoomPick::File);
+            }
+        })
+        .response
+        .accessible_name("Room");
+    if let Some(RoomPick::Made(i)) = pick {
+        b.set(0, i as f64);
+    }
+    pick
+}
+
+/// The line under a convolution reverb's room: who recorded it, or
+/// which file it is.
+fn room_note(b: &daw_effects::Effect) -> Option<RichText> {
+    let reference = b.response_ref();
+    if reference.is_empty() {
+        return None;
+    }
+    if b.response_missing() {
+        return Some(
+            RichText::new(
+                "Its response file can't be read here, so a room made here plays instead. \
+                 The project keeps the file's name.",
+            )
+            .small()
+            .color(Color32::LIGHT_RED),
+        );
+    }
+    let line = match daw_effects::library::find(&reference) {
+        Some(room) => room.credit(),
+        None => "From your own file, kept with the project.".into(),
+    };
+    Some(RichText::new(line).small().weak())
+}
+
+fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<RoomPick> {
     let kind = b.kind();
+    let mut pick = None;
     egui::Grid::new(("builtin", id))
         .num_columns(2)
         .show(ui, |ui| {
             for (i, p) in kind.params().iter().enumerate() {
+                if kind == daw_effects::Kind::Convolution && i == 0 {
+                    ui.label(p.name);
+                    pick = room_picker(ui, id, b);
+                    ui.end_row();
+                    continue;
+                }
                 let mut v = b.get(i);
                 ui.label(p.name);
                 let changed = if p.unit == daw_effects::Unit::Switch {
@@ -783,6 +1033,10 @@ fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) {
                     .request_repaint_after(std::time::Duration::from_millis(50));
             }
         });
+    if let Some(note) = room_note(b) {
+        ui.add(egui::Label::new(note).wrap());
+    }
+    pick
 }
 
 fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
@@ -980,6 +1234,100 @@ mod tests {
         assert_eq!(builtin(h.state(), 0).get(12), -6.0);
         let again = peak(&render(h.state_mut(), frames));
         assert!((again - wet).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_reverb_response_file_comes_into_the_project_and_back() {
+        let dir = scratch("ir");
+        let mut h = harness();
+        let rate = h.state().rate;
+        h.state_mut().add_file(&tone(&dir, rate));
+        until(&mut h, |a| !a.tracks.is_empty());
+        // A made-up room's response, as a file of the user's own.
+        let ir = dir.join("my-room.wav");
+        let left: Vec<f32> = (0..rate as usize / 2)
+            .map(|i| ((i * 7919 % 997) as f32 / 997.0 - 0.5) * (-(i as f32) / 2000.0).exp())
+            .collect();
+        daw_effects::Response {
+            rate,
+            right: left.iter().map(|x| -x).collect(),
+            left,
+        }
+        .to_wav(&ir)
+        .unwrap();
+
+        let app = h.state_mut();
+        let mut slot = app.effects.create_builtin(Kind::Convolution, rate);
+        builtin_of(&slot).set(2, 100.0);
+        app.effects
+            .set_response(&mut slot, &ir.to_string_lossy(), rate)
+            .unwrap();
+        app.tracks[0].fx.push(slot);
+        app.rebuild();
+        h.run();
+        let frames = rate as usize;
+        let heard = render(h.state_mut(), frames);
+
+        // Saved: the file is copied in, and the project names the copy.
+        let song = dir.join("Song");
+        let ctx = h.ctx.clone();
+        h.state_mut().save_in(&ctx, &song).unwrap();
+        h.run();
+        let (_, bytes) = ProjectFolder::open(&song).unwrap();
+        let doc = ProjectDoc::from_bytes(&bytes, 1).unwrap();
+        let e = &doc.get().tracks[0].effects[0];
+        let folder = ProjectFolder { dir: song.clone() };
+        assert!(folder.has_asset(&e.response), "{}", e.response);
+        assert!(doc.assets_in_use().contains(&e.response));
+        drop(h);
+
+        // Reopened elsewhere, without the original file: the same sound.
+        std::fs::remove_file(&ir).unwrap();
+        let mut h = harness();
+        h.state_mut().open_project(song.clone());
+        until(&mut h, |a| !a.proj.loading());
+        h.run();
+        let b = builtin(h.state(), 0);
+        assert!(!b.response_missing());
+        let again = render(h.state_mut(), frames);
+        let worst = (heard.iter().zip(&again)).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst < 1e-3, "{worst}");
+
+        // Back to a room made here, and undone.
+        let app = h.state_mut();
+        let mut slot = app.tracks[0].fx.remove(0);
+        app.effects.set_response(&mut slot, "", rate).unwrap();
+        app.tracks[0].fx.push(slot);
+        h.run();
+        assert_eq!(builtin(h.state(), 0).response_ref(), "");
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run();
+        assert_eq!(builtin(h.state(), 0).response_ref(), e.response);
+        assert!(!builtin(h.state(), 0).response_missing());
+    }
+
+    #[test]
+    fn a_missing_response_file_is_kept_by_name() {
+        let mut h = harness();
+        let rate = h.state().rate;
+        let e = daw_project::Effect {
+            id: "e1".into(),
+            name: "Room reverb".into(),
+            builtin: "convolution".into(),
+            response: "feedbeef.wav".into(),
+            ..Default::default()
+        };
+        let slot = h.state_mut().effects.restore(&e, rate).unwrap();
+        assert!(builtin_of(&slot).response_missing());
+        assert_eq!(slot.value().response, "feedbeef.wav");
+    }
+
+    fn builtin_of(s: &super::FxSlot) -> &daw_effects::Effect {
+        match &s.kind {
+            SlotKind::Builtin(b) => b,
+            SlotKind::Plugin { .. } => panic!("a plugin"),
+        }
     }
 
     #[test]

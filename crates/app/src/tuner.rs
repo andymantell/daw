@@ -3,7 +3,7 @@
 
 use daw_engine::engine::{Command, Controller};
 use daw_engine::tuner::{Detector, Note, Smoother, window};
-use eframe::egui::{self, Color32, RichText, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, RichText, Sense, Stroke, pos2, vec2};
 
 pub struct Tuner {
     pub open: bool,
@@ -110,7 +110,7 @@ impl Tuner {
             let (text, color) = match note {
                 Some(n) if n.cents.abs() <= IN_TUNE => (
                     format!("{}{}", n.name(), n.octave()),
-                    Color32::from_rgb(80, 210, 110),
+                    crate::theme::look(ui.ctx()).c().good,
                 ),
                 Some(n) => (
                     format!("{}{}", n.name(), n.octave()),
@@ -137,14 +137,16 @@ impl Tuner {
 /// A meter from −50 to +50 cents with a needle.
 fn needle(ui: &mut egui::Ui, cents: Option<f32>) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+    let look = crate::theme::look(ui.ctx());
+    let tc = look.c();
     let p = ui.painter();
-    p.rect_filled(rect, 3.0, Color32::from_gray(30));
+    p.rect_filled(rect, look.radius.min(4.0), tc.meter_bg);
     let x = |c: f32| rect.left() + rect.width() * (c + 50.0) / 100.0;
     // The in-tune zone, and ticks every 10 cents.
     p.rect_filled(
         egui::Rect::from_x_y_ranges(x(-IN_TUNE)..=x(IN_TUNE), rect.y_range()),
         0.0,
-        Color32::from_rgb(30, 70, 40),
+        tc.good.gamma_multiply(0.3),
     );
     for c in (-50..=50).step_by(10) {
         let h = if c == 0 { 14.0 } else { 7.0 };
@@ -153,15 +155,11 @@ fn needle(ui: &mut egui::Ui, cents: Option<f32>) {
                 pos2(x(c as f32), rect.bottom()),
                 pos2(x(c as f32), rect.bottom() - h),
             ],
-            Stroke::new(1.0, Color32::from_gray(110)),
+            Stroke::new(look.line, tc.text_dim),
         );
     }
     if let Some(c) = cents {
-        let color = if c.abs() <= IN_TUNE {
-            Color32::from_rgb(80, 210, 110)
-        } else {
-            Color32::from_rgb(230, 200, 60)
-        };
+        let color = if c.abs() <= IN_TUNE { tc.good } else { tc.warn };
         let nx = x(c.clamp(-50.0, 50.0));
         p.line_segment(
             [pos2(nx, rect.top() + 2.0), pos2(nx, rect.bottom() - 2.0)],

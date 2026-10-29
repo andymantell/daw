@@ -9,7 +9,7 @@ use std::sync::mpsc;
 
 use daw_audio_io::StreamStatus;
 use daw_plugins::scan::Available;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 /// The bar: tracks, and plugin instances spread over them.
 pub const TRACKS: usize = 16;
@@ -134,17 +134,19 @@ impl Perf {
                     let over = overloads - self.overloads_from.min(overloads);
                     ui.label("Dropouts");
                     ui.label(if over == 0 {
-                        RichText::new("none").color(Color32::from_rgb(80, 210, 110))
+                        RichText::new("none").color(crate::theme::look(ui.ctx()).c().good)
                     } else {
-                        RichText::new(format!("{over} buffers late")).color(Color32::LIGHT_RED)
+                        RichText::new(format!("{over} buffers late"))
+                            .color(ui.visuals().error_fg_color)
                     });
                     ui.end_row();
                     let under = underruns - self.underruns_from.min(underruns);
                     ui.label("Disk");
                     ui.label(if under == 0 {
-                        RichText::new("kept up").color(Color32::from_rgb(80, 210, 110))
+                        RichText::new("kept up").color(crate::theme::look(ui.ctx()).c().good)
                     } else {
-                        RichText::new(format!("{under} frames missed")).color(Color32::LIGHT_RED)
+                        RichText::new(format!("{under} frames missed"))
+                            .color(ui.visuals().error_fg_color)
                     });
                     ui.end_row();
                 });
@@ -201,7 +203,7 @@ impl Perf {
                     .weak(),
                 );
                 if let Some(e) = &self.error {
-                    ui.colored_label(Color32::LIGHT_RED, e);
+                    ui.colored_label(ui.visuals().error_fg_color, e);
                 }
             });
         self.open = open;

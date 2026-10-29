@@ -1,0 +1,109 @@
+# Vellum: an engineer's drawing on warm tracing paper. Ink-line
+# waveforms, hairlines and a fine beat grid; everything live (playhead,
+# loop, record) is marked in red pencil, and the active button is
+# solid ink.
+# The light colours are from the mock-ups (the dim text is a little
+# darker, to pass the contrast check); the dark ones are derived.
+
+name = Vellum
+about = Warm tracing paper, ink lines, and red pencil for anything live.
+designed = light
+
+[shape]
+radius = 2
+clip_radius = 0
+line = 1
+gap = 8 3
+padding = 4 1
+shadow = 0
+loop = hatched
+
+[type]
+body = 13
+small = 11
+heading = 17
+numerals = 16
+numerals_face = mono
+
+[waveform]
+style = line
+weight = 1.6
+
+[texture]
+kind = grain
+
+[glow]
+on = no
+radius = 0
+
+[light]
+bg = #efe9dc
+panel = #e7e0d1
+lane = #f5f0e4
+raised = #faf6ec
+line = #c9bfab
+grid = #c9bfab
+grid_fine = #e4dccb
+text = #2a2622
+text_dim = #625a50
+accent = #2a2622
+on_accent = #faf6ec
+selection = #d9cdb3
+record = #c43b2a
+playhead = #c43b2a
+glow = #00000000
+loop = #c43b2a40
+marker = #c43b2a
+comment = #c43b2a
+tempo = #0f6b3a
+signature = #0a3c8a
+clip_fill = #ffffff59
+clip_border = track
+clip_text = track
+clip_label = none
+meter_bg = #d9d0bd
+meter_low = #2a2622
+meter_mid = #2a2622
+meter_high = #c43b2a
+good = #0f6b3a
+warn = #7a5000
+error = #b0301f
+texture = #00000014
+shadow = #00000000
+tracks = #0a3c8a #8a1f6e #0f6b3a #7a5000 #5a2a8a #00646b #8a3a1f #3a4a5a
+
+[dark]
+bg = #1f1c18
+panel = #27231e
+lane = #1b1915
+raised = #302b25
+line = #4a4338
+grid = #4a4338
+grid_fine = #2e2a24
+text = #ede6d6
+text_dim = #b0a590
+accent = #ede6d6
+on_accent = #1f1c18
+selection = #4a4136
+record = #f06a55
+playhead = #f06a55
+glow = #00000000
+loop = #f06a5540
+marker = #f06a55
+comment = #f06a55
+tempo = #7fc79a
+signature = #8fb0ef
+clip_fill = #ffffff0a
+clip_border = track
+clip_text = track
+clip_label = none
+meter_bg = #14120f
+meter_low = #ede6d6
+meter_mid = #ede6d6
+meter_high = #f06a55
+good = #7fc79a
+warn = #e8c06a
+error = #ff8a75
+texture = #ffffff0c
+shadow = #00000000
+tracks = #8fb0ef #e39ad0 #7fc79a #e0b35c #b59bef #6cc7c9 #f0997a #a8b4c4

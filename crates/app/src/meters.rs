@@ -5,7 +5,7 @@
 
 use daw_engine::engine::{Command, Controller};
 use daw_engine::meter::{Analyser, Tap, bands};
-use eframe::egui::{self, Color32, RichText, Sense, Stroke, pos2, vec2};
+use eframe::egui::{self, RichText, Sense, Stroke, pos2, vec2};
 
 pub struct Meters {
     pub open: bool,
@@ -259,14 +259,12 @@ fn reading(ui: &mut egui::Ui, name: &str, value: &str, unit: &str) {
 /// Momentary and short-term as bars, integrated as a line, −60 to 0 LUFS.
 fn loudness_bar(ui: &mut egui::Ui, m: f64, s: f64, i: f64) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+    let tc = crate::theme::look(ui.ctx()).c().clone();
     let p = ui.painter();
-    p.rect_filled(rect, 2.0, Color32::from_gray(30));
+    p.rect_filled(rect, 2.0, tc.meter_bg);
     let x = |v: f64| rect.left() + rect.width() * (((v + 60.0) / 60.0).clamp(0.0, 1.0) as f32);
     let h = rect.height() / 2.0;
-    for (row, v, color) in [
-        (0.0, m, Color32::from_rgb(80, 200, 110)),
-        (1.0, s, Color32::from_rgb(70, 150, 230)),
-    ] {
+    for (row, v, color) in [(0.0, m, tc.meter_low), (1.0, s, tc.meter_mid)] {
         if v.is_finite() {
             let top = rect.top() + row * h;
             p.rect_filled(
@@ -279,14 +277,14 @@ fn loudness_bar(ui: &mut egui::Ui, m: f64, s: f64, i: f64) -> egui::Response {
     if i.is_finite() {
         p.line_segment(
             [pos2(x(i), rect.top()), pos2(x(i), rect.bottom())],
-            Stroke::new(2.0, Color32::WHITE),
+            Stroke::new(2.0, tc.text),
         );
     }
     for v in (-60..=0).step_by(10) {
         let xv = x(v as f64);
         p.line_segment(
             [pos2(xv, rect.bottom() - 4.0), pos2(xv, rect.bottom())],
-            Stroke::new(1.0, Color32::from_gray(110)),
+            Stroke::new(1.0, tc.text_dim),
         );
     }
     resp
@@ -295,18 +293,19 @@ fn loudness_bar(ui: &mut egui::Ui, m: f64, s: f64, i: f64) -> egui::Response {
 /// −1 to +1, with a needle; dimmed while silent.
 fn correlation(ui: &mut egui::Ui, v: Option<f32>) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+    let tc = crate::theme::look(ui.ctx()).c().clone();
     let p = ui.painter();
-    p.rect_filled(rect, 2.0, Color32::from_gray(30));
+    p.rect_filled(rect, 2.0, tc.meter_bg);
     let inner = rect.shrink2(vec2(18.0, 0.0));
     let x = |v: f32| inner.left() + inner.width() * (v + 1.0) / 2.0;
     p.line_segment(
         [pos2(x(0.0), rect.top()), pos2(x(0.0), rect.bottom())],
-        Stroke::new(1.0, Color32::from_gray(110)),
+        Stroke::new(1.0, tc.text_dim),
     );
     let (at, color) = match v {
-        Some(v) if v < 0.0 => (v, Color32::from_rgb(230, 70, 60)),
-        Some(v) => (v, Color32::from_rgb(80, 200, 110)),
-        None => (0.0, Color32::from_gray(80)),
+        Some(v) if v < 0.0 => (v, tc.meter_high),
+        Some(v) => (v, tc.good),
+        None => (0.0, tc.line),
     };
     p.line_segment(
         [
@@ -324,7 +323,7 @@ fn correlation(ui: &mut egui::Ui, v: Option<f32>) -> egui::Response {
             align,
             txt,
             egui::FontId::proportional(10.0),
-            Color32::from_gray(140),
+            tc.text_dim,
         );
     }
     resp
@@ -333,18 +332,19 @@ fn correlation(ui: &mut egui::Ui, v: Option<f32>) -> egui::Response {
 /// Bands on a log scale, 20 Hz to 20 kHz, from the floor to 0 dB.
 fn spectrum(ui: &mut egui::Ui, edges: &[f32], db: &[f32], rate: u32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 170.0), Sense::hover());
+    let tc = crate::theme::look(ui.ctx()).c().clone();
     let p = ui.painter();
-    p.rect_filled(rect, 2.0, Color32::from_gray(22));
+    p.rect_filled(rect, 2.0, tc.meter_bg);
     let x = |hz: f32| rect.left() + rect.width() * (hz / LOW_HZ).log2() / (HIGH_HZ / LOW_HZ).log2();
     let y = |d: f32| rect.bottom() - rect.height() * ((d - FLOOR) / -FLOOR).clamp(0.0, 1.0);
-    let grid = Stroke::new(1.0, Color32::from_gray(50));
+    let grid = Stroke::new(1.0, tc.grid);
     let label = |p: &egui::Painter, at: egui::Pos2, t: &str| {
         p.text(
             at,
             egui::Align2::LEFT_TOP,
             t,
             egui::FontId::proportional(10.0),
-            Color32::from_gray(130),
+            tc.text_dim,
         );
     };
     for (hz, t) in [
@@ -382,14 +382,11 @@ fn spectrum(ui: &mut egui::Ui, edges: &[f32], db: &[f32], rate: u32) {
                     pos2(w[1].x, rect.bottom()),
                     pos2(w[0].x, rect.bottom()),
                 ],
-                Color32::from_rgba_unmultiplied(70, 150, 230, 60),
+                tc.accent.gamma_multiply(0.25),
                 Stroke::NONE,
             ));
         }
-        p.add(egui::Shape::line(
-            points,
-            Stroke::new(1.5, Color32::from_rgb(110, 180, 250)),
-        ));
+        p.add(egui::Shape::line(points, Stroke::new(1.5, tc.accent)));
     }
 }
 
@@ -397,8 +394,11 @@ fn spectrum(ui: &mut egui::Ui, edges: &[f32], db: &[f32], rate: u32) {
 /// beyond it. Click to open the meters window on it.
 pub fn strip(ui: &mut egui::Ui, (l, r): (f32, f32), (rl, rr): (f32, f32)) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(140.0, 14.0), Sense::click());
+    let look = crate::theme::look(ui.ctx());
+    let tc = look.c();
+    let corner = look.radius.min(3.0);
     let p = ui.painter();
-    p.rect_filled(rect, 2.0, Color32::from_gray(30));
+    p.rect_filled(rect, corner, tc.meter_bg);
     let h = rect.height() / 2.0;
     for (i, (peak, rms)) in [(l, rl), (r, rr)].into_iter().enumerate() {
         let level = |v: f32| 20.0 * v.max(1e-6).log10();
@@ -411,11 +411,11 @@ pub fn strip(ui: &mut egui::Ui, (l, r): (f32, f32), (rl, rr): (f32, f32)) -> egu
         };
         let color = |db: f32| {
             if db > -0.5 {
-                Color32::from_rgb(230, 70, 60)
+                tc.meter_high
             } else if db > -12.0 {
-                Color32::from_rgb(230, 200, 60)
+                tc.meter_mid
             } else {
-                Color32::from_rgb(80, 200, 110)
+                tc.meter_low
             }
         };
         p.rect_filled(
@@ -427,8 +427,8 @@ pub fn strip(ui: &mut egui::Ui, (l, r): (f32, f32), (rl, rr): (f32, f32)) -> egu
     }
     p.rect_stroke(
         rect,
-        2.0,
-        Stroke::new(1.0, Color32::from_gray(70)),
+        corner,
+        Stroke::new(look.line, tc.line),
         egui::StrokeKind::Inside,
     );
     resp

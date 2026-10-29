@@ -17,7 +17,7 @@ use daw_plugins::presets::{self, Preset};
 use daw_plugins::proto::ProgramList;
 use daw_plugins::scan::{self, Available, PluginList};
 use daw_plugins::{Host, Module, Plugin, PluginState, Processor, Sandbox};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 /// One effect in a track's chain.
 pub struct FxSlot {
@@ -843,7 +843,7 @@ impl Effects {
                                     }
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(&e).color(Color32::LIGHT_RED),
+                                            RichText::new(&e).color(ui.visuals().error_fg_color),
                                         )
                                         .truncate(),
                                     )
@@ -978,7 +978,7 @@ impl Effects {
                         ui.horizontal(|ui| {
                             ui.label(
                                 RichText::new(format!("Stopped: {why}. Its audio passes through."))
-                                    .color(Color32::LIGHT_RED),
+                                    .color(ui.visuals().error_fg_color),
                             );
                             if ui
                                 .button("Restart")
@@ -1188,7 +1188,7 @@ fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<Ro
 
 /// The line under a convolution reverb's room: who recorded it, or
 /// which file it is.
-fn room_note(b: &daw_effects::Effect) -> Option<RichText> {
+fn room_note(ui: &egui::Ui, b: &daw_effects::Effect) -> Option<RichText> {
     let reference = b.response_ref();
     if reference.is_empty() {
         return None;
@@ -1200,7 +1200,7 @@ fn room_note(b: &daw_effects::Effect) -> Option<RichText> {
                  The project keeps the file's name.",
             )
             .small()
-            .color(Color32::LIGHT_RED),
+            .color(ui.visuals().error_fg_color),
         );
     }
     let line = match daw_effects::library::find(&reference) {
@@ -1269,7 +1269,7 @@ fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option
                     .request_repaint_after(std::time::Duration::from_millis(50));
             }
         });
-    if let Some(note) = room_note(b) {
+    if let Some(note) = room_note(ui, b) {
         ui.add(egui::Label::new(note).wrap());
     }
     pick

@@ -1,0 +1,109 @@
+# Tidal: sea glass and surf. Pale green-blue, very rounded, relaxed;
+# clips are smooth white pebbles with a single-line waveform and a teal
+# accent that never shouts.
+# The light colours are from the mock-ups (the accent and dim text are
+# a little darker, to pass the contrast check); the dark ones are
+# derived.
+
+name = Tidal
+about = Pale sea glass, soft rounded shapes and single-line waveforms.
+designed = light
+
+[shape]
+radius = 12
+clip_radius = 12
+line = 1
+gap = 9 4
+padding = 8 3
+shadow = 6
+loop = filled
+
+[type]
+body = 14
+small = 11.5
+heading = 19
+numerals = 18
+numerals_face = proportional
+
+[waveform]
+style = line
+weight = 1.5
+
+[texture]
+kind = none
+
+[glow]
+on = no
+radius = 0
+
+[light]
+bg = #e6f1ef
+panel = #f2f8f7
+lane = #eef5f3
+raised = #ffffff
+line = #c6dcd8
+grid = #c6dcd8
+grid_fine = #dfeae7
+text = #1f3a37
+text_dim = #4a6b67
+accent = #1a7a6c
+on_accent = #ffffff
+selection = #bfe3dc
+record = #d0503a
+playhead = #1f3a37
+glow = #00000000
+loop = #1f8a7a29
+marker = #1a7a6c
+comment = #b8508a
+tempo = #436d27
+signature = #3d6fa3
+clip_fill = #ffffff
+clip_border = #c6dcd8
+clip_text = #1f3a37
+clip_label = none
+meter_bg = #dbe9e6
+meter_low = #3f7f5a
+meter_mid = #1a7a6c
+meter_high = #c2402a
+good = #2f7d4f
+warn = #7a5200
+error = #b8321e
+texture = #00000000
+shadow = #1f3a3720
+tracks = #1a7a6c #b8508a #4f7f2e #a06a1f #5a60b8 #22789e #b8583a #7a6c1f
+
+[dark]
+bg = #0f1e1d
+panel = #142725
+lane = #0c1918
+raised = #1a3230
+line = #2b4a46
+grid = #2b4a46
+grid_fine = #182d2b
+text = #dcefeb
+text_dim = #92b5af
+accent = #4cc2ae
+on_accent = #0c1918
+selection = #1f5a52
+record = #ff7f66
+playhead = #dcefeb
+glow = #00000000
+loop = #4cc2ae29
+marker = #4cc2ae
+comment = #f08cbf
+tempo = #9ccf7a
+signature = #8fb4ef
+clip_fill = #1a3230
+clip_border = #2b4a46
+clip_text = #dcefeb
+clip_label = none
+meter_bg = #081211
+meter_low = #2f8a7a
+meter_mid = #4cc2ae
+meter_high = #ff7f66
+good = #7fd19a
+warn = #f0c870
+error = #ff8f78
+texture = #00000000
+shadow = #00000066
+tracks = #4cc2ae #f08cbf #9ccf7a #e8b86a #a9adf5 #6cc4ef #f09a78 #d4c87a

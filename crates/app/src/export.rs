@@ -12,7 +12,7 @@ use daw_engine::export::{Written, write_wav};
 use daw_engine::graph::Graph;
 use daw_engine::time::Frames;
 use daw_plugins::Plugin;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 /// Each file written: its name, and how it went.
 type Lines = Vec<(String, Result<Written, String>)>;
@@ -217,7 +217,7 @@ impl Export {
                         match r {
                             Ok(w) if w.clipped() => {
                                 ui.colored_label(
-                                    Color32::YELLOW,
+                                    ui.visuals().warn_fg_color,
                                     format!(
                                         "{name}.wav: went {:.1} dB over and was clipped; turn it down",
                                         20.0 * w.peak.log10()
@@ -228,7 +228,7 @@ impl Export {
                                 ui.label(format!("{name}.wav ✔"));
                             }
                             Err(e) => {
-                                ui.colored_label(Color32::LIGHT_RED, format!("{name}: {e}"));
+                                ui.colored_label(ui.visuals().error_fg_color, format!("{name}: {e}"));
                             }
                         }
                     }

@@ -157,7 +157,7 @@ impl Remote {
                 );
                 ui.add_space(6.0);
                 if let Some(e) = &self.error {
-                    ui.colored_label(Color32::LIGHT_RED, e);
+                    ui.colored_label(ui.visuals().error_fg_color, e);
                 }
                 if let Some(n) = &self.note {
                     ui.label(RichText::new(n).strong());
@@ -258,6 +258,7 @@ fn qr(ui: &mut egui::Ui, img: &QrImage) {
     let side = cell * (img.size + 8) as f32;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
     let p = ui.painter();
+    // Black on white whatever the theme, so phone cameras can read it.
     p.rect_filled(rect, 0.0, Color32::WHITE);
     let origin = rect.min + egui::vec2(4.0 * cell, 4.0 * cell);
     for y in 0..img.size {

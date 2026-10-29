@@ -6,7 +6,7 @@
 
 use daw_audio_io::DeviceProfile;
 use daw_audio_io::latency::{self, Measured, Measuring, Target};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 #[derive(Default)]
 pub struct Latency {
@@ -141,7 +141,7 @@ impl Latency {
                             ui.label("The same every time the audio started, so recordings line up exactly.");
                         } else {
                             ui.colored_label(
-                                Color32::from_rgb(230, 180, 60),
+                                ui.visuals().warn_fg_color,
                                 format!(
                                     "It changed by {:.0} frames ({:.1} ms) between starts, so recordings may be off by up to that much. \
                                      This driver may not start the same way each time; try again, or another buffer size.",
@@ -160,7 +160,7 @@ impl Latency {
                     }
                     Some(Err(e)) => {
                         ui.separator();
-                        ui.colored_label(Color32::LIGHT_RED, e);
+                        ui.colored_label(ui.visuals().error_fg_color, e);
                     }
                     None => {}
                 }

@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use crate::commands::Cmd;
 use eframe::egui::{
-    self, Color32, CursorIcon, DragAndDrop, Id, Pos2, Rect, Sense, Stroke, UiBuilder,
-    ViewportBuilder, ViewportCommand, ViewportId, pos2, vec2,
+    self, CursorIcon, DragAndDrop, Id, Pos2, Rect, Sense, Stroke, UiBuilder, ViewportBuilder,
+    ViewportCommand, ViewportId, pos2, vec2,
 };
 
 /// A part of the main window.
@@ -1352,7 +1352,7 @@ impl<H: Host> Draw<'_, H> {
             egui::Align2::CENTER_CENTER,
             format!("{words} {}", shown.the()),
             egui::FontId::proportional(16.0),
-            Color32::WHITE,
+            crate::theme::look(ui.ctx()).c().text,
         );
         if ui.input(|i| i.pointer.any_released()) {
             self.acts.push(Act::Put(p, shown, side));

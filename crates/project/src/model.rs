@@ -17,8 +17,11 @@ pub struct Project {
     pub tracks: Vec<Track>,
     /// In bar order.
     pub markers: Vec<Marker>,
-    /// Lesson notes, plain text.
+    /// Lesson notes: text with a few simple marks (`#` headings,
+    /// `**bold**`, `-` lists) that the app shows formatted.
     pub notes: String,
+    /// Tab blocks pinned to sections, oldest first.
+    pub tabs: Vec<TabBlock>,
     /// Pinned comments and their replies, oldest first.
     pub comments: Vec<Comment>,
 }
@@ -34,6 +37,7 @@ impl Default for Project {
             tracks: Vec::new(),
             markers: Vec::new(),
             notes: String::new(),
+            tabs: Vec::new(),
             comments: Vec::new(),
         }
     }
@@ -186,6 +190,22 @@ pub struct Comment {
     pub end: Option<i64>,
     pub text: String,
     pub resolved: bool,
+    /// When it was written, in milliseconds since 1970, for ordering.
+    pub created: i64,
+}
+
+/// A block of tab (or anything else to read in a fixed-width font), pinned
+/// to the section a marker starts, or to the whole song.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabBlock {
+    pub id: String,
+    /// The marker whose section it belongs to, or `None` for the whole
+    /// song. A marker since deleted leaves the block unpinned.
+    pub marker: Option<String>,
+    pub title: String,
+    pub text: String,
+    /// Who wrote it: the member's public key, as hex, or empty.
+    pub author: String,
     /// When it was written, in milliseconds since 1970, for ordering.
     pub created: i64,
 }

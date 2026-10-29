@@ -21,6 +21,7 @@ mod crash;
 mod export;
 mod fx;
 mod latency;
+mod notes;
 mod people;
 mod perf;
 mod practice;
@@ -192,9 +193,10 @@ struct App {
     markers: Vec<Marker>,
     timeline: timeline::Timeline,
     perf: perf::Perf,
-    /// Lesson notes, and whether their window is open.
+    /// Lesson notes and tab blocks, as in the project, and their window.
     notes: String,
-    notes_open: bool,
+    tabs: Vec<daw_project::TabBlock>,
+    notes_ui: notes::Notes,
     /// Pinned comments, as in the project, and their panel.
     comments: Vec<daw_project::Comment>,
     comment_ui: comments::Comments,
@@ -318,7 +320,8 @@ impl App {
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
             notes: String::new(),
-            notes_open: false,
+            tabs: Vec::new(),
+            notes_ui: notes::Notes::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             shortcuts_open: false,
@@ -767,24 +770,39 @@ impl App {
         }
     }
 
-    /// Lesson notes: plain text kept with the project (roadmap 1.7).
+    /// Lesson notes and tab blocks (roadmap 1.7).
     fn notes_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.notes_open;
-        egui::Window::new("Lesson notes")
-            .open(&mut open)
-            .default_size([380.0, 300.0])
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.notes)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(14)
-                            .hint_text("What to practise, chord shapes, tab…")
-                            .font(egui::TextStyle::Monospace),
-                    );
-                });
-            });
-        self.notes_open = open;
+        if !self.notes_ui.open {
+            return;
+        }
+        let map = self.tempo_map();
+        let end_bar = self.with_song(|_, song| timeline::Timeline::end_bar(&map, song));
+        let playhead = self.ctl.status().position();
+        let me = self.my_author_id();
+        let cx = notes::Ctx {
+            markers: &self.markers,
+            end_bar,
+            playhead_bar: map.bar_beat(map.ticks_at(playhead)).bar,
+            me: &me,
+            may_edit: self.may_edit_song(),
+        };
+        let out = self
+            .notes_ui
+            .window(ctx, &mut self.notes, &mut self.tabs, &cx);
+        if let Some(bar) = out.go_to_bar {
+            let f = map.frames_at(map.bar_start(bar));
+            self.send(Command::Seek(f));
+        }
+        if let Some(bars) = out.loop_bars {
+            self.loop_bars = bars;
+            self.looping = true;
+            self.send_loop();
+        }
+    }
+
+    /// Whether this user may change the song, not only comment on it.
+    fn may_edit_song(&self) -> bool {
+        self.proj.doc.my_role() != Some(daw_project::Role::Commenter)
     }
 
     /// Who this user is, for the comments they write: this computer's id
@@ -863,6 +881,14 @@ impl App {
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
         if let Some(id) = out.pin {
             self.comment_ui.show_thread(&id);
+        }
+        if let Some(marker) = out.tab_for {
+            if self.may_edit_song() {
+                let me = self.my_author_id();
+                self.notes_ui.add_tab(&mut self.tabs, Some(marker), &me);
+            } else {
+                self.notes_ui.open = true;
+            }
         }
         if let Some((lane, at)) = out.comment_at {
             self.comment_ui.write_at(comments::Target {
@@ -1975,7 +2001,7 @@ impl eframe::App for App {
                         ui.close();
                     }
                     if ui.button("Lesson notes…").clicked() {
-                        self.notes_open = true;
+                        self.notes_ui.open = true;
                         ui.close();
                     }
                     if ui.button("Comments…").clicked() {

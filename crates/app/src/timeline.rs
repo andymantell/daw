@@ -444,6 +444,8 @@ pub struct Outcome {
     pub pin: Option<String>,
     /// Write a comment here: on a lane (or the whole song) at a frame.
     pub comment_at: Option<(Option<usize>, i64)>,
+    /// Write tab for this marker's section.
+    pub tab_for: Option<String>,
 }
 
 /// Frames between waveform peaks at the finest level.
@@ -702,7 +704,7 @@ impl Timeline {
     }
 
     /// The first bar after the song's end.
-    fn end_bar(map: &TempoMap, song: &Song) -> i64 {
+    pub(crate) fn end_bar(map: &TempoMap, song: &Song) -> i64 {
         Self::bar_at(map, song.end()) + 1
     }
 
@@ -1735,6 +1737,10 @@ impl Timeline {
             Some((Hit::Marker(i), _)) if i < song.markers.len() => {
                 if ui.button("Loop this section").clicked() {
                     out.loop_bars = Some(section(song.markers, i, end_bar));
+                    ui.close();
+                }
+                if ui.button("Add tab for this section…").clicked() {
+                    out.tab_for = Some(song.markers[i].id.clone());
                     ui.close();
                 }
                 if ui.button("Rename…").clicked() {

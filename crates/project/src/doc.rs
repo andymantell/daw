@@ -3,7 +3,8 @@
 //!
 //! Layout: a `song` map of settings, a `tracks` map from id to track,
 //! with the track order in the movable list `order`, a `markers` map, and
-//! the lesson notes as text, and a `comments` map from id to comment. A
+//! the lesson notes as text, a `tabs` map from id to tab block, and a
+//! `comments` map from id to comment. A
 //! track is a map of its settings, a `clips`
 //! map from id to clip, an `fx` map from id to effect and the effect
 //! order in the movable list `fx_order`. Every field is its own map entry,
@@ -15,7 +16,9 @@
 //! out of the file too, not just out of the project as it stands: the
 //! document keeps its whole history, so they could otherwise be read
 //! back. [`ProjectDoc::to_bytes`] blanks every value that comments no
-//! longer show in the copy it writes (see [`scrub`]).
+//! longer show in the copy it writes (see [`scrub`]). Tab blocks are laid
+//! out the same way, one value per field, so the same scrub could cover
+//! them; for now their old text, and the notes', stays in the history.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -28,7 +31,7 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings,
+    Clip, Comment, Effect, EffectState, Marker, Practice, Project, TabBlock, Track, TrainerSettings,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -308,6 +311,10 @@ impl ProjectDoc {
         self.doc.get_map("comments")
     }
 
+    fn tabs(&self) -> LoroMap {
+        self.doc.get_map("tabs")
+    }
+
     fn write(&mut self, p: &Project) -> bool {
         let mut w = Writer::default();
         let song = self.song();
@@ -349,6 +356,22 @@ impl ProjectDoc {
         if notes.to_string() != p.notes {
             let _ = notes.update(&p.notes, UpdateOptions::default());
             w.changed = true;
+        }
+
+        let tabs = self.tabs();
+        let keep: HashSet<&str> = p.tabs.iter().map(|t| t.id.as_str()).collect();
+        for id in keys(&tabs) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&tabs, &id);
+            }
+        }
+        for t in &p.tabs {
+            let m = w.child(&tabs, &t.id);
+            w.put(&m, "marker", opt_str(&t.marker));
+            w.put(&m, "title", t.title.as_str());
+            w.put(&m, "text", t.text.as_str());
+            w.put(&m, "author", t.author.as_str());
+            w.put(&m, "created", t.created);
         }
 
         let comments = self.comments();
@@ -435,6 +458,21 @@ impl ProjectDoc {
         if let Some(LoroValue::String(s)) = root.get("notes") {
             p.notes = s.to_string();
         }
+        if let Some(LoroValue::Map(ts)) = root.get("tabs") {
+            for (id, t) in ts.iter() {
+                let LoroValue::Map(t) = t else { continue };
+                p.tabs.push(TabBlock {
+                    id: id.to_string(),
+                    marker: string(t, "marker"),
+                    title: string(t, "title").unwrap_or_default(),
+                    text: string(t, "text").unwrap_or_default(),
+                    author: string(t, "author").unwrap_or_default(),
+                    created: int(t, "created").unwrap_or(0),
+                });
+            }
+        }
+        p.tabs
+            .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
         if let Some(LoroValue::Map(cs)) = root.get("comments") {
             for (id, c) in cs.iter() {
                 let LoroValue::Map(c) = c else { continue };

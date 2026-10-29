@@ -312,8 +312,14 @@ Comments show their writer's name. Still to do: live sessions.*
   owner grants editor or commenter roles.
 
 ### 1.7 Lesson notes & tab (S)
-*Started 2026-10-28: Practice → Lesson notes… keeps plain-text notes in
-the project document. Rich text and tab blocks are still to do.*
+*Started 2026-10-28: Practice → Lesson notes… keeps notes in the
+project document. 2026-10-29: notes take simple typed marks (headings,
+bold, lists, fixed-width blocks) and show formatted under Read, with
+buttons to add the marks; tab blocks are pinned to a marker's section
+(or the whole song), listed in song order, and can move the playhead
+to their section or loop it. Commenters can read notes but not change
+them. Still to decide: wiping deleted notes and tab out of the saved
+history, as for comments.*
 - Rich-text lesson notes per project. Plain-text tab blocks pinned to
   sections.
 

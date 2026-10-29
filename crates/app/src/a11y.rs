@@ -96,7 +96,7 @@ fn every_control_has_a_spoken_name() {
     app.tuner.open = true;
     app.perf.open = true;
     app.export.open = true;
-    app.notes_open = true;
+    app.notes_ui.open = true;
     app.shortcuts_open = true;
     app.comment_ui.open = true;
     app.comments.push(daw_project::Comment {
@@ -118,6 +118,9 @@ fn every_control_has_a_spoken_name() {
         "Add effect",
         "New comment",
         "Delete comment: Rushing here",
+        "Lesson notes",
+        "Add tab block",
+        "Section for the new tab block",
     ] {
         assert!(
             names(&h).iter().any(|n| n == name),
@@ -161,7 +164,7 @@ fn the_transport_works_from_the_keyboard() {
 #[test]
 fn keys_type_into_text_fields_instead() {
     let mut h = with_tracks();
-    h.state_mut().notes_open = true;
+    h.state_mut().notes_ui.open = true;
     h.run();
     h.get_by_role(egui::accesskit::Role::MultilineTextInput)
         .focus();

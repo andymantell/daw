@@ -28,6 +28,7 @@ mod people;
 mod perf;
 mod practice;
 mod project;
+mod recording;
 mod share;
 mod snapshots;
 mod timeline;
@@ -169,6 +170,8 @@ struct App {
     _disk: StreamerThread,
     _recorder: RecorderThread,
     recording: bool,
+    /// Punch range, pre-roll and post-roll, and retrospective capture.
+    record: recording::RecordOptions,
     audio: Audio,
     profile: Option<DeviceProfile>,
     /// The settings being edited in the device window.
@@ -253,6 +256,7 @@ impl App {
             _disk: disk,
             _recorder: recorder,
             recording: false,
+            record: recording::RecordOptions::default(),
             audio: Audio::Stopped,
             draft: profile.clone(),
             profile: profile.clone(),
@@ -303,6 +307,7 @@ impl App {
         }
         app.look_for_recovery();
         app.audio = app.open_device(eng);
+        app.send_capture();
         app.sign_in();
         if people::ask_name_at_start(&app.me) {
             app.ask_name();
@@ -398,6 +403,7 @@ impl App {
         self.send(self.practice());
         self.send_loop();
         self.send(Command::Seek(pos));
+        self.send_capture();
         eng
     }
 
@@ -903,7 +909,10 @@ impl App {
     fn toggle_play(&mut self) {
         if self.ctl.status().playing() {
             self.send(Command::Stop);
-        } else if self.count_in {
+            return;
+        }
+        self.prepare_play();
+        if self.count_in {
             self.send(Command::CountIn { bars: 1 });
         } else {
             self.send(Command::Play);
@@ -1028,6 +1037,7 @@ impl App {
             self.trainer.controls(ui);
         });
         ui.horizontal(|ui| self.practice_controls(ui));
+        ui.horizontal(|ui| self.recording_controls(ui));
     }
 
     fn practice(&self) -> Command {
@@ -1296,11 +1306,14 @@ impl App {
                 meter(ui, self.master_meter);
                 ui.end_row();
             });
-        if ui.button("+ Add track").clicked() {
-            self.tracks
-                .push(Track::new(format!("Track {}", self.tracks.len() + 1)));
-            rebuild = true;
-        }
+        ui.horizontal(|ui| {
+            if ui.button("+ Add track").clicked() {
+                self.tracks
+                    .push(Track::new(format!("Track {}", self.tracks.len() + 1)));
+                rebuild = true;
+            }
+            rebuild |= self.input_tracks_button(ui, inputs);
+        });
         for (track, mix) in changes {
             self.send(Command::SetMix { track, mix });
         }

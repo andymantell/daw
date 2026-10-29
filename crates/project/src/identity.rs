@@ -762,6 +762,26 @@ mod tests {
     }
 
     #[test]
+    fn commenters_cant_add_tab_blocks() {
+        let (_, mut mine, _, mut theirs) = shared();
+        mine.set_role(&pat_key(&theirs), Some(Role::Commenter))
+            .unwrap();
+        theirs.merge(&mine.to_bytes()).unwrap();
+        let mut p: Project = theirs.get();
+        p.tabs.push(crate::TabBlock {
+            id: "t1".into(),
+            marker: None,
+            title: String::new(),
+            text: "e|---|".into(),
+            author: pat_key(&theirs),
+            created: 0,
+        });
+        theirs.set(&p);
+        assert!(mine.merge(&theirs.to_bytes()).is_err());
+        assert!(mine.get().tabs.is_empty());
+    }
+
+    #[test]
     fn taking_a_role_away_stops_later_changes() {
         let (_, mut mine, _, mut theirs) = shared();
         let pat = pat_key(&theirs);

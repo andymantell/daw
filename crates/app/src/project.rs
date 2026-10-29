@@ -183,6 +183,7 @@ impl App {
             loop_bars: self.loop_bars,
             reference_hz: self.tuner.a4 as f64,
             notes: self.notes.clone(),
+            tabs: self.tabs.clone(),
             markers: (self.markers.iter())
                 .map(|m| daw_project::Marker {
                     id: m.id.clone(),
@@ -340,6 +341,7 @@ impl App {
         self.loop_bars = p.loop_bars;
         self.tuner.a4 = p.reference_hz as f32;
         self.notes = p.notes.clone();
+        self.tabs = p.tabs.clone();
         self.comments = p.comments.clone();
         self.markers = (p.markers.iter())
             .map(|m| Marker {
@@ -646,7 +648,11 @@ impl App {
             return;
         };
         let p = doc.get();
-        if p.tracks.is_empty() && p.markers.is_empty() && p.notes.trim().is_empty() {
+        if p.tracks.is_empty()
+            && p.markers.is_empty()
+            && p.notes.trim().is_empty()
+            && p.tabs.is_empty()
+        {
             let _ = std::fs::remove_file(path);
             return;
         }

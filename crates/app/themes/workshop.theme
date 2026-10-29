@@ -1,0 +1,107 @@
+# Workshop: a calm workbench. Warm matte greys and copper, rounder
+# corners, and depth from layered panels with soft shadows instead of
+# glow. Clip names sit on small paper labels.
+# The dark colours are from the mock-ups; the light ones are derived.
+
+name = Workshop
+about = Warm matte greys and copper, with soft shadows and paper clip labels.
+designed = dark
+
+[shape]
+radius = 8
+clip_radius = 7
+line = 1
+gap = 8 4
+padding = 6 2
+shadow = 10
+loop = filled
+
+[type]
+body = 13.5
+small = 11
+heading = 18
+numerals = 17
+numerals_face = mono
+
+[waveform]
+style = filled
+weight = 1
+
+[texture]
+kind = none
+
+[glow]
+on = yes
+radius = 4
+
+[dark]
+bg = #2b2623
+panel = #352f2b
+lane = #262220
+raised = #3f3733
+line = #4a423c
+grid = #4a423c
+grid_fine = #312b28
+text = #efe7dc
+text_dim = #b3a797
+accent = #d9824a
+on_accent = #1e1917
+selection = #6e4329
+record = #e0553d
+playhead = #f2c9a6
+glow = #d9824a99
+loop = #d9824a33
+marker = #d9824a
+comment = #c88cb5
+tempo = #8fb37a
+signature = #7fa3c4
+clip_fill = #3a322d
+clip_border = #574d45
+clip_text = #2b2623
+clip_label = #efe7dc
+meter_bg = #1c1816
+meter_low = #9a5c36
+meter_mid = #d9824a
+meter_high = #e0553d
+good = #8fb37a
+warn = #e6b85c
+error = #ff8a70
+texture = #00000000
+shadow = #00000059
+tracks = #d9824a #c88cb5 #8fb37a #7fa3c4 #c9b06b #7fbfb0 #d98a8a #a993c9
+
+[light]
+bg = #ece7e1
+panel = #e2dbd3
+lane = #f3efea
+raised = #f9f6f2
+line = #c7bdb2
+grid = #c7bdb2
+grid_fine = #e0d8cf
+text = #2b2623
+text_dim = #665a50
+accent = #9c4f22
+on_accent = #fbf8f4
+selection = #e8c3a6
+record = #b8402a
+playhead = #7a3d1a
+glow = #d9824a66
+loop = #c2703a33
+marker = #9c4f22
+comment = #94487c
+tempo = #406833
+signature = #3e6a90
+clip_fill = #fbf8f4
+clip_border = #c7bdb2
+clip_text = #2b2623
+clip_label = #e6dccd
+meter_bg = #d9d0c5
+meter_low = #5a6b2f
+meter_mid = #9c4f22
+meter_high = #b8402a
+good = #33662f
+warn = #7d5300
+error = #b02a1a
+texture = #00000000
+shadow = #3a2a1a30
+tracks = #9c4f22 #94487c #4d7a3c #3e6a90 #7d6a24 #2f7466 #a8423f #6b55a0

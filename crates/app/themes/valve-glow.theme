@@ -1,0 +1,107 @@
+# Valve Glow: the back of a valve amp in a dim room. Warm browns, amber
+# light and cream lettering; the playhead glows like a warm valve.
+# The dark colours are from the mock-ups; the light ones are derived.
+# How theme files work: see README.md beside this file.
+
+name = Valve Glow
+about = Warm dark browns, amber light and cream text. The playhead glows.
+designed = dark
+
+[shape]
+radius = 6
+clip_radius = 5
+line = 1
+gap = 8 3
+padding = 5 2
+shadow = 0
+loop = filled
+
+[type]
+body = 13
+small = 11
+heading = 18
+numerals = 17
+numerals_face = mono
+
+[waveform]
+style = filled
+weight = 1
+
+[texture]
+kind = none
+
+[glow]
+on = yes
+radius = 8
+
+[dark]
+bg = #1a1512
+panel = #231c17
+lane = #1d1814
+raised = #2c231d
+line = #3a2f27
+grid = #3a2f27
+grid_fine = #2a221c
+text = #efe3cf
+text_dim = #a8957c
+accent = #f0a23b
+on_accent = #1a1512
+selection = #6b4518
+record = #e5533b
+playhead = #ffd18a
+glow = #f0a23b
+loop = #f0a23b2e
+marker = #f0a23b
+comment = #d98ab0
+tempo = #86b36b
+signature = #7aa6d6
+clip_fill = track 10%
+clip_border = track 35%
+clip_text = #efe3cf
+clip_label = none
+meter_bg = #120e0b
+meter_low = #8a5a1c
+meter_mid = #f0a23b
+meter_high = #e5533b
+good = #86b36b
+warn = #f0c24b
+error = #ff7a5c
+texture = #00000000
+shadow = #00000099
+tracks = #f0a23b #d98ab0 #86b36b #7aa6d6 #c9a86a #9ec9b8 #d6866a #b39ddb
+
+[light]
+bg = #f4ebdd
+panel = #ece0cc
+lane = #f8f1e5
+raised = #fffaf1
+line = #d3c1a5
+grid = #d3c1a5
+grid_fine = #e6d9c4
+text = #2b1f15
+text_dim = #6b563f
+accent = #a9600e
+on_accent = #fffaf1
+selection = #f0c98a
+record = #c0392b
+playhead = #8a4a08
+glow = #f0a23b
+loop = #d98a2240
+marker = #a9600e
+comment = #a8437a
+tempo = #436b30
+signature = #3a659a
+clip_fill = track 14%
+clip_border = track 60%
+clip_text = #2b1f15
+clip_label = none
+meter_bg = #e2d4bd
+meter_low = #5f7a2e
+meter_mid = #a9600e
+meter_high = #c0392b
+good = #336b2b
+warn = #855600
+error = #b3261e
+texture = #00000000
+shadow = #5a3c1a40
+tracks = #a9600e #a8437a #4f7d3a #3f6fa3 #8a6d2a #2f7d70 #b0502f #6f5aa8

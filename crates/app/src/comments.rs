@@ -9,12 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use daw_engine::time::{Frames, TempoMap};
 use daw_project::Comment;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 use crate::timeline::Pin;
-
-/// Pins and their highlight on the timeline.
-pub const COLOUR: Color32 = Color32::from_rgb(225, 110, 200);
 
 /// Where a new comment goes.
 #[derive(Clone, Debug, PartialEq)]
@@ -220,7 +217,7 @@ impl Comments {
     ) {
         let selected = self.selected.as_ref() == Some(&root.id);
         let stroke = if selected {
-            egui::Stroke::new(1.5, COLOUR)
+            egui::Stroke::new(1.5, crate::theme::look(ui.ctx()).c().comment)
         } else {
             ui.visuals().widgets.noninteractive.bg_stroke
         };
@@ -367,7 +364,7 @@ impl Comments {
                     "Delete for good"
                 };
                 if ui
-                    .button(RichText::new(what).color(Color32::LIGHT_RED))
+                    .button(RichText::new(what).color(ui.visuals().error_fg_color))
                     .on_hover_text("Also removes it from the saved file and anything shared later")
                     .clicked()
                 {

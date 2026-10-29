@@ -26,6 +26,7 @@ use eframe::egui::{
 };
 
 use crate::commands::Cmd;
+use crate::theme::{Look, LoopFill, Texture, WaveStyle};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -952,18 +953,9 @@ fn pin_rect(x: f32, top: f32) -> Rect {
     Rect::from_min_size(pos2(x - PIN.x, top + 1.0), PIN - vec2(0.0, 1.0))
 }
 
-const COLOURS: [Color32; 6] = [
-    Color32::from_rgb(70, 130, 200),
-    Color32::from_rgb(200, 120, 60),
-    Color32::from_rgb(90, 170, 100),
-    Color32::from_rgb(170, 90, 170),
-    Color32::from_rgb(190, 170, 70),
-    Color32::from_rgb(70, 170, 170),
-];
-
 /// A clip's volume line in its box `r`, with its points.
-fn draw_volume(painter: &egui::Painter, c: &Clip, r: Rect, x_of: &dyn Fn(i64) -> f32) {
-    let colour = Color32::from_rgb(250, 220, 90);
+fn draw_volume(painter: &egui::Painter, look: &Look, c: &Clip, r: Rect, x_of: &dyn Fn(i64) -> f32) {
+    let colour = look.c().accent;
     let w = (r.width().max(1.0) / 2.0).ceil() as usize;
     let line: Vec<Pos2> = (0..=w)
         .map(|i| {
@@ -975,13 +967,82 @@ fn draw_volume(painter: &egui::Painter, c: &Clip, r: Rect, x_of: &dyn Fn(i64) ->
             )
         })
         .collect();
-    painter.add(egui::Shape::line(line, Stroke::new(1.5, colour)));
+    painter.add(egui::Shape::line(
+        line,
+        Stroke::new(1.5 * look.line, colour),
+    ));
     for p in &c.envelope {
         let rel = p.at as i64 - c.offset as i64;
         if (0..=c.len as i64).contains(&rel) {
             let at = pos2(x_of(c.start + rel), db_y(r, c.gain_db + p.db));
             painter.circle_filled(at, 3.5, colour);
-            painter.circle_stroke(at, 3.5, Stroke::new(1.0, Color32::BLACK));
+            painter.circle_stroke(at, 3.5, Stroke::new(1.0, look.c().lane));
+        }
+    }
+}
+
+/// A clip's waveform, from its columns of `(x, top, bottom)`, in the
+/// theme's style.
+fn draw_wave(painter: &egui::Painter, look: &Look, cols: &[(f32, f32, f32)], mid: f32, c: Color32) {
+    let w = look.wave_weight;
+    // One line swinging between the top and bottom, two pixels a step.
+    let swing = || -> Vec<Pos2> {
+        (cols.iter().step_by(2).enumerate())
+            .map(|(i, &(x, top, bottom))| pos2(x, if i % 2 == 0 { top } else { bottom }))
+            .collect()
+    };
+    match look.wave {
+        WaveStyle::Filled => {
+            for &(x, top, bottom) in cols {
+                painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, c));
+            }
+        }
+        WaveStyle::Outline => {
+            let tops = cols.iter().map(|&(x, t, _)| pos2(x, t)).collect();
+            let bottoms = cols.iter().map(|&(x, _, b)| pos2(x, b)).collect();
+            painter.add(egui::Shape::line(tops, Stroke::new(w, c)));
+            painter.add(egui::Shape::line(bottoms, Stroke::new(w, c)));
+            if let (Some(a), Some(b)) = (cols.first(), cols.last()) {
+                painter.line_segment(
+                    [pos2(a.0, mid), pos2(b.0, mid)],
+                    Stroke::new(1.0, c.gamma_multiply(0.4)),
+                );
+            }
+        }
+        WaveStyle::Line => {
+            painter.add(egui::Shape::line(swing(), Stroke::new(w, c)));
+        }
+        WaveStyle::Trace => {
+            let pts = swing();
+            let glow = look.glow.unwrap_or(4.0);
+            painter.add(egui::Shape::line(
+                pts.clone(),
+                Stroke::new(w + glow, c.gamma_multiply(0.18)),
+            ));
+            painter.add(egui::Shape::line(pts, Stroke::new(w, c)));
+        }
+    }
+}
+
+/// Paper grain: a faint, fixed scatter of specks over `rect`.
+fn draw_grain(painter: &egui::Painter, rect: Rect, c: Color32) {
+    const CELL: i32 = 5;
+    let (x0, y0) = (rect.left() as i32 / CELL, rect.top() as i32 / CELL);
+    let (x1, y1) = (
+        rect.right() as i32 / CELL + 1,
+        rect.bottom() as i32 / CELL + 1,
+    );
+    for gy in y0..y1 {
+        for gx in x0..x1 {
+            let h = crate::theme::hash(gx, gy);
+            if !h.is_multiple_of(3) {
+                continue;
+            }
+            let at = pos2(
+                (gx * CELL) as f32 + (h >> 8) as f32 % CELL as f32,
+                (gy * CELL) as f32 + (h >> 16) as f32 % CELL as f32,
+            );
+            painter.rect_filled(Rect::from_min_size(at, vec2(1.0, 1.0)), 0.0, c);
         }
     }
 }
@@ -1091,17 +1152,20 @@ impl Timeline {
 
     /// A clip's fades in its box `r`: the faded part shaded above its
     /// curve, and a handle at the top of each to drag.
+    #[allow(clippy::too_many_arguments)]
     fn draw_fades(
         &self,
         painter: &egui::Painter,
         c: &Clip,
         r: Rect,
         x_of: &dyn Fn(i64) -> f32,
+        look: &Look,
         colour: Color32,
         handles: bool,
     ) {
-        let shade = Color32::from_black_alpha(110);
-        let line = Stroke::new(1.5, colour.gamma_multiply(1.6));
+        // The faded part is washed out towards the lane's colour.
+        let shade = look.c().lane.gamma_multiply(0.6);
+        let line = Stroke::new(1.5 * look.line, colour);
         for (end, f) in [(false, c.fade_in), (true, c.fade_out)] {
             if f.len > 0 {
                 let (a, b) = if end {
@@ -1137,8 +1201,8 @@ impl Timeline {
                     pos2(x, r.top() + HANDLE / 2.0),
                     vec2(HANDLE - 1.0, HANDLE - 1.0),
                 );
-                painter.rect_filled(h, 1.0, Color32::from_gray(230));
-                painter.rect_stroke(h, 1.0, Stroke::new(1.0, Color32::BLACK), StrokeKind::Inside);
+                painter.rect_filled(h, 1.0, look.c().raised);
+                painter.rect_stroke(h, 1.0, Stroke::new(1.0, look.c().text), StrokeKind::Inside);
             }
         }
     }
@@ -1330,17 +1394,18 @@ impl Timeline {
         view: &View,
         ruler: Rect,
         x_of: &dyn Fn(i64) -> f32,
+        look: &Look,
     ) {
         let map = view.map;
-        let tempo_c = Color32::from_rgb(90, 180, 150);
-        let meter_c = Color32::from_rgb(170, 140, 230);
+        let c = look.c();
+        let (tempo_c, meter_c) = (c.tempo, c.signature);
         let (top, bottom) = (ruler.top() + 14.0, ruler.top() + 26.0);
         let painter = painter.with_clip_rect(ruler);
         let label = |x: f32, text: String, colour: Color32| {
-            let g = painter.layout_no_wrap(text, FontId::proportional(10.0), Color32::BLACK);
+            let g = painter.layout_no_wrap(text, FontId::proportional(10.0), c.bg);
             let r = Rect::from_min_size(pos2(x + 1.0, top), g.size() + vec2(6.0, 0.0));
-            painter.rect_filled(r, 2.0, colour);
-            painter.galley(r.min + vec2(3.0, 0.0), g, Color32::BLACK);
+            painter.rect_filled(r, look.radius.min(3.0), colour);
+            painter.galley(r.min + vec2(3.0, 0.0), g, c.bg);
             r.width()
         };
         let bpm = |t: daw_engine::time::Tempo| {
@@ -1370,10 +1435,13 @@ impl Timeline {
             if glided {
                 painter.line_segment(
                     [pos2(prev, bottom), pos2(x, top)],
-                    Stroke::new(1.5, tempo_c),
+                    Stroke::new(1.5 * look.line, tempo_c),
                 );
             }
-            painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, tempo_c));
+            painter.line_segment(
+                [pos2(x, top), pos2(x, bottom)],
+                Stroke::new(look.line, tempo_c),
+            );
             label(x, format!("{} BPM", bpm(t)), tempo_c);
             prev = x;
         }
@@ -1381,7 +1449,10 @@ impl Timeline {
             let x = x_of(map.frames_at(at).0);
             // To the left of a tempo change on the same bar line.
             let g = format!("{}/{}", sig.beats, sig.unit);
-            painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, meter_c));
+            painter.line_segment(
+                [pos2(x, top), pos2(x, bottom)],
+                Stroke::new(look.line, meter_c),
+            );
             let shift = if map.tempo_changes().any(|(t, _, _)| t == at) {
                 -(g.len() as f32 * 6.0 + 10.0)
             } else {
@@ -2378,16 +2449,25 @@ impl Timeline {
         self.keys(&ui.ctx().clone(), song, view, &mut out);
 
         // Drawing.
+        // Every colour and weight from here on is the theme's.
         let painter = ui.painter_at(rect);
-        let visuals = ui.visuals().clone();
-        painter.rect_filled(rect, 0.0, visuals.extreme_bg_color);
+        let look = crate::theme::look(ui.ctx());
+        let tc = look.c();
+        painter.rect_filled(rect, 0.0, tc.lane);
+        if look.texture == Texture::Grain {
+            draw_grain(&painter, rect, tc.texture);
+        }
         let ruler = Rect::from_min_max(
             pos2(left, rect.top()),
             pos2(rect.right(), rect.top() + RULER),
         );
-        painter.rect_filled(ruler, 0.0, visuals.faint_bg_color);
+        painter.rect_filled(ruler, 0.0, tc.panel);
+        painter.line_segment(
+            [ruler.left_bottom(), ruler.right_bottom()],
+            Stroke::new(look.line, tc.line),
+        );
 
-        // Loop range.
+        // Loop range, with its ends marked so it reads without colour.
         if let Some((a, b)) = view.loop_bars {
             let fa = view.map.frames_at(view.map.bar_start(a)).0;
             let fb = view.map.frames_at(view.map.bar_start(b)).0;
@@ -2395,7 +2475,30 @@ impl Timeline {
                 x_of(fa).max(left)..=x_of(fb).max(left),
                 rect.top() + RULER - 12.0..=rect.top() + RULER,
             );
-            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(80, 160, 240, 90));
+            match look.loop_fill {
+                LoopFill::Filled => {
+                    painter.rect_filled(r, 0.0, tc.loop_range);
+                }
+                LoopFill::Hatched => {
+                    let hatch = painter.with_clip_rect(r.intersect(painter.clip_rect()));
+                    let mut x = r.left() - r.height();
+                    while x < r.right() {
+                        hatch.line_segment(
+                            [pos2(x, r.bottom()), pos2(x + r.height(), r.top())],
+                            Stroke::new(1.5, tc.loop_range.gamma_multiply(2.0)),
+                        );
+                        x += 5.0;
+                    }
+                }
+            }
+            for x in [x_of(fa), x_of(fb)] {
+                if x >= left {
+                    painter.line_segment(
+                        [pos2(x, r.top()), pos2(x, r.bottom())],
+                        Stroke::new(2.0, tc.accent),
+                    );
+                }
+            }
         }
 
         // Bar lines, thinned out when zoomed out.
@@ -2416,8 +2519,7 @@ impl Timeline {
         // time signature may change in it.
         let grid = self.grid.at_zoom(view.map, frame_of(left).max(0), pps);
         if every == 1 && grid != Grid::Bar {
-            let line = visuals.widgets.noninteractive.bg_stroke.color;
-            let (beat_c, part_c) = (line.gamma_multiply(0.6), line.gamma_multiply(0.3));
+            let (beat_c, part_c) = (tc.grid_fine, tc.grid_fine.gamma_multiply(0.5));
             let mut bar = first;
             loop {
                 let t0 = view.map.bar_start(bar);
@@ -2458,19 +2560,19 @@ impl Timeline {
             if x >= left {
                 painter.line_segment(
                     [pos2(x, rect.top() + 12.0), pos2(x, rect.bottom())],
-                    Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
+                    Stroke::new(look.line, tc.grid),
                 );
                 painter.text(
                     pos2(x + 3.0, rect.top() + RULER - 2.0),
                     Align2::LEFT_BOTTOM,
                     bar.to_string(),
-                    FontId::proportional(11.0),
-                    visuals.weak_text_color(),
+                    FontId::new(look.small, look.numerals_font().family),
+                    tc.text_dim,
                 );
             }
             bar += every;
         }
-        self.draw_time_changes(&painter, view, ruler, &x_of);
+        self.draw_time_changes(&painter, view, ruler, &x_of, &look);
 
         let hover_at = resp.hover_pos();
         // Lanes and clips, under the ruler.
@@ -2481,22 +2583,28 @@ impl Timeline {
         for (i, lane) in song.lanes.iter().enumerate() {
             let top = lane_top(i);
             let name_rect = Rect::from_min_size(pos2(rect.left(), top), vec2(HEADER, lane_h));
-            lanes.rect_filled(name_rect, 0.0, visuals.faint_bg_color);
+            let colour = tc.track(i);
+            lanes.rect_filled(name_rect, 0.0, tc.panel);
+            // The track's colour as a tag, as in the mixer.
+            lanes.rect_filled(
+                Rect::from_min_size(name_rect.min + vec2(6.0, 8.0), vec2(4.0, lane_h - 16.0)),
+                2.0,
+                colour,
+            );
             lanes.text(
-                name_rect.left_center() + vec2(8.0, 0.0),
+                name_rect.left_center() + vec2(16.0, 0.0),
                 Align2::LEFT_CENTER,
                 lane.name,
-                FontId::proportional(13.0),
-                visuals.text_color(),
+                FontId::proportional(look.body),
+                tc.text,
             );
             lanes.line_segment(
                 [
                     pos2(rect.left(), top + lane_h),
                     pos2(rect.right(), top + lane_h),
                 ],
-                Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
+                Stroke::new(look.line, tc.line),
             );
-            let colour = COLOURS[i % COLOURS.len()];
             let order = lane
                 .clips
                 .iter()
@@ -2512,15 +2620,28 @@ impl Timeline {
                     top + 2.0..=top + lane_h - 2.0,
                 );
                 let selected = self.selected.contains(&c.id);
+                let corner = look.clip_radius.min(r.height() / 2.0).min(r.width() / 2.0);
                 if c.muted {
                     lanes.rect_stroke(
                         r,
-                        3.0,
-                        Stroke::new(1.0, colour.gamma_multiply(0.5)),
+                        corner,
+                        Stroke::new(look.line, tc.clip_border.of(colour).gamma_multiply(0.5)),
                         StrokeKind::Inside,
                     );
                 } else {
-                    lanes.rect_filled(r, 3.0, colour.gamma_multiply(0.35));
+                    if look.shadow > 0.0 {
+                        let drop = (look.shadow / 4.0).min(3.0);
+                        lanes.rect_filled(r.translate(vec2(0.0, drop)), corner, tc.shadow);
+                    }
+                    // Over the lane, so a see-through fill shows it.
+                    lanes.rect_filled(r, corner, tc.lane);
+                    lanes.rect_filled(r, corner, tc.clip_fill.of(colour));
+                    lanes.rect_stroke(
+                        r,
+                        corner,
+                        Stroke::new(look.line, tc.clip_border.of(colour)),
+                        StrokeKind::Inside,
+                    );
                 }
                 let shape = c.shape();
                 let level = |x: f32| {
@@ -2535,6 +2656,7 @@ impl Timeline {
                     } else {
                         colour
                     };
+                    let mut cols = Vec::with_capacity(r.width() as usize + 1);
                     let mut x = r.left().floor();
                     while x < r.right() {
                         let f0 = frame_of(x) - c.start + c.offset as i64;
@@ -2550,42 +2672,53 @@ impl Timeline {
                             // As it plays: through its fades and volume.
                             let g = level(x);
                             let (lo, hi) = (lo * g, hi * g);
-                            lanes.line_segment(
-                                [
-                                    pos2(x + 0.5, mid - hi.min(1.0) * half),
-                                    pos2(x + 0.5, mid - lo.max(-1.0) * half - 0.5),
-                                ],
-                                Stroke::new(1.0, wave),
-                            );
+                            cols.push((
+                                x + 0.5,
+                                mid - hi.min(1.0) * half,
+                                mid - lo.max(-1.0) * half - 0.5,
+                            ));
                         }
                         x += 1.0;
                     }
+                    draw_wave(&lanes, &look, &cols, mid, wave);
                 }
                 let full = Rect::from_x_y_ranges(x0..=x1, r.y_range());
                 // Handles on the clip under the pointer and the selected.
                 let handles = selected || hover_at.is_some_and(|h| full.contains(h));
-                self.draw_fades(&lanes.with_clip_rect(r), c, full, &x_of, colour, handles);
+                self.draw_fades(
+                    &lanes.with_clip_rect(r),
+                    c,
+                    full,
+                    &x_of,
+                    &look,
+                    colour,
+                    handles,
+                );
                 if self.show_volume && !c.muted {
-                    draw_volume(&lanes.with_clip_rect(r.expand(4.0)), c, full, &x_of);
+                    draw_volume(&lanes.with_clip_rect(r.expand(4.0)), &look, c, full, &x_of);
                 }
                 let name = if c.gain_db.abs() >= 0.05 {
                     format!("{} ({:+.1} dB)", c.name(), c.gain_db)
                 } else {
                     c.name()
                 };
-                lanes.text(
-                    r.left_top() + vec2(4.0 + HANDLE, 2.0),
-                    Align2::LEFT_TOP,
-                    name,
-                    FontId::proportional(11.0),
-                    if c.muted {
-                        visuals.weak_text_color()
-                    } else {
-                        visuals.strong_text_color()
-                    },
-                );
+                let at = r.left_top() + vec2(4.0 + HANDLE, 2.0);
+                let font = FontId::proportional(look.small);
+                if c.muted {
+                    lanes.text(at, Align2::LEFT_TOP, name, font, tc.text_dim);
+                } else {
+                    let g = lanes.layout_no_wrap(name, font, tc.clip_text.of(colour));
+                    if let Some(label) = tc.clip_label {
+                        let back =
+                            Rect::from_min_size(at - vec2(3.0, 1.0), g.size() + vec2(6.0, 2.0));
+                        lanes
+                            .with_clip_rect(r.intersect(lanes.clip_rect()))
+                            .rect_filled(back, 3.0, label);
+                    }
+                    lanes.galley(at, g, tc.clip_text.of(colour));
+                }
                 if selected {
-                    lanes.rect_stroke(r, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Inside);
+                    lanes.rect_stroke(r, corner, Stroke::new(2.0, tc.text), StrokeKind::Inside);
                 }
                 if self
                     .focus
@@ -2595,8 +2728,8 @@ impl Timeline {
                     // The keyboard's ring, outside the selection's.
                     lanes.rect_stroke(
                         r.expand(1.0),
-                        4.0,
-                        Stroke::new(2.0, visuals.selection.stroke.color),
+                        corner + 1.0,
+                        Stroke::new(2.0, tc.accent),
                         StrokeKind::Outside,
                     );
                 }
@@ -2607,8 +2740,8 @@ impl Timeline {
                 pos2(left + 10.0, rect.top() + RULER + 20.0),
                 Align2::LEFT_CENTER,
                 "No tracks yet",
-                FontId::proportional(13.0),
-                visuals.weak_text_color(),
+                FontId::proportional(look.body),
+                tc.text_dim,
             );
         }
 
@@ -2618,16 +2751,19 @@ impl Timeline {
             if x < left - 60.0 || x > rect.right() {
                 continue;
             }
-            let flag = Color32::from_rgb(240, 180, 60);
+            let flag = tc.marker;
             painter.line_segment(
                 [pos2(x, rect.top()), pos2(x, rect.bottom())],
-                Stroke::new(1.0, flag.gamma_multiply(0.6)),
+                Stroke::new(look.line, flag.gamma_multiply(0.6)),
             );
-            let g =
-                painter.layout_no_wrap(m.name.clone(), FontId::proportional(11.0), Color32::BLACK);
+            let g = painter.layout_no_wrap(
+                m.name.clone(),
+                FontId::proportional(look.small),
+                tc.on_accent,
+            );
             let label = Rect::from_min_size(pos2(x, rect.top()), g.size() + vec2(8.0, 2.0));
-            painter.rect_filled(label, 2.0, flag);
-            painter.galley(label.min + vec2(4.0, 1.0), g, Color32::BLACK);
+            painter.rect_filled(label, look.radius.min(3.0), flag);
+            painter.galley(label.min + vec2(4.0, 1.0), g, tc.on_accent);
             if self
                 .focus
                 .as_ref()
@@ -2636,7 +2772,7 @@ impl Timeline {
                 painter.rect_stroke(
                     label.expand(1.0),
                     3.0,
-                    Stroke::new(2.0, visuals.selection.stroke.color),
+                    Stroke::new(2.0, tc.text),
                     StrokeKind::Outside,
                 );
             }
@@ -2646,11 +2782,7 @@ impl Timeline {
         // the start.
         let hover = resp.hover_pos();
         for p in view.pins {
-            let colour = if p.resolved {
-                visuals.weak_text_color()
-            } else {
-                crate::comments::COLOUR
-            };
+            let colour = if p.resolved { tc.text_dim } else { tc.comment };
             let x = x_of(p.start);
             let (top, bottom) = match p.lane {
                 Some(l) => (lane_top(l), lane_top(l) + lane_h),
@@ -2671,34 +2803,50 @@ impl Timeline {
             let on = if p.lane.is_some() { &lanes } else { &painter };
             on.rect_filled(r, 3.0, colour);
             if p.selected {
-                on.rect_stroke(
-                    r,
-                    3.0,
-                    Stroke::new(1.5, Color32::WHITE),
-                    StrokeKind::Outside,
-                );
+                on.rect_stroke(r, 3.0, Stroke::new(1.5, tc.text), StrokeKind::Outside);
             }
             if hover.is_some_and(|h| r.expand(2.0).contains(h)) {
                 let g = painter.layout_no_wrap(
                     p.text.clone(),
-                    FontId::proportional(12.0),
-                    visuals.text_color(),
+                    FontId::proportional(look.small + 1.0),
+                    tc.text,
                 );
                 let tip =
                     Rect::from_min_size(r.right_top() + vec2(4.0, 0.0), g.size() + vec2(8.0, 4.0));
-                painter.rect_filled(tip, 3.0, visuals.window_fill);
-                painter.rect_stroke(tip, 3.0, Stroke::new(1.0, colour), StrokeKind::Inside);
-                painter.galley(tip.min + vec2(4.0, 2.0), g, visuals.text_color());
+                painter.rect_filled(tip, look.radius.min(6.0), tc.raised);
+                painter.rect_stroke(
+                    tip,
+                    look.radius.min(6.0),
+                    Stroke::new(look.line, colour),
+                    StrokeKind::Inside,
+                );
+                painter.galley(tip.min + vec2(4.0, 2.0), g, tc.text);
             }
         }
 
-        // Playhead.
+        // Playhead: a line with a head on the ruler, glowing if the
+        // theme says so.
         let px = x_of(view.playhead);
         if px >= left && px <= rect.right() {
-            painter.line_segment(
-                [pos2(px, rect.top()), pos2(px, rect.bottom())],
-                Stroke::new(1.5, Color32::from_rgb(240, 70, 60)),
-            );
+            let line = [pos2(px, rect.top()), pos2(px, rect.bottom())];
+            if let Some(radius) = look.glow {
+                for k in 1..=4 {
+                    let w = 1.5 + radius * k as f32 / 2.0;
+                    let a = 0.22 * (1.0 - k as f32 / 5.0);
+                    painter.line_segment(line, Stroke::new(w, tc.glow.gamma_multiply(a)));
+                }
+            }
+            painter.line_segment(line, Stroke::new(1.5 * look.line, tc.playhead));
+            let top = rect.top() + RULER - 9.0;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    pos2(px - 5.0, top),
+                    pos2(px + 5.0, top),
+                    pos2(px, top + 8.0),
+                ],
+                tc.playhead,
+                Stroke::NONE,
+            ));
         }
 
         // Right-click menus.

@@ -37,6 +37,7 @@ mod share;
 mod snapshots;
 mod templates;
 mod tempo;
+mod theme;
 mod timeline;
 mod trainer;
 mod tuner;
@@ -61,7 +62,7 @@ use daw_engine::metronome::Metronome;
 use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
 use daw_engine::time::{Frames, TempoMap};
-use eframe::egui::{self, Color32, RichText, vec2};
+use eframe::egui::{self, RichText, vec2};
 use fx::{Effects, FxSlot};
 use timeline::{Clip, Lane, Marker, Song};
 
@@ -247,6 +248,8 @@ struct App {
     drawing_panes: bool,
     /// Workspace commands that came while it was out.
     workspace_cmds: Vec<Cmd>,
+    /// The look, chosen per computer.
+    themes: theme::Themes,
 }
 
 /// How often to look for a lost device.
@@ -334,6 +337,7 @@ impl App {
             ),
             drawing_panes: false,
             workspace_cmds: Vec::new(),
+            themes: theme::Themes::new((!cfg!(test)).then(config_dir).as_deref()),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -984,7 +988,7 @@ impl App {
                 self.send(Command::Seek(Frames(0)));
             }
             let rec = RichText::new("⏺ Record").color(if self.recording {
-                Color32::from_rgb(240, 70, 60)
+                crate::theme::look(ui.ctx()).c().record
             } else {
                 ui.visuals().text_color()
             });
@@ -1004,7 +1008,8 @@ impl App {
             } else {
                 format!("{bb}   {:.2} s", map.seconds(pos))
             };
-            ui.label(RichText::new(label).monospace().size(16.0));
+            let font = theme::look(ui.ctx()).numerals_font();
+            ui.label(RichText::new(label).font(font));
             ui.separator();
 
             ui.label("Tempo");
@@ -1231,7 +1236,7 @@ impl App {
         }
         if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
             ui.colored_label(
-                Color32::YELLOW,
+                ui.visuals().warn_fg_color,
                 "Recording waits for normal speed and pitch",
             );
         }
@@ -1283,7 +1288,16 @@ impl App {
                 for (i, t) in self.tracks.iter_mut().enumerate() {
                     let before = t.heard();
                     let name = t.name.clone();
-                    let label = ui.label(&t.name);
+                    let label = ui
+                        .horizontal(|ui| {
+                            // The track's colour, as on its lane.
+                            let (tag, _) =
+                                ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+                            let c = theme::look(ui.ctx()).c().track(i);
+                            ui.painter().rect_filled(tag, 2.0, c);
+                            ui.label(&t.name)
+                        })
+                        .inner;
                     if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
                         label.on_hover_text(c.path.display().to_string());
                     }
@@ -1291,7 +1305,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.add_enabled_ui(t.input.is_some(), |ui| {
                             let arm = RichText::new("R").color(if t.arm {
-                                Color32::from_rgb(240, 70, 60)
+                                crate::theme::look(ui.ctx()).c().record
                             } else {
                                 ui.visuals().text_color()
                             });
@@ -1546,7 +1560,7 @@ impl App {
                             && (rate, buffer) != (draft.rate, draft.buffer)
                         {
                             ui.colored_label(
-                                Color32::from_rgb(230, 180, 60),
+                                ui.visuals().warn_fg_color,
                                 format!(
                                     "Measured at {rate} Hz, {}: measure again for these settings.",
                                     buffer.map_or("driver default buffer".into(), |b| format!("{b} samples"))
@@ -1579,7 +1593,7 @@ impl App {
                     Audio::Running(r) => {
                         let s = &r.status;
                         if s.failed.load(Ordering::Relaxed) {
-                            ui.colored_label(Color32::LIGHT_RED, "The device stopped with an error.");
+                            ui.colored_label(ui.visuals().error_fg_color, "The device stopped with an error.");
                         } else {
                             ui.label(format!(
                                 "Running: {} channels at {} Hz, {} samples per callback.",
@@ -1597,7 +1611,7 @@ impl App {
                         ));
                         match (&r.input_error, r.input_channels) {
                             (Some(e), _) => {
-                                ui.colored_label(Color32::LIGHT_RED, format!("No input: {e}"));
+                                ui.colored_label(ui.visuals().error_fg_color, format!("No input: {e}"));
                             }
                             (None, 0) => {
                                 ui.label("No input selected.");
@@ -1616,7 +1630,7 @@ impl App {
                     Audio::Stopped => {}
                     Audio::Silent(_, why) => {
                         ui.colored_label(
-                            Color32::LIGHT_RED,
+                            ui.visuals().error_fg_color,
                             format!("{why}. Playing silently, so the app still works."),
                         );
                     }
@@ -1865,6 +1879,7 @@ fn channel_picker(ui: &mut egui::Ui, id: &str, name: &str, ch: &mut usize, outs:
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.themes.apply(&ctx);
         self.ctl.collect_garbage();
         self.watch_device(&ctx);
 
@@ -2003,6 +2018,7 @@ impl eframe::App for App {
                         Cmd::Plugins,
                         Cmd::PerformanceCheck,
                         Cmd::KeyCommands,
+                        Cmd::Theme,
                     ] {
                         self.menu_item(ui, c);
                     }
@@ -2039,7 +2055,7 @@ impl eframe::App for App {
                         let load = self.perf.load();
                         let text = format!("DSP {:.0}%", load * 100.0);
                         let l = if load > 0.8 {
-                            ui.colored_label(Color32::LIGHT_RED, text)
+                            ui.colored_label(ui.visuals().error_fg_color, text)
                         } else {
                             ui.label(RichText::new(text).weak())
                         };
@@ -2048,7 +2064,10 @@ impl eframe::App for App {
                         }
                     }
                     Audio::Silent(..) | Audio::Stopped => {
-                        ui.colored_label(Color32::LIGHT_RED, "No audio device: playing silently");
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            "No audio device: playing silently",
+                        );
                     }
                 }
                 if let Some(s) = self.effects.scanning() {
@@ -2076,14 +2095,14 @@ impl eframe::App for App {
                 let lost = self.ctl.status().rec_dropped();
                 if lost > 0 {
                     ui.colored_label(
-                        Color32::LIGHT_RED,
+                        ui.visuals().error_fg_color,
                         format!("recording fell behind: {lost} frames lost"),
                     );
                 }
                 let under = self.ctl.status().underruns();
                 if under > 0 {
                     ui.colored_label(
-                        Color32::YELLOW,
+                        ui.visuals().warn_fg_color,
                         format!("disk too slow: {under} frames missed"),
                     );
                 }
@@ -2093,7 +2112,7 @@ impl eframe::App for App {
         if let Some(m) = self.message.clone() {
             egui::Panel::bottom("message").show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.colored_label(Color32::LIGHT_RED, m);
+                    ui.colored_label(ui.visuals().error_fg_color, m);
                     if ui.button("OK").clicked() {
                         self.message = None;
                     }
@@ -2165,6 +2184,7 @@ impl eframe::App for App {
         }
         self.perf_window(&ctx);
         self.layout_windows(&ctx);
+        self.themes.window(&ctx);
         self.command_windows(&ctx);
         self.updates.poll(&ctx);
         self.updates.window(&ctx);

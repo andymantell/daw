@@ -50,6 +50,16 @@ repository.
 Ship **Valve Glow**, **Workshop**, **Vellum** and **Tidal** first, each
 with a light and a dark variant, switchable at runtime.
 
+## Built so far (2026-10-29)
+
+The foundation: themes are files (`crates/app/themes/`, format in the
+README there), egui's style is made from the active one, and the
+timeline, waveforms, meters, mixer strips, tuner and status messages read
+only theme colours. All four themes ship with both variants; the light
+Valve Glow and Workshop and the dark Vellum and Tidal were derived, not
+mocked up. A contrast test runs in CI. Bundled typefaces, time-of-day
+switching and per-theme designs for dense views are still to come.
+
 ## Still to design
 
 The mock-ups cover the timeline, transport bar and a row of mixer strips

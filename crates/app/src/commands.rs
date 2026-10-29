@@ -64,6 +64,9 @@ pub(crate) enum Cmd {
     Plugins,
     PerformanceCheck,
     KeyCommands,
+    Theme,
+    NextTheme,
+    LightDark,
     FindCommand,
     CheckUpdates,
     CrashReports,
@@ -519,6 +522,20 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("See and change the key for each command")
     .words("keyboard shortcuts keys"),
+    info(Cmd::Theme, "theme", "Settings", "Theme…", &[])
+        .hint("Choose how the app looks on this computer")
+        .words("look colours colors appearance skin dark light"),
+    info(Cmd::NextTheme, "next-theme", "Settings", "Next theme", &[])
+        .words("look colours colors appearance skin switch"),
+    info(
+        Cmd::LightDark,
+        "light-dark",
+        "Settings",
+        "Switch light and dark",
+        &[],
+    )
+    .hint("Swap the theme's light and dark colours")
+    .words("night day mode appearance"),
     info(
         Cmd::FindCommand,
         "find-command",
@@ -1394,6 +1411,9 @@ impl App {
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::KeyCommands => self.commands.editor.open = true,
+            Cmd::Theme => self.themes.open = true,
+            Cmd::NextTheme => self.themes.next(),
+            Cmd::LightDark => self.themes.flip(ctx),
             Cmd::FindCommand => {
                 let p = &mut self.commands.palette;
                 p.open = true;

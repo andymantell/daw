@@ -78,6 +78,34 @@ fn streamed_clip_plays_the_same_as_in_memory() {
 }
 
 #[test]
+fn streamed_fades_and_gain_match_in_memory() {
+    use daw_engine::fade::{Curve, Fade, GainPoint};
+    let src = StreamSource::open(&write_float_stereo("faded.wav")).unwrap();
+    let render = |mut clip: ClipSpec| {
+        clip.offset = 700;
+        clip.len = Some(CHUNK * 3);
+        clip.gain_db = -3.0;
+        // Fades that cross chunk boundaries.
+        clip.fade_in = Fade::new(CHUNK + 17, Curve::SCurve);
+        clip.fade_out = Fade::new(CHUNK / 2, Curve::Fast);
+        clip.envelope = Arc::new([
+            GainPoint { at: 2000, db: 0.0 },
+            GainPoint {
+                at: CHUNK * 2,
+                db: -12.0,
+            },
+        ]);
+        let mut s = session();
+        s.tracks.push(TrackSpec::new(vec![clip]));
+        engine::render_offline(s.compile(500).unwrap(), Frames(0), LEN, 500)
+    };
+    let streamed = render(ClipSpec::new(Ticks(0), src));
+    let memory = render(ClipSpec::new(Ticks(0), memory_copy()));
+    assert_eq!(streamed, memory);
+    assert_eq!(streamed[0][0], 0.0, "starts silent");
+}
+
+#[test]
 fn sixteen_bit_files_are_scaled() {
     let path = temp_wav("int16.wav");
     let spec = hound::WavSpec {

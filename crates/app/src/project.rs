@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use daw_collab::watch::{Change, FolderWatch};
 use daw_engine::engine::Command;
+use daw_engine::fade::{Curve, Fade, GainPoint};
 use daw_engine::graph::Mix;
 use daw_engine::import;
 use daw_engine::stream::StreamSource;
@@ -212,6 +213,15 @@ impl App {
                 take: c.take.map(|t| t as u32),
                 muted: c.muted,
                 seq: 0,
+                gain_db: c.gain_db as f64,
+                fade_in: fade_value(c.fade_in),
+                fade_out: fade_value(c.fade_out),
+                envelope: (c.envelope.iter())
+                    .map(|p| daw_project::GainPoint {
+                        at: p.at as i64,
+                        db: p.db as f64,
+                    })
+                    .collect(),
             })
             .collect();
         clips.extend(
@@ -422,6 +432,17 @@ impl App {
                 c.len = (scale(pc.len).max(0) as usize).min(c.source.frames - c.offset);
                 c.take = pc.take.map(|t| t as usize);
                 c.muted = pc.muted;
+                c.gain_db = pc.gain_db as f32;
+                c.fade_in = fade_from(pc.fade_in, &scale);
+                c.fade_out = fade_from(pc.fade_out, &scale);
+                c.envelope = (pc.envelope.iter())
+                    .map(|p| GainPoint {
+                        at: scale(p.at).max(0) as usize,
+                        db: p.db as f32,
+                    })
+                    .collect();
+                c.set_fade(false, c.fade_in.len);
+                c.set_fade(true, c.fade_out.len);
                 t.clips.push(c);
             }
             let mut had: HashMap<String, crate::fx::FxSlot> =
@@ -1144,6 +1165,34 @@ pub fn is_project(path: &Path) -> bool {
 impl App {
     pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, path: PathBuf) {
         self.then(ctx, After::Open(path));
+    }
+}
+
+/// A clip's fade as the document has it.
+fn fade_value(f: Fade) -> daw_project::Fade {
+    daw_project::Fade {
+        len: f.len as i64,
+        curve: match f.curve {
+            Curve::Linear => daw_project::Curve::Linear,
+            Curve::EqualPower => daw_project::Curve::EqualPower,
+            Curve::SCurve => daw_project::Curve::SCurve,
+            Curve::Fast => daw_project::Curve::Fast,
+            Curve::Slow => daw_project::Curve::Slow,
+        },
+    }
+}
+
+/// A fade from the document, its length counted at the device's rate.
+fn fade_from(f: daw_project::Fade, scale: &dyn Fn(i64) -> i64) -> Fade {
+    Fade {
+        len: scale(f.len).max(0) as usize,
+        curve: match f.curve {
+            daw_project::Curve::Linear => Curve::Linear,
+            daw_project::Curve::EqualPower => Curve::EqualPower,
+            daw_project::Curve::SCurve => Curve::SCurve,
+            daw_project::Curve::Fast => Curve::Fast,
+            daw_project::Curve::Slow => Curve::Slow,
+        },
     }
 }
 

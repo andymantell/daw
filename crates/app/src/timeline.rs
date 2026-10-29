@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The timeline (roadmap 1.5): each track's clips on a lane, with their
-//! waveforms. Select, move, trim, split and delete clips, snapped to
-//! beats or bars; markers on bar lines name the song's sections, and a
-//! section can be looped. Comments show as pins. Undo belongs to the project document; the
-//! timeline only asks for it.
+//! The timeline (roadmap 1.5, 2.1): each track's clips on a lane, with
+//! their waveforms. Select, move, trim, slip, split and delete clips,
+//! snapped to a grid that follows the tempo map, or to other clips and
+//! markers; fade their ends, crossfade where they meet, and set their
+//! volume with a line of points. Ripple editing closes the gaps that
+//! deleting and trimming leave. Markers on bar lines name the song's
+//! sections, and a section can be looped. Comments show as pins. Undo
+//! belongs to the project document; the timeline only asks for it.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -11,6 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
+use daw_engine::fade::{Curve, Fade, GainPoint, Shape, envelope_db};
+use daw_engine::graph::db_to_gain;
 use daw_engine::stream::StreamSource;
 use daw_engine::time::{Frames, TempoMap, Ticks};
 use eframe::egui::{
@@ -53,10 +58,59 @@ pub struct Clip {
     pub take: Option<usize>,
     /// Out of the mix: an older take under a newer one.
     pub muted: bool,
+    /// The clip's own volume, in dB.
+    pub gain_db: f32,
+    /// Fades at the start and end, in frames; together never longer
+    /// than the clip.
+    pub fade_in: Fade,
+    pub fade_out: Fade,
+    /// Volume points, in source frames, in order: the line stays with
+    /// the audio when the clip is trimmed, split or slipped.
+    pub envelope: Vec<GainPoint>,
 }
 
 /// The shortest clip a trim or split leaves, in frames.
 pub const MIN_LEN: usize = 64;
+
+/// The range of a clip's volume and its points, in dB.
+pub const MIN_DB: f32 = -48.0;
+pub const MAX_DB: f32 = 12.0;
+
+/// How long a crossfade made where two clips just touch lasts.
+pub const CROSSFADE_SECONDS: f64 = 0.02;
+
+/// Where two clips on a track meet: fades the earlier out and the later
+/// in across their overlap, with steady power. Clips that touch (or
+/// nearly) are first stretched into each other by half of `len` each,
+/// as far as their audio goes. False if they don't meet.
+pub fn crossfade(a: &mut Clip, b: &mut Clip, len: usize) -> bool {
+    if b.start < a.start {
+        return crossfade(b, a, len);
+    }
+    let gap = b.start - a.end();
+    if gap > (len / 2) as i64 {
+        return false;
+    }
+    if gap >= 0 {
+        let half = (len / 2) as i64;
+        let meet = a.end() + gap / 2;
+        a.trim_end(meet + half);
+        b.trim_start(meet - half);
+    }
+    // One inside the other has no join to fade across.
+    if b.end() <= a.end() {
+        return false;
+    }
+    let overlap = (a.end() - b.start).max(0) as usize;
+    if overlap == 0 {
+        return false;
+    }
+    a.fade_out = Fade::new(overlap, Curve::EqualPower);
+    b.fade_in = Fade::new(overlap, Curve::EqualPower);
+    a.fit_fades();
+    b.fit_fades();
+    true
+}
 
 impl Clip {
     /// All of `source`, starting at `start`. Anything before the start of
@@ -76,6 +130,10 @@ impl Clip {
             offset: 0,
             take,
             muted: false,
+            gain_db: 0.0,
+            fade_in: Fade::default(),
+            fade_out: Fade::default(),
+            envelope: Vec::new(),
         };
         if c.start < 0 {
             let cut = ((-c.start) as usize).min(c.len);
@@ -107,12 +165,75 @@ impl Clip {
         self.offset = (self.offset as i64 + d) as usize;
         self.len = (self.len as i64 - d) as usize;
         self.start += d;
+        self.fit_fades();
     }
 
     /// Moves the end edge to `to`, as far as the source goes.
     pub fn trim_end(&mut self, to: i64) {
         let most = self.source.frames - self.offset;
         self.len = ((to - self.start).max(MIN_LEN as i64) as usize).min(most);
+        self.fit_fades();
+    }
+
+    /// Shortens the fades, each keeping its share, so that together they
+    /// fit in the clip.
+    fn fit_fades(&mut self) {
+        let (a, b) = (self.fade_in.len, self.fade_out.len);
+        if a + b > self.len {
+            let a2 = (a as f64 * self.len as f64 / (a + b) as f64).round() as usize;
+            self.fade_in.len = a2.min(self.len);
+            self.fade_out.len = self.len - self.fade_in.len;
+        }
+    }
+
+    /// Sets a fade's length, as long as the clip leaves room for it
+    /// beside the other fade.
+    pub fn set_fade(&mut self, end: bool, len: usize) {
+        if end {
+            self.fade_out.len = len.min(self.len - self.fade_in.len);
+        } else {
+            self.fade_in.len = len.min(self.len - self.fade_out.len);
+        }
+    }
+
+    /// Moves the audio inside the clip so source frame `offset` plays
+    /// at its start, as far as the source goes; the clip stays put.
+    pub fn slip_to(&mut self, offset: i64) {
+        let most = (self.source.frames - self.len) as i64;
+        self.offset = offset.clamp(0, most) as usize;
+    }
+
+    /// What sets the clip's level, as the engine plays it.
+    pub fn shape(&self) -> Shape {
+        Shape {
+            gain: db_to_gain(self.gain_db),
+            fade_in: self.fade_in,
+            fade_out: self.fade_out,
+            envelope: self.envelope.as_slice().into(),
+        }
+    }
+
+    /// The envelope's level at the clip's frame `rel` (0 dB with no
+    /// points), before the clip's own volume.
+    pub fn envelope_db(&self, rel: i64) -> f32 {
+        envelope_db(&self.envelope, (self.offset as i64 + rel) as f64)
+    }
+
+    /// Adds a volume point at the clip's frame `rel`, or moves the one
+    /// already there. Returns its index.
+    pub fn add_point(&mut self, rel: i64, db: f32) -> usize {
+        let at = (self.offset as i64 + rel.clamp(0, self.len as i64)) as usize;
+        let db = db.clamp(MIN_DB, MAX_DB);
+        match self.envelope.binary_search_by_key(&at, |p| p.at) {
+            Ok(i) => {
+                self.envelope[i].db = db;
+                i
+            }
+            Err(i) => {
+                self.envelope.insert(i, GainPoint { at, db });
+                i
+            }
+        }
     }
 
     /// Cuts in two at timeline frame `at`; `None` if either part would be
@@ -122,14 +243,19 @@ impl Clip {
             return None;
         }
         let first = (at - self.start) as usize;
+        // The cut is clean; the fades stay at the outer ends.
         let mut a = self.clone();
         a.len = first;
+        a.fade_out = Fade::default();
+        a.fit_fades();
         let mut b = self.clone();
         b.id = next_id();
         b.key = daw_project::new_id();
         b.start = at;
         b.offset += first;
         b.len -= first;
+        b.fade_in = Fade::default();
+        b.fit_fades();
         Some((a, b))
     }
 
@@ -140,7 +266,14 @@ impl Clip {
         self.start = (self.start as f64 * k).round() as i64;
         self.offset = ((self.offset as f64 * k).round() as usize).min(source.frames);
         self.len = ((self.len as f64 * k).round() as usize).min(source.frames - self.offset);
+        for f in [&mut self.fade_in, &mut self.fade_out] {
+            f.len = (f.len as f64 * k).round() as usize;
+        }
+        for p in &mut self.envelope {
+            p.at = (p.at as f64 * k).round() as usize;
+        }
         self.source = source;
+        self.fit_fades();
     }
 
     pub fn name(&self) -> String {
@@ -148,6 +281,47 @@ impl Clip {
             Some(t) => format!("Take {}", t + 1),
             None => self.label.clone(),
         }
+    }
+}
+
+/// Ranges merged where they overlap or touch, in order.
+fn merged(mut r: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    r.sort_unstable();
+    let mut out: Vec<(i64, i64)> = Vec::new();
+    for (a, b) in r {
+        match out.last_mut() {
+            Some(l) if a <= l.1 => l.1 = l.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
+
+/// Ripple delete: moves `clips` earlier to close the time the `gone`
+/// ranges leave empty. Time still covered by another clip stays.
+pub fn close_gaps(clips: &mut [Clip], gone: &[(i64, i64)]) {
+    let kept = merged(clips.iter().map(|c| (c.start, c.end())).collect());
+    // The gone ranges, less what kept clips still cover.
+    let mut empty = Vec::new();
+    for (mut a, b) in merged(gone.to_vec()) {
+        for &(ka, kb) in &kept {
+            if kb <= a || ka >= b {
+                continue;
+            }
+            if ka > a {
+                empty.push((a, ka));
+            }
+            a = a.max(kb);
+        }
+        if a < b {
+            empty.push((a, b));
+        }
+    }
+    for c in clips.iter_mut() {
+        let by: i64 = (empty.iter())
+            .map(|&(a, b)| (b.min(c.start) - a).max(0))
+            .sum();
+        c.start -= by;
     }
 }
 
@@ -198,36 +372,88 @@ pub fn choose_take(clips: &mut [Clip], which: Option<usize>) {
     }
 }
 
+/// The grid clips snap to and the timeline draws: bars, beats, or
+/// parts of a beat, along the tempo map, so it follows tempo and time
+/// signature changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Snap {
-    Off,
+pub enum Grid {
+    /// The finest of bars, beats, halves, quarters and eighths of a
+    /// beat that is still wide enough to see at this zoom.
+    Auto,
+    Bar,
     #[default]
     Beat,
-    Bar,
+    /// A beat in this many equal parts: 3 and 6 for triplets.
+    Part(u8),
 }
 
-impl Snap {
-    fn label(self) -> &'static str {
+impl Grid {
+    /// In the order offered.
+    pub const ALL: [Grid; 8] = [
+        Grid::Auto,
+        Grid::Bar,
+        Grid::Beat,
+        Grid::Part(2),
+        Grid::Part(3),
+        Grid::Part(4),
+        Grid::Part(6),
+        Grid::Part(8),
+    ];
+
+    pub fn label(self) -> &'static str {
         match self {
-            Snap::Off => "Off",
-            Snap::Beat => "Beat",
-            Snap::Bar => "Bar",
+            Grid::Auto => "Auto",
+            Grid::Bar => "Bar",
+            Grid::Beat => "Beat",
+            Grid::Part(2) => "½ beat",
+            Grid::Part(3) => "⅓ beat (triplets)",
+            Grid::Part(4) => "¼ beat",
+            Grid::Part(6) => "⅙ beat (triplets)",
+            Grid::Part(8) => "⅛ beat",
+            Grid::Part(_) => "Part of a beat",
         }
+    }
+
+    /// The grid's step at `at`, in ticks.
+    fn ticks(self, map: &TempoMap, at: Ticks) -> i64 {
+        let sig = map.signature_at(at);
+        match self {
+            Grid::Bar => sig.bar_ticks(),
+            Grid::Part(n) => (sig.beat_ticks() / n.max(1) as i64).max(1),
+            Grid::Beat | Grid::Auto => sig.beat_ticks(),
+        }
+    }
+
+    /// The grid to use at `at` when `pps` points show a second: `Auto`
+    /// becomes the finest step at least [`AUTO_GRID_PX`] wide.
+    pub fn at_zoom(self, map: &TempoMap, at: i64, pps: f64) -> Grid {
+        if self != Grid::Auto {
+            return self;
+        }
+        let rate = map.sample_rate() as f64;
+        let t = map.ticks_at(Frames(at));
+        let px = |g: Grid| {
+            let f0 = map.frames_at(t).0;
+            let f1 = map.frames_at(Ticks(t.0 + g.ticks(map, t))).0;
+            (f1 - f0) as f64 / rate * pps
+        };
+        [Grid::Part(8), Grid::Part(4), Grid::Part(2), Grid::Beat]
+            .into_iter()
+            .find(|&g| px(g) >= AUTO_GRID_PX)
+            .unwrap_or(Grid::Bar)
     }
 }
 
-/// `frames` moved to the nearest beat or bar line.
-pub fn snap(map: &TempoMap, frames: i64, snap: Snap) -> i64 {
+/// The narrowest grid step `Grid::Auto` picks, in points.
+pub const AUTO_GRID_PX: f64 = 14.0;
+
+/// `frames` moved to the nearest line of `grid` (which isn't `Auto`).
+pub fn snap(map: &TempoMap, frames: i64, grid: Grid) -> i64 {
     let t = map.ticks_at(Frames(frames));
     let bb = map.bar_beat(t);
     let bar = map.bar_start(bb.bar);
-    let ticks = match snap {
-        Snap::Off => return frames,
-        Snap::Beat => {
-            let beat = map.signature_at(t).beat_ticks();
-            bar.0 + ((t.0 - bar.0) as f64 / beat as f64).round() as i64 * beat
-        }
-        Snap::Bar => {
+    let ticks = match grid {
+        Grid::Bar => {
             let next = map.bar_start(bb.bar + 1);
             if t.0 - bar.0 < next.0 - t.0 {
                 bar.0
@@ -235,20 +461,20 @@ pub fn snap(map: &TempoMap, frames: i64, snap: Snap) -> i64 {
                 next.0
             }
         }
+        _ => {
+            let unit = grid.ticks(map, t);
+            bar.0 + ((t.0 - bar.0) as f64 / unit as f64).round() as i64 * unit
+        }
     };
     map.frames_at(Ticks(ticks)).0
 }
 
-/// `frames` moved by `n` beats, or bars, along the tempo map.
-pub fn step(map: &TempoMap, frames: i64, n: i64, bars: bool) -> i64 {
+/// `frames` moved by `n` steps of `grid` (which isn't `Auto`) along the
+/// tempo map.
+pub fn step(map: &TempoMap, frames: i64, n: i64, grid: Grid) -> i64 {
     let t = map.ticks_at(Frames(frames));
-    let sig = map.signature_at(t);
-    let unit = if bars {
-        sig.bar_ticks()
-    } else {
-        sig.beat_ticks()
-    };
-    map.frames_at(Ticks((t.0 + n * unit).max(0))).0
+    map.frames_at(Ticks((t.0 + n * grid.ticks(map, t)).max(0)))
+        .0
 }
 
 /// A position as a screen reader should say it: "bar 3", or "bar 3
@@ -260,6 +486,26 @@ pub fn spoken(map: &TempoMap, frames: i64) -> String {
     } else {
         format!("bar {} beat {}", bb.bar, bb.beat)
     }
+}
+
+/// A clip's fades and volume as a screen reader should say them, after
+/// its name: nothing for a clip at its plain level.
+pub fn spoken_level(c: &Clip, rate: u32) -> String {
+    let ms = |f: usize| (f as f64 * 1000.0 / rate as f64).round();
+    let mut s = String::new();
+    if c.fade_in.len > 0 {
+        s += &format!(", fades in over {} ms", ms(c.fade_in.len));
+    }
+    if c.fade_out.len > 0 {
+        s += &format!(", fades out over {} ms", ms(c.fade_out.len));
+    }
+    if c.gain_db.abs() >= 0.05 {
+        s += &format!(", volume {:+.1} dB", c.gain_db);
+    }
+    if !c.envelope.is_empty() {
+        s += &format!(", {} volume points", c.envelope.len());
+    }
+    s
 }
 
 /// A named point on a bar line: the start of a section, which runs to
@@ -543,6 +789,11 @@ enum Zone {
     Body,
     StartEdge,
     EndEdge,
+    /// The handle at the top of a fade.
+    FadeIn,
+    FadeOut,
+    /// The volume line, or one of its points.
+    Volume(Option<usize>),
 }
 
 #[derive(Clone, Copy)]
@@ -564,6 +815,12 @@ struct Drag {
     from_lane: usize,
     /// The clips being dragged, as they were, with their tracks.
     originals: Vec<(usize, Clip)>,
+    /// Moving the audio inside the clips rather than the clips.
+    slip: bool,
+    /// Ripple: the clips after a trimmed end, and where they started.
+    after: Vec<(u64, i64)>,
+    /// Height under the pointer when pressed.
+    from_y: f32,
     moved: bool,
 }
 
@@ -592,7 +849,23 @@ pub struct Timeline {
     scroll: f64,
     /// Points scrolled down the lanes.
     vscroll: f32,
-    pub snap: Snap,
+    /// The grid drawn, and snapped to when `snap` is on.
+    pub grid: Grid,
+    pub snap: bool,
+    /// Snap to other clips' edges, markers and the playhead when one is
+    /// near.
+    pub magnet: bool,
+    /// Deleting a clip, or trimming its end, moves the clips after it
+    /// on its track to close (or open) the gap.
+    pub ripple: bool,
+    /// Show each clip's volume line, to drag and add points to.
+    pub show_volume: bool,
+    /// The fades and volume window for the selected clips is open.
+    pub fades_open: bool,
+    /// Width of the lanes last drawn, in points, for zooming.
+    width: f32,
+    /// A value in the fades window changed while being dragged.
+    fades_unsettled: bool,
     pub selected: HashSet<u64>,
     drag: Option<Drag>,
     /// Scrubbing the playhead along the ruler.
@@ -618,7 +891,14 @@ impl Default for Timeline {
             px_per_sec: 40.0,
             scroll: 0.0,
             vscroll: 0.0,
-            snap: Snap::default(),
+            grid: Grid::default(),
+            snap: true,
+            magnet: false,
+            ripple: false,
+            show_volume: false,
+            fades_open: false,
+            width: 600.0,
+            fades_unsettled: false,
             selected: HashSet::new(),
             drag: None,
             scrubbing: false,
@@ -640,6 +920,23 @@ const HEADER: f32 = 110.0;
 const RULER: f32 = 38.0;
 /// Edge grab width for trimming, in points.
 const EDGE: f32 = 6.0;
+/// A fade handle's size, and how near counts as on the volume line.
+const HANDLE: f32 = 8.0;
+/// How near another clip's edge or a marker must be to snap to it, in
+/// points.
+const MAGNET: f32 = 8.0;
+
+/// Height in a clip's box `r` of a level in dB.
+fn db_y(r: Rect, db: f32) -> f32 {
+    let k = (MAX_DB - db.clamp(MIN_DB, MAX_DB)) / (MAX_DB - MIN_DB);
+    r.top() + k * r.height()
+}
+
+/// The level in dB at height `y` in a clip's box `r`.
+fn y_db(r: Rect, y: f32) -> f32 {
+    let k = ((y - r.top()) / r.height().max(1.0)).clamp(0.0, 1.0);
+    MAX_DB - k * (MAX_DB - MIN_DB)
+}
 /// A comment pin's bubble.
 const PIN: egui::Vec2 = vec2(14.0, 11.0);
 
@@ -656,6 +953,82 @@ const COLOURS: [Color32; 6] = [
     Color32::from_rgb(190, 170, 70),
     Color32::from_rgb(70, 170, 170),
 ];
+
+/// A clip's volume line in its box `r`, with its points.
+fn draw_volume(painter: &egui::Painter, c: &Clip, r: Rect, x_of: &dyn Fn(i64) -> f32) {
+    let colour = Color32::from_rgb(250, 220, 90);
+    let w = (r.width().max(1.0) / 2.0).ceil() as usize;
+    let line: Vec<Pos2> = (0..=w)
+        .map(|i| {
+            let k = i as f32 / w as f32;
+            let rel = (c.len as f64 * k as f64) as i64;
+            pos2(
+                r.left() + k * r.width(),
+                db_y(r, c.gain_db + c.envelope_db(rel)),
+            )
+        })
+        .collect();
+    painter.add(egui::Shape::line(line, Stroke::new(1.5, colour)));
+    for p in &c.envelope {
+        let rel = p.at as i64 - c.offset as i64;
+        if (0..=c.len as i64).contains(&rel) {
+            let at = pos2(x_of(c.start + rel), db_y(r, c.gain_db + p.db));
+            painter.circle_filled(at, 3.5, colour);
+            painter.circle_stroke(at, 3.5, Stroke::new(1.0, Color32::BLACK));
+        }
+    }
+}
+
+/// A fade shape's name, as offered.
+pub fn curve_label(c: Curve) -> &'static str {
+    match c {
+        Curve::Linear => "Straight",
+        Curve::EqualPower => "Smooth (steady power)",
+        Curve::SCurve => "S-curve",
+        Curve::Fast => "Fast start",
+        Curve::Slow => "Slow start",
+    }
+}
+
+/// Which part of clip `c`, drawn in `r`, is at `pos`.
+fn clip_zone(c: &Clip, pos: Pos2, r: Rect, x_of: &dyn Fn(i64) -> f32, volume: bool) -> Zone {
+    let (x0, x1) = (r.left(), r.right());
+    if pos.y < r.top() + HANDLE && x1 - x0 > 3.0 * HANDLE {
+        let fin = x_of(c.start + c.fade_in.len as i64).max(x0 + HANDLE / 2.0);
+        let fout = x_of(c.end() - c.fade_out.len as i64).min(x1 - HANDLE / 2.0);
+        if (pos.x - fin).abs() <= HANDLE / 2.0 + 1.0 {
+            return Zone::FadeIn;
+        }
+        if (pos.x - fout).abs() <= HANDLE / 2.0 + 1.0 {
+            return Zone::FadeOut;
+        }
+    }
+    let edge = EDGE.min((x1 - x0) / 3.0);
+    if pos.x - x0 < edge {
+        return Zone::StartEdge;
+    }
+    if x1 - pos.x < edge {
+        return Zone::EndEdge;
+    }
+    if volume {
+        for (i, p) in c.envelope.iter().enumerate() {
+            let rel = p.at as i64 - c.offset as i64;
+            if rel < 0 || rel > c.len as i64 {
+                continue;
+            }
+            let at = pos2(x_of(c.start + rel), db_y(r, c.gain_db + p.db));
+            if at.distance(pos) <= HANDLE / 2.0 + 1.0 {
+                return Zone::Volume(Some(i));
+            }
+        }
+        let rel = (c.len as f64 * ((pos.x - x0) / (x1 - x0).max(1.0)) as f64) as i64;
+        let y = db_y(r, c.gain_db + c.envelope_db(rel));
+        if (pos.y - y).abs() <= HANDLE / 2.0 {
+            return Zone::Volume(None);
+        }
+    }
+    Zone::Body
+}
 
 impl Timeline {
     /// Splits the selected clips at `at`, or, with none selected, every
@@ -695,10 +1068,246 @@ impl Timeline {
         let mut any = false;
         for lane in &mut song.lanes {
             let n = lane.clips.len();
+            let gone: Vec<(i64, i64)> = (lane.clips.iter())
+                .filter(|c| self.selected.contains(&c.id))
+                .map(|c| (c.start, c.end()))
+                .collect();
             lane.clips.retain(|c| !self.selected.contains(&c.id));
             any |= lane.clips.len() != n;
+            if self.ripple {
+                close_gaps(lane.clips, &gone);
+            }
         }
         self.selected.clear();
+        any
+    }
+
+    /// A clip's fades in its box `r`: the faded part shaded above its
+    /// curve, and a handle at the top of each to drag.
+    fn draw_fades(
+        &self,
+        painter: &egui::Painter,
+        c: &Clip,
+        r: Rect,
+        x_of: &dyn Fn(i64) -> f32,
+        colour: Color32,
+        handles: bool,
+    ) {
+        let shade = Color32::from_black_alpha(110);
+        let line = Stroke::new(1.5, colour.gamma_multiply(1.6));
+        for (end, f) in [(false, c.fade_in), (true, c.fade_out)] {
+            if f.len > 0 {
+                let (a, b) = if end {
+                    (x_of(c.end() - f.len as i64), r.right())
+                } else {
+                    (r.left(), x_of(c.start + f.len as i64))
+                };
+                let span = (b - a).max(1.0);
+                let n = span.ceil() as usize;
+                let mut pts = Vec::with_capacity(n + 1);
+                for i in 0..=n {
+                    let x = a + span * i as f32 / n as f32;
+                    let k = (x - a) / span;
+                    let g = f.curve.gain(if end { 1.0 - k } else { k });
+                    let y = r.bottom() - g * r.height();
+                    if i < n {
+                        painter.line_segment([pos2(x + 0.5, r.top()), pos2(x + 0.5, y)], {
+                            Stroke::new(1.0, shade)
+                        });
+                    }
+                    pts.push(pos2(x, y));
+                }
+                painter.add(egui::Shape::line(pts, line));
+            }
+            // The handle sits at the fade's inner end, at the top.
+            let x = if end {
+                x_of(c.end() - f.len as i64).min(r.right() - HANDLE / 2.0)
+            } else {
+                x_of(c.start + f.len as i64).max(r.left() + HANDLE / 2.0)
+            };
+            if handles && r.width() > 3.0 * HANDLE {
+                let h = Rect::from_center_size(
+                    pos2(x, r.top() + HANDLE / 2.0),
+                    vec2(HANDLE - 1.0, HANDLE - 1.0),
+                );
+                painter.rect_filled(h, 1.0, Color32::from_gray(230));
+                painter.rect_stroke(h, 1.0, Stroke::new(1.0, Color32::BLACK), StrokeKind::Inside);
+            }
+        }
+    }
+
+    /// The fades and volume of the selected clips, to set by number:
+    /// what the first one has, and a change goes to them all.
+    fn fades_window(
+        &mut self,
+        ctx: &egui::Context,
+        song: &mut Song,
+        view: &View,
+        out: &mut Outcome,
+    ) {
+        let ids: Vec<u64> = (song.ordered().into_iter())
+            .filter(|id| self.selected.contains(id))
+            .collect();
+        let Some(first) = ids.first().and_then(|&id| song.find(id)).cloned() else {
+            self.fades_open = false;
+            return;
+        };
+        let ms = |f: usize| f as f64 * 1000.0 / view.rate as f64;
+        let frames = |ms: f64| (ms * view.rate as f64 / 1000.0).round().max(0.0) as usize;
+        let longest = ids
+            .iter()
+            .filter_map(|&id| song.find(id))
+            .map(|c| c.len)
+            .max()
+            .unwrap_or(0);
+        let mut open = true;
+        let mut fade = [first.fade_in, first.fade_out];
+        let mut fade_ms = [ms(first.fade_in.len), ms(first.fade_out.len)];
+        let mut gain = first.gain_db;
+        let (mut set_len, mut set_curve, mut set_gain) = ([false; 2], [false; 2], false);
+        let mut clear = false;
+        let mut cross = false;
+        // A value being dragged changes as it goes; the graph is
+        // rebuilt once it is let go.
+        let mut settled = true;
+        egui::Window::new("Fades and volume")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(if ids.len() == 1 {
+                    first.name()
+                } else {
+                    format!("{} clips: changes go to them all", ids.len())
+                });
+                egui::Grid::new("fades").num_columns(3).show(ui, |ui| {
+                    for (i, name) in ["Fade in", "Fade out"].into_iter().enumerate() {
+                        ui.label(name);
+                        let r = ui
+                            .add(
+                                egui::DragValue::new(&mut fade_ms[i])
+                                    .range(0.0..=ms(longest))
+                                    .speed(1.0)
+                                    .max_decimals(0)
+                                    .suffix(" ms"),
+                            )
+                            .accessible_name(format!("{name} length"));
+                        set_len[i] = r.changed();
+                        settled &= !r.dragged();
+                        let before = fade[i].curve;
+                        egui::ComboBox::from_id_salt(("curve", i))
+                            .selected_text(curve_label(fade[i].curve))
+                            .show_ui(ui, |ui| {
+                                for c in Curve::ALL {
+                                    ui.selectable_value(&mut fade[i].curve, c, curve_label(c));
+                                }
+                            })
+                            .response
+                            .accessible_name(format!("{name} shape"));
+                        set_curve[i] = fade[i].curve != before;
+                        ui.end_row();
+                    }
+                    ui.label("Volume");
+                    let r = ui
+                        .add(
+                            egui::Slider::new(&mut gain, MIN_DB..=MAX_DB)
+                                .suffix(" dB")
+                                .max_decimals(1),
+                        )
+                        .accessible_name("Clip volume");
+                    set_gain = r.changed();
+                    settled &= !r.dragged();
+                    if ui.button("0 dB").clicked() {
+                        gain = 0.0;
+                        set_gain = true;
+                    }
+                    ui.end_row();
+                    let points = first.envelope.len();
+                    ui.label("Volume points");
+                    ui.label(points.to_string());
+                    clear = ui
+                        .add_enabled(points > 0, egui::Button::new("Remove all"))
+                        .clicked();
+                    ui.end_row();
+                });
+                ui.weak("Drag a fade's square handle at the top of a clip, or turn on Volume in the toolbar to draw a volume line.");
+                cross = ui
+                    .add_enabled(ids.len() > 1, egui::Button::new("Crossfade where they meet"))
+                    .on_hover_text("Select clips next to each other on a track first")
+                    .clicked();
+            });
+        let mut changed = false;
+        for &id in &ids {
+            let Some(c) = song.find_mut(id) else { continue };
+            for (i, end) in [(0, false), (1, true)] {
+                let f = if end { &mut c.fade_out } else { &mut c.fade_in };
+                if set_curve[i] {
+                    changed |= f.curve != fade[i].curve;
+                    f.curve = fade[i].curve;
+                }
+                if set_len[i] {
+                    c.set_fade(end, frames(fade_ms[i]));
+                    changed = true;
+                }
+            }
+            if set_gain {
+                c.gain_db = gain;
+                changed = true;
+            }
+            if clear && !c.envelope.is_empty() {
+                c.envelope.clear();
+                changed = true;
+            }
+        }
+        if cross {
+            changed |= self.crossfade_selected(song, view.rate);
+        }
+        self.fades_unsettled |= changed && !settled;
+        if settled && (changed || self.fades_unsettled) {
+            self.fades_unsettled = false;
+            out.changed = true;
+        }
+        self.fades_open = open;
+    }
+
+    /// Gives the selected clips' fades in (or out) shape `c`. True if
+    /// any changed.
+    fn set_curves(&mut self, song: &mut Song, end: bool, c: Curve) -> bool {
+        let mut any = false;
+        for clip in (song.lanes.iter_mut())
+            .flat_map(|l| l.clips.iter_mut())
+            .filter(|clip| self.selected.contains(&clip.id))
+        {
+            let f = if end {
+                &mut clip.fade_out
+            } else {
+                &mut clip.fade_in
+            };
+            any |= f.curve != c;
+            f.curve = c;
+        }
+        any
+    }
+
+    /// Fades the selected clips into each other where they meet on a
+    /// track, or, with none selected, every pair that meets. True if any
+    /// did.
+    pub fn crossfade_selected(&mut self, song: &mut Song, rate: u32) -> bool {
+        let len = (CROSSFADE_SECONDS * rate as f64) as usize;
+        let all = self.selected.is_empty();
+        let mut any = false;
+        for lane in &mut song.lanes {
+            let mut order: Vec<usize> = (0..lane.clips.len())
+                .filter(|&i| !lane.clips[i].muted)
+                .filter(|&i| all || self.selected.contains(&lane.clips[i].id))
+                .collect();
+            order.sort_by_key(|&i| (lane.clips[i].start, lane.clips[i].id));
+            for w in order.windows(2) {
+                let (i, j) = (w[0].min(w[1]), w[0].max(w[1]));
+                let (head, tail) = lane.clips.split_at_mut(j);
+                any |= crossfade(&mut head[i], &mut tail[0], len);
+            }
+        }
         any
     }
 
@@ -820,9 +1429,9 @@ impl Timeline {
         }
     }
 
-    /// Moves the selected clips by `n` beats (or bars); none goes
-    /// before the start.
-    fn nudge(&mut self, song: &mut Song, map: &TempoMap, n: i64, bars: bool) -> bool {
+    /// Moves the selected clips by `n` steps of `grid`; none goes before
+    /// the start.
+    fn nudge(&mut self, song: &mut Song, map: &TempoMap, n: i64, grid: Grid) -> bool {
         self.select_focused();
         let ids: Vec<u64> = song
             .ordered()
@@ -837,7 +1446,7 @@ impl Timeline {
         // go before the start.
         let moves: Vec<(u64, i64)> = ids
             .iter()
-            .filter_map(|&id| song.find(id).map(|c| (id, step(map, c.start, n, bars))))
+            .filter_map(|&id| song.find(id).map(|c| (id, step(map, c.start, n, grid))))
             .collect();
         if moves
             .iter()
@@ -878,29 +1487,82 @@ impl Timeline {
         true
     }
 
-    /// Trims the focused clip's start or end edge by `n` beats (or
-    /// bars).
+    /// Trims the focused clip's start or end edge by `n` steps of
+    /// `grid`.
     fn trim_focused(
         &mut self,
         song: &mut Song,
         map: &TempoMap,
         n: i64,
-        bars: bool,
+        grid: Grid,
         end: bool,
     ) -> bool {
         let Some(id) = self.focused_clip() else {
             return false;
         };
-        let Some(c) = song.find_mut(id) else {
+        let ripple = self.ripple;
+        let Some(lane) = song.lane_of(id) else {
             return false;
         };
+        let clips = &mut *song.lanes[lane].clips;
+        let Some(i) = clips.iter().position(|c| c.id == id) else {
+            return false;
+        };
+        let c = &mut clips[i];
         let was = (c.start, c.offset, c.len);
+        let old_end = c.end();
         if end {
-            c.trim_end(step(map, c.end(), n, bars));
+            c.trim_end(step(map, c.end(), n, grid));
         } else {
-            c.trim_start(step(map, c.start, n, bars));
+            c.trim_start(step(map, c.start, n, grid));
         }
-        (c.start, c.offset, c.len) != was
+        let changed = (c.start, c.offset, c.len) != was;
+        let by = c.end() - old_end;
+        if end && ripple && by != 0 {
+            for o in clips
+                .iter_mut()
+                .filter(|o| o.id != id && o.start >= old_end)
+            {
+                o.start += by;
+            }
+        }
+        changed
+    }
+
+    /// The grid step the keys move by: the grid as drawn now.
+    fn key_grid(&self, map: &TempoMap, at: i64) -> Grid {
+        self.grid.at_zoom(map, at, self.px_per_sec as f64)
+    }
+
+    /// Shows the timeline from `from` to `to` (frames), with a little
+    /// room either side.
+    fn zoom_to(&mut self, from: i64, to: i64, rate: u32) {
+        let secs = ((to - from).max(1) as f64 / rate as f64).max(0.05);
+        self.px_per_sec = ((self.width as f64 / (secs * 1.1)) as f32).clamp(1.0, 4000.0);
+        let pad = 0.05 * secs;
+        self.scroll = (from as f64 / rate as f64 - pad).max(0.0);
+    }
+
+    /// Zooms by `k` about the middle of the view.
+    fn zoom_by(&mut self, k: f32) {
+        let mid = self.scroll + self.width as f64 / 2.0 / self.px_per_sec as f64;
+        self.px_per_sec = (self.px_per_sec * k).clamp(1.0, 4000.0);
+        self.scroll = (mid - self.width as f64 / 2.0 / self.px_per_sec as f64).max(0.0);
+    }
+
+    /// Shows the selected clips, or, with none, the whole song.
+    pub fn zoom_to_selection(&mut self, song: &Song, rate: u32) {
+        let picked: Vec<&Clip> = (song.lanes.iter())
+            .flat_map(|l| l.clips.iter())
+            .filter(|c| self.selected.contains(&c.id))
+            .collect();
+        match (
+            picked.iter().map(|c| c.start).min(),
+            picked.iter().map(|c| c.end()).max(),
+        ) {
+            (Some(a), Some(b)) => self.zoom_to(a, b, rate),
+            _ => self.zoom_to(0, song.end().max(10 * rate as i64), rate),
+        }
     }
 
     /// Moves the keyboard to the clip on the next track down (up if
@@ -960,6 +1622,24 @@ impl Timeline {
                 }
                 Cmd::Marker => self.add_marker(song, Self::bar_at(view.map, view.playhead)),
                 Cmd::ClearSelection => self.selected.clear(),
+                Cmd::Crossfade => {
+                    if focused {
+                        self.select_focused();
+                    }
+                    out.changed |= self.crossfade_selected(song, view.rate);
+                }
+                Cmd::ClipFades => {
+                    if focused {
+                        self.select_focused();
+                    }
+                    self.fades_open = true;
+                }
+                Cmd::ZoomIn => self.zoom_by(1.5),
+                Cmd::ZoomOut => self.zoom_by(1.0 / 1.5),
+                Cmd::ZoomSelection => self.zoom_to_selection(song, view.rate),
+                Cmd::Snap => self.snap = !self.snap,
+                Cmd::Ripple => self.ripple = !self.ripple,
+                Cmd::VolumeLines => self.show_volume = !self.show_volume,
                 _ => {}
             }
         }
@@ -1015,23 +1695,26 @@ impl Timeline {
             }
         }
         let shift = Modifiers::SHIFT;
+        let at = song.find(id).map_or(view.playhead, |c| c.start);
+        let fine = self.key_grid(view.map, at);
+        let bar = Grid::Bar;
         for (k, n) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
-            // Plain arrows move the selection a beat, Shift a bar;
+            // Plain arrows move the selection a grid step, Shift a bar;
             // Ctrl trims the start edge and Alt the end edge instead.
             // (The fuller combinations first: egui lets a plain key
             // match with Shift or Alt held.)
             if key(Modifiers::COMMAND | shift, k) {
-                out.changed |= self.trim_focused(song, view.map, n, true, false);
+                out.changed |= self.trim_focused(song, view.map, n, bar, false);
             } else if key(Modifiers::ALT | shift, k) {
-                out.changed |= self.trim_focused(song, view.map, n, true, true);
+                out.changed |= self.trim_focused(song, view.map, n, bar, true);
             } else if key(Modifiers::COMMAND, k) {
-                out.changed |= self.trim_focused(song, view.map, n, false, false);
+                out.changed |= self.trim_focused(song, view.map, n, fine, false);
             } else if key(Modifiers::ALT, k) {
-                out.changed |= self.trim_focused(song, view.map, n, false, true);
+                out.changed |= self.trim_focused(song, view.map, n, fine, true);
             } else if key(shift, k) {
-                out.changed |= self.nudge(song, view.map, n, true);
+                out.changed |= self.nudge(song, view.map, n, bar);
             } else if key(Modifiers::NONE, k) {
-                out.changed |= self.nudge(song, view.map, n, false);
+                out.changed |= self.nudge(song, view.map, n, fine);
             }
         }
         for (k, by) in [(Key::ArrowUp, -1), (Key::ArrowDown, 1)] {
@@ -1046,19 +1729,36 @@ impl Timeline {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, song: &mut Song, view: &View, out: &mut Outcome) {
-        ui.horizontal(|ui| {
-            ui.label("Snap");
-            egui::ComboBox::from_id_salt("snap")
-                .width(60.0)
-                .selected_text(self.snap.label())
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.snap, "Snap")
+                .on_hover_text("Snap to the grid while dragging. Hold Alt to place freely");
+            let shown = self.grid.at_zoom(view.map, view.playhead, self.px_per_sec as f64);
+            let text = match self.grid {
+                Grid::Auto => format!("Auto: {}", shown.label()),
+                g => g.label().to_string(),
+            };
+            egui::ComboBox::from_id_salt("grid")
+                .width(110.0)
+                .selected_text(text)
                 .show_ui(ui, |ui| {
-                    for s in [Snap::Off, Snap::Beat, Snap::Bar] {
-                        ui.selectable_value(&mut self.snap, s, s.label());
+                    for g in Grid::ALL {
+                        ui.selectable_value(&mut self.grid, g, g.label());
                     }
                 })
                 .response
-                .accessible_name("Snap")
-                .on_hover_text("Hold Alt while dragging to place freely");
+                .accessible_name("Grid")
+                .on_hover_text(
+                    "The grid's step, drawn on the timeline. Auto follows the zoom. \
+                     The arrow keys move clips by it",
+                );
+            ui.checkbox(&mut self.magnet, "To clips")
+                .on_hover_text("Also snap to other clips' edges, markers and the playhead");
+            ui.checkbox(&mut self.ripple, "Ripple").on_hover_text(
+                "Deleting a clip, or trimming its end, moves the later clips on its track to close the gap",
+            );
+            ui.checkbox(&mut self.show_volume, "Volume").on_hover_text(
+                "Show each clip's volume line: drag it up or down, double-click to add a point",
+            );
             ui.separator();
             if ui
                 .button("−")
@@ -1066,7 +1766,7 @@ impl Timeline {
                 .on_hover_text("Zoom out (Ctrl + wheel)")
                 .clicked()
             {
-                self.px_per_sec = (self.px_per_sec / 1.5).max(1.0);
+                self.zoom_by(1.0 / 1.5);
             }
             if ui
                 .button("+")
@@ -1074,7 +1774,7 @@ impl Timeline {
                 .on_hover_text("Zoom in (Ctrl + wheel)")
                 .clicked()
             {
-                self.px_per_sec = (self.px_per_sec * 1.5).min(4000.0);
+                self.zoom_by(1.5);
             }
             if ui
                 .button("Fit")
@@ -1085,6 +1785,13 @@ impl Timeline {
                 let w = (ui.available_width() + ui.min_rect().width() - HEADER).max(200.0);
                 self.px_per_sec = (w as f64 / (secs * 1.05)) as f32;
                 self.scroll = 0.0;
+            }
+            if ui
+                .add_enabled(!self.selected.is_empty(), egui::Button::new("Zoom to clips"))
+                .on_hover_text("Show the selected clips across the timeline (Z)")
+                .clicked()
+            {
+                self.zoom_to_selection(song, view.rate);
             }
             ui.separator();
             if ui
@@ -1100,6 +1807,22 @@ impl Timeline {
                 .clicked()
             {
                 out.changed |= self.delete_selected(song);
+            }
+            if ui
+                .button("Crossfade")
+                .on_hover_text(
+                    "Fade clips into each other where they meet: the selected ones, or all (X)",
+                )
+                .clicked()
+            {
+                out.changed |= self.crossfade_selected(song, view.rate);
+            }
+            if ui
+                .add_enabled(!self.selected.is_empty(), egui::Button::new("Fades…"))
+                .on_hover_text("Fades and volume of the selected clips (F)")
+                .clicked()
+            {
+                self.fades_open = true;
             }
             if ui
                 .button("⚑ Marker")
@@ -1147,6 +1870,7 @@ impl Timeline {
         // Lanes that don't fit scroll up and down.
         let overflow = (lanes_n as f32 * lane_h - (rect.height() - RULER)).max(0.0);
         let left = rect.left() + HEADER;
+        self.width = (rect.right() - left).max(50.0);
         let rate = view.rate as f64;
         let pps = self.px_per_sec as f64;
 
@@ -1193,6 +1917,7 @@ impl Timeline {
             }
         }
 
+        let show_volume = self.show_volume;
         let hit = |pos: Pos2, song: &Song| -> Option<Hit> {
             if !rect.contains(pos) || pos.x < left {
                 return None;
@@ -1225,17 +1950,12 @@ impl Timeline {
                 .rev()
                 .filter(|c| !c.muted)
                 .chain(clips.iter().rev().filter(|c| c.muted));
+            let top = lane_top(lane);
             for c in order {
                 let (x0, x1) = (x_of(c.start), x_of(c.end()));
                 if pos.x >= x0 && pos.x <= x1 {
-                    let edge = EDGE.min((x1 - x0) / 3.0);
-                    let zone = if pos.x - x0 < edge {
-                        Zone::StartEdge
-                    } else if x1 - pos.x < edge {
-                        Zone::EndEdge
-                    } else {
-                        Zone::Body
-                    };
+                    let r = Rect::from_x_y_ranges(x0..=x1, top + 2.0..=top + lane_h - 2.0);
+                    let zone = clip_zone(c, pos, r, &x_of, show_volume && !c.muted);
                     return Some(Hit::Clip { id: c.id, zone });
                 }
             }
@@ -1244,22 +1964,59 @@ impl Timeline {
 
         // Pointer: cursors, selection, dragging.
         let modifiers = ui.input(|i| i.modifiers);
-        let grid = self.snap;
+        let (grid, snapping) = (self.grid, self.snap);
+        // Other clips' edges, the markers and the playhead, when snapping
+        // to them; not the clips being dragged.
+        let mut targets: Vec<i64> = Vec::new();
+        if self.magnet {
+            let held: HashSet<u64> = (self.drag.iter())
+                .flat_map(|d| d.originals.iter().map(|(_, c)| c.id))
+                .collect();
+            for c in song.lanes.iter().flat_map(|l| l.clips.iter()) {
+                if !held.contains(&c.id) {
+                    targets.extend([c.start, c.end()]);
+                }
+            }
+            targets.extend(
+                (song.markers.iter()).map(|m| view.map.frames_at(view.map.bar_start(m.bar)).0),
+            );
+            targets.push(view.playhead);
+        }
+        let near = (MAGNET as f64 / pps * rate) as i64;
         let snap_to = |f: i64| {
             if modifiers.alt {
-                f
-            } else {
-                snap(view.map, f, grid)
+                return f;
             }
+            if let Some(&t) = (targets.iter())
+                .filter(|&&t| (t - f).abs() <= near)
+                .min_by_key(|&&t| (t - f).abs())
+            {
+                return t;
+            }
+            if !snapping {
+                return f;
+            }
+            snap(view.map, f, grid.at_zoom(view.map, f, pps))
         };
         if let Some(p) = resp.hover_pos()
             && self.drag.is_none()
         {
             match hit(p, song) {
                 Some(Hit::Clip {
-                    zone: Zone::StartEdge | Zone::EndEdge,
+                    zone: Zone::StartEdge | Zone::EndEdge | Zone::FadeIn | Zone::FadeOut,
                     ..
                 }) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
+                Some(Hit::Clip {
+                    zone: Zone::Volume(None),
+                    ..
+                }) => ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical),
+                Some(Hit::Clip {
+                    zone: Zone::Volume(Some(_)),
+                    ..
+                }) => ui.ctx().set_cursor_icon(CursorIcon::Move),
+                Some(Hit::Clip { .. }) if modifiers.command => {
+                    ui.ctx().set_cursor_icon(CursorIcon::ResizeColumn)
+                }
                 Some(Hit::Clip { .. }) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
                 _ => {}
             }
@@ -1270,8 +2027,11 @@ impl Timeline {
         {
             match hit(p, song) {
                 Some(Hit::Clip { id, zone }) => {
+                    // Ctrl held as a clip's body is dragged slips its
+                    // audio; it doesn't add to the selection.
+                    let slip = zone == Zone::Body && modifiers.command;
                     if !self.selected.contains(&id) {
-                        if !(modifiers.shift || modifiers.command) {
+                        if !(modifiers.shift || modifiers.command) || slip {
                             self.selected.clear();
                         }
                         self.selected.insert(id);
@@ -1290,12 +2050,24 @@ impl Timeline {
                         })
                         .map(|(l, c)| (l, c.clone()))
                         .collect();
+                    let after = match (zone, song.lane_of(id), song.find(id)) {
+                        (Zone::EndEdge, Some(l), Some(c)) if self.ripple => {
+                            (song.lanes[l].clips.iter())
+                                .filter(|o| o.id != id && o.start >= c.end())
+                                .map(|o| (o.id, o.start))
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    };
                     self.drag = Some(Drag {
                         zone,
                         anchor: id,
                         from: frame_of(p.x),
                         from_lane: lane_at(p.y),
+                        from_y: p.y,
                         originals: held,
+                        slip,
+                        after,
                         moved: false,
                     });
                     self.focus_next = Some(Focus::Clip(id));
@@ -1313,18 +2085,47 @@ impl Timeline {
             && let Some(p) = resp.interact_pointer_pos()
         {
             let dx = frame_of(p.x) - d.from;
-            if let Some(anchor) = d
+            if let Some((anchor_lane, anchor)) = d
                 .originals
                 .iter()
                 .find(|(_, c)| c.id == d.anchor)
-                .map(|(_, c)| c.clone())
+                .map(|(l, c)| (*l, c.clone()))
             {
+                // The anchor's box when pressed, for the volume line.
+                let top = lane_top(anchor_lane);
+                let r = Rect::from_x_y_ranges(
+                    x_of(anchor.start)..=x_of(anchor.end()),
+                    top + 2.0..=top + lane_h - 2.0,
+                );
+                let mut set = |song: &mut Song, t: Clip| {
+                    if let Some(c) = song.find_mut(t.id) {
+                        d.moved |= (c.start, c.offset, c.len, c.fade_in, c.fade_out, c.gain_db)
+                            != (t.start, t.offset, t.len, t.fade_in, t.fade_out, t.gain_db)
+                            || c.envelope != t.envelope;
+                        *c = t;
+                    }
+                };
                 match d.zone {
+                    Zone::Body if d.slip => {
+                        for (_, o) in &d.originals {
+                            let mut t = o.clone();
+                            t.slip_to(o.offset as i64 - dx);
+                            set(song, t);
+                        }
+                    }
                     Zone::Body => {
                         // The held clip lands on the grid; the rest keep
                         // their distance from it, in time and in tracks.
                         let lowest = d.originals.iter().map(|(_, c)| c.start).min().unwrap_or(0);
-                        let delta = (snap_to(anchor.start + dx) - anchor.start).max(-lowest);
+                        let mut delta = (snap_to(anchor.start + dx) - anchor.start).max(-lowest);
+                        // Or its end on another clip's edge.
+                        let by_end = snap_to(anchor.end() + dx) - anchor.end();
+                        if by_end != dx
+                            && targets.contains(&(anchor.end() + by_end))
+                            && !targets.contains(&(anchor.start + delta))
+                        {
+                            delta = by_end.max(-lowest);
+                        }
                         let lo = d.originals.iter().map(|(l, _)| *l).min().unwrap_or(0) as isize;
                         let hi = d.originals.iter().map(|(l, _)| *l).max().unwrap_or(0) as isize;
                         let dl = (lane_at(p.y) as isize - d.from_lane as isize)
@@ -1339,21 +2140,55 @@ impl Timeline {
                         }
                     }
                     Zone::StartEdge => {
-                        if let Some(c) = song.find_mut(anchor.id) {
-                            let mut t = anchor.clone();
-                            t.trim_start(snap_to(anchor.start + dx));
-                            d.moved |= (c.start, c.len) != (t.start, t.len);
-                            *c = t;
-                        }
+                        let mut t = anchor.clone();
+                        t.trim_start(snap_to(anchor.start + dx));
+                        set(song, t);
                     }
                     Zone::EndEdge => {
-                        if let Some(c) = song.find_mut(anchor.id) {
-                            let mut t = anchor.clone();
-                            t.trim_end(snap_to(anchor.end() + dx));
-                            d.moved |= c.len != t.len;
-                            *c = t;
+                        let mut t = anchor.clone();
+                        t.trim_end(snap_to(anchor.end() + dx));
+                        let by = t.end() - anchor.end();
+                        set(song, t);
+                        for &(id, start) in &d.after {
+                            if let Some(c) = song.find_mut(id) {
+                                c.start = start + by;
+                            }
                         }
                     }
+                    Zone::FadeIn | Zone::FadeOut => {
+                        let end = d.zone == Zone::FadeOut;
+                        let at = snap_to(frame_of(p.x));
+                        let len = if end {
+                            anchor.end() - at
+                        } else {
+                            at - anchor.start
+                        };
+                        let mut t = anchor.clone();
+                        t.set_fade(end, len.max(0) as usize);
+                        set(song, t);
+                    }
+                    Zone::Volume(None) => {
+                        let mut t = anchor.clone();
+                        let db = anchor.gain_db + y_db(r, p.y) - y_db(r, d.from_y);
+                        t.gain_db = db.clamp(MIN_DB, MAX_DB);
+                        set(song, t);
+                    }
+                    Zone::Volume(Some(i)) if i < anchor.envelope.len() => {
+                        let mut t = anchor.clone();
+                        // Between its neighbours, within the clip.
+                        let lo = (i.checked_sub(1).map(|j| anchor.envelope[j].at + 1))
+                            .unwrap_or(anchor.offset);
+                        let hi = (anchor.envelope.get(i + 1).map(|q| q.at - 1))
+                            .unwrap_or(anchor.offset + anchor.len)
+                            .max(lo);
+                        let at = (anchor.envelope[i].at as i64 + dx).clamp(lo as i64, hi as i64);
+                        t.envelope[i] = GainPoint {
+                            at: at as usize,
+                            db: (y_db(r, p.y) - anchor.gain_db).clamp(MIN_DB, MAX_DB),
+                        };
+                        set(song, t);
+                    }
+                    Zone::Volume(Some(_)) => {}
                 }
             }
         }
@@ -1405,10 +2240,31 @@ impl Timeline {
         }
         if resp.double_clicked()
             && let Some(p) = resp.interact_pointer_pos()
-            && let Some(Hit::Marker(i)) = hit(p, song)
         {
-            self.rename = Some((i, song.markers[i].name.clone()));
-            self.rename_focused = false;
+            match hit(p, song) {
+                Some(Hit::Marker(i)) => {
+                    self.rename = Some((i, song.markers[i].name.clone()));
+                    self.rename_focused = false;
+                }
+                Some(Hit::Clip {
+                    id,
+                    zone: Zone::Volume(None),
+                }) => {
+                    let lane = lane_at(p.y);
+                    let top = lane_top(lane);
+                    if let Some(c) = song.find_mut(id) {
+                        let r = Rect::from_x_y_ranges(
+                            x_of(c.start)..=x_of(c.end()),
+                            top + 2.0..=top + lane_h - 2.0,
+                        );
+                        let rel = frame_of(p.x) - c.start;
+                        let db = y_db(r, p.y) - c.gain_db;
+                        c.add_point(rel, db);
+                        out.changed = true;
+                    }
+                }
+                _ => {}
+            }
         }
         if resp.secondary_clicked()
             && let Some(p) = resp.interact_pointer_pos()
@@ -1458,12 +2314,13 @@ impl Timeline {
                     top + 2.0..=top + lane_h - 2.0,
                 );
                 let name = format!(
-                    "{} on {}, {} to {}{}",
+                    "{} on {}, {} to {}{}{}",
                     c.name(),
                     lane.name,
                     spoken(view.map, c.start),
                     spoken(view.map, c.end()),
-                    if c.muted { ", muted" } else { "" }
+                    if c.muted { ", muted" } else { "" },
+                    spoken_level(c, view.rate),
                 );
                 let selected = self.selected.contains(&c.id);
                 let info = egui::WidgetInfo::selected(egui::Role::Button, true, selected, name);
@@ -1547,6 +2404,44 @@ impl Timeline {
             .into_iter()
             .find(|&n| bar_px * n as f32 >= 40.0)
             .unwrap_or(128);
+        // The grid's lines inside the bars, fainter, beats stronger than
+        // their parts; each bar measured on its own, as the tempo and
+        // time signature may change in it.
+        let grid = self.grid.at_zoom(view.map, frame_of(left).max(0), pps);
+        if every == 1 && grid != Grid::Bar {
+            let line = visuals.widgets.noninteractive.bg_stroke.color;
+            let (beat_c, part_c) = (line.gamma_multiply(0.6), line.gamma_multiply(0.3));
+            let mut bar = first;
+            loop {
+                let t0 = view.map.bar_start(bar);
+                if x_of(view.map.frames_at(t0).0) > rect.right() {
+                    break;
+                }
+                let t1 = view.map.bar_start(bar + 1);
+                let beat = view.map.signature_at(t0).beat_ticks();
+                let unit = grid.ticks(view.map, t0);
+                let mut t = t0.0 + unit;
+                while t < t1.0 {
+                    let x = x_of(view.map.frames_at(Ticks(t)).0);
+                    if x > rect.right() {
+                        break;
+                    }
+                    if x >= left {
+                        let c = if (t - t0.0) % beat == 0 {
+                            beat_c
+                        } else {
+                            part_c
+                        };
+                        painter.line_segment(
+                            [pos2(x, rect.top() + RULER), pos2(x, rect.bottom())],
+                            Stroke::new(1.0, c),
+                        );
+                    }
+                    t += unit;
+                }
+                bar += 1;
+            }
+        }
         let mut bar = (first - 1) / every * every + 1;
         loop {
             let x = x_of(view.map.frames_at(view.map.bar_start(bar)).0);
@@ -1570,6 +2465,7 @@ impl Timeline {
         }
         self.draw_time_changes(&painter, view, ruler, &x_of);
 
+        let hover_at = resp.hover_pos();
         // Lanes and clips, under the ruler.
         let lanes = painter.with_clip_rect(Rect::from_min_max(
             pos2(rect.left(), rect.top() + RULER),
@@ -1619,6 +2515,11 @@ impl Timeline {
                 } else {
                     lanes.rect_filled(r, 3.0, colour.gamma_multiply(0.35));
                 }
+                let shape = c.shape();
+                let level = |x: f32| {
+                    let rel = (frame_of(x) - c.start).clamp(0, c.len as i64 - 1);
+                    shape.at(rel as usize, c.len, c.offset)
+                };
                 if let Some(w) = self.waves.get(&c.source) {
                     let mid = r.center().y + 6.0;
                     let half = (r.height() - 16.0) / 2.0;
@@ -1639,6 +2540,9 @@ impl Timeline {
                         );
                         if b > a {
                             let (lo, hi) = w.range(a, b);
+                            // As it plays: through its fades and volume.
+                            let g = level(x);
+                            let (lo, hi) = (lo * g, hi * g);
                             lanes.line_segment(
                                 [
                                     pos2(x + 0.5, mid - hi.min(1.0) * half),
@@ -1650,10 +2554,22 @@ impl Timeline {
                         x += 1.0;
                     }
                 }
+                let full = Rect::from_x_y_ranges(x0..=x1, r.y_range());
+                // Handles on the clip under the pointer and the selected.
+                let handles = selected || hover_at.is_some_and(|h| full.contains(h));
+                self.draw_fades(&lanes.with_clip_rect(r), c, full, &x_of, colour, handles);
+                if self.show_volume && !c.muted {
+                    draw_volume(&lanes.with_clip_rect(r.expand(4.0)), c, full, &x_of);
+                }
+                let name = if c.gain_db.abs() >= 0.05 {
+                    format!("{} ({:+.1} dB)", c.name(), c.gain_db)
+                } else {
+                    c.name()
+                };
                 lanes.text(
-                    r.left_top() + vec2(4.0, 2.0),
+                    r.left_top() + vec2(4.0 + HANDLE, 2.0),
                     Align2::LEFT_TOP,
-                    c.name(),
+                    name,
                     FontId::proportional(11.0),
                     if c.muted {
                         visuals.weak_text_color()
@@ -1781,7 +2697,7 @@ impl Timeline {
         // Right-click menus.
         let end_bar = Self::end_bar(view.map, song);
         resp.context_menu(|ui| match self.menu {
-            Some((Hit::Clip { .. }, at)) => {
+            Some((Hit::Clip { id, zone }, at)) => {
                 if ui.button("Split here").clicked() {
                     out.changed |= self.split_at(song, snap_to(at));
                     ui.close();
@@ -1790,6 +2706,37 @@ impl Timeline {
                     out.changed |= self.delete_selected(song);
                     ui.close();
                 }
+                ui.separator();
+                if ui.button("Fades and volume…").clicked() {
+                    self.fades_open = true;
+                    ui.close();
+                }
+                for (end, name) in [(false, "Fade in shape"), (true, "Fade out shape")] {
+                    ui.menu_button(name, |ui| {
+                        for c in Curve::ALL {
+                            if ui.button(curve_label(c)).clicked() {
+                                out.changed |= self.set_curves(song, end, c);
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+                if ui.button("Crossfade where they meet").clicked() {
+                    out.changed |= self.crossfade_selected(song, view.rate);
+                    ui.close();
+                }
+                if let Zone::Volume(Some(i)) = zone
+                    && ui.button("Delete volume point").clicked()
+                {
+                    if let Some(c) = song.find_mut(id)
+                        && i < c.envelope.len()
+                    {
+                        c.envelope.remove(i);
+                        out.changed = true;
+                    }
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Add comment here…").clicked() {
                     out.comment_at = Some((self.menu_lane, snap_to(at)));
                     ui.close();
@@ -1821,7 +2768,7 @@ impl Timeline {
                 }
             }
             Some((_, at)) => {
-                let bar = Self::bar_at(view.map, snap(view.map, at, Snap::Bar));
+                let bar = Self::bar_at(view.map, snap(view.map, at, Grid::Bar));
                 if ui.button(format!("Add marker at bar {bar}")).clicked() {
                     self.add_marker(song, bar);
                     ui.close();
@@ -1830,7 +2777,7 @@ impl Timeline {
                     let bb = view.map.bar_beat(view.map.ticks_at(Frames(snap(
                         view.map,
                         at,
-                        Snap::Beat,
+                        Grid::Beat,
                     ))));
                     let (b, beat) = (bb.bar, bb.beat as u32);
                     if (b, beat) != (1, 1)
@@ -1867,6 +2814,10 @@ impl Timeline {
                 ui.close();
             }
         });
+
+        if self.fades_open {
+            self.fades_window(ui.ctx(), song, view, &mut out);
+        }
 
         // Renaming a marker.
         if let Some((i, mut text)) = self.rename.take() {
@@ -2004,11 +2955,177 @@ pub(crate) mod tests {
     fn snapping_goes_to_the_nearest_beat_or_bar() {
         // 120 BPM in 4/4: a beat is 24,000 frames, a bar 96,000.
         let map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
-        assert_eq!(snap(&map, 35_000, Snap::Beat), 24_000);
-        assert_eq!(snap(&map, 37_000, Snap::Beat), 48_000);
-        assert_eq!(snap(&map, 47_000, Snap::Bar), 0);
-        assert_eq!(snap(&map, 49_000, Snap::Bar), 96_000);
-        assert_eq!(snap(&map, 12_345, Snap::Off), 12_345);
+        assert_eq!(snap(&map, 35_000, Grid::Beat), 24_000);
+        assert_eq!(snap(&map, 37_000, Grid::Beat), 48_000);
+        assert_eq!(snap(&map, 47_000, Grid::Bar), 0);
+        assert_eq!(snap(&map, 49_000, Grid::Bar), 96_000);
+        // Half a beat is 12,000 frames; a triplet 8,000.
+        assert_eq!(snap(&map, 17_000, Grid::Part(2)), 12_000);
+        assert_eq!(snap(&map, 13_000, Grid::Part(3)), 16_000);
+        assert_eq!(snap(&map, 4_000, Grid::Part(8)), 3_000);
+    }
+
+    #[test]
+    fn the_grid_follows_tempo_and_time_signature_changes() {
+        // 120 BPM to bar 3, then 60 BPM; 3/4 from bar 5.
+        let mut map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+        map.add_tempo(map.bar_start(3), Tempo::bpm(60)).unwrap();
+        map.add_meter(map.bar_start(5), TimeSignature::new(3, 4))
+            .unwrap();
+        let bar3 = map.frames_at(map.bar_start(3)).0;
+        assert_eq!(bar3, 192_000);
+        // Beats are a second long after the change.
+        assert_eq!(snap(&map, bar3 + 30_000, Grid::Beat), bar3 + 48_000);
+        assert_eq!(step(&map, bar3, 3, Grid::Part(2)), bar3 + 72_000);
+        let bar5 = map.frames_at(map.bar_start(5)).0;
+        assert_eq!(step(&map, bar5, 1, Grid::Bar), bar5 + 3 * 48_000);
+        // Auto picks a finer step the further in it zooms.
+        assert_eq!(Grid::Auto.at_zoom(&map, 0, 4.0), Grid::Bar);
+        assert_eq!(Grid::Auto.at_zoom(&map, 0, 40.0), Grid::Beat);
+        assert_eq!(Grid::Auto.at_zoom(&map, 0, 400.0), Grid::Part(8));
+        // At the slower tempo a beat is wider, so finer at the same zoom.
+        assert_eq!(Grid::Auto.at_zoom(&map, bar3, 30.0), Grid::Part(2));
+        assert_eq!(Grid::Beat.at_zoom(&map, 0, 400.0), Grid::Beat);
+    }
+
+    #[test]
+    fn fades_stay_inside_the_clip_through_trims_and_splits() {
+        let mut c = clip(0, 10_000);
+        c.set_fade(false, 3000);
+        c.set_fade(true, 9000);
+        assert_eq!((c.fade_in.len, c.fade_out.len), (3000, 7000));
+        c.trim_end(5000);
+        assert_eq!(c.fade_in.len + c.fade_out.len, 5000);
+        assert_eq!((c.fade_in.len, c.fade_out.len), (1500, 3500));
+        let (a, b) = c.split(2500).unwrap();
+        assert_eq!((a.fade_in.len, a.fade_out.len), (1500, 0), "a clean cut");
+        assert_eq!((b.fade_in.len, b.fade_out.len), (0, 2500));
+    }
+
+    #[test]
+    fn slipping_moves_the_audio_inside_the_clip() {
+        let mut c = clip(1000, 10_000);
+        c.trim_start(3000);
+        c.trim_end(6000);
+        assert_eq!((c.start, c.offset, c.len), (3000, 2000, 3000));
+        c.slip_to(500);
+        assert_eq!((c.start, c.offset, c.len), (3000, 500, 3000));
+        c.slip_to(-50);
+        assert_eq!(c.offset, 0, "no further than the file's start");
+        c.slip_to(99_999);
+        assert_eq!(c.offset, 7000, "or its end");
+    }
+
+    #[test]
+    fn volume_points_stay_with_the_audio() {
+        let mut c = clip(1000, 10_000);
+        c.trim_start(2000); // offset 1000
+        let i = c.add_point(500, -6.0);
+        assert_eq!(c.envelope[i].at, 1500, "a source frame");
+        c.add_point(2500, 0.0);
+        assert_eq!(c.envelope_db(1500), -3.0);
+        assert_eq!(c.add_point(500, -100.0), 0, "the same frame moves it");
+        assert_eq!(c.envelope[0].db, MIN_DB);
+        // Slipped, the line moves with the audio.
+        c.slip_to(0);
+        assert_eq!(c.envelope_db(2500), -24.0);
+    }
+
+    #[test]
+    fn crossfades_cover_overlaps_and_joins() {
+        // Overlapping by 2000 frames.
+        let (mut a, mut b) = (clip(0, 10_000), clip(8000, 10_000));
+        assert!(crossfade(&mut a, &mut b, 960));
+        assert_eq!((a.fade_out.len, b.fade_in.len), (2000, 2000));
+        assert_eq!(a.fade_out.curve, Curve::EqualPower);
+        // Touching, each with audio to spare: stretched into each other.
+        let mut a = clip(0, 10_000);
+        a.trim_end(5000);
+        let mut b = clip(0, 10_000);
+        b.trim_start(5000);
+        assert!(crossfade(&mut b, &mut a, 960), "either order");
+        assert_eq!((a.end(), b.start), (5480, 4520));
+        assert_eq!((a.fade_out.len, b.fade_in.len), (960, 960));
+        // Far apart, or one inside the other: nothing.
+        let (mut a, mut b) = (clip(0, 1000), clip(5000, 1000));
+        assert!(!crossfade(&mut a, &mut b, 960));
+        let (mut a, mut b) = (clip(0, 10_000), clip(2000, 1000));
+        assert!(!crossfade(&mut a, &mut b, 960));
+    }
+
+    #[test]
+    fn ripple_delete_closes_only_empty_time() {
+        // A clip at 3000..4000 went; another clip covers part of its time.
+        let mut clips = vec![clip(0, 1000), clip(6000, 1000)];
+        let mut under = clip(2500, 1000);
+        under.id = 99;
+        clips.push(under);
+        close_gaps(&mut clips, &[(3000, 4000)]);
+        let starts: Vec<i64> = clips.iter().map(|c| c.start).collect();
+        // 3500..4000 was empty: 500 frames close.
+        assert_eq!(starts, vec![0, 5500, 2500]);
+    }
+
+    #[test]
+    fn deleting_and_trimming_ripple_when_asked() {
+        let mut clips = vec![clip(0, 1000), clip(1000, 1000), clip(2000, 1000)];
+        let mut markers = Vec::new();
+        let mut tl = Timeline {
+            ripple: true,
+            ..Timeline::default()
+        };
+        let mut song = Song {
+            lanes: vec![Lane {
+                name: "Guitar",
+                clips: &mut clips,
+            }],
+            markers: &mut markers,
+        };
+        tl.selected.insert(song.lanes[0].clips[1].id);
+        assert!(tl.delete_selected(&mut song));
+        let starts: Vec<i64> = song.lanes[0].clips.iter().map(|c| c.start).collect();
+        assert_eq!(starts, vec![0, 1000]);
+
+        // Trimming the first clip's end a beat shorter pulls the next in.
+        let map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+        let mut clips = vec![clip(0, 96_000), clip(96_000, 10_000)];
+        let mut song = Song {
+            lanes: vec![Lane {
+                name: "Guitar",
+                clips: &mut clips,
+            }],
+            markers: &mut markers,
+        };
+        let id = song.lanes[0].clips[0].id;
+        tl.focus = Some((Focus::Clip(id), egui::Id::NULL));
+        assert!(tl.trim_focused(&mut song, &map, -1, Grid::Beat, true));
+        assert_eq!(song.lanes[0].clips[0].end(), 72_000);
+        assert_eq!(song.lanes[0].clips[1].start, 72_000);
+    }
+
+    #[test]
+    fn crossfading_the_selection_and_zooming_to_it() {
+        let mut clips = vec![clip(0, 48_000), clip(46_000, 10_000), clip(90_000, 100)];
+        let mut markers = Vec::new();
+        let mut tl = Timeline::default();
+        let mut song = Song {
+            lanes: vec![Lane {
+                name: "Guitar",
+                clips: &mut clips,
+            }],
+            markers: &mut markers,
+        };
+        assert!(
+            tl.crossfade_selected(&mut song, RATE),
+            "all, with none selected"
+        );
+        assert_eq!(song.lanes[0].clips[1].fade_in.len, 2000);
+        assert_eq!(song.lanes[0].clips[2].fade_in.len, 0, "too far to meet");
+        tl.width = 1000.0;
+        tl.selected.insert(song.lanes[0].clips[0].id);
+        tl.zoom_to_selection(&song, RATE);
+        // A second, with a tenth more, across 1000 points.
+        assert!((tl.px_per_sec as f64 - 1000.0 / 1.1).abs() < 0.5);
     }
 
     #[test]

@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
@@ -126,6 +127,12 @@ pub struct ClipSpec {
     /// How much of the source plays, in frames; `None` for the rest of it.
     pub len: Option<usize>,
     pub gain_db: f32,
+    /// Fades at the start and end, shortened to fit if together they
+    /// are longer than the clip.
+    pub fade_in: Fade,
+    pub fade_out: Fade,
+    /// The clip's gain envelope, in source frames, in order.
+    pub envelope: Arc<[GainPoint]>,
 }
 
 impl ClipSpec {
@@ -136,6 +143,9 @@ impl ClipSpec {
             offset: 0,
             len: None,
             gain_db: 0.0,
+            fade_in: Fade::default(),
+            fade_out: Fade::default(),
+            envelope: Arc::new([]),
         }
     }
 }
@@ -324,7 +334,7 @@ pub(crate) struct ClipNode {
     pub start: i64,
     pub end: i64,
     pub offset: usize,
-    pub gain: f32,
+    pub shape: Shape,
     pub src: NodeSrc,
 }
 
@@ -361,6 +371,15 @@ pub(crate) struct InsertNode {
     pub effect: Option<Box<dyn Insert>>,
 }
 
+impl ClipNode {
+    /// The level of the clip's frame `rel`.
+    #[inline]
+    fn gain(&self, rel: usize) -> f32 {
+        self.shape
+            .at(rel, (self.end - self.start) as usize, self.offset)
+    }
+}
+
 impl TrackNode {
     /// Left and right gains the mixer settings ask for.
     fn target(&self, any_solo: bool) -> (f32, f32) {
@@ -373,7 +392,6 @@ impl TrackNode {
     }
 }
 
-/// Adds `run` frames of a chunk, from frame `at`, into the two buffers.
 /// Adds the clips' audio for frames `[pos, pos + l.len())` into `l` and
 /// `r`. Returns how many frames of streamed audio were missing.
 fn read_clips(
@@ -397,15 +415,18 @@ fn read_clips(
         let from = c.start.max(pos);
         let to = c.end.min(pos + n as i64);
         let dst = (from - pos) as usize;
-        let src = c.offset + (from - c.start) as usize;
+        let rel = (from - c.start) as usize;
+        let src = c.offset + rel;
         let len = (to - from) as usize;
         match &c.src {
             NodeSrc::Memory(d) => {
                 let chans = &d.channels;
                 let right = chans.get(1).unwrap_or(&chans[0]);
+                let flat = c.shape.is_flat();
                 for i in 0..len {
-                    sl[dst + i] += chans[0][src + i] * c.gain;
-                    sr[dst + i] += right[src + i] * c.gain;
+                    let g = if flat { c.shape.gain } else { c.gain(rel + i) };
+                    sl[dst + i] += chans[0][src + i] * g;
+                    sr[dst + i] += right[src + i] * g;
                 }
             }
             NodeSrc::Stream(si) => {
@@ -423,7 +444,8 @@ fn read_clips(
                                 ch,
                                 within,
                                 run,
-                                c.gain,
+                                c,
+                                rel + done,
                                 &mut sl[dst + done..],
                                 &mut sr[dst + done..],
                             );
@@ -502,12 +524,32 @@ pub(crate) struct Rate {
     pub reset: bool,
 }
 
-fn mix_chunk(ch: &Chunk, at: usize, run: usize, gain: f32, l: &mut [f32], r: &mut [f32]) {
+/// Adds `run` frames of a chunk, from frame `at`, into the two buffers,
+/// at clip `c`'s level from its frame `rel` on.
+#[allow(clippy::too_many_arguments)]
+fn mix_chunk(
+    ch: &Chunk,
+    at: usize,
+    run: usize,
+    c: &ClipNode,
+    rel: usize,
+    l: &mut [f32],
+    r: &mut [f32],
+) {
     let k = ch.channels;
     let s = &ch.samples[at * k..(at + run) * k];
-    for (i, frame) in s.chunks_exact(k).enumerate() {
-        l[i] += frame[0] * gain;
-        r[i] += frame[k - 1] * gain;
+    if c.shape.is_flat() {
+        let gain = c.shape.gain;
+        for (i, frame) in s.chunks_exact(k).enumerate() {
+            l[i] += frame[0] * gain;
+            r[i] += frame[k - 1] * gain;
+        }
+    } else {
+        for (i, frame) in s.chunks_exact(k).enumerate() {
+            let gain = c.gain(rel + i);
+            l[i] += frame[0] * gain;
+            r[i] += frame[k - 1] * gain;
+        }
     }
 }
 
@@ -599,7 +641,13 @@ impl Session {
                     start,
                     end: start + len as i64,
                     offset: c.offset,
-                    gain: db_to_gain(c.gain_db),
+                    shape: Shape {
+                        fade_in: c.fade_in,
+                        fade_out: c.fade_out,
+                        envelope: c.envelope.clone(),
+                        ..Shape::flat(c.gain_db)
+                    }
+                    .fitted(len),
                     src,
                 });
             }

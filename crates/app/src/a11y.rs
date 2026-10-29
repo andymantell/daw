@@ -570,3 +570,77 @@ fn menus_show_each_commands_keys() {
     h.run();
     assert!(h.state().metronome.enabled);
 }
+
+#[test]
+fn fades_and_volume_are_set_from_the_keyboard_and_kept() {
+    let mut h = with_a_clip();
+    focus(&mut h, "backing on Guitar");
+    h.key_press(Key::F);
+    h.run();
+    h.run();
+    assert!(h.state().timeline.fades_open, "F opens fades and volume");
+    for name in [
+        "Fade in length",
+        "Fade in shape",
+        "Fade out length",
+        "Fade out shape",
+        "Clip volume",
+    ] {
+        assert!(names(&h).iter().any(|n| n == name), "no control {name}");
+    }
+    assert_eq!(unspoken(&h), Vec::<String>::new());
+    h.get_by_label("Fade in length").focus();
+    h.run();
+    h.get_by_label("Fade in length").type_text("250");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    let c = clip_of(h.state(), 0);
+    assert_eq!(c.fade_in.len, 12_000, "250 ms at 48 kHz");
+    assert!(
+        h.query_by_label_contains("backing on Guitar, bar 1 to bar 2, fades in over 250 ms")
+            .is_some(),
+        "{:?}",
+        names(&h)
+    );
+
+    // Kept through the project document, as saving and opening do.
+    let app = h.state_mut();
+    app.tracks[0].clips[0].gain_db = -4.5;
+    app.tracks[0].clips[0].add_point(1000, -6.0);
+    let mut doc = daw_project::ProjectDoc::new(1);
+    doc.set(&app.project());
+    app.apply(doc.get());
+    let c = clip_of(h.state(), 0);
+    assert_eq!(
+        (c.fade_in.len, c.gain_db, c.envelope.len()),
+        (12_000, -4.5, 1)
+    );
+}
+
+#[test]
+fn a_fade_is_dragged_from_its_handle() {
+    let mut h = with_a_clip();
+    let r = h.get_by_label_contains("backing on Guitar").rect();
+    // The fade-in handle sits at the clip's top left corner.
+    let start = egui::pos2(r.left() + 4.0, r.top() + 4.0);
+    let end = egui::pos2(start.x + 200.0, start.y);
+    h.hover_at(start);
+    h.run();
+    h.drag_at(start);
+    h.run();
+    for i in 1..=4 {
+        h.hover_at(start.lerp(end, i as f32 / 4.0));
+        h.run();
+    }
+    h.drop_at(end);
+    h.run();
+    let c = clip_of(h.state(), 0);
+    assert_eq!(c.start, 0, "the clip stays put");
+    // Snapped to the grid: a whole number of beats.
+    assert!(
+        c.fade_in.len > 0 && c.fade_in.len.is_multiple_of(24_000),
+        "{}",
+        c.fade_in.len
+    );
+}

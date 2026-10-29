@@ -207,6 +207,7 @@ mod tests {
             take: None,
             muted: false,
             seq: 0,
+            ..Default::default()
         }
     }
 

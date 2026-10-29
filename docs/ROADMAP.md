@@ -570,9 +570,15 @@ recorded in [research/THEMES.md](research/THEMES.md).
   Every widget and the timeline renderer read from the active theme and
   hard-code nothing. This starts in Phase 1, while the UI is small.
 - **First shipped themes:** *Valve Glow* (warm dark, amber light),
-  *Workshop* (warm matte greys, copper, layered panels) and *Vellum* (warm
-  paper, ink lines, red pencil for live state). More follow as the research
-  page settles.
+  *Workshop* (warm matte greys, copper, layered panels), *Vellum* (warm
+  paper, ink lines, red pencil for live state) and *Tidal* (pale sea-glass,
+  soft and rounded). More follow as the research page settles.
+- **Before building:** the mock-ups so far show only the timeline,
+  transport and a mixer strip. Each theme is extended to the full set of
+  views first (mixer window, plugin and effect panels, note and notation
+  editors, browser, settings, dialogs, the phone remote), so that dense
+  views like the mixer are designed in the theme rather than inherited
+  from defaults.
 - **Light and dark variants** of each theme, with automatic switching by
   the operating system's setting or the time of day.
 - Switching is instant, from settings or the command palette, and never
@@ -593,7 +599,7 @@ recorded in [research/THEMES.md](research/THEMES.md).
 - Delay compensation is verified by automated null tests.
 - A sloppy multi-mic drum take is tightened to the grid at 70% strength,
   and the drum mics stay in phase.
-- Switching between the three shipped themes while playing causes no
+- Switching between the four shipped themes while playing causes no
   dropout and no change to the project file, and every theme passes the
   contrast checks in both variants.
 - On a three-screen setup, the timeline, mixer and a plugin editor each sit

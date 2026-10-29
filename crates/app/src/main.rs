@@ -19,6 +19,7 @@
 mod comments;
 mod crash;
 mod export;
+mod freeze;
 mod fx;
 mod latency;
 mod notes;
@@ -69,6 +70,10 @@ struct Track {
     practice_mute: bool,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
+    /// The track rendered through its effects, as the document has it.
+    frozen: Option<daw_project::Frozen>,
+    /// Its audio, opened when one of the track's plugins is missing here.
+    frozen_audio: Option<Arc<StreamSource>>,
     /// Peak levels shown on the meter, decaying.
     meter: (f32, f32),
 }
@@ -93,6 +98,8 @@ impl Track {
             monitor: false,
             practice_mute: false,
             fx: Vec::new(),
+            frozen: None,
+            frozen_audio: None,
             meter: (0.0, 0.0),
         }
     }
@@ -182,6 +189,7 @@ struct App {
     effects: Effects,
     tuner: tuner::Tuner,
     export: export::Export,
+    freezer: freeze::Freezer,
     /// Practice speed, percent, and transpose.
     speed_pct: f64,
     semitones: i32,
@@ -310,6 +318,7 @@ impl App {
             effects: Effects::new(config_dir().join("plugins.txt")),
             tuner: tuner::Tuner::new(rate),
             export: export::Export::default(),
+            freezer: freeze::Freezer::default(),
             speed_pct: 100.0,
             semitones: 0,
             cents: 0,
@@ -573,6 +582,26 @@ impl App {
     fn session(&self) -> Session {
         let mut s = Session::new(self.tempo_map());
         for t in &self.tracks {
+            if let Some(clip) = self.frozen_playing(t) {
+                // Its clips and effects as rendered where it has every
+                // plugin.
+                let mut spec = TrackSpec::new(vec![clip]);
+                spec.mix = t.heard();
+                spec.input = t.input;
+                spec.arm = t.arm;
+                spec.monitor =
+                    t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
+                // Its plugins that are here stay in the graph, bypassed,
+                // for when the frozen audio stops fitting.
+                spec.inserts = (t.fx.iter())
+                    .map(|f| daw_engine::graph::InsertSpec {
+                        bypass: true,
+                        ..f.spec()
+                    })
+                    .collect();
+                s.tracks.push(spec);
+                continue;
+            }
             // A file still being converted to a new rate plays nothing
             // until it is ready, but keeps its place.
             let clips = (t.clips.iter())
@@ -1256,6 +1285,9 @@ impl App {
             Audio::Stopped => 0,
         };
         let direct = self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
+        let frozen: Vec<bool> = (self.tracks.iter())
+            .map(|t| self.frozen_playing(t).is_some())
+            .collect();
         let mut changes = Vec::new();
         let mut rebuild = false;
         let mut chosen = None;
@@ -1323,9 +1355,12 @@ impl App {
                             .accessible_name(format!("Practice mute {name}"))
                             .on_hover_text("Practice mute: silence this part to play it yourself");
                     });
-                    let label = match t.fx.len() {
-                        0 => "FX".to_string(),
-                        n => format!("FX ({n})"),
+                    let fx = t.fx.len() + self.proj.missing_fx.get(&t.key).map_or(0, Vec::len);
+                    let label = match (fx, frozen[i]) {
+                        (0, _) => "FX".to_string(),
+                        (n, false) => format!("FX ({n})"),
+                        // Plays its frozen audio.
+                        (n, true) => format!("FX ({n}) ❄"),
                     };
                     let open = self.effects.open_track == Some(i);
                     if ui
@@ -2115,6 +2150,7 @@ impl eframe::App for App {
             Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
             Audio::Stopped => 0,
         };
+        self.poll_freezing(&ctx);
         self.export.poll();
         if self.export.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -2138,19 +2174,22 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
         if let Some(i) = self.effects.open_track {
-            match self.tracks.get_mut(i) {
-                Some(t) => {
+            let note = self.tracks.get(i).map(|t| self.frozen_note(t));
+            match (self.tracks.get_mut(i), note) {
+                (Some(t), Some((note, missing))) => {
                     if self.effects.track_window(
                         &ctx,
                         &t.name,
                         &mut t.fx,
+                        &missing,
+                        note.as_deref(),
                         self.rate,
                         &mut self.message,
                     ) {
                         self.rebuild();
                     }
                 }
-                None => self.effects.open_track = None,
+                _ => self.effects.open_track = None,
             }
         }
         self.perf_window(&ctx);

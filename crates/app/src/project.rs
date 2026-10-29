@@ -84,7 +84,7 @@ pub enum Dialog {
 pub struct Loaded {
     folder: ProjectFolder,
     doc: ProjectDoc,
-    sources: HashMap<String, Arc<StreamSource>>,
+    pub(crate) sources: HashMap<String, Arc<StreamSource>>,
     /// Assets that couldn't be opened, and why.
     failed: Vec<String>,
 }
@@ -93,20 +93,21 @@ pub struct Proj {
     pub doc: ProjectDoc,
     pub folder: Option<ProjectFolder>,
     /// The project as last written to the document.
-    committed: Project,
+    pub(crate) committed: Project,
     /// This computer's practice settings as last written to it.
     pub(crate) practice: Practice,
     /// Changed since last saved.
     pub dirty: bool,
     last_save: Instant,
     /// Audio by asset, so clips that undo brings back can play.
-    sources: HashMap<String, Arc<StreamSource>>,
+    pub(crate) sources: HashMap<String, Arc<StreamSource>>,
     /// Files moved into the project folder: full path before, asset now.
     moved: HashMap<String, String>,
     /// Clips and effects that couldn't be loaded (audio missing, plugin
-    /// not installed), by track: kept so saving doesn't lose them.
+    /// not installed), by track: kept so saving doesn't lose them. Each
+    /// effect is kept with its place in the chain.
     pub(crate) missing_clips: HashMap<String, Vec<daw_project::Clip>>,
-    missing_fx: HashMap<String, Vec<daw_project::Effect>>,
+    pub(crate) missing_fx: HashMap<String, Vec<(usize, daw_project::Effect)>>,
     loading: Option<mpsc::Receiver<Result<Loaded, String>>>,
     pub dialog: Option<Dialog>,
     /// Watches the saved project's folder for other computers' changes.
@@ -196,7 +197,7 @@ impl App {
         }
     }
 
-    fn track_value(&self, t: &Track) -> daw_project::Track {
+    pub(crate) fn track_value(&self, t: &Track) -> daw_project::Track {
         let mut clips: Vec<daw_project::Clip> = (t.clips.iter())
             .map(|c| daw_project::Clip {
                 id: c.key.clone(),
@@ -231,14 +232,11 @@ impl App {
                 state: None,
             })
             .collect();
-        effects.extend(
-            self.proj
-                .missing_fx
-                .get(&t.key)
-                .into_iter()
-                .flatten()
-                .cloned(),
-        );
+        // Missing effects keep their places, so the chain's order in the
+        // document stays as the computers with them see it.
+        for (i, e) in self.proj.missing_fx.get(&t.key).into_iter().flatten() {
+            effects.insert((*i).min(effects.len()), e.clone());
+        }
         daw_project::Track {
             id: t.key.clone(),
             name: t.name.clone(),
@@ -248,6 +246,7 @@ impl App {
             solo: t.mix.solo,
             clips,
             effects,
+            frozen: t.frozen.clone(),
         }
     }
 
@@ -361,6 +360,8 @@ impl App {
         self.proj.missing_clips.clear();
         self.proj.missing_fx.clear();
         let mut problems = Vec::new();
+        // Tracks playing their frozen audio for missing plugins.
+        let mut frozen = Vec::new();
         let mut tracks = Vec::new();
         for pt in &p.tracks {
             let mut t = old.remove(&pt.id).unwrap_or_else(|| {
@@ -416,7 +417,7 @@ impl App {
             }
             let mut had: HashMap<String, crate::fx::FxSlot> =
                 t.fx.drain(..).map(|s| (s.key.clone(), s)).collect();
-            for pe in &pt.effects {
+            for (i, pe) in pt.effects.iter().enumerate() {
                 match had.remove(&pe.id) {
                     Some(mut s) => {
                         s.bypass = pe.bypass;
@@ -430,9 +431,24 @@ impl App {
                                 .missing_fx
                                 .entry(pt.id.clone())
                                 .or_default()
-                                .push(pe.clone());
+                                .push((i, pe.clone()));
                         }
                     },
+                }
+            }
+            t.frozen = pt.frozen.clone();
+            t.frozen_audio = None;
+            if let Some(f) = &pt.frozen
+                && self.proj.missing_fx.contains_key(&pt.id)
+            {
+                match self.source_for(&f.asset) {
+                    Ok(s) => {
+                        t.frozen_audio = Some(s);
+                        if f.fits(pt, p.rate) {
+                            frozen.push(pt.name.clone());
+                        }
+                    }
+                    Err(e) => problems.push(format!("frozen audio for {}: {e}", pt.name)),
                 }
             }
             tracks.push(t);
@@ -447,7 +463,11 @@ impl App {
             open_key.and_then(|k| self.tracks.iter().position(|t| t.key == k));
         self.proj.committed = self.project();
         if !problems.is_empty() {
-            self.message = Some(format!("Couldn't load {}", problems.join("; ")));
+            let mut m = format!("Couldn't load {}", problems.join("; "));
+            if !frozen.is_empty() {
+                m += &format!(". Playing frozen audio instead on {}", frozen.join(", "));
+            }
+            self.message = Some(m);
         }
         self.rebuild();
         self.send_loop();
@@ -515,6 +535,7 @@ impl App {
         self.proj.dirty = false;
         self.proj.last_save = Instant::now();
         self.watch_folder();
+        self.freeze_tracks();
         Ok(())
     }
 

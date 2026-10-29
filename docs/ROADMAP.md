@@ -216,9 +216,18 @@ latency compensated by reading the track's clips ahead; monitoring runs
 through the effects; effects carry over unchanged when the session
 changes, and are made again with the same settings when the device or
 sample rate changes. Effects and their settings are saved in the
-project (1.6). Still to do: frozen audio for missing plugins (with
-collaboration). Known limits: effects run inside the app, so a
-plugin that crashes while playing takes the app with it.*
+project (1.6). Frozen audio for missing plugins: each save renders every
+track with an effect switched on through its effects (in the background,
+with its own copies of the plugins, and only when the track's clips or
+effects changed), into the project's audio, so bundles and shared folders
+carry it. A computer missing one of the track's plugins plays that audio
+through the track's fader instead, keeping the effects and their settings
+in the project untouched and in their order. Known limits: effects run
+inside the app, so a plugin that crashes while playing takes the app with
+it. Frozen audio stops fitting once its clips are moved or the chain is
+changed, and the track then plays without the missing plugin until
+someone with every plugin saves; on such a track, changes to the other
+effects' settings are heard only after that.*
 - Plugin scanning, run out of process so a bad plugin can't crash the app.
   A plugin manager lets users enable, disable and rescan.
 - **VST 3 effects as track inserts** (instrument plugins come in Phase 3),

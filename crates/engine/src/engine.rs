@@ -15,6 +15,9 @@
 //! With device input ([`Engine::process_duplex`]), tracks can monitor
 //! their input at any time, and armed tracks record while the transport
 //! records and plays (not during the count-in); see [`crate::record`].
+//! Every armed track records at once, each from its own inputs. A punch
+//! range limits recording to part of the timeline, and playback can stop
+//! by itself at a frame (post-roll), both sample-accurate.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,7 +26,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::graph::{Graph, InputBlock, MAX_TRACKS, Mix, Rate};
 use crate::metronome::{self, Metronome, Voice};
-use crate::record::{BLOCK_FRAMES, RecBlock, Recorder, Take};
+use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
 use crate::stretch;
 use crate::time::{Frames, Ticks};
@@ -51,6 +54,18 @@ pub enum Command {
     SetMetronome(Metronome),
     /// Records armed tracks whenever playing (after any count-in).
     SetRecording(bool),
+    /// Records only input captured in `[start, end)`; `None` records
+    /// everything. Capture time is the timeline frame the input arrived
+    /// at, so a range meant for the timeline is sent later by the
+    /// interface's round trip (see [`Take::clip_start`]).
+    SetPunch(Option<(Frames, Frames)>),
+    /// Stops playback on reaching this frame (not during a count-in);
+    /// cleared when reached or on [`Command::Stop`].
+    StopAt(Option<Frames>),
+    /// Sends armed tracks' input that is not being recorded to the
+    /// recorder for retrospective capture. Use
+    /// [`Controller::set_capture`], which also tells the recorder.
+    SetCapture(bool),
     /// Sends this input channel to the tuner; `None` stops.
     SetTunerInput(Option<usize>),
     /// Practice speed (1 is normal, 0.5 to 1.5) and transpose in
@@ -84,6 +99,8 @@ pub struct Status {
     recording: AtomicBool,
     /// Recorded frames lost because the recording thread fell behind.
     rec_dropped: AtomicU64,
+    /// The same for input kept by retrospective capture.
+    capture_dropped: AtomicU64,
     /// Times playback has gone round the loop.
     loops: AtomicU64,
 }
@@ -107,6 +124,7 @@ impl Status {
                 .collect(),
             recording: AtomicBool::new(false),
             rec_dropped: AtomicU64::new(0),
+            capture_dropped: AtomicU64::new(0),
             loops: AtomicU64::new(0),
         }
     }
@@ -124,6 +142,12 @@ impl Status {
 
     pub fn rec_dropped(&self) -> u64 {
         self.rec_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Frames of input lost to retrospective capture because the
+    /// recording thread fell behind; recorded takes are unaffected.
+    pub fn capture_dropped(&self) -> u64 {
+        self.capture_dropped.load(Ordering::Relaxed)
     }
 
     /// Input peak (left, right) on a track since the last call. Mono
@@ -206,6 +230,7 @@ pub struct Controller {
     record_dir: Arc<Mutex<std::path::PathBuf>>,
     record_rate: Arc<Mutex<u32>>,
     takes: Arc<Mutex<Vec<Take>>>,
+    capture: Arc<CaptureShared>,
     status: Arc<Status>,
     max_block: usize,
     from_tuner: Consumer<f32>,
@@ -242,6 +267,26 @@ impl Controller {
     /// The folder new takes are written to.
     pub fn set_record_dir(&mut self, dir: impl Into<std::path::PathBuf>) {
         *self.record_dir.lock().unwrap() = dir.into();
+    }
+
+    /// Keeps the last `seconds` of armed tracks' input that was not
+    /// recorded, for [`keep_capture`](Self::keep_capture); 0 turns
+    /// retrospective capture off and forgets what was kept.
+    pub fn set_capture(&mut self, seconds: u32) -> Result<(), Command> {
+        self.capture.seconds.store(seconds, Ordering::Relaxed);
+        self.send(Command::SetCapture(seconds > 0))
+    }
+
+    /// Asks the recorder to write what retrospective capture holds as
+    /// takes; they arrive through [`finished_takes`](Self::finished_takes).
+    pub fn keep_capture(&self) {
+        self.capture.keep.store(true, Ordering::Relaxed);
+    }
+
+    /// Frames of input retrospective capture holds, on the track with
+    /// the most.
+    pub fn captured_frames(&self) -> usize {
+        self.capture.held.load(Ordering::Relaxed) as usize
     }
 
     /// Takes finished since the last call.
@@ -307,6 +352,10 @@ pub struct Engine {
     /// Per-block track peaks, preallocated.
     peaks: Vec<(f32, f32)>,
     recording: bool,
+    /// See [`Command::SetPunch`].
+    punch: Option<(i64, i64)>,
+    stop_at: Option<i64>,
+    capture: bool,
     to_recorder: Producer<RecBlock>,
     tuner_input: Option<usize>,
     to_tuner: Producer<f32>,
@@ -324,9 +373,10 @@ pub struct Engine {
 const QUEUE: usize = 1024;
 /// Chunk messages between the disk thread and the audio thread.
 const DISK_QUEUE: usize = 4096;
-/// Recorded blocks in flight: about 20 seconds of one stereo track at
-/// 48 kHz, shared between armed tracks, before input is lost.
-const REC_QUEUE: usize = 8192;
+/// Recorded blocks in flight, shared between armed tracks, before input
+/// is lost: about 85 seconds of one stereo track at 48 kHz, or 10 seconds
+/// each of 16 mono tracks. Preallocated, about 34 MB.
+const REC_QUEUE: usize = 32_768;
 /// Tuner samples in flight: about a third of a second at 48 kHz, more
 /// than the UI needs between frames.
 const TUNER_QUEUE: usize = 16_384;
@@ -347,6 +397,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let record_dir = Arc::new(Mutex::new(std::env::temp_dir().join("daw-takes")));
     let record_rate = Arc::new(Mutex::new(48_000));
     let takes = Arc::new(Mutex::new(Vec::new()));
+    let capture = Arc::new(CaptureShared::default());
     let (tuner_tx, tuner_rx) = RingBuffer::new(TUNER_QUEUE);
     let recorder = Recorder::new(
         rec_rx,
@@ -354,6 +405,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
         record_dir.clone(),
         record_rate.clone(),
         takes.clone(),
+        capture.clone(),
     );
     (
         Controller {
@@ -365,6 +417,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             record_dir,
             record_rate,
             takes,
+            capture,
             status: status.clone(),
             max_block,
             from_tuner: tuner_rx,
@@ -386,6 +439,9 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             click_buf: vec![0.0; max_block],
             peaks: vec![(0.0, 0.0); MAX_TRACKS],
             recording: false,
+            punch: None,
+            stop_at: None,
+            capture: false,
             to_recorder: rec_tx,
             tuner_input: None,
             to_tuner: tuner_tx,
@@ -445,6 +501,7 @@ impl Engine {
                 }
                 Command::Stop => {
                     self.playing = false;
+                    self.stop_at = None;
                     if let Some(to) = self.count_in_to.take() {
                         self.pos = to;
                     }
@@ -482,6 +539,11 @@ impl Engine {
                 }
                 Command::SetMetronome(m) => self.metronome = m,
                 Command::SetRecording(on) => self.recording = on,
+                Command::SetPunch(p) => {
+                    self.punch = p.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
+                }
+                Command::StopAt(f) => self.stop_at = f.map(|f| f.0),
+                Command::SetCapture(on) => self.capture = on,
                 Command::SetTunerInput(ch) => self.tuner_input = ch,
                 Command::SetPractice { speed, semitones } => {
                     self.speed = speed.clamp(stretch::SPEED_RANGE.0, stretch::SPEED_RANGE.1);
@@ -550,19 +612,7 @@ impl Engine {
         };
         self.input_meters(inp(0..n));
         if !self.playing {
-            // Stopped: monitored inputs still sound.
-            let mut done = 0;
-            while done < n {
-                let r = done..(done + self.max_block).min(n);
-                self.render(
-                    inp(r.clone()),
-                    &mut left[r.clone()],
-                    &mut right[r.clone()],
-                    false,
-                    None,
-                );
-                done = r.end;
-            }
+            self.render_stopped(input, channels, left, right, 0);
         }
         if !self.playing || !self.stretching() {
             self.stretch_reset = true;
@@ -586,6 +636,9 @@ impl Engine {
                 }
                 len = len.min((end - self.pos) as usize);
             }
+            if let Some(stop) = self.stop_at.filter(|&s| s > self.pos && !counting) {
+                len = len.min((stop - self.pos) as usize);
+            }
             let range = done..done + len;
             let block = inp(range.clone());
             self.render(
@@ -595,9 +648,7 @@ impl Engine {
                 !counting,
                 None,
             );
-            if !counting && self.recording {
-                self.record(block, len);
-            }
+            self.record(block, len, counting);
             if counting || self.metronome.enabled {
                 self.clicks(len);
                 let clicks = &self.click_buf[..len];
@@ -623,6 +674,12 @@ impl Engine {
             done += len;
             if self.count_in_to == Some(self.pos) {
                 self.count_in_to = None;
+            } else if !counting && self.stop_at == Some(self.pos) {
+                // Post-roll done: the rest of the block is as if stopped.
+                self.playing = false;
+                self.stop_at = None;
+                self.voice = None;
+                self.render_stopped(input, channels, left, right, done);
             } else if let Some((start, end)) = self.looping
                 && !counting
                 && self.pos == end
@@ -634,9 +691,86 @@ impl Engine {
         self.publish();
     }
 
-    /// Sends `len` frames of each armed track's input, from `pos`, to the
-    /// recording thread.
-    fn record(&mut self, input: InputBlock, len: usize) {
+    /// Renders frames `from..` of the block while stopped: monitored
+    /// inputs still sound.
+    fn render_stopped(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        left: &mut [f32],
+        right: &mut [f32],
+        from: usize,
+    ) {
+        let n = left.len().min(right.len());
+        let mut done = from;
+        while done < n {
+            let r = done..(done + self.max_block).min(n);
+            let block = InputBlock {
+                data: input
+                    .get(r.start * channels..(r.end * channels).min(input.len()))
+                    .unwrap_or(&[]),
+                channels,
+            };
+            self.render(
+                block,
+                &mut left[r.clone()],
+                &mut right[r.clone()],
+                false,
+                None,
+            );
+            done = r.end;
+        }
+    }
+
+    /// Sends the `len` frames of armed tracks' input played from `pos`
+    /// to the recording thread: what is inside the punch range (all of
+    /// it without one) to be recorded, unless counting in, and the rest
+    /// for retrospective capture if that is on.
+    fn record(&mut self, input: InputBlock, len: usize, counting: bool) {
+        let (pos, end) = (self.pos, self.pos + len as i64);
+        let (lo, hi) = match self.punch {
+            _ if counting || !self.recording => (end, end),
+            Some((a, b)) => (a.clamp(pos, end), b.clamp(pos, end).max(a.clamp(pos, end))),
+            None => (pos, end),
+        };
+        if self.capture {
+            self.send_input(input, 0, (lo - pos) as usize, pos, Kind::Capture);
+        }
+        self.send_input(
+            input,
+            (lo - pos) as usize,
+            (hi - lo) as usize,
+            lo,
+            Kind::Record,
+        );
+        if let Some((_, out)) = self.punch
+            && self.recording
+            && !counting
+            && pos < out
+            && out <= end
+        {
+            // Punched out: the takes end here, not when playback stops.
+            self.send_input(input, 0, 0, out, Kind::End);
+        }
+        if self.capture {
+            self.send_input(
+                input,
+                (hi - pos) as usize,
+                (end - hi) as usize,
+                hi,
+                Kind::Capture,
+            );
+        }
+    }
+
+    /// Sends `len` frames of each armed track's input, from frame `from`
+    /// of the block, to the recording thread as `kind`, the first at
+    /// timeline frame `at`. With `Kind::End`, sends one empty block per
+    /// track.
+    fn send_input(&mut self, input: InputBlock, from: usize, len: usize, at: i64, kind: Kind) {
+        if len == 0 && kind != Kind::End {
+            return;
+        }
         let Some(g) = &self.graph else { return };
         for (ti, t) in g.tracks.iter().enumerate() {
             let Some(sel) = t.input.filter(|_| t.arm) else {
@@ -644,24 +778,30 @@ impl Engine {
             };
             let ch = sel.channels();
             let mut done = 0;
-            while done < len {
-                let run = (len - done).min(BLOCK_FRAMES);
+            loop {
+                let run = (len - done).min(BLOCK_SAMPLES / ch);
                 let mut b = RecBlock::EMPTY;
                 b.track = ti as u16;
                 b.channels = ch as u8;
                 b.len = run as u16;
-                b.at = self.pos + done as i64;
+                b.kind = kind;
+                b.at = at + done as i64;
                 for i in 0..run {
                     for c in 0..ch {
-                        b.samples[i * ch + c] = input.get(done + i, sel.first + c);
+                        b.samples[i * ch + c] = input.get(from + done + i, sel.first + c);
                     }
                 }
                 if self.to_recorder.push(b).is_err() {
-                    self.status
-                        .rec_dropped
-                        .fetch_add(run as u64, Ordering::Relaxed);
+                    let lost = match kind {
+                        Kind::Record | Kind::End => &self.status.rec_dropped,
+                        Kind::Capture => &self.status.capture_dropped,
+                    };
+                    lost.fetch_add(run as u64, Ordering::Relaxed);
                 }
                 done += run;
+                if done >= len {
+                    break;
+                }
             }
         }
     }

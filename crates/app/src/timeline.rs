@@ -1402,7 +1402,7 @@ impl Timeline {
         let (top, bottom) = (ruler.top() + 14.0, ruler.top() + 26.0);
         let painter = painter.with_clip_rect(ruler);
         let label = |x: f32, text: String, colour: Color32| {
-            let g = painter.layout_no_wrap(text, FontId::proportional(10.0), c.bg);
+            let g = painter.layout_no_wrap(text, look.font(10.0), c.bg);
             let r = Rect::from_min_size(pos2(x + 1.0, top), g.size() + vec2(6.0, 0.0));
             painter.rect_filled(r, look.radius.min(3.0), colour);
             painter.galley(r.min + vec2(3.0, 0.0), g, c.bg);
@@ -2595,7 +2595,7 @@ impl Timeline {
                 name_rect.left_center() + vec2(16.0, 0.0),
                 Align2::LEFT_CENTER,
                 lane.name,
-                FontId::proportional(look.body),
+                look.font(look.body),
                 tc.text,
             );
             lanes.line_segment(
@@ -2703,7 +2703,7 @@ impl Timeline {
                     c.name()
                 };
                 let at = r.left_top() + vec2(4.0 + HANDLE, 2.0);
-                let font = FontId::proportional(look.small);
+                let font = look.font(look.small);
                 if c.muted {
                     lanes.text(at, Align2::LEFT_TOP, name, font, tc.text_dim);
                 } else {
@@ -2740,7 +2740,7 @@ impl Timeline {
                 pos2(left + 10.0, rect.top() + RULER + 20.0),
                 Align2::LEFT_CENTER,
                 "No tracks yet",
-                FontId::proportional(look.body),
+                look.font(look.body),
                 tc.text_dim,
             );
         }
@@ -2756,11 +2756,7 @@ impl Timeline {
                 [pos2(x, rect.top()), pos2(x, rect.bottom())],
                 Stroke::new(look.line, flag.gamma_multiply(0.6)),
             );
-            let g = painter.layout_no_wrap(
-                m.name.clone(),
-                FontId::proportional(look.small),
-                tc.on_accent,
-            );
+            let g = painter.layout_no_wrap(m.name.clone(), look.font(look.small), tc.on_accent);
             let label = Rect::from_min_size(pos2(x, rect.top()), g.size() + vec2(8.0, 2.0));
             painter.rect_filled(label, look.radius.min(3.0), flag);
             painter.galley(label.min + vec2(4.0, 1.0), g, tc.on_accent);
@@ -2806,11 +2802,8 @@ impl Timeline {
                 on.rect_stroke(r, 3.0, Stroke::new(1.5, tc.text), StrokeKind::Outside);
             }
             if hover.is_some_and(|h| r.expand(2.0).contains(h)) {
-                let g = painter.layout_no_wrap(
-                    p.text.clone(),
-                    FontId::proportional(look.small + 1.0),
-                    tc.text,
-                );
+                let g =
+                    painter.layout_no_wrap(p.text.clone(), look.font(look.small + 1.0), tc.text);
                 let tip =
                     Rect::from_min_size(r.right_top() + vec2(4.0, 0.0), g.size() + vec2(8.0, 4.0));
                 painter.rect_filled(tip, look.radius.min(6.0), tc.raised);

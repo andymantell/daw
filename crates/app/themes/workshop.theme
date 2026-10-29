@@ -21,7 +21,8 @@ body = 13.5
 small = 11
 heading = 18
 numerals = 17
-numerals_face = mono
+font = ibm-plex-sans-condensed
+numerals_font = ibm-plex-mono
 
 [waveform]
 style = filled

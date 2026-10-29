@@ -57,7 +57,8 @@ README there), egui's style is made from the active one, and the
 timeline, waveforms, meters, mixer strips, tuner and status messages read
 only theme colours. All four themes ship with both variants; the light
 Valve Glow and Workshop and the dark Vellum and Tidal were derived, not
-mocked up. A contrast test runs in CI. Bundled typefaces, time-of-day
+mocked up. Each theme's typefaces from the mock-ups are bundled (SIL
+OFL 1.1). A contrast test runs in CI. Time-of-day
 switching and per-theme designs for dense views are still to come.
 
 ## Still to design

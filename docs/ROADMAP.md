@@ -506,8 +506,9 @@ setting (so undo and merging work on them). Tracks with only built-in
 effects need no frozen audio. The Room reverb also loads your own
 impulse response files (copied into the project), and credits the
 recorded rooms that come with the app where they are chosen and in Help
-→ Sound credits. Fifteen recorded rooms come with it (twelve real
-spaces and three spring reverbs, licences checked in decision 0011).
+→ Sound credits. Twenty-one recorded rooms come with it (eighteen
+real spaces, indoors and out, and three spring reverbs; licences
+checked in decision 0011).
 Still to do: amp and cabinet simulation, the neural amp model player
 and the tuner as an insert.*
 - EQ, compressor, gate, limiter, algorithmic and convolution reverb, delay.

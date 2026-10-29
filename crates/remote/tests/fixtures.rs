@@ -148,7 +148,11 @@ fn fixtures_match_the_protocol() {
             std::fs::write(&path, &text).unwrap();
             continue;
         }
-        if std::fs::read_to_string(&path).ok().as_deref() != Some(&text) {
+        // Line endings are left to git on each platform.
+        let on_disk = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
+        if on_disk != text {
             stale.push(name);
         }
     }

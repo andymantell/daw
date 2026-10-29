@@ -1,0 +1,3 @@
+# The protocol fixtures are compared byte for byte by tests on every
+# platform (crates/remote/tests/fixtures.rs).
+crates/remote/tests/fixtures/*.json text eol=lf

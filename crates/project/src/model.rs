@@ -113,3 +113,53 @@ pub struct Marker {
     pub bar: i64,
     pub name: String,
 }
+
+/// One person's practice settings. Each computer keeps its own in the
+/// document, so a student slowing the song down or muting the teacher's
+/// riff changes nothing for the teacher.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Practice {
+    /// Percent.
+    pub speed_pct: f64,
+    pub semitones: i32,
+    pub cents: i32,
+    /// Whether the loop is on. The loop's bars are the song's.
+    pub looping: bool,
+    /// Ids of the tracks silenced to play the part yourself.
+    pub muted: Vec<String>,
+    pub trainer: TrainerSettings,
+}
+
+impl Default for Practice {
+    fn default() -> Practice {
+        Practice {
+            speed_pct: 100.0,
+            semitones: 0,
+            cents: 0,
+            looping: false,
+            muted: Vec::new(),
+            trainer: TrainerSettings::default(),
+        }
+    }
+}
+
+/// The tempo trainer: speed goes up by `step` percent every `every`
+/// loops, up to `target` percent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrainerSettings {
+    pub on: bool,
+    pub step: f64,
+    pub every: u64,
+    pub target: f64,
+}
+
+impl Default for TrainerSettings {
+    fn default() -> TrainerSettings {
+        TrainerSettings {
+            on: false,
+            step: 5.0,
+            every: 2,
+            target: 100.0,
+        }
+    }
+}

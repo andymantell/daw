@@ -21,7 +21,7 @@ use daw_engine::graph::Mix;
 use daw_engine::import;
 use daw_engine::stream::StreamSource;
 use daw_engine::time::Frames;
-use daw_project::{DOC_FILE, Project, ProjectDoc, ProjectFolder};
+use daw_project::{DOC_FILE, Practice, Project, ProjectDoc, ProjectFolder};
 use eframe::egui::{self, RichText, ViewportCommand};
 
 use crate::timeline::{Clip, Marker};
@@ -63,6 +63,8 @@ pub struct Proj {
     pub folder: Option<ProjectFolder>,
     /// The project as last written to the document.
     committed: Project,
+    /// This computer's practice settings as last written to it.
+    pub(crate) practice: Practice,
     /// Changed since last saved.
     pub dirty: bool,
     last_save: Instant,
@@ -101,6 +103,7 @@ impl Proj {
             doc,
             folder: None,
             committed,
+            practice: Practice::default(),
             dirty: false,
             last_save: Instant::now(),
             sources: HashMap::new(),
@@ -205,6 +208,7 @@ impl App {
     /// Writes any change to the document, unless one is under way (a
     /// button held, text being typed) and `force` isn't set.
     pub(crate) fn sync_doc(&mut self, ctx: &egui::Context, force: bool) {
+        self.sync_practice(ctx, force);
         if !force && (ctx.input(|i| i.pointer.any_down()) || ctx.egui_wants_keyboard_input()) {
             return;
         }
@@ -478,7 +482,7 @@ impl App {
     }
 
     /// Saves the project as a new folder at `dir`.
-    fn save_in(&mut self, ctx: &egui::Context, dir: &Path) -> Result<(), String> {
+    pub(crate) fn save_in(&mut self, ctx: &egui::Context, dir: &Path) -> Result<(), String> {
         if dir.exists() {
             let name = dir.file_name().unwrap_or_default().to_string_lossy();
             return Err(format!("There is already a project called {name}."));
@@ -506,7 +510,7 @@ impl App {
     }
 
     /// Starts afresh with an empty, unsaved project.
-    fn new_project(&mut self) {
+    pub(crate) fn new_project(&mut self) {
         self.send(Command::Stop);
         self.send(Command::Seek(Frames(0)));
         self.tracks.clear();
@@ -517,6 +521,7 @@ impl App {
         });
         self.proj.committed = self.project();
         self.proj.doc.set_quietly(&self.proj.committed);
+        self.apply_practice();
         self.proj.dirty = false;
     }
 
@@ -555,6 +560,7 @@ impl App {
                 proj.device_version = proj.doc.version();
                 self.proj = proj;
                 self.apply(self.proj.doc.get());
+                self.apply_practice();
                 self.watch_folder();
                 if !l.failed.is_empty() {
                     self.message = Some(format!("Couldn't open {}", l.failed.join("; ")));

@@ -17,6 +17,7 @@
 mod export;
 mod fx;
 mod perf;
+mod practice;
 mod project;
 mod share;
 mod timeline;

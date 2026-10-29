@@ -14,7 +14,7 @@ mod model;
 
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
-pub use model::{Clip, Effect, EffectState, Marker, Project, Track};
+pub use model::{Clip, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

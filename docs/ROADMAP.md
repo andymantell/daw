@@ -236,8 +236,10 @@ the transport, the metronome follows the slowed beat, and loops wrap
 smoothly; nothing records while speed or pitch is changed. A tempo
 trainer raises the speed by a step every N loops up to a target.
 Markers name sections on the timeline, and a section can be looped from
-its marker's menu (1.5). Still to do: saving the practice settings in
-projects. Tuning presets can measure a track's
+its marker's menu (1.5). Speed, transpose, practice mute, loop on/off
+and the tempo trainer are saved in the project, each computer keeping
+its own so one person's practice doesn't change another's (the loop's
+bars stay the song's, shared). Tuning presets can measure a track's
 offset from concert pitch (spectral peaks against the tuner's
 reference) and offer the fine-pitch shift that corrects it; whole-step
 tunings such as E♭ read as in tune, so those stay with the presets.*

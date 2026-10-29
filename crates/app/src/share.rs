@@ -190,38 +190,21 @@ impl App {
         }
     }
 
-    /// File menu items for bundles.
-    pub(crate) fn share_menu(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let idle = self.proj.bundle_job.is_none();
-        if ui
-            .add_enabled(idle, egui::Button::new("Export bundle…"))
-            .on_hover_text("The project and its audio in one file, to send by any means")
-            .clicked()
-        {
-            ui.close();
-            self.export_bundle(&ctx);
-        }
-        if ui
-            .add_enabled(idle, egui::Button::new("Import bundle…"))
-            .on_hover_text("Merges into your copy of the project if you have one")
-            .clicked()
-        {
-            ui.close();
-            let picked = rfd::FileDialog::new()
-                .set_title("Import bundle")
-                .set_directory(user_dir())
-                .add_filter("Project bundle", &[EXT])
-                .pick_file();
-            if let Some(path) = picked {
-                self.import_bundle(path);
-            }
+    /// Asks for a bundle and imports it.
+    pub(crate) fn pick_bundle(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .set_title("Import bundle")
+            .set_directory(user_dir())
+            .add_filter("Project bundle", &[EXT])
+            .pick_file();
+        if let Some(path) = picked {
+            self.import_bundle(path);
         }
     }
 
     /// Saves the project, asks where, and writes its bundle in the
     /// background.
-    fn export_bundle(&mut self, ctx: &egui::Context) {
+    pub(crate) fn export_bundle(&mut self, ctx: &egui::Context) {
         let Some(folder) = self.proj.folder.clone() else {
             self.message = Some("Save the project first, then export it as a bundle.".into());
             self.save_or_ask(ctx);

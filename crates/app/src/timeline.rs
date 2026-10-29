@@ -18,6 +18,8 @@ use eframe::egui::{
     StrokeKind, pos2, vec2,
 };
 
+use crate::commands::Cmd;
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_id() -> u64 {
@@ -428,6 +430,8 @@ pub struct View<'a> {
     pub can_undo: bool,
     pub can_redo: bool,
     pub pins: &'a [Pin],
+    /// Commands for the timeline, run since it was last drawn.
+    pub commands: &'a [Cmd],
 }
 
 /// What the app should do after the timeline is drawn.
@@ -857,47 +861,34 @@ impl Timeline {
         Some(Focus::Clip(order[next]))
     }
 
-    /// Keyboard shortcuts, when no text field has the keyboard. With a
-    /// clip or marker focused, the arrow keys edit it.
+    /// The commands run on the timeline (by key, menu or search), and
+    /// its own keys when no text field has the keyboard. With a clip or
+    /// marker focused, the commands and arrow keys act on it.
     fn keys(&mut self, ctx: &egui::Context, song: &mut Song, view: &View, out: &mut Outcome) {
         let focused = self.has_keyboard(ctx);
-        if ctx.egui_wants_keyboard_input() && !focused {
-            return;
-        }
-        let shift_cmd = Modifiers::COMMAND | Modifiers::SHIFT;
-        if ctx.input_mut(|i| {
-            i.consume_key(shift_cmd, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y)
-        }) {
-            out.redo = true;
-        }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Z)) {
-            out.undo = true;
-        }
-        if ctx.input_mut(|i| {
-            i.consume_key(Modifiers::NONE, Key::Delete)
-                || i.consume_key(Modifiers::NONE, Key::Backspace)
-        }) {
-            if let Some(i) = self.focused_marker(song).filter(|_| focused) {
-                song.markers.remove(i);
-            } else {
-                if focused {
-                    self.select_focused();
-                    self.focus_next = self.neighbour(song);
+        for cmd in view.commands {
+            match cmd {
+                Cmd::Delete => {
+                    if let Some(i) = self.focused_marker(song).filter(|_| focused) {
+                        song.markers.remove(i);
+                    } else {
+                        if focused {
+                            self.select_focused();
+                            self.focus_next = self.neighbour(song);
+                        }
+                        out.changed |= self.delete_selected(song);
+                    }
                 }
-                out.changed |= self.delete_selected(song);
+                Cmd::Split => {
+                    if focused {
+                        self.select_focused();
+                    }
+                    out.changed |= self.split_at(song, view.playhead);
+                }
+                Cmd::Marker => self.add_marker(song, Self::bar_at(view.map, view.playhead)),
+                Cmd::ClearSelection => self.selected.clear(),
+                _ => {}
             }
-        }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
-            if focused {
-                self.select_focused();
-            }
-            out.changed |= self.split_at(song, view.playhead);
-        }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
-            self.add_marker(song, Self::bar_at(view.map, view.playhead));
-        }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            self.selected.clear();
         }
         if !focused {
             return;

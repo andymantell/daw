@@ -384,7 +384,7 @@ Scripted merge tests run people's edits through live updates, bundles
 checking that every copy agrees and nothing is lost. Every control has
 a screen-reader name, checked by a test that reads the accessibility
 tree; the transport works from the keyboard (Space, Home, R, L, K, C,
-Tab and Enter), listed under Help → Keyboard shortcuts. Every clip and
+Tab and Enter), listed under Settings → Key commands. Every clip and
 marker on the timeline is an entry in that tree too, named with its
 track and bars ("Take 2 on Guitar, bar 3 to bar 5"), reached with Tab,
 and edited with the arrow keys: move by a beat or bar, trim either

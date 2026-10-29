@@ -21,6 +21,7 @@ daw-effects = { path = "../effects" }
 daw-engine = { path = "../engine" }
 daw-plugins = { path = "../plugins" }
 daw-project = { path = "../project" }
+daw-remote = { path = "../remote" }
 eframe = "0.37.0"
 hound = "3.5.1"
 minisign-verify = "0.3.0"

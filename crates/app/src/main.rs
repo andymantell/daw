@@ -29,6 +29,7 @@ mod perf;
 mod practice;
 mod project;
 mod recording;
+mod remote;
 mod share;
 mod snapshots;
 mod tempo;
@@ -229,6 +230,8 @@ struct App {
     /// This install's identity, and the people windows.
     me: daw_project::Identity,
     people: people::People,
+    /// The phone remote: its window and the phones connected.
+    remote: remote::Remote,
 }
 
 /// How often to look for a lost device.
@@ -307,6 +310,7 @@ impl App {
             }),
             me: people::load_identity(),
             people: people::People::default(),
+            remote: remote::Remote::load(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -683,6 +687,7 @@ impl App {
             _ => 0,
         };
         let mut any = false;
+        let mut keys = Vec::new();
         for take in takes {
             if let Some(e) = &take.error {
                 self.message = Some(format!("Recording problem: {e}"));
@@ -691,25 +696,30 @@ impl App {
                 continue;
             }
             match self.place_take(&take, offset) {
-                Ok(()) => any = true,
+                Ok(k) => {
+                    any = true;
+                    keys.push(k);
+                }
                 Err(e) => self.message = Some(e),
             }
         }
+        // For "undo last take" from a phone.
+        self.remote.note_takes(keys);
         any
     }
 
-    fn place_take(&mut self, take: &Take, offset: u32) -> Result<(), String> {
+    /// Returns the track's and the new clip's keys.
+    fn place_take(&mut self, take: &Take, offset: u32) -> Result<(String, String), String> {
         let source = StreamSource::open(&take.path)?;
         let t = self
             .tracks
             .get_mut(take.track)
             .ok_or("a take arrived for a track that is gone")?;
         let start = take.clip_start(Frames(offset as i64)).0;
-        timeline::add_take(
-            &mut t.clips,
-            Clip::new(source, take.path.clone(), start, None),
-        );
-        Ok(())
+        let clip = Clip::new(source, take.path.clone(), start, None);
+        let keys = (t.key.clone(), clip.key.clone());
+        timeline::add_take(&mut t.clips, clip);
+        Ok(keys)
     }
 
     /// The performance check, and its actions.
@@ -1670,7 +1680,7 @@ fn settings_path() -> PathBuf {
 
 /// Per-user settings folder: `%APPDATA%\<name>` on Windows,
 /// `~/.config/<name>` elsewhere.
-fn config_dir() -> PathBuf {
+pub(crate) fn config_dir() -> PathBuf {
     std::env::var_os("APPDATA")
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME"))
         .map(PathBuf::from)
@@ -1941,6 +1951,14 @@ impl eframe::App for App {
                     ] {
                         self.menu_item(ui, c);
                     }
+                    if ui
+                        .button("Phone remote…")
+                        .on_hover_text("Record and run the transport from your phone")
+                        .clicked()
+                    {
+                        self.remote.open = true;
+                        ui.close();
+                    }
                 });
                 ui.menu_button("Practice", |ui| {
                     for c in [Cmd::Tuner, Cmd::LessonNotes, Cmd::Comments] {
@@ -2100,6 +2118,7 @@ impl eframe::App for App {
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
+        self.remote_tick(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.sync_doc(&ctx, false);

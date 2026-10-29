@@ -99,6 +99,30 @@ jobs:
           rustup target add x86_64-apple-darwin
           cargo build --workspace --target x86_64-apple-darwin
 
+  # The phone remote's Android app (android/README.md): the shared
+  # core's tests, then a debug package to sideload on the owner's phone
+  # (docs/review-queue/2.2-phone-remote.md).
+  android:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Core tests and the app package
+        working-directory: android
+        run: ./gradlew --no-daemon test assembleDebug
+      - name: Upload the Android app
+        uses: actions/upload-artifact@v4
+        with:
+          name: daw-remote-android
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   licences:
     needs: changes
     if: needs.changes.outputs.code == 'true'

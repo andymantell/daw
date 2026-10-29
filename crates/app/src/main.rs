@@ -1993,7 +1993,7 @@ impl eframe::App for App {
                     }
                 });
                 ui.menu_button("Practice", |ui| {
-                    for c in [Cmd::Tuner, Cmd::LessonNotes, Cmd::Comments] {
+                    for c in [Cmd::Tuner, Cmd::Meters, Cmd::LessonNotes, Cmd::Comments] {
                         self.menu_item(ui, c);
                     }
                 });

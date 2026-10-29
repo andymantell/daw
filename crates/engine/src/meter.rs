@@ -162,7 +162,7 @@ impl Loudness {
 
     /// Takes interleaved stereo frames.
     pub fn push(&mut self, stereo: &[f32]) {
-        for f in stereo.chunks_exact(2) {
+        for f in stereo.as_chunks::<2>().0 {
             let mut p = 0.0;
             for (c, &x) in f.iter().enumerate() {
                 let [a, b] = &mut self.filters[c];
@@ -349,7 +349,7 @@ impl Default for TruePeak {
 impl TruePeak {
     /// Takes interleaved stereo frames.
     pub fn push(&mut self, stereo: &[f32]) {
-        for f in stereo.chunks_exact(2) {
+        for f in stereo.as_chunks::<2>().0 {
             self.at = (self.at + 11) % 12;
             for (c, &x) in f.iter().enumerate() {
                 let h = &mut self.history[c];
@@ -394,7 +394,7 @@ impl Correlation {
     }
 
     pub fn push(&mut self, stereo: &[f32]) {
-        for f in stereo.chunks_exact(2) {
+        for f in stereo.as_chunks::<2>().0 {
             let (l, r) = (f[0] as f64, f[1] as f64);
             self.lr = self.lr * self.decay + l * r;
             self.ll = self.ll * self.decay + l * l;
@@ -525,7 +525,7 @@ impl Analyser {
         self.loudness.push(stereo);
         self.true_peak.push(stereo);
         self.correlation.push(stereo);
-        for f in stereo.chunks_exact(2) {
+        for f in stereo.as_chunks::<2>().0 {
             self.sample_peak[0] = self.sample_peak[0].max(f[0].abs());
             self.sample_peak[1] = self.sample_peak[1].max(f[1].abs());
             self.recent.push(0.5 * (f[0] + f[1]));

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use bundle::{broken, bundle};
 use daw_engine::graph::Insert;
 use daw_plugins::host::{HANG_TIMEOUT, Host};
-use daw_plugins::{Plugin, PluginState, Processor};
+use daw_plugins::{Plugin, PluginState};
 use daw_test_plugin::{LATENCY, NAME, PROCESSOR_CID};
 
 const RATE: f64 = 48_000.0;
@@ -107,9 +107,24 @@ fn a_live_plugin_runs_one_block_behind_and_never_waits() {
         "{:?}",
         &out[delay..]
     );
-    if let Processor::Remote(p) = &Processor::Remote(fx) {
-        assert_eq!(p.late(), 0);
+    assert_eq!(plugin.late(), 0);
+
+    // Bigger blocks than it was set up for move the output further
+    // behind rather than playing silence every block.
+    let big = BLOCK * 2;
+    let mut out = Vec::new();
+    for _ in 0..6 {
+        let (mut a, mut b) = (vec![1.0; big], vec![1.0; big]);
+        fx.process(&mut a, &mut b);
+        out.extend(a);
+        std::thread::sleep(Duration::from_millis(12));
     }
+    assert_eq!(plugin.poll().latency, LATENCY + big as u32);
+    assert!(
+        out[2 * big..].iter().all(|&x| x == 1.0),
+        "{:?}",
+        &out[2 * big..]
+    );
     assert_eq!(plugin.late(), 0);
 }
 

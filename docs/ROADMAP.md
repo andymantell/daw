@@ -483,6 +483,16 @@ still to come. Checks are in `docs/review-queue/2.1-fades-grid-snap.md`.*
 - Mixer view inside the main window, and as a full window.
 
 ### 2.4 Plugin hosting — depth (L)
+*Started 2026-10-29, at risk. Done so far: a choice per plugin (Settings
+→ Plugins) of running in the app, in a helper process shared with other
+plugins, or in a helper process of its own; the helper is a copy of the
+app talking over pipes, runs one audio block behind (reported as latency
+and made up for), and a plugin that crashes or hangs there is marked
+"Stopped" with a Restart button while the app plays on; presets as
+`.vstpreset` files, the user's own saved under the settings folder and
+the plugin's own found in the standard preset folders, plus the plugin's
+program lists, all from a Presets menu on each effect. Owner checks in
+`docs/review-queue/2.4-plugin-process.md`.*
 - Sandboxing options per plugin: in-process, shared host process, or own
   process.
 - Multi-output plugins, sidechain inputs to plugins, bus layouts.

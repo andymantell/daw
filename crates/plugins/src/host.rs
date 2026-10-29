@@ -489,6 +489,7 @@ impl Host {
                 let state = Arc::new(ProcState {
                     gone: AtomicBool::new(false),
                     late: AtomicU64::new(0),
+                    extra: AtomicU32::new(block as u32),
                 });
                 late = Some(state.clone());
                 let side = IoSide {
@@ -518,7 +519,6 @@ impl Host {
             instance,
             params: Mutex::new(params),
             latency: AtomicU32::new(latency),
-            extra: live_block.unwrap_or(0) as u32,
             editor_open: AtomicBool::new(false),
             late,
         };
@@ -570,8 +570,6 @@ pub struct RemotePlugin {
     instance: Arc<Instance>,
     params: Mutex<Vec<Param>>,
     latency: AtomicU32,
-    /// Frames the live processor adds on top.
-    extra: u32,
     editor_open: AtomicBool,
     late: Option<Arc<ProcState>>,
 }
@@ -586,7 +584,7 @@ impl RemotePlugin {
     }
 
     pub fn latency(&self) -> u32 {
-        self.latency.load(Ordering::Relaxed) + self.extra
+        self.latency.load(Ordering::Relaxed) + self.extra()
     }
 
     pub fn failure(&self) -> Option<String> {
@@ -599,6 +597,13 @@ impl RemotePlugin {
         self.late
             .as_ref()
             .map_or(0, |s| s.late.load(Ordering::Relaxed))
+    }
+
+    /// Frames the live processor adds on top of the plugin's own delay.
+    fn extra(&self) -> u32 {
+        self.late
+            .as_ref()
+            .map_or(0, |s| s.extra.load(Ordering::Relaxed))
     }
 
     pub fn poll(&mut self) -> Status {
@@ -619,7 +624,7 @@ impl RemotePlugin {
         self.latency.store(status.latency, Ordering::Relaxed);
         self.editor_open
             .store(status.editor_open, Ordering::Relaxed);
-        status.latency += self.extra;
+        status.latency += self.extra();
         status
     }
 
@@ -706,6 +711,9 @@ struct ProcState {
     gone: AtomicBool,
     /// Blocks (or parts) that came back too late and played as silence.
     late: AtomicU64,
+    /// Frames the queues put between input and output: the block size
+    /// asked for, grown to the largest block the engine has sent.
+    extra: AtomicU32,
 }
 
 /// The I/O thread's end of a live processor's queues.
@@ -809,6 +817,14 @@ impl LiveProcessor {
         if self._instance.host.dead_flag.load(Ordering::Relaxed) {
             // Pass the audio through unchanged.
             return;
+        }
+        // A block bigger than the queues were set up for would never be
+        // back in time: move the output that much further behind, once.
+        // The UI sees the new delay on its next poll and rebuilds.
+        let extra = self.state.extra.load(Ordering::Relaxed) as usize;
+        if n > extra {
+            self.pad += n - extra;
+            self.state.extra.store(n as u32, Ordering::Relaxed);
         }
         let mut dropped = 0;
         for (i, (l, r)) in left[..n].iter().zip(&right[..n]).enumerate() {

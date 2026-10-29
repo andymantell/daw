@@ -597,11 +597,11 @@ impl App {
     /// kept out of undo.
     pub(crate) fn write_plugin_states(&mut self) {
         let mut p = self.project();
-        for (pt, t) in p.tracks.iter_mut().zip(&self.tracks) {
+        for (pt, t) in p.tracks.iter_mut().zip(&mut self.tracks) {
             // By id: effects missing here sit among them, and keep the
             // settings they came with.
             for pe in &mut pt.effects {
-                if let Some(s) = t.fx.iter().find(|s| s.key == pe.id) {
+                if let Some(s) = t.fx.iter_mut().find(|s| s.key == pe.id) {
                     pe.state = s.state();
                 }
             }

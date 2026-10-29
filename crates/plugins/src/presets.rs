@@ -236,12 +236,12 @@ pub fn list(root: &Path, cid: &TUID) -> Vec<Preset> {
     let hex = canonical_hex(cid);
     let mut own = Vec::new();
     find(&own_dir(root, cid), &hex, 0, true, &mut own);
-    own.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    own.sort_by_key(|a| a.name.to_lowercase());
     let mut native = Vec::new();
     for d in native_dirs() {
         find(&d, &hex, 3, false, &mut native);
     }
-    native.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    native.sort_by_key(|a| a.name.to_lowercase());
     own.extend(native);
     own
 }

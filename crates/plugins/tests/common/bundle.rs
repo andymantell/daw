@@ -19,6 +19,37 @@ pub fn broken(name: &'static str, feature: &'static str) -> PathBuf {
     build(name, Some(feature))
 }
 
+/// The plugin helper binary, for tests outside the plugins crate (which
+/// has it as `CARGO_BIN_EXE_daw-plugin-helper`). Built once per test
+/// process, in a target dir of its own; Cargo's own lock keeps processes
+/// building it side by side in step.
+#[allow(dead_code)]
+pub fn helper() -> PathBuf {
+    static BUILT: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = &*built {
+        return p.clone();
+    }
+    let release = !cfg!(debug_assertions);
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args(["build", "-p", "daw-plugins", "--bin", "daw-plugin-helper"]);
+    if release {
+        cmd.arg("--release");
+    }
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-plugin/helper");
+    cmd.arg("--target-dir").arg(&target);
+    assert!(
+        cmd.status().expect("run cargo").success(),
+        "building the plugin helper failed"
+    );
+    let profile = if release { "release" } else { "debug" };
+    let exe = target
+        .join(profile)
+        .join(format!("daw-plugin-helper{}", std::env::consts::EXE_SUFFIX));
+    *built = Some(exe.clone());
+    exe
+}
+
 /// Builds once per test process for each name. Within a process the
 /// builds take turns. Test runners that start a process per test (such as
 /// nextest) build side by side, so each name has its own target dir, and

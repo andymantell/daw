@@ -9,8 +9,9 @@
 //! The frequency-domain part answers a block late, which is exactly where
 //! its share of the response starts, so the reverb adds no delay.
 //!
-//! The responses are made here, from decaying noise that darkens as it
-//! dies away, with a few early reflections: no recordings are shipped.
+//! Four responses are made here, from decaying noise that darkens as it
+//! dies away, with a few early reflections. A recorded one, from a file
+//! or one of the rooms that come with the app, can be used instead.
 
 use std::sync::Arc;
 
@@ -195,16 +196,22 @@ pub struct Convolution {
     wet: f32,
     /// Has had its first settings, so changes of room fade.
     started: bool,
+    /// The loaded response's room, which the room setting doesn't change.
+    fixed: Option<usize>,
 }
 
 impl Convolution {
-    pub fn new(rate: f64) -> Convolution {
+    /// With the rooms made here, and `loaded` (a response at `rate`)
+    /// used instead of them if given.
+    pub fn new(rate: f64, loaded: Option<[Vec<f32>; 2]>) -> Convolution {
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(2 * BLOCK);
         let ifft = planner.plan_fft_inverse(2 * BLOCK);
-        let rooms: Vec<Room> = (0..ROOMS.len())
-            .map(|r| Room::new(&response(r, rate), fft.as_ref()))
+        let made = (0..ROOMS.len()).map(|r| response(r, rate));
+        let rooms: Vec<Room> = (made.chain(loaded))
+            .map(|h| Room::new(&h, fft.as_ref()))
             .collect();
+        let fixed = (rooms.len() > ROOMS.len()).then_some(ROOMS.len());
         let most = rooms
             .iter()
             .map(|r| r.parts[0].len())
@@ -235,6 +242,7 @@ impl Convolution {
             pos: 0,
             wet: 0.0,
             started: false,
+            fixed,
         }
     }
 
@@ -311,7 +319,7 @@ impl Convolution {
 
 impl Dsp for Convolution {
     fn update(&mut self, v: &[f64]) {
-        self.want = (v[0] as usize).min(self.rooms.len() - 1);
+        self.want = self.fixed.unwrap_or((v[0] as usize).min(ROOMS.len() - 1));
         if !self.started {
             self.room = self.want;
             self.started = true;
@@ -390,6 +398,38 @@ mod tests {
             assert!(err < 1e-4, "room {room}: {err}");
             assert!(l[h[0].len()..].iter().all(|x| x.abs() < 1e-4));
         }
+    }
+
+    #[test]
+    fn a_loaded_response_is_used_whatever_the_room_setting() {
+        let h: Vec<f32> = (0..30_000)
+            .map(|i| ((i * 7919) % 1000) as f32 / 1000.0 - 0.5)
+            .map(|x| x * 0.01)
+            .collect();
+        let r = crate::Response {
+            rate: 48_000,
+            left: h.clone(),
+            right: h.iter().map(|x| -x).collect(),
+        };
+        let e = Effect::new(Kind::Convolution);
+        e.set_response("hall.wav".into(), Some(Arc::new(r)));
+        e.set(0, 3.0);
+        e.set(2, 100.0);
+        let mut p = e.processor(48_000);
+        let mut l = vec![0f32; 31_000];
+        l[0] = 1.0;
+        let mut rr = l.clone();
+        for (a, b) in l.chunks_mut(100).zip(rr.chunks_mut(100)) {
+            p.process(a, b);
+        }
+        let err = (0..h.len())
+            .map(|i| (l[i] - h[i]).abs().max((rr[i] + h[i]).abs()))
+            .fold(0f32, f32::max);
+        assert!(err < 1e-5, "{err}");
+        assert_eq!(e.response_ref(), "hall.wav");
+        assert!(!e.response_missing());
+        e.set_response("gone.wav".into(), None);
+        assert!(e.response_missing());
     }
 
     #[test]

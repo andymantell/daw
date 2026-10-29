@@ -335,6 +335,7 @@ impl App {
     /// plugins, meters, inputs) for tracks, clips and effects it already
     /// has.
     pub(crate) fn apply(&mut self, p: Project) {
+        self.effects.folder = self.proj.folder.as_ref().map(|f| f.dir.clone());
         self.tempo_bpm = p.tempo_bpm;
         self.beats_per_bar = p.beats_per_bar;
         self.loop_bars = p.loop_bars;
@@ -422,6 +423,12 @@ impl App {
                     Some(mut s) => {
                         s.bypass = pe.bypass;
                         s.set_params(&pe.params);
+                        if s.response_ref() != pe.response
+                            && let Err(e) =
+                                self.effects.set_response(&mut s, &pe.response, self.rate)
+                        {
+                            problems.push(format!("{}: {e}", pe.name));
+                        }
                         t.fx.push(s);
                     }
                     None => match self.effects.restore(pe, self.rate) {
@@ -522,6 +529,21 @@ impl App {
             }
             self.proj.moved.insert(old, name);
         }
+        // So do reverb response files.
+        for s in self.tracks.iter().flat_map(|t| &t.fx) {
+            let r = s.response_ref();
+            if r.is_empty()
+                || r.starts_with(daw_effects::library::PREFIX)
+                || folder.has_asset(&r)
+                || !Path::new(&r).is_file()
+            {
+                continue;
+            }
+            let name = folder.add_asset(Path::new(&r), false)?;
+            self.effects.remember_as(&r, &name);
+            s.rename_response(&name);
+        }
+        self.effects.folder = Some(folder.dir.clone());
         self.rebuild();
         self.write_plugin_states();
         let bytes = self.proj.doc.to_bytes();

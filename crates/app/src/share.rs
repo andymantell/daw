@@ -123,6 +123,12 @@ impl App {
         if (self.tracks.iter().flat_map(|t| &t.clips)).any(|c| !folder.has_asset(&c.asset)) {
             return;
         }
+        let outside = |r: String| {
+            !r.is_empty() && !r.starts_with(daw_effects::library::PREFIX) && !folder.has_asset(&r)
+        };
+        if (self.tracks.iter().flat_map(|t| &t.fx)).any(|s| outside(s.response_ref())) {
+            return;
+        }
         let bytes = self.proj.doc.to_bytes();
         if let Err(e) = self.save_device_copy(&folder, &bytes) {
             self.message = Some(e);

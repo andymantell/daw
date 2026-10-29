@@ -1940,6 +1940,7 @@ impl eframe::App for App {
                     ui.separator();
                     self.menu_item(ui, Cmd::CheckUpdates);
                     self.menu_item(ui, Cmd::CrashReports);
+                    self.menu_item(ui, Cmd::SoundCredits);
                 });
                 ui.separator();
                 match &self.audio {
@@ -2028,6 +2029,7 @@ impl eframe::App for App {
         self.device_window(&ctx);
         self.latency_window(&ctx);
         self.effects.manager_window(&ctx);
+        self.effects.credits_window(&ctx);
         let inputs = match &self.audio {
             Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
             Audio::Stopped => 0,

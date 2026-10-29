@@ -117,6 +117,7 @@ impl Track {
                 field(k.as_bytes());
                 field(&v.to_le_bytes());
             }
+            field(e.response.as_bytes());
         }
         h.finalize()[..16]
             .iter()
@@ -253,12 +254,23 @@ pub struct Effect {
     pub builtin: String,
     /// A built-in effect's settings, by name.
     pub params: Vec<(String, f64)>,
+    /// For a built-in convolution reverb, the response it uses: empty
+    /// for its own rooms, `room:` and an id for a recorded room that
+    /// comes with the app, or else a sound file (an asset name, or a
+    /// full path until the project is saved).
+    pub response: String,
 }
 
 impl Effect {
     /// Whether it is a plugin, which a computer may not have.
     pub fn is_plugin(&self) -> bool {
         self.builtin.is_empty()
+    }
+
+    /// The sound file it uses, if it uses one: an asset, like a clip's.
+    pub fn asset(&self) -> Option<&str> {
+        (!self.response.is_empty() && !self.response.starts_with("room:"))
+            .then_some(self.response.as_str())
     }
 }
 

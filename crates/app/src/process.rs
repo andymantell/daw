@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Normalise, reverse or change the gain of clips (roadmap 2.1), from the
-//! clip menu. Each clip's part of its file is processed into a new file
-//! on a thread of its own; the clip then plays that file from its start,
-//! in the same place. It keeps its id in the project, so undo points it
-//! back at the original, which is never changed.
+//! clip menu. Each clip's whole file is processed into a new file on a
+//! thread of its own, so the clip can still be dragged longer; the clip
+//! then plays the same part of the new file, in the same place. It keeps
+//! its id in the project, so undo points it back at the original, which
+//! is never changed.
 //!
 //! New files wait with the unsaved takes, and move into the project's
 //! folder when it is saved.
@@ -58,9 +59,9 @@ impl Processing {
 
     fn start_one(&mut self, c: &Clip, how: Process, out: PathBuf) {
         let (tx, rx) = mpsc::channel();
-        let (source, offset, len) = (c.source.clone(), c.offset, c.len);
+        let (source, part) = (c.source.clone(), c.offset..c.offset + c.len);
         std::thread::spawn(move || {
-            let r = process::process(&source, offset, len, how, &out)
+            let r = process::process(&source, part, how, &out)
                 .and_then(|p| Ok((StreamSource::open(&out)?, p.peak)));
             let _ = tx.send(r);
         });
@@ -107,8 +108,17 @@ impl Processing {
                     let path = source.path.clone();
                     c.asset = path.to_string_lossy().into_owned();
                     c.path = path;
+                    if job.how == Process::Reverse {
+                        // The same part, now backwards, with the volume
+                        // line staying with the audio it was drawn on.
+                        let frames = source.frames;
+                        c.offset = process::reversed(c.offset + c.len - 1, frames);
+                        for p in &mut c.envelope {
+                            p.at = process::reversed(p.at, frames);
+                        }
+                        c.envelope.reverse();
+                    }
                     c.source = source;
-                    c.offset = 0;
                     c.label = format!("{} ({})", c.label, job.how.label());
                     if peak > 1.0 {
                         *message = Some(format!(
@@ -128,6 +138,7 @@ impl Processing {
 mod tests {
     use super::*;
     use crate::timeline::tests::clip;
+    use daw_engine::fade::GainPoint;
 
     fn track(clips: Vec<Clip>) -> Track {
         let mut t = Track::new("Guitar".into());
@@ -151,9 +162,17 @@ mod tests {
     }
 
     #[test]
-    fn a_processed_clip_plays_its_new_file_in_the_same_place() {
+    fn a_processed_clip_plays_the_same_part_of_its_new_file() {
         let mut c = clip(4_800, 10_000);
         c.trim_start(5_800);
+        c.trim_end(11_800);
+        c.envelope = vec![
+            GainPoint {
+                at: 1_000,
+                db: -3.0,
+            },
+            GainPoint { at: 6_999, db: 0.0 },
+        ];
         let (before, key) = (c.source.clone(), c.key.clone());
         let mut tracks = vec![track(vec![c])];
         let mut p = Processing::default();
@@ -161,12 +180,19 @@ mod tests {
         let mut msg = None;
         assert!(wait(&mut p, &mut tracks, &mut msg));
         assert_eq!(msg, None);
-        let c = &tracks[0].clips[0];
-        assert_eq!((c.start, c.offset, c.len), (5_800, 0, 9_000));
+        let c = &mut tracks[0].clips[0];
+        // Frames 1000..7000 of 10000, backwards, are 3000..9000.
+        assert_eq!((c.start, c.offset, c.len), (5_800, 3_000, 6_000));
+        let at: Vec<(usize, f32)> = c.envelope.iter().map(|p| (p.at, p.db)).collect();
+        assert_eq!(at, [(3_000, 0.0), (8_999, -3.0)]);
         assert_eq!(c.key, key, "the same clip, so undo puts the old file back");
-        assert_eq!(c.source.frames, 9_000);
+        assert_eq!(c.source.frames, 10_000);
         assert_eq!(c.asset, c.source.path.to_string_lossy());
         assert!(c.label.ends_with("(reversed)"));
+        // The whole file was processed, so the clip can be dragged longer.
+        c.trim_start(0);
+        c.trim_end(20_000);
+        assert_eq!((c.start, c.offset, c.len), (2_800, 0, 10_000));
         // The original is untouched.
         assert!(before.path.exists());
         assert_ne!(before.path, c.source.path);

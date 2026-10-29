@@ -8,9 +8,14 @@
 //! never drifts however long the project is. A position that falls between
 //! two frames (or two ticks) rounds down, to the earlier one.
 //!
-//! Phase 1 needs one tempo and one time signature, but the map already
-//! takes step changes of either, at tick positions. Tempo ramps are not
-//! supported yet.
+//! The map takes changes of either at tick positions. A tempo change
+//! either jumps or glides: a glide moves the tempo smoothly from the
+//! change before, arriving at the new tempo on the change's tick. The
+//! tempo moves evenly per beat (halfway through the glide's beats, it is
+//! halfway between the two tempos). Time through a glide is a logarithm,
+//! which is not a fraction, so inside one it is worked out in floating
+//! point from the glide's start; every change still lands on an exact
+//! frame, so nothing drifts past the glide.
 
 use std::fmt;
 
@@ -116,6 +121,58 @@ struct TempoPoint {
     /// Where `at` falls in frames, worked out when the map is built.
     frame: Frames,
     tempo: Tempo,
+    /// The tempo glides from here to the next point: its length in
+    /// ticks, and the tempo it arrives at.
+    glide: Option<(i64, Tempo)>,
+    /// This point was glided into from the one before.
+    glided: bool,
+}
+
+impl TempoPoint {
+    /// Frames from this point to `ticks` after it, rounded down. Before
+    /// the point, and after a glide ends, the tempo is steady.
+    fn frames(&self, ticks: i64, rate: u32) -> i64 {
+        match self.glide {
+            Some((len, end)) if ticks > 0 => {
+                if ticks >= len {
+                    // Exactly where the next point was put.
+                    glide_frames(len, len, self.tempo, end, rate)
+                        + span_frames(ticks - len, end, rate)
+                } else {
+                    glide_frames(ticks, len, self.tempo, end, rate)
+                }
+            }
+            _ => span_frames(ticks, self.tempo, rate),
+        }
+    }
+
+    /// Ticks from this point to `frames` after it, rounded down: the
+    /// last tick whose frame is not after it.
+    fn ticks(&self, frames: i64, rate: u32) -> i64 {
+        let Some((len, end)) = self.glide else {
+            return span_ticks(frames, self.tempo, rate);
+        };
+        if frames <= 0 {
+            return span_ticks(frames, self.tempo, rate);
+        }
+        let (t0, t1) = (self.tempo.as_f64(), end.as_f64());
+        let secs = frames as f64 / rate as f64;
+        let k = (t1 - t0) / (len as f64 * t0);
+        // Inverse of `glide_frames`, then nudged onto the exact answer.
+        let guess = ((secs * PPQ as f64 * t0 / 60.0 * k).exp_m1() / k).floor() as i64;
+        let mut t = guess.clamp(0, len);
+        while t > 0 && self.frames(t, rate) > frames {
+            t -= 1;
+        }
+        while t < len && self.frames(t + 1, rate) <= frames {
+            t += 1;
+        }
+        if t >= len {
+            let at_end = self.frames(len, rate);
+            return len + span_ticks(frames - at_end, end, rate);
+        }
+        t
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -167,6 +224,8 @@ impl TempoMap {
                 at: Ticks(0),
                 frame: Frames(0),
                 tempo,
+                glide: None,
+                glided: false,
             }],
             meters: vec![MeterPoint {
                 at: Ticks(0),
@@ -182,13 +241,69 @@ impl TempoMap {
 
     /// Changes the tempo from `at` onwards. Changes must be added in order.
     pub fn add_tempo(&mut self, at: Ticks, tempo: Tempo) -> Result<(), MapError> {
-        let last = *self.tempos.last().unwrap();
+        self.push_tempo(at, tempo, false)
+    }
+
+    /// Glides the tempo from the change before (or the start) to `tempo`,
+    /// arriving at `at`, and keeps it there. Changes must be added in
+    /// order.
+    pub fn add_glide(&mut self, at: Ticks, tempo: Tempo) -> Result<(), MapError> {
+        self.push_tempo(at, tempo, true)
+    }
+
+    fn push_tempo(&mut self, at: Ticks, tempo: Tempo, glide: bool) -> Result<(), MapError> {
+        let last = self.tempos.last_mut().unwrap();
         if at <= last.at {
             return Err(MapError::OutOfOrder);
         }
-        let frame = Frames(last.frame.0 + span_frames(at.0 - last.at.0, last.tempo, self.rate));
-        self.tempos.push(TempoPoint { at, frame, tempo });
+        let len = at.0 - last.at.0;
+        // Gliding to the same tempo is just carrying on.
+        let glide = glide && tempo != last.tempo;
+        if glide {
+            last.glide = Some((len, tempo));
+        }
+        let frame = Frames(last.frame.0 + last.frames(len, self.rate));
+        self.tempos.push(TempoPoint {
+            at,
+            frame,
+            tempo,
+            glide: None,
+            glided: glide,
+        });
         Ok(())
+    }
+
+    /// Every tempo change after the start: where it is, its tempo, and
+    /// whether the tempo glides into it.
+    pub fn tempo_changes(&self) -> impl Iterator<Item = (Ticks, Tempo, bool)> + '_ {
+        (self.tempos.iter().skip(1)).map(|p| (p.at, p.tempo, p.glided))
+    }
+
+    /// Every time-signature change after the start: where it is, the bar
+    /// number (from 1) it starts, and the new signature.
+    pub fn signature_changes(&self) -> impl Iterator<Item = (Ticks, i64, TimeSignature)> + '_ {
+        (self.meters.iter().skip(1)).map(|m| (m.at, m.bar + 1, m.sig))
+    }
+
+    /// Makes this a map of one tempo and time signature again, without
+    /// allocating (for the audio thread).
+    pub fn reset(&mut self, rate: u32, tempo: Tempo, sig: TimeSignature) {
+        assert!(rate > 0, "sample rate must be positive");
+        self.rate = rate;
+        self.tempos.truncate(1);
+        self.tempos[0] = TempoPoint {
+            at: Ticks(0),
+            frame: Frames(0),
+            tempo,
+            glide: None,
+            glided: false,
+        };
+        self.meters.truncate(1);
+        self.meters[0] = MeterPoint {
+            at: Ticks(0),
+            bar: 0,
+            sig,
+        };
     }
 
     /// Changes the time signature from the bar line at `at` onwards.
@@ -209,9 +324,18 @@ impl TempoMap {
         Ok(())
     }
 
-    /// The tempo in force at `at`.
+    /// The tempo in force at `at`. Part way through a glide, it is to
+    /// three decimal places.
     pub fn tempo_at(&self, at: Ticks) -> Tempo {
-        self.tempo_point(at).tempo
+        let p = self.tempo_point(at);
+        match p.glide {
+            Some((len, end)) if at.0 > p.at.0 && at.0 - p.at.0 < len => {
+                let f = (at.0 - p.at.0) as f64 / len as f64;
+                Tempo::from_f64(p.tempo.as_f64() + (end.as_f64() - p.tempo.as_f64()) * f)
+            }
+            Some((_, end)) if at.0 > p.at.0 => end,
+            _ => p.tempo,
+        }
     }
 
     /// The time signature in force at `at`.
@@ -233,14 +357,14 @@ impl TempoMap {
     /// start use the first tempo.
     pub fn frames_at(&self, at: Ticks) -> Frames {
         let p = self.tempo_point(at);
-        Frames(p.frame.0 + span_frames(at.0 - p.at.0, p.tempo, self.rate))
+        Frames(p.frame.0 + p.frames(at.0 - p.at.0, self.rate))
     }
 
     /// The musical position at a frame, rounded down.
     pub fn ticks_at(&self, at: Frames) -> Ticks {
         let i = self.tempos.partition_point(|p| p.frame <= at);
         let p = &self.tempos[i.saturating_sub(1)];
-        Ticks(p.at.0 + span_ticks(at.0 - p.frame.0, p.tempo, self.rate))
+        Ticks(p.at.0 + p.ticks(at.0 - p.frame.0, self.rate))
     }
 
     /// Bar, beat and tick at a musical position (from 0 upwards).
@@ -276,6 +400,17 @@ fn span_frames(ticks: i64, t: Tempo, rate: u32) -> i64 {
     let n = ticks as i128 * 60 * rate as i128 * t.den as i128;
     let d = PPQ as i128 * t.num as i128;
     n.div_euclid(d) as i64
+}
+
+/// Frames in the first `ticks` of a glide `len` ticks long from tempo
+/// `from` to `to`, rounded down. The tempo at tick x is
+/// from + (to − from) × x ÷ len, so the time is the integral of
+/// 60 ÷ (PPQ × tempo): 60 × len ÷ (PPQ × (to − from)) × ln(tempo ÷ from).
+fn glide_frames(ticks: i64, len: i64, from: Tempo, to: Tempo, rate: u32) -> i64 {
+    let (t0, t1) = (from.as_f64(), to.as_f64());
+    let k = (t1 - t0) / (len as f64 * t0);
+    let secs = 60.0 / (PPQ as f64 * t0) * (k * ticks as f64).ln_1p() / k;
+    (secs * rate as f64).floor() as i64
 }
 
 /// Ticks in `frames` at a fixed tempo, rounded down.
@@ -371,6 +506,84 @@ mod tests {
             m.add_meter(Ticks(m.bar_start(6).0 + 1), TimeSignature::COMMON),
             Err(MapError::NotOnBarLine)
         );
+    }
+
+    #[test]
+    fn a_glide_slows_smoothly_then_holds() {
+        let mut m = map120();
+        let (bar3, bar5) = (m.bar_start(3), m.bar_start(5));
+        m.add_tempo(bar3, Tempo::bpm(120)).unwrap();
+        m.add_glide(bar5, Tempo::bpm(60)).unwrap();
+        // Eight beats gliding from 120 to 60 BPM take
+        // 60 × 8 ÷ (60 − 120) × ln(60 ÷ 120) = 8 ln 2 seconds.
+        let glide = (8.0 * std::f64::consts::LN_2 * 48_000.0).floor() as i64;
+        assert_eq!(m.frames_at(bar5), Frames(4 * 48_000 + glide));
+        // Then steady at 60: a second a beat, exactly.
+        assert_eq!(
+            m.frames_at(Ticks(bar5.0 + 1000 * PPQ)),
+            Frames(4 * 48_000 + glide + 1000 * 48_000)
+        );
+        // Halfway through the beats, halfway between the tempos.
+        assert_eq!(m.tempo_at(Ticks(bar3.0 + 4 * PPQ)), Tempo::bpm(90));
+        assert_eq!(m.tempo_at(bar5), Tempo::bpm(60));
+        // Each beat of the glide is longer than the one before.
+        let beat = |b: i64| {
+            let at = |b: i64| m.frames_at(Ticks(bar3.0 + b * PPQ)).0;
+            at(b + 1) - at(b)
+        };
+        assert_eq!(beat(-1), 24_000);
+        for b in 0..8 {
+            assert!(beat(b) > beat(b - 1), "beat {b}");
+        }
+        assert_eq!(beat(8), 48_000);
+        assert_eq!(
+            m.tempo_changes().collect::<Vec<_>>(),
+            vec![(bar3, Tempo::bpm(120), false), (bar5, Tempo::bpm(60), true)]
+        );
+    }
+
+    #[test]
+    fn glides_round_trip_like_steady_tempos() {
+        let mut m = TempoMap::new(44_100, Tempo::from_f64(97.3), TimeSignature::COMMON);
+        m.add_glide(m.bar_start(3), Tempo::from_f64(141.7)).unwrap();
+        m.add_glide(m.bar_start(4), Tempo::bpm(50)).unwrap();
+        let end = m.bar_start(6).0;
+        let mut last = Frames(-1);
+        for t in (0..end).step_by(7) {
+            let f = m.frames_at(Ticks(t));
+            assert!(f >= last, "frames never go back, {t}");
+            last = f;
+            let back = m.ticks_at(f);
+            assert!(back <= Ticks(t) && t - back.0 <= 1, "{t}");
+        }
+        for f in (0..m.frames_at(Ticks(end)).0).step_by(101) {
+            let t = m.ticks_at(Frames(f));
+            // At or before the frame, and the next tick isn't before it.
+            assert!(m.frames_at(t).0 <= f, "{f}");
+            assert!(m.frames_at(Ticks(t.0 + 1)).0 >= f, "{f}");
+        }
+    }
+
+    #[test]
+    fn gliding_to_the_same_tempo_is_steady() {
+        let mut m = map120();
+        m.add_glide(m.bar_start(2), Tempo::bpm(120)).unwrap();
+        assert_eq!(m.frames_at(m.bar_start(3)), Frames(4 * 48_000));
+        assert!(!m.tempo_changes().next().unwrap().2);
+    }
+
+    #[test]
+    fn reset_goes_back_to_one_tempo() {
+        let mut m = map120();
+        m.add_glide(m.bar_start(3), Tempo::bpm(90)).unwrap();
+        m.add_meter(m.bar_start(2), TimeSignature::new(3, 4))
+            .unwrap();
+        assert_eq!(m.signature_changes().count(), 1);
+        m.reset(44_100, Tempo::bpm(60), TimeSignature::new(6, 8));
+        assert_eq!(m.sample_rate(), 44_100);
+        assert_eq!(m.frames_at(Ticks(10 * PPQ)), Frames(10 * 44_100));
+        assert_eq!(m.signature_at(Ticks(100 * PPQ)), TimeSignature::new(6, 8));
+        assert_eq!(m.tempo_changes().count() + m.signature_changes().count(), 0);
     }
 
     #[test]

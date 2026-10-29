@@ -181,6 +181,9 @@ impl App {
             rate: self.rate,
             tempo_bpm: self.tempo_bpm,
             beats_per_bar: self.beats_per_bar,
+            beat_unit: self.time.beat_unit,
+            tempo_changes: self.time.tempos.clone(),
+            meter_changes: self.time.meters.clone(),
             loop_bars: self.loop_bars,
             reference_hz: self.tuner.a4 as f64,
             notes: self.notes.clone(),
@@ -337,6 +340,11 @@ impl App {
     pub(crate) fn apply(&mut self, p: Project) {
         self.tempo_bpm = p.tempo_bpm;
         self.beats_per_bar = p.beats_per_bar;
+        self.time = crate::tempo::Changes {
+            beat_unit: p.beat_unit,
+            tempos: p.tempo_changes.clone(),
+            meters: p.meter_changes.clone(),
+        };
         self.loop_bars = p.loop_bars;
         self.tuner.a4 = p.reference_hz as f32;
         self.notes = p.notes.clone();

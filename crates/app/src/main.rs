@@ -31,6 +31,7 @@ mod project;
 mod recording;
 mod share;
 mod snapshots;
+mod tempo;
 mod timeline;
 mod trainer;
 mod tuner;
@@ -53,7 +54,7 @@ use daw_engine::import;
 use daw_engine::metronome::Metronome;
 use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
-use daw_engine::time::{Frames, Tempo, TempoMap, TimeSignature};
+use daw_engine::time::{Frames, TempoMap};
 use eframe::egui::{self, Color32, RichText, Sense, Stroke, vec2};
 use fx::{Effects, FxSlot};
 use timeline::{Clip, Lane, Marker, Song};
@@ -165,6 +166,9 @@ struct App {
     imports: Vec<Import>,
     tempo_bpm: f64,
     beats_per_bar: u32,
+    /// Tempo and time-signature changes, and the start's beat unit.
+    time: tempo::Changes,
+    tempo_ui: tempo::TempoWindow,
     rate: u32,
     ctl: Controller,
     _disk: StreamerThread,
@@ -251,6 +255,8 @@ impl App {
             imports: Vec::new(),
             tempo_bpm: 120.0,
             beats_per_bar: 4,
+            time: tempo::Changes::default(),
+            tempo_ui: tempo::TempoWindow::default(),
             rate,
             ctl,
             _disk: disk,
@@ -438,11 +444,7 @@ impl App {
     }
 
     fn tempo_map(&self) -> TempoMap {
-        TempoMap::new(
-            self.rate,
-            Tempo::from_f64(self.tempo_bpm),
-            TimeSignature::new(self.beats_per_bar, 4),
-        )
+        tempo::map(self.rate, self.tempo_bpm, self.beats_per_bar, &self.time)
     }
 
     fn add_file(&mut self, path: &Path) {
@@ -904,6 +906,9 @@ impl App {
             self.looping = true;
             self.send_loop();
         }
+        if let Some(ask) = out.tempo {
+            self.ask_tempo(ask);
+        }
     }
 
     fn toggle_play(&mut self) {
@@ -970,13 +975,21 @@ impl App {
                         .suffix(" BPM"),
                 )
                 .accessible_name("Tempo");
-            ui.label("Beats per bar");
+            ui.label("Time signature");
             let b = ui
                 .add(egui::DragValue::new(&mut self.beats_per_bar).range(1..=12))
                 .accessible_name("Beats per bar");
-            if t.changed() || b.changed() {
-                self.rebuild();
-                self.send_loop();
+            ui.label("/");
+            let u = tempo::unit_picker(ui, &mut self.time.beat_unit);
+            if t.changed() || b.changed() || u {
+                self.time_changed();
+            }
+            if ui
+                .button("Changes…")
+                .on_hover_text("Tempo and time signature changes later in the song")
+                .clicked()
+            {
+                self.tempo_ui.open = !self.tempo_ui.open;
             }
         });
         ui.horizontal(|ui| {
@@ -2084,6 +2097,7 @@ impl eframe::App for App {
         self.project_windows(&ctx);
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
+        self.tempo_window(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.sync_doc(&ctx, false);

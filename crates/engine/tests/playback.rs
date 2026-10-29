@@ -398,6 +398,48 @@ fn count_in_plays_clicks_then_starts_on_the_frame() {
 }
 
 #[test]
+fn count_in_uses_the_tempo_and_time_signature_where_play_starts() {
+    let mut map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+    let bar3 = map.bar_start(3);
+    map.add_tempo(bar3, Tempo::bpm(60)).unwrap();
+    map.add_meter(bar3, TimeSignature::new(3, 4)).unwrap();
+    let mut s = Session::new(map);
+    let mut t = TrackSpec::new(vec![ClipSpec::new(bar3, mono(vec![0.5; 10_000]))]);
+    t.mix.pan = -1.0;
+    s.tracks.push(t);
+    let (mut ctl, mut eng) = engine::new(512);
+    ctl.send(Command::SetGraph(Box::new(s.compile(512).unwrap())))
+        .ok()
+        .unwrap();
+    // Bar 3 starts after two bars at 120: 4 seconds.
+    ctl.send(Command::Seek(Frames(4 * RATE as i64)))
+        .ok()
+        .unwrap();
+    ctl.send(Command::CountIn { bars: 1 }).ok().unwrap();
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    for _ in 0..300 {
+        let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+        eng.process(&mut l, &mut r);
+        left.extend(l);
+        right.extend(r);
+    }
+    // One bar of 3/4 at 60, the tempo bar 3 is played at: three clicks
+    // a second apart, the first accented, then the track on the frame.
+    let beat = RATE as usize;
+    assert_eq!(first_sound(&right, 0), Some(1));
+    assert_eq!(first_sound(&right, 2_000), Some(beat + 1));
+    assert_eq!(first_sound(&right, beat + 2_000), Some(2 * beat + 1));
+    let peak = |a: usize| {
+        right[a..a + 1_000]
+            .iter()
+            .fold(0.0f32, |m, x| m.max(x.abs()))
+    };
+    assert!(peak(0) > peak(beat));
+    assert!(left[3 * beat - 1].abs() < 0.5);
+    assert_eq!(left[3 * beat], 0.5);
+}
+
+#[test]
 fn clicks_can_go_to_their_own_output() {
     let s = session();
     let (mut ctl, mut eng) = engine::new(256);

@@ -516,6 +516,10 @@ and the tuner as an insert.*
 - Read/touch/latch/write modes. Clip-level automation.
 
 ### 2.7 Tempo & time (M)
+*Built 2026-10-29, at risk. Tempo changes that jump or glide, and
+time-signature changes, by bar and beat, saved and merged with the
+project. The metronome, count-in, bar numbers, snapping, loop and markers
+follow them. Checks are in `docs/review-queue/2.7-tempo.md`.*
 - Tempo map with changes and ramps. Time-signature changes.
 
 ### 2.8 Project management (S)

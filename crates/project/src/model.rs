@@ -9,8 +9,15 @@ use sha2::{Digest, Sha256};
 pub struct Project {
     /// Sample rate that clip positions are counted in.
     pub rate: u32,
+    /// The tempo and time signature at the start of the song.
     pub tempo_bpm: f64,
     pub beats_per_bar: u32,
+    /// The note value of a beat: 4 for quarter notes, 8 for eighths.
+    pub beat_unit: u32,
+    /// Changes of tempo after the start, in order.
+    pub tempo_changes: Vec<TempoChange>,
+    /// Changes of time signature after the start, in bar order.
+    pub meter_changes: Vec<MeterChange>,
     /// Bars, counted from 1: the loop runs from the start of the first
     /// to the start of the second.
     pub loop_bars: (i64, i64),
@@ -34,6 +41,9 @@ impl Default for Project {
             rate: 48_000,
             tempo_bpm: 120.0,
             beats_per_bar: 4,
+            beat_unit: 4,
+            tempo_changes: Vec::new(),
+            meter_changes: Vec::new(),
             loop_bars: (1, 5),
             reference_hz: 440.0,
             tracks: Vec::new(),
@@ -256,6 +266,31 @@ pub struct Marker {
     /// Counted from 1.
     pub bar: i64,
     pub name: String,
+}
+
+/// A change of tempo on a beat. Placed by bar and beat, like markers,
+/// so it stays on its beat when the time signature before it changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TempoChange {
+    pub id: String,
+    /// Counted from 1.
+    pub bar: i64,
+    /// The beat in the bar, counted from 1.
+    pub beat: u32,
+    pub bpm: f64,
+    /// Glide smoothly from the tempo before, arriving at `bpm` here,
+    /// instead of jumping to it.
+    pub glide: bool,
+}
+
+/// A change of time signature, from the start of a bar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeterChange {
+    pub id: String,
+    /// Counted from 1.
+    pub bar: i64,
+    pub beats: u32,
+    pub unit: u32,
 }
 
 /// One person's practice settings. Each computer keeps its own in the

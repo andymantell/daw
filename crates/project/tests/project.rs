@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 
 use daw_project::{
-    Clip, Effect, EffectState, Marker, Practice, Project, ProjectDoc, ProjectFolder, Track,
-    TrainerSettings,
+    Clip, Effect, EffectState, Marker, MeterChange, Practice, Project, ProjectDoc, ProjectFolder,
+    TempoChange, Track, TrainerSettings,
 };
 
 fn clip(id: &str, start: i64) -> Clip {
@@ -50,7 +50,29 @@ fn song() -> Project {
         }],
         notes: "Watch the bends in bar 7.".into(),
         reference_hz: 442.0,
+        beat_unit: 8,
+        beats_per_bar: 6,
+        tempo_changes: vec![
+            tempo("k1", 9, 1, 140.0, false),
+            tempo("k2", 17, 3, 96.5, true),
+        ],
+        meter_changes: vec![MeterChange {
+            id: "s1".into(),
+            bar: 13,
+            beats: 7,
+            unit: 8,
+        }],
         ..Project::default()
+    }
+}
+
+fn tempo(id: &str, bar: i64, beat: u32, bpm: f64, glide: bool) -> TempoChange {
+    TempoChange {
+        id: id.into(),
+        bar,
+        beat,
+        bpm,
+        glide,
     }
 }
 
@@ -155,6 +177,31 @@ fn edits_to_different_fields_of_one_clip_both_survive() {
     assert_eq!(ga.tracks[0].clips[0].start, 5000);
     assert_eq!(ga.tracks[0].clips[0].len, 1000);
     assert_eq!(ga.tracks[0].name, "Rhythm");
+}
+
+#[test]
+fn tempo_changes_made_apart_are_all_kept() {
+    let (mut a, mut b, p) = two_copies();
+    let mut pa = p.clone();
+    pa.tempo_changes.push(tempo("ka", 25, 1, 80.0, true));
+    pa.tempo_changes[0].bpm = 150.0;
+    a.set(&pa);
+    let mut pb = p.clone();
+    pb.tempo_changes.insert(0, tempo("kb", 5, 2, 100.0, false));
+    pb.tempo_changes[1].glide = true;
+    pb.meter_changes.clear();
+    b.set(&pb);
+    sync(&mut a, &mut b);
+    let g = a.get();
+    assert_eq!(g, b.get(), "both copies agree");
+    let ids: Vec<&str> = g.tempo_changes.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["kb", "k1", "k2", "ka"], "in the song's order");
+    assert_eq!(g.tempo_changes[1].bpm, 150.0);
+    assert!(
+        g.tempo_changes[1].glide,
+        "two fields of one change both kept"
+    );
+    assert!(g.meter_changes.is_empty());
 }
 
 #[test]

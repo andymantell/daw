@@ -2,7 +2,8 @@
 //! The project document on Loro.
 //!
 //! Layout: a `song` map of settings, a `tracks` map from id to track,
-//! with the track order in the movable list `order`, a `markers` map, and
+//! with the track order in the movable list `order`, a `markers` map,
+//! `tempo_changes` and `meter_changes` maps from id to change, and
 //! the lesson notes as text, a `tabs` map from id to tab block, and a
 //! `comments` map from id to comment. A
 //! track is a map of its settings, a `clips`
@@ -36,8 +37,8 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Effect, EffectState, Frozen, FrozenClip, Marker, Practice, Project, TabBlock,
-    Track, TrainerSettings, is_asset_name,
+    Clip, Comment, Effect, EffectState, Frozen, FrozenClip, Marker, MeterChange, Practice, Project,
+    TabBlock, TempoChange, Track, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -327,6 +328,7 @@ impl ProjectDoc {
         w.put(&song, "rate", p.rate as i64);
         w.put(&song, "tempo", p.tempo_bpm);
         w.put(&song, "beats_per_bar", p.beats_per_bar as i64);
+        w.put(&song, "beat_unit", p.beat_unit as i64);
         w.put(&song, "loop_from", p.loop_bars.0);
         w.put(&song, "loop_to", p.loop_bars.1);
         w.put(&song, "reference_hz", p.reference_hz);
@@ -356,6 +358,35 @@ impl ProjectDoc {
             let m = w.child(&markers, &mk.id);
             w.put(&m, "bar", mk.bar);
             w.put(&m, "name", mk.name.as_str());
+        }
+
+        let tempos = self.doc.get_map("tempo_changes");
+        let keep: HashSet<&str> = p.tempo_changes.iter().map(|c| c.id.as_str()).collect();
+        for id in keys(&tempos) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&tempos, &id);
+            }
+        }
+        for c in &p.tempo_changes {
+            let m = w.child(&tempos, &c.id);
+            w.put(&m, "bar", c.bar);
+            w.put(&m, "beat", c.beat as i64);
+            w.put(&m, "bpm", c.bpm);
+            w.put(&m, "glide", c.glide);
+        }
+
+        let meters = self.doc.get_map("meter_changes");
+        let keep: HashSet<&str> = p.meter_changes.iter().map(|c| c.id.as_str()).collect();
+        for id in keys(&meters) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&meters, &id);
+            }
+        }
+        for c in &p.meter_changes {
+            let m = w.child(&meters, &c.id);
+            w.put(&m, "bar", c.bar);
+            w.put(&m, "beats", c.beats as i64);
+            w.put(&m, "unit", c.unit as i64);
         }
 
         let notes = self.notes();
@@ -417,6 +448,7 @@ impl ProjectDoc {
             p.rate = int(s, "rate").map_or(p.rate, |v| v as u32);
             p.tempo_bpm = float(s, "tempo").unwrap_or(p.tempo_bpm);
             p.beats_per_bar = int(s, "beats_per_bar").map_or(p.beats_per_bar, |v| v as u32);
+            p.beat_unit = int(s, "beat_unit").map_or(p.beat_unit, |v| v as u32);
             p.loop_bars = (
                 int(s, "loop_from").unwrap_or(p.loop_bars.0),
                 int(s, "loop_to").unwrap_or(p.loop_bars.1),
@@ -460,6 +492,33 @@ impl ProjectDoc {
             }
         }
         p.markers
+            .sort_by(|a, b| a.bar.cmp(&b.bar).then(a.id.cmp(&b.id)));
+        if let Some(LoroValue::Map(cs)) = root.get("tempo_changes") {
+            for (id, c) in cs.iter() {
+                let LoroValue::Map(c) = c else { continue };
+                p.tempo_changes.push(TempoChange {
+                    id: id.to_string(),
+                    bar: int(c, "bar").unwrap_or(1),
+                    beat: int(c, "beat").map_or(1, |v| v.max(1) as u32),
+                    bpm: float(c, "bpm").unwrap_or(p.tempo_bpm),
+                    glide: boolean(c, "glide").unwrap_or(false),
+                });
+            }
+        }
+        p.tempo_changes
+            .sort_by(|a, b| (a.bar, a.beat, &a.id).cmp(&(b.bar, b.beat, &b.id)));
+        if let Some(LoroValue::Map(cs)) = root.get("meter_changes") {
+            for (id, c) in cs.iter() {
+                let LoroValue::Map(c) = c else { continue };
+                p.meter_changes.push(MeterChange {
+                    id: id.to_string(),
+                    bar: int(c, "bar").unwrap_or(1),
+                    beats: int(c, "beats").map_or(4, |v| v.max(1) as u32),
+                    unit: int(c, "unit").map_or(4, |v| v as u32),
+                });
+            }
+        }
+        p.meter_changes
             .sort_by(|a, b| a.bar.cmp(&b.bar).then(a.id.cmp(&b.id)));
         if let Some(LoroValue::String(s)) = root.get("notes") {
             p.notes = s.to_string();

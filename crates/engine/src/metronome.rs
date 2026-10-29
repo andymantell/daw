@@ -201,4 +201,26 @@ mod tests {
         assert_eq!(at, -48_000);
         assert_eq!(m.ticks_at(Frames(-48_000)), Ticks(-2 * PPQ));
     }
+
+    #[test]
+    fn clicks_speed_up_through_a_glide() {
+        let mut m = TempoMap::new(48_000, Tempo::bpm(60), TimeSignature::COMMON);
+        m.add_glide(m.bar_start(2), Tempo::bpm(120)).unwrap();
+        let mut f = 0;
+        let mut at = Vec::new();
+        for _ in 0..10 {
+            let (c, _) = next_click(&m, 1, true, f);
+            at.push(c);
+            f = c + 1;
+        }
+        // Each click lands on its beat's frame, gaps shrinking from a
+        // second towards half a second, then steady.
+        for (b, &c) in at.iter().enumerate() {
+            assert_eq!(c, m.frames_at(Ticks(b as i64 * PPQ)).0);
+        }
+        let gaps: Vec<i64> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps[0] < 48_000 && gaps[0] > gaps[3]);
+        assert_eq!(gaps[4..], [24_000; 5]);
+        assert_eq!(next_click(&m, 1, true, at[3] + 1).1, Kind::Accent);
+    }
 }

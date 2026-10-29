@@ -450,6 +450,8 @@ pub struct Outcome {
     pub comment_at: Option<(Option<usize>, i64)>,
     /// Write tab for this marker's section.
     pub tab_for: Option<String>,
+    /// Add a tempo or time-signature change, or open their window.
+    pub tempo: Option<crate::tempo::Ask>,
 }
 
 /// Frames between waveform peaks at the finest level.
@@ -633,7 +635,9 @@ impl Default for Timeline {
 
 /// Track names to the left of the lanes.
 const HEADER: f32 = 110.0;
-const RULER: f32 = 26.0;
+/// The ruler: marker flags on top, then tempo and time-signature
+/// changes, then the loop and bar numbers.
+const RULER: f32 = 38.0;
 /// Edge grab width for trimming, in points.
 const EDGE: f32 = 6.0;
 /// A comment pin's bubble.
@@ -700,6 +704,75 @@ impl Timeline {
 
     pub fn add_marker(&mut self, song: &mut Song, bar: i64) {
         add_marker(song.markers, bar);
+    }
+
+    /// Tempo and time-signature changes along the ruler's middle row:
+    /// each as a label at its beat, with a slope up to a tempo glided into.
+    fn draw_time_changes(
+        &self,
+        painter: &egui::Painter,
+        view: &View,
+        ruler: Rect,
+        x_of: &dyn Fn(i64) -> f32,
+    ) {
+        let map = view.map;
+        let tempo_c = Color32::from_rgb(90, 180, 150);
+        let meter_c = Color32::from_rgb(170, 140, 230);
+        let (top, bottom) = (ruler.top() + 14.0, ruler.top() + 26.0);
+        let painter = painter.with_clip_rect(ruler);
+        let label = |x: f32, text: String, colour: Color32| {
+            let g = painter.layout_no_wrap(text, FontId::proportional(10.0), Color32::BLACK);
+            let r = Rect::from_min_size(pos2(x + 1.0, top), g.size() + vec2(6.0, 0.0));
+            painter.rect_filled(r, 2.0, colour);
+            painter.galley(r.min + vec2(3.0, 0.0), g, Color32::BLACK);
+            r.width()
+        };
+        let bpm = |t: daw_engine::time::Tempo| {
+            let v = t.as_f64();
+            if v.fract() == 0.0 {
+                format!("{v:.0}")
+            } else {
+                format!("{v:.1}")
+            }
+        };
+        let tempos: Vec<_> = map.tempo_changes().collect();
+        let meters: Vec<_> = map.signature_changes().collect();
+        if tempos.is_empty() && meters.is_empty() {
+            return;
+        }
+        let start = map.signature_at(Ticks(0));
+        let x0 = x_of(0);
+        let w = label(x0, format!("{} BPM", bpm(map.tempo_at(Ticks(0)))), tempo_c);
+        label(
+            x0 + w + 2.0,
+            format!("{}/{}", start.beats, start.unit),
+            meter_c,
+        );
+        let mut prev = x0;
+        for (at, t, glided) in tempos {
+            let x = x_of(map.frames_at(at).0);
+            if glided {
+                painter.line_segment(
+                    [pos2(prev, bottom), pos2(x, top)],
+                    Stroke::new(1.5, tempo_c),
+                );
+            }
+            painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, tempo_c));
+            label(x, format!("{} BPM", bpm(t)), tempo_c);
+            prev = x;
+        }
+        for (at, _, sig) in meters {
+            let x = x_of(map.frames_at(at).0);
+            // To the left of a tempo change on the same bar line.
+            let g = format!("{}/{}", sig.beats, sig.unit);
+            painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, meter_c));
+            let shift = if map.tempo_changes().any(|(t, _, _)| t == at) {
+                -(g.len() as f32 * 6.0 + 10.0)
+            } else {
+                0.0
+            };
+            label(x + shift, g, meter_c);
+        }
     }
 
     /// The bar the playhead is in.
@@ -1456,22 +1529,24 @@ impl Timeline {
             let fb = view.map.frames_at(view.map.bar_start(b)).0;
             let r = Rect::from_x_y_ranges(
                 x_of(fa).max(left)..=x_of(fb).max(left),
-                rect.top() + 16.0..=rect.top() + RULER,
+                rect.top() + RULER - 12.0..=rect.top() + RULER,
             );
             painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(80, 160, 240, 90));
         }
 
         // Bar lines, thinned out when zoomed out.
+        // Bars change length with the tempo and time signature, so this
+        // is measured where the view starts.
+        let first = Self::bar_at(view.map, frame_of(left).max(0));
         let bar_px = {
-            let b1 = view.map.frames_at(view.map.bar_start(1)).0;
-            let b2 = view.map.frames_at(view.map.bar_start(2)).0;
+            let b1 = view.map.frames_at(view.map.bar_start(first)).0;
+            let b2 = view.map.frames_at(view.map.bar_start(first + 1)).0;
             (x_of(b2) - x_of(b1)).max(0.1)
         };
         let every = [1, 2, 4, 8, 16, 32, 64]
             .into_iter()
             .find(|&n| bar_px * n as f32 >= 40.0)
             .unwrap_or(128);
-        let first = Self::bar_at(view.map, frame_of(left).max(0));
         let mut bar = (first - 1) / every * every + 1;
         loop {
             let x = x_of(view.map.frames_at(view.map.bar_start(bar)).0);
@@ -1493,6 +1568,7 @@ impl Timeline {
             }
             bar += every;
         }
+        self.draw_time_changes(&painter, view, ruler, &x_of);
 
         // Lanes and clips, under the ruler.
         let lanes = painter.with_clip_rect(Rect::from_min_max(
@@ -1749,6 +1825,34 @@ impl Timeline {
                 if ui.button(format!("Add marker at bar {bar}")).clicked() {
                     self.add_marker(song, bar);
                     ui.close();
+                }
+                if self.menu_lane.is_none() {
+                    let bb = view.map.bar_beat(view.map.ticks_at(Frames(snap(
+                        view.map,
+                        at,
+                        Snap::Beat,
+                    ))));
+                    let (b, beat) = (bb.bar, bb.beat as u32);
+                    if (b, beat) != (1, 1)
+                        && ui
+                            .button(format!("Add tempo change at bar {b}, beat {beat}…"))
+                            .clicked()
+                    {
+                        out.tempo = Some(crate::tempo::Ask::Tempo(b, beat));
+                        ui.close();
+                    }
+                    if bar > 1
+                        && ui
+                            .button(format!("Add time signature change at bar {bar}…"))
+                            .clicked()
+                    {
+                        out.tempo = Some(crate::tempo::Ask::Meter(bar));
+                        ui.close();
+                    }
+                    if ui.button("Tempo and time signature…").clicked() {
+                        out.tempo = Some(crate::tempo::Ask::Open);
+                        ui.close();
+                    }
                 }
                 let on = match self.menu_lane.and_then(|l| song.lanes.get(l)) {
                     Some(l) => format!("Add comment on {} here…", l.name),

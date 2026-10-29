@@ -10,7 +10,9 @@
 //! The transport is sample-accurate: a block that crosses the loop end is
 //! split there, and play continues from the loop start in the same block.
 //! A count-in plays clicks only, for a whole number of bars before the
-//! play position, then playback starts on the exact frame.
+//! play position, then playback starts on the exact frame. The count-in
+//! keeps the tempo and time signature in force at the play position, so
+//! starting just after a tempo change counts in at the new tempo.
 //!
 //! With device input ([`Engine::process_duplex`]), tracks can monitor
 //! their input at any time, and armed tracks record while the transport
@@ -29,7 +31,7 @@ use crate::metronome::{self, Metronome, Voice};
 use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
 use crate::stretch;
-use crate::time::{Frames, Ticks};
+use crate::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
 
 /// Messages from the controller to the audio thread.
 pub enum Command {
@@ -347,6 +349,11 @@ pub struct Engine {
     voice: Option<Voice>,
     /// During a count-in: where playback starts. `pos` runs up to it.
     count_in_to: Option<i64>,
+    /// The count-in's clicks: one steady tempo and time signature, made
+    /// up front so a count-in never allocates. Timeline frame `f` is
+    /// frame `f - count_offset` on it.
+    count_map: TempoMap,
+    count_offset: i64,
     /// Clicks for the current block, preallocated.
     click_buf: Vec<f32>,
     /// Per-block track peaks, preallocated.
@@ -436,6 +443,8 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             metronome: Metronome::default(),
             voice: None,
             count_in_to: None,
+            count_map: TempoMap::new(48_000, Tempo::bpm(120), TimeSignature::COMMON),
+            count_offset: 0,
             click_buf: vec![0.0; max_block],
             peaks: vec![(0.0, 0.0); MAX_TRACKS],
             recording: false,
@@ -490,8 +499,15 @@ impl Engine {
                     if let Some(g) = &self.graph {
                         let map = g.tempo();
                         let start = map.ticks_at(Frames(self.pos));
-                        let bar = map.signature_at(start).bar_ticks();
-                        let from = map.frames_at(Ticks(start.0 - bar * bars as i64));
+                        let sig = map.signature_at(start);
+                        // Steady at the play position's tempo, with its
+                        // bar lines where the song's are.
+                        let into_bar = start.0 - map.bar_start(map.bar_beat(start).bar).0;
+                        let c = &mut self.count_map;
+                        c.reset(map.sample_rate(), map.tempo_at(start), sig);
+                        self.count_offset = self.pos - c.frames_at(Ticks(into_bar)).0;
+                        let back = Ticks(into_bar - sig.bar_ticks() * bars as i64);
+                        let from = Frames(c.frames_at(back).0 + self.count_offset);
                         if from.0 < self.pos {
                             self.count_in_to = Some(self.pos);
                             self.pos = from.0;
@@ -907,12 +923,16 @@ impl Engine {
                 let buf = &mut self.click_buf[..len];
                 buf.fill(0.0);
                 if let Some(g) = &self.graph {
+                    let (map, from) = match self.count_in_to {
+                        Some(_) => (&self.count_map, self.posf - self.count_offset as f64),
+                        None => (g.tempo(), self.posf),
+                    };
                     metronome::render_at(
-                        g.tempo(),
+                        map,
                         &g.clicks,
                         &self.metronome,
                         &mut self.voice,
-                        self.posf,
+                        from,
                         speed,
                         buf,
                     );
@@ -963,14 +983,11 @@ impl Engine {
         let buf = &mut self.click_buf[..len];
         buf.fill(0.0);
         if let Some(g) = &self.graph {
-            metronome::render(
-                g.tempo(),
-                &g.clicks,
-                &self.metronome,
-                &mut self.voice,
-                self.pos,
-                buf,
-            );
+            let (map, from) = match self.count_in_to {
+                Some(_) => (&self.count_map, self.pos - self.count_offset),
+                None => (g.tempo(), self.pos),
+            };
+            metronome::render(map, &g.clicks, &self.metronome, &mut self.voice, from, buf);
         }
     }
 

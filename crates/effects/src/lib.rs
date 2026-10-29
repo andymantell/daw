@@ -103,6 +103,12 @@ impl Kind {
     }
 
     /// A line saying what it does.
+    /// Whether the effect can listen to another track (a sidechain):
+    /// the compressor and gate react to its level instead of their own.
+    pub fn takes_key(self) -> bool {
+        matches!(self, Kind::Compressor | Kind::Gate)
+    }
+
     pub fn about(self) -> &'static str {
         match self {
             Kind::Eq => "Cut or boost bass, middle and treble, and cut rumble or hiss",
@@ -466,6 +472,17 @@ trait Dsp: Send {
     fn update(&mut self, values: &[f64]);
     /// Processes at most [`CHUNK`] frames in place.
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+    /// As `process`, listening to `key` (another track's audio for the
+    /// same frames) instead of the audio itself, for an effect that
+    /// [`takes_key`](Self::takes_key).
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        let _ = key;
+        self.process(left, right);
+    }
+    /// Whether a sidechain means anything to it.
+    fn takes_key(&self) -> bool {
+        false
+    }
     /// Frames of delay it adds.
     fn latency(&self) -> u32 {
         0
@@ -549,6 +566,32 @@ impl Insert for Processor {
             self.read();
             self.glide();
             self.dsp.process(&mut left[at..end], &mut right[at..end]);
+            at = end;
+        }
+        self.shared
+            .reduction
+            .store(self.dsp.reduction_db().to_bits(), Ordering::Relaxed);
+    }
+
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        if !self.dsp.takes_key() {
+            return self.process(left, right);
+        }
+        let n = left
+            .len()
+            .min(right.len())
+            .min(key.0.len())
+            .min(key.1.len());
+        let mut at = 0;
+        while at < n {
+            let end = (at + CHUNK).min(n);
+            self.read();
+            self.glide();
+            self.dsp.process_keyed(
+                &mut left[at..end],
+                &mut right[at..end],
+                (&key.0[at..end], &key.1[at..end]),
+            );
             at = end;
         }
         self.shared

@@ -7,6 +7,7 @@ pub mod fade;
 pub mod graph;
 pub mod import;
 pub mod metronome;
+pub mod process;
 pub mod record;
 pub mod stream;
 pub mod stretch;

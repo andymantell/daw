@@ -23,7 +23,8 @@ body = 13
 small = 11
 heading = 17
 numerals = 16
-numerals_face = mono
+font = libre-franklin
+numerals_font = ibm-plex-mono
 
 [waveform]
 style = line

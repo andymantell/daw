@@ -27,6 +27,77 @@ const BUILT_IN: [(&str, &str); 4] = [
     ("tidal", include_str!("../themes/tidal.theme")),
 ];
 
+/// A typeface shipped with the app (SIL Open Font License 1.1, its
+/// licence beside it in `crates/app/fonts/`), by the name themes use.
+struct Face {
+    id: &'static str,
+    data: &'static [u8],
+    /// The weight to use, for a variable font.
+    weight: Option<f32>,
+}
+
+const FACES: [Face; 5] = [
+    Face {
+        id: "barlow-condensed",
+        data: include_bytes!("../fonts/barlow-condensed/BarlowCondensed-Medium.ttf"),
+        weight: None,
+    },
+    Face {
+        id: "ibm-plex-mono",
+        data: include_bytes!("../fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf"),
+        weight: None,
+    },
+    Face {
+        id: "ibm-plex-sans-condensed",
+        data: include_bytes!("../fonts/ibm-plex-sans-condensed/IBMPlexSansCondensed-Regular.ttf"),
+        weight: None,
+    },
+    Face {
+        id: "libre-franklin",
+        data: include_bytes!("../fonts/libre-franklin/LibreFranklin-wght.ttf"),
+        weight: Some(400.0),
+    },
+    Face {
+        id: "nunito",
+        data: include_bytes!("../fonts/nunito/Nunito-wght.ttf"),
+        weight: Some(500.0),
+    },
+];
+
+/// Egui's own faces, by the names themes use for them.
+const DEFAULT: &str = "default";
+const DEFAULT_MONO: &str = "default-mono";
+
+/// The family egui draws a theme's font name with.
+fn family(name: &str) -> FontFamily {
+    match name {
+        DEFAULT => FontFamily::Proportional,
+        DEFAULT_MONO => FontFamily::Monospace,
+        _ => FontFamily::Name(name.into()),
+    }
+}
+
+/// Egui's fonts with the bundled faces added, each falling back to
+/// egui's own for symbols it lacks.
+fn font_definitions() -> egui::FontDefinitions {
+    let mut defs = egui::FontDefinitions::default();
+    let fallback = defs.families[&FontFamily::Proportional].clone();
+    for f in &FACES {
+        let mut tweak = egui::FontTweak::default();
+        if let Some(w) = f.weight {
+            tweak.coords.push(b"wght", w);
+        }
+        defs.font_data.insert(
+            f.id.into(),
+            Arc::new(egui::FontData::from_static(f.data).tweak(tweak)),
+        );
+        let mut list = vec![f.id.to_string()];
+        list.extend(fallback.iter().cloned());
+        defs.families.insert(FontFamily::Name(f.id.into()), list);
+    }
+    defs
+}
+
 static BUILT_INS: LazyLock<Vec<Arc<Theme>>> = LazyLock::new(|| {
     BUILT_IN
         .iter()
@@ -166,7 +237,10 @@ pub(crate) struct Theme {
     pub(crate) small: f32,
     pub(crate) heading: f32,
     pub(crate) numerals: f32,
-    pub(crate) numerals_mono: bool,
+    /// The typeface for text, and for readouts such as the position: a
+    /// bundled face's name, `default` or `default-mono`.
+    pub(crate) font: String,
+    pub(crate) numerals_font: String,
     pub(crate) wave: WaveStyle,
     pub(crate) wave_weight: f32,
     pub(crate) texture: Texture,
@@ -323,6 +397,17 @@ impl Reader<'_> {
         })
     }
 
+    fn font(&self, key: &str) -> Result<String, String> {
+        let v = self.get(key)?;
+        if v == DEFAULT || v == DEFAULT_MONO || FACES.iter().any(|f| f.id == v) {
+            return Ok(v.to_string());
+        }
+        let names: Vec<_> = (FACES.iter().map(|f| f.id))
+            .chain([DEFAULT, DEFAULT_MONO])
+            .collect();
+        Err(Self::bad(key, v, &format!("one of {}", names.join(", "))))
+    }
+
     fn colour(&self, key: &str) -> Result<Color32, String> {
         let v = self.get(key)?;
         colour(v).ok_or_else(|| Self::bad(key, v, "a colour like #1a2b3c or #1a2b3c80"))
@@ -409,10 +494,8 @@ impl Theme {
             small: r.num("type.small", 7.0..=24.0)?,
             heading: r.num("type.heading", 10.0..=48.0)?,
             numerals: r.num("type.numerals", 8.0..=48.0)?,
-            numerals_mono: r.choice(
-                "type.numerals_face",
-                &[("mono", true), ("proportional", false)],
-            )?,
+            font: r.font("type.font")?,
+            numerals_font: r.font("type.numerals_font")?,
             wave: r.choice(
                 "waveform.style",
                 &[
@@ -467,10 +550,10 @@ impl Theme {
                 ..Default::default()
             },
             text_styles: [
-                (TextStyle::Small, FontId::proportional(self.small)),
-                (TextStyle::Body, FontId::proportional(self.body)),
-                (TextStyle::Button, FontId::proportional(self.body)),
-                (TextStyle::Heading, FontId::proportional(self.heading)),
+                (TextStyle::Small, self.font(self.small)),
+                (TextStyle::Body, self.font(self.body)),
+                (TextStyle::Button, self.font(self.body)),
+                (TextStyle::Heading, self.font(self.heading)),
                 (TextStyle::Monospace, FontId::monospace(self.body - 0.5)),
             ]
             .into(),
@@ -538,14 +621,22 @@ impl Theme {
 
     /// The font for readouts such as the position counter.
     pub(crate) fn numerals_font(&self) -> FontId {
-        FontId::new(
-            self.numerals,
-            if self.numerals_mono {
-                FontFamily::Monospace
-            } else {
-                FontFamily::Proportional
-            },
-        )
+        FontId::new(self.numerals, family(&self.numerals_font))
+    }
+
+    /// The theme's text font at `size`.
+    pub(crate) fn font(&self, size: f32) -> FontId {
+        FontId::new(size, family(&self.font))
+    }
+
+    /// The same theme in egui's own faces, for the frame before the
+    /// bundled ones are loaded.
+    fn in_default_fonts(&self) -> Theme {
+        Theme {
+            font: DEFAULT.into(),
+            numerals_font: DEFAULT_MONO.into(),
+            ..self.clone()
+        }
     }
 }
 
@@ -577,7 +668,7 @@ fn data_id() -> egui::Id {
 pub(crate) fn look(ctx: &egui::Context) -> Look {
     let theme = ctx
         .data(|d| d.get_temp::<Arc<Theme>>(data_id()))
-        .unwrap_or_else(|| BUILT_INS[0].clone());
+        .unwrap_or_else(|| Arc::new(BUILT_INS[0].in_default_fonts()));
     Look {
         theme,
         dark: ctx.theme() == egui::Theme::Dark,
@@ -632,6 +723,8 @@ pub(crate) struct Themes {
     dir: Option<PathBuf>,
     /// What egui was last given, so it is only set again on a change.
     applied: Option<(String, Mode)>,
+    /// The bundled faces have been handed to egui.
+    fonts_loaded: bool,
     /// Said in the window after copying or reloading.
     pub(crate) note: Option<String>,
 }
@@ -649,6 +742,7 @@ impl Themes {
             path: dir.map(|d| d.join("theme.txt")),
             dir: dir.map(|d| d.join("themes")),
             applied: None,
+            fonts_loaded: false,
             note: None,
         };
         if let Some(text) = t
@@ -781,7 +875,17 @@ impl Themes {
         if self.applied.as_ref() == Some(&want) {
             return;
         }
-        let theme = self.current();
+        // Fonts handed over now are only ready next frame, so this one
+        // draws in egui's own and the theme is applied again then.
+        let first = !self.fonts_loaded;
+        if first {
+            ctx.set_fonts(font_definitions());
+            self.fonts_loaded = true;
+        }
+        let mut theme = self.current();
+        if first {
+            theme = Arc::new(theme.in_default_fonts());
+        }
         ctx.set_style_of(egui::Theme::Dark, theme.style(true));
         ctx.set_style_of(egui::Theme::Light, theme.style(false));
         ctx.set_theme(match self.mode {
@@ -792,7 +896,7 @@ impl Themes {
             Mode::Light => egui::ThemePreference::Light,
         });
         ctx.data_mut(|d| d.insert_temp(data_id(), theme));
-        self.applied = Some(want);
+        self.applied = (!first).then_some(want);
         ctx.request_repaint();
     }
 
@@ -1022,6 +1126,47 @@ mod tests {
         for (id, text) in BUILT_IN {
             assert_eq!(keys(text), first, "{id}.theme has different keys");
         }
+    }
+
+    #[test]
+    fn every_bundled_face_reads_and_has_its_licence() {
+        for f in &FACES {
+            let data = egui::FontData::from_static(f.data);
+            let licence = std::fs::read_to_string(format!(
+                "{}/fonts/{}/OFL.txt",
+                env!("CARGO_MANIFEST_DIR"),
+                f.id
+            ))
+            .unwrap_or_else(|e| panic!("{}: no OFL.txt: {e}", f.id));
+            assert!(
+                licence.contains("SIL Open Font License, Version 1.1"),
+                "{}",
+                f.id
+            );
+            if f.weight.is_some() {
+                assert!(
+                    data.variation_axes().iter().any(|a| a.tag == *b"wght"),
+                    "{}",
+                    f.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_bundled_faces_draw_once_loaded() {
+        let ctx = egui::Context::default();
+        let mut t = Themes::new(None);
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                t.apply(ui.ctx());
+                ui.label("Andy · guitar 1.1.000");
+            });
+            out.textures_delta.clear();
+        }
+        let l = look(&ctx);
+        assert_eq!(l.font, "barlow-condensed");
+        assert!(ctx.fonts(|f| f.families().contains(&family("barlow-condensed"))));
     }
 
     #[test]

@@ -23,7 +23,8 @@ body = 14
 small = 11.5
 heading = 19
 numerals = 18
-numerals_face = proportional
+font = nunito
+numerals_font = nunito
 
 [waveform]
 style = line

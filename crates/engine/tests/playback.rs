@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use daw_engine::engine::{self, Command};
 use daw_engine::graph::{AudioData, ClipSpec, CompileError, Mix, Session, TrackSpec};
+use daw_engine::meter::Tap;
 use daw_engine::metronome::Metronome;
 use daw_engine::time::{Frames, PPQ, Tempo, TempoMap, Ticks, TimeSignature};
 
@@ -244,6 +245,64 @@ fn meters_report_peaks_and_reset() {
 }
 
 #[test]
+fn meters_tap_a_bus_and_keep_rms() {
+    let mut s = session();
+    // A steady 0.5 on the left of track 0; track 1 silent.
+    let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), mono(vec![0.5; 200_000]))]);
+    t.mix.pan = -1.0;
+    s.tracks.push(t);
+    s.tracks.push(TrackSpec::new(Vec::new()));
+    let (mut ctl, mut eng) = engine::new(256);
+    ctl.send(Command::SetGraph(Box::new(s.compile(256).unwrap())))
+        .ok()
+        .unwrap();
+    ctl.send(Command::SetMeterTap(Some(Tap::Track(0))))
+        .ok()
+        .unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let (mut l, mut r) = (vec![0.0; 256], vec![0.0; 256]);
+    // 0.3 s: the RMS has come most of the way.
+    for _ in 0..56 {
+        eng.process(&mut l, &mut r);
+    }
+    let mut got = Vec::new();
+    ctl.take_meter_samples(&mut got);
+    assert_eq!(got.len(), 2 * 56 * 256);
+    assert!(got.chunks(2).all(|f| close(f[0], 0.5) && f[1] == 0.0));
+    let (rl, rr) = ctl.status().track_rms(0);
+    assert!(rl > 0.5 * 0.6 && rl <= 0.5 && rr == 0.0, "{rl} {rr}");
+    assert_eq!(ctl.status().track_rms(1), (0.0, 0.0));
+    let (ml, _) = ctl.status().master_rms();
+    assert!(close(ml, rl), "master {ml} vs track {rl}");
+    for _ in 0..400 {
+        eng.process(&mut l, &mut r);
+    }
+    let settled = ctl.status().track_rms(0).0;
+    assert!(
+        (settled - 0.5).abs() < 1e-3,
+        "settles on the level: {settled}"
+    );
+
+    // The master, then nothing.
+    ctl.send(Command::SetMeterTap(Some(Tap::Master)))
+        .ok()
+        .unwrap();
+    got.clear();
+    ctl.take_meter_samples(&mut got);
+    eng.process(&mut l, &mut r);
+    got.clear();
+    ctl.take_meter_samples(&mut got);
+    let master: Vec<f32> = l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]).collect();
+    assert_eq!(got, master);
+    ctl.send(Command::SetMeterTap(None)).ok().unwrap();
+    eng.process(&mut l, &mut r);
+    got.clear();
+    ctl.take_meter_samples(&mut got);
+    assert!(got.is_empty());
+    assert_eq!(ctl.status().meter_dropped(), 0);
+}
+
+#[test]
 fn compile_rejects_bad_audio() {
     let mut s = session();
     s.tracks.push(TrackSpec::new(vec![ClipSpec::new(
@@ -280,6 +339,10 @@ fn audio_thread_never_allocates() {
     s.tracks.pop();
     let second = s.compile(512).unwrap();
     ctl.send(Command::SetGraph(Box::new(first))).ok().unwrap();
+    // Tapped for the meters, more than the queue holds (nobody reads it).
+    ctl.send(Command::SetMeterTap(Some(Tap::Track(0))))
+        .ok()
+        .unwrap();
     ctl.send(Command::SetLoop(Some((Frames(1000), Frames(90_000)))))
         .ok()
         .unwrap();

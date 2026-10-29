@@ -4,7 +4,8 @@
 //! and count-in, choose the audio device, and record: per track input, arm and monitor, with takes kept
 //! and switchable; VST 3 effects as track inserts; a tuner and practice
 //! mute; export of the mix and stems to WAV; a timeline to edit clips
-//! and mark sections; comments pinned to times in the song.
+//! and mark sections; comments pinned to times in the song; level,
+//! loudness and spectrum meters.
 //!
 //! Usage: `daw [file ...]`, or drop audio or video files on the window:
 //! WAV, MP3, FLAC, OGG, AAC/M4A, AIFF, or the sound of an MP4, MOV or MKV
@@ -23,6 +24,7 @@ mod export;
 mod freeze;
 mod fx;
 mod latency;
+mod meters;
 mod notes;
 mod people;
 mod perf;
@@ -58,7 +60,7 @@ use daw_engine::metronome::Metronome;
 use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
 use daw_engine::time::{Frames, TempoMap};
-use eframe::egui::{self, Color32, RichText, Sense, Stroke, vec2};
+use eframe::egui::{self, Color32, RichText, vec2};
 use fx::{Effects, FxSlot};
 use timeline::{Clip, Lane, Marker, Song};
 
@@ -201,6 +203,7 @@ struct App {
     saved: SavedProfiles,
     effects: Effects,
     tuner: tuner::Tuner,
+    meters: meters::Meters,
     export: export::Export,
     freezer: freeze::Freezer,
     processing: process::Processing,
@@ -291,6 +294,7 @@ impl App {
             saved,
             effects: Effects::new(config_dir().join("plugins.txt")),
             tuner: tuner::Tuner::new(rate),
+            meters: meters::Meters::new(rate),
             export: export::Export::default(),
             freezer: freeze::Freezer::default(),
             processing: process::Processing::default(),
@@ -425,6 +429,7 @@ impl App {
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
         self.send(self.tuner.command());
+        self.send(self.meters.command());
         self.send(self.practice());
         self.send_loop();
         self.send(Command::Seek(pos));
@@ -1300,7 +1305,13 @@ impl App {
                                 );
                         });
                     });
-                    meter(ui, t.meter);
+                    let rms = self.ctl.status().track_rms(i);
+                    if meters::strip(ui, t.meter, rms)
+                        .on_hover_text("Peak and RMS. Click for the meters")
+                        .clicked()
+                    {
+                        self.meters.show(Some(t.key.clone()));
+                    }
                     ui.name_inputs(format!("{name} volume"), |ui| {
                         ui.add(
                             egui::Slider::new(&mut t.mix.gain_db, -60.0..=12.0)
@@ -1351,8 +1362,16 @@ impl App {
                 }
                 ui.label(RichText::new("Master").strong());
                 ui.label("");
-                ui.label("");
-                meter(ui, self.master_meter);
+                if ui.button("Meters…").clicked() {
+                    self.meters.show(None);
+                }
+                let rms = self.ctl.status().master_rms();
+                if meters::strip(ui, self.master_meter, rms)
+                    .on_hover_text("Peak and RMS. Click for the meters")
+                    .clicked()
+                {
+                    self.meters.show(None);
+                }
                 ui.end_row();
             });
         ui.horizontal(|ui| {
@@ -1835,36 +1854,6 @@ fn channel_picker(ui: &mut egui::Ui, id: &str, name: &str, ch: &mut usize, outs:
         .accessible_name(name);
 }
 
-/// A stereo peak meter, −60 dB to 0 dB.
-fn meter(ui: &mut egui::Ui, (l, r): (f32, f32)) {
-    let (rect, _) = ui.allocate_exact_size(vec2(140.0, 14.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 2.0, Color32::from_gray(30));
-    for (i, v) in [l, r].into_iter().enumerate() {
-        let db = 20.0 * v.max(1e-6).log10();
-        let frac = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
-        let h = rect.height() / 2.0;
-        let bar = egui::Rect::from_min_size(
-            rect.min + vec2(0.0, i as f32 * h),
-            vec2(rect.width() * frac, h - 1.0),
-        );
-        let color = if db > -0.5 {
-            Color32::from_rgb(230, 70, 60)
-        } else if db > -12.0 {
-            Color32::from_rgb(230, 200, 60)
-        } else {
-            Color32::from_rgb(80, 200, 110)
-        };
-        p.rect_filled(bar, 1.0, color);
-    }
-    p.rect_stroke(
-        rect,
-        2.0,
-        Stroke::new(1.0, Color32::from_gray(70)),
-        egui::StrokeKind::Inside,
-    );
-}
-
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -2004,7 +1993,7 @@ impl eframe::App for App {
                     }
                 });
                 ui.menu_button("Practice", |ui| {
-                    for c in [Cmd::Tuner, Cmd::LessonNotes, Cmd::Comments] {
+                    for c in [Cmd::Tuner, Cmd::Meters, Cmd::LessonNotes, Cmd::Comments] {
                         self.menu_item(ui, c);
                     }
                 });
@@ -2119,6 +2108,17 @@ impl eframe::App for App {
         }
         self.tuner.update(&mut self.ctl, self.rate);
         if self.tuner.open {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+        let names: Vec<_> = (self.tracks.iter())
+            .map(|t| (t.key.as_str(), t.name.as_str()))
+            .collect();
+        if let Some(c) = self.meters.window(&ctx, &names) {
+            self.send(c);
+        }
+        let playing = self.ctl.status().playing();
+        self.meters.update(&mut self.ctl, self.rate, playing);
+        if self.meters.open {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
         if let Some(i) = self.effects.open_track {

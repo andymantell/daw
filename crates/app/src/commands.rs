@@ -55,6 +55,7 @@ pub(crate) enum Cmd {
     SaveLayout,
     PaneWindows,
     Tuner,
+    Meters,
     LessonNotes,
     Comments,
     AudioDevice,
@@ -461,6 +462,8 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Let a pane open in a window of its own, to put on another screen")
     .words("detach screens monitors undock float tear"),
     info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[]).words("tune pitch"),
+    info(Cmd::Meters, "meters", "Practice", "Meters…", &[])
+        .words("loudness lufs level peak rms spectrum phase"),
     info(
         Cmd::LessonNotes,
         "lesson-notes",
@@ -1362,6 +1365,7 @@ impl App {
                 let c = self.tuner.command();
                 self.send(c);
             }
+            Cmd::Meters => self.meters.show(None),
             Cmd::LessonNotes => self.notes_ui.open = true,
             Cmd::Comments => self.comment_ui.open = true,
             Cmd::AudioDevice => self.show_devices = true,

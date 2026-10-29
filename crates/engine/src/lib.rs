@@ -6,6 +6,7 @@ pub mod export;
 pub mod fade;
 pub mod graph;
 pub mod import;
+pub mod meter;
 pub mod metronome;
 pub mod process;
 pub mod record;

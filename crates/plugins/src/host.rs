@@ -803,6 +803,11 @@ impl LiveProcessor {
     pub fn late(&self) -> u64 {
         self.state.late.load(Ordering::Relaxed)
     }
+
+    /// Frames the helper has answered that have not been played yet.
+    pub fn available(&self) -> usize {
+        self.output.slots() / 2
+    }
 }
 
 impl Drop for LiveProcessor {
@@ -910,6 +915,15 @@ impl RemoteProcessor {
     pub fn late(&self) -> u64 {
         match self {
             RemoteProcessor::Live(p) => p.late(),
+            RemoteProcessor::Offline(_) => 0,
+        }
+    }
+
+    /// Frames answered by the helper and waiting to be played (live
+    /// processors only).
+    pub fn available(&self) -> usize {
+        match self {
+            RemoteProcessor::Live(p) => p.available(),
             RemoteProcessor::Offline(_) => 0,
         }
     }

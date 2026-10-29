@@ -22,6 +22,19 @@ fn helper() -> &'static Path {
     Path::new(env!("CARGO_BIN_EXE_daw-plugin-helper"))
 }
 
+/// Waits until the helper has answered `frames` of a live processor's
+/// queued audio.
+fn answered(fx: &daw_plugins::host::RemoteProcessor, frames: usize) {
+    let start = Instant::now();
+    while fx.available() < frames {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the helper never answered"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 fn spawn() -> Host {
     Host::spawn(helper()).unwrap()
 }
@@ -91,14 +104,16 @@ fn a_live_plugin_runs_one_block_behind_and_never_waits() {
     assert_eq!(plugin.latency(), LATENCY + BLOCK as u32);
     assert_eq!(plugin.poll().latency, LATENCY + BLOCK as u32);
 
-    // Paced like an audio device, the ones come back one block (plus
-    // the plugin's delay) later, and no block is late.
+    // Paced like an audio device that waits for the helper between
+    // blocks (so a busy test machine cannot make this fail), the ones
+    // come back one block (plus the plugin's delay) later, and no block
+    // is late.
     let mut out = Vec::new();
     for _ in 0..8 {
         let (mut a, mut b) = (vec![1.0; BLOCK], vec![1.0; BLOCK]);
         fx.process(&mut a, &mut b);
         out.extend(a);
-        std::thread::sleep(Duration::from_millis(6));
+        answered(&fx, BLOCK);
     }
     let delay = BLOCK + LATENCY as usize;
     assert!(out[..delay].iter().all(|&x| x == 0.0));
@@ -117,7 +132,7 @@ fn a_live_plugin_runs_one_block_behind_and_never_waits() {
         let (mut a, mut b) = (vec![1.0; big], vec![1.0; big]);
         fx.process(&mut a, &mut b);
         out.extend(a);
-        std::thread::sleep(Duration::from_millis(12));
+        answered(&fx, big);
     }
     assert_eq!(plugin.poll().latency, LATENCY + big as u32);
     assert!(

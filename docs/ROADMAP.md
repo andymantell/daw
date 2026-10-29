@@ -405,6 +405,26 @@ from audio.
   and switch between them.
 - Multi-input recording on many armed tracks.
 - Retrospective capture: keep recent input even when not recording.
+- **Remote control app for Android** (M): record and run the transport from
+  a phone while away from the computer, for example at a drum kit.
+  - Controls: record, play, stop, return to start, arm tracks, count-in and
+    metronome on/off, undo last take. Large buttons that work with sticks
+    in hand, haptic feedback, landscape and portrait.
+  - **Timeline overview:** tracks, clips, markers, loop region and playhead.
+    Tap or drag to move the playhead and recording start point, snapping to
+    bars and markers. Set a punch-in range.
+  - Input level meters and clip warnings, to check mic levels from the kit.
+  - Keeps the screen on while open (a standard window flag on Android needs
+    no extra permission).
+  - Local network only, paired by QR code. No internet or server of ours.
+    The desktop stays in charge: losing the phone's connection never stops
+    or spoils a recording, and the app reconnects by itself.
+  - Why an app and not just a web page served by the desktop: a page on
+    plain HTTP over the local network is not a "secure context", so the
+    browser will not let it keep the screen awake. See
+    [research/REMOTE_CONTROL.md](research/REMOTE_CONTROL.md).
+  - Uses the same control protocol as the Phase 5 companion remote, which
+    later adds looper pages to this app.
 
 ### 2.3 Mixer, routing & monitoring (L)
 - Inserts, sends (pre/post fader), effect return buses, group buses,
@@ -456,6 +476,28 @@ from audio.
 - Snapshots with a diff summary. Project templates (e.g. "Guitar lesson",
   "Band demo").
 
+### 2.9 Workspace: panes and multiple screens (M)
+- **One window by default.** The timeline, mixer, editors, browser, plugin
+  editors and practice tools are panes inside the main window. They can be
+  docked, split, resized, tabbed together, collapsed and shown full-size,
+  all without leaving that window.
+- **Detach on request:** any pane can be torn off into its own window and
+  docked back again, so the app can spread over several screens (e.g.
+  timeline on one, mixer on another, plugins on a third). Off by default.
+- **Saved layouts:** name and recall arrangements ("Recording", "Mixing",
+  "Lesson"), with a key command for each.
+- **Layouts belong to the computer, not the project.** Collaborators have
+  different screens, so window positions are kept in local settings and
+  never synced. The project only remembers which panes were open.
+- **Screen changes are safe:** if a saved screen is missing (laptop
+  undocked, monitor off), its windows come back onto a screen that exists,
+  and the layout returns when the screen does. Each window follows its
+  own screen's scaling (high-DPI).
+- Keyboard focus, shortcuts and the screen reader work the same in every
+  window. Closing a detached window docks its pane back. It never closes
+  the project.
+- Toolkit support: see [research/WORKSPACE_WINDOWS.md](research/WORKSPACE_WINDOWS.md).
+
 **Exit criteria**
 - A 24+-track song with 10+ plugins can be recorded, comped, mixed with
   automation and exported with no dropouts at a 128-sample buffer on the
@@ -463,6 +505,14 @@ from audio.
 - Delay compensation is verified by automated null tests.
 - A sloppy multi-mic drum take is tightened to the grid at 70% strength,
   and the drum mics stay in phase.
+- On a three-screen setup, the timeline, mixer and a plugin editor each sit
+  on their own screen. After the app restarts with one screen unplugged,
+  every pane is still reachable, and the layout returns when the screen
+  is plugged back in.
+- From the drum stool, a phone moves the start point to bar 17, arms the
+  drum tracks, records a take with count-in, and stops, with the desktop
+  out of reach. Turning off the phone's Wi-Fi mid-take does not affect the
+  recording.
 
 ---
 
@@ -759,11 +809,12 @@ guitar through effects into loops works properly.
 - MIDI controllers, footswitches and expression pedals. Press, hold and
   double-press actions. Keyboard mapping. HID devices where feasible.
 - Macro controls spanning several parameters.
-- **Companion remote on a phone or tablet:** the desktop app serves a
-  simple control page over the local network. No internet or server of
-  ours is needed. It offers large looper buttons, effect pads, XY
-  control of several effects at once, and transport. It pairs by QR
-  code, and works on the same network only.
+- **Companion remote on a phone or tablet:** builds on the Phase 2 Android
+  remote app, adding large looper buttons, effect pads and XY control of
+  several effects at once. For other phones and tablets, the desktop app
+  also serves a simple control page over the local network (no screen
+  wake-lock there, see 2.2). No internet or server of ours is needed. It
+  pairs by QR code, and works on the same network only.
 - **Per-loop-track output routing:** send each loop track (and the rhythm,
   and each input) to the main, alternate or headphone outputs separately.
 

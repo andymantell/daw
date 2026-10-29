@@ -29,6 +29,7 @@ end for what could not be verified.
 | Comping: swipe-select best parts, auto crossfades, audition, flatten; several saved comps | 2 | M | |
 | Multi-input simultaneous recording | 2 | L | |
 | Retrospective capture (keep input played while not recording) | 2 (audio), 3 (MIDI) | L | Valuable for students. |
+| Android remote app: transport, record, arm, timeline overview to move the start point, input meters | 2 | M | Local network, QR pairing. See [REMOTE_CONTROL.md](REMOTE_CONTROL.md). |
 | Monitor section: control-room output, cue/headphone mixes, talkback, dim/mono, speaker switching | 2 | M | Useful for in-person lessons. |
 
 ## 2. Audio editing
@@ -171,6 +172,7 @@ end for what could not be verified.
 | User scripting (editor actions, MIDI) | 7 | M | Sandboxed. |
 | Controller scripting / control surfaces | 7 | M | |
 | Customisable key commands, command palette | 2 | L | |
+| Docked panes in one window by default; optional detachable windows across several screens; saved layouts kept per computer | 2 | M | See [WORKSPACE_WINDOWS.md](WORKSPACE_WINDOWS.md). |
 
 ## 8. Non-linear / performance
 
@@ -182,7 +184,7 @@ end for what could not be verified.
 | Live looping of a timeline region; pre-arranged performance structure | 6 | M | |
 | Stage rig mode: patches, set lists, song sheet (lyrics/chords/notation), foot control | 5 | M | |
 | LAN tempo sync with other apps/devices | 5 | M | Common SDK is GPLv2+/proprietary — check against licence decision. |
-| Companion remote on phone/tablet over local network (served by the app) | 5 | M | No internet or server needed. |
+| Companion remote: looper and effect pages in the Android app; served web page for other devices | 5 | M | No internet or server needed. |
 | Audio streaming between devices on the local network | 8 | M | |
 | Pattern-based song building | 3 | L | |
 | MIDI learn / controller mapping | 3 | L | |

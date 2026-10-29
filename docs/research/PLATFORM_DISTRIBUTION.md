@@ -3,7 +3,7 @@
 Checked 2026-10-27. This covers which operating system versions to support,
 Apple Silicon and Intel Macs, code signing, updates with no server we
 operate, crash reports, and Linux packaging. Items marked **Owner decision**
-are also listed in [REVIEW_QUEUE.md](../REVIEW_QUEUE.md).
+are also listed in [review-queue/0.7-platform.md](../review-queue/0.7-platform.md).
 
 ## Operating system versions
 

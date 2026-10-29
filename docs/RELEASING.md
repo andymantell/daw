@@ -3,8 +3,8 @@
 How installers are built and published (roadmap 1.8). This follows the
 0.7 proposals in [research/PLATFORM_DISTRIBUTION.md](research/PLATFORM_DISTRIBUTION.md),
 which are still waiting for the owner's sign-off in
-[REVIEW_QUEUE.md](REVIEW_QUEUE.md); what changes if they do is listed at
-the end.
+[review-queue/0.7-platform.md](review-queue/0.7-platform.md); what
+changes if they do is listed at the end.
 
 ## What a release contains
 

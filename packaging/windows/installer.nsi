@@ -2,8 +2,8 @@
 ; The Windows installer (roadmap 1.8). Built by packaging/windows/build.sh
 ; in the release workflow. It installs for the current user only, into
 ; %LOCALAPPDATA%\Programs\DAW, so it needs no administrator rights. It is
-; not signed yet (docs/REVIEW_QUEUE.md, 0.7 Windows signing), so Windows
-; warns before running it. Uninstalling removes the program only: projects,
+; not signed yet (docs/review-queue/0.7-platform.md, Windows signing), so
+; Windows warns before running it. Uninstalling removes the program only: projects,
 ; takes, settings and crash reports stay.
 ;
 ; makensis -DVERSION=0.1.0 -DSRC=<folder with daw.exe> -DOUT=<setup.exe>

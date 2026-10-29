@@ -81,7 +81,7 @@ jobs:
           path: target/tmp/golden
           if-no-files-found: ignore
       # A Windows build of the app for trying on the owner's PC
-      # (docs/REVIEW_QUEUE.md).
+      # (docs/review-queue/).
       - name: Build the Windows app
         if: runner.os == 'Windows'
         run: cargo build --release -p daw-app

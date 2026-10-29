@@ -4,7 +4,7 @@ Checked 2026-10-28. The app is used for music lessons, and some students
 will be children. This review looks at which child-data and privacy rules
 could apply, and what that means for the identity, live session and
 comment work still to come in roadmap 1.6. Items marked **Owner decision**
-are also listed in [REVIEW_QUEUE.md](../REVIEW_QUEUE.md).
+are also listed in [review-queue/1.8-privacy.md](../review-queue/1.8-privacy.md).
 
 **This is not legal advice.** It summarises what regulators' own pages
 say, and marks clearly where the pages are silent or where I am drawing an

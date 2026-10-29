@@ -227,8 +227,10 @@ impl R<'_> {
     fn samples(&mut self) -> Res<Vec<f32>> {
         let n = self.u32()? as usize;
         let b = self.take(n * 4)?;
-        Ok(b.chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        Ok(b.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect())
     }
     fn opt_f64(&mut self) -> Res<Option<f64>> {

@@ -191,9 +191,9 @@ mod tests {
         let (spec, s) = read(&out);
         assert_eq!((spec.channels, spec.sample_rate), (2, 48_000));
         assert_eq!(s.len(), frames * 2);
-        for (k, f) in s.chunks_exact(2).enumerate() {
+        for (k, f) in s.as_chunks::<2>().0.iter().enumerate() {
             let v = ((300 + frames - 1 - k) % 10_000) as f32 * STEP;
-            assert_eq!(f, [v, -v], "frame {k}");
+            assert_eq!(*f, [v, -v], "frame {k}");
         }
         assert!(!out.with_extension("wav.part").exists());
     }

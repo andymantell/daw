@@ -31,10 +31,17 @@ plus a timeline overview to move the recording start point.
 - One control protocol serves the Android app, the Phase 5 looper pages and
   the served web page.
 
+## Settled since
+
+- **Language and toolkit** (2026-10-29): Kotlin with the platform's
+  declarative UI toolkit; the protocol is written on both sides and kept
+  in step by shared fixtures. See
+  [decision 0010](../decisions/0010-phone-remote-app.md).
+- **Distribution**, first step: a debug package built by CI to sideload.
+  A signed package on our releases, or a store listing, is the owner's
+  call (review queue 2.2).
+
 ## Not researched yet
 
-- Which UI toolkit and language to use for the Android app, and whether it
-  can share Rust code with the desktop. This needs its own spike.
-- Distribution: an app store listing versus an installable package
-  downloaded from our releases.
-- Discovering the desktop on the local network without scanning a code.
+- Discovering the desktop on the local network without scanning a code
+  (and so surviving a change of the desktop's address).

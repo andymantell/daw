@@ -2,3 +2,9 @@
 /spikes/target/
 /spikes/*-report.txt
 /spikes/stretch-listen/
+# The Android app (android/README.md)
+/android/.gradle/
+/android/**/build/
+/android/local.properties
+/android/.idea/
+/android/.kotlin/

@@ -26,7 +26,8 @@ use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::graph::{Graph, InputBlock, MAX_TRACKS, Mix, Rate};
+use crate::graph::{Graph, InputBlock, Level, MAX_TRACKS, Mix, Rate};
+use crate::meter::Tap;
 use crate::metronome::{self, Metronome, Voice};
 use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
@@ -70,6 +71,8 @@ pub enum Command {
     SetCapture(bool),
     /// Sends this input channel to the tuner; `None` stops.
     SetTunerInput(Option<usize>),
+    /// Sends this bus to the meters; `None` stops.
+    SetMeterTap(Option<Tap>),
     /// Practice speed (1 is normal, 0.5 to 1.5) and transpose in
     /// semitones (±12, fractions for cents), keeping pitch and tempo
     /// apart. Nothing records while either is changed.
@@ -103,6 +106,12 @@ pub struct Status {
     rec_dropped: AtomicU64,
     /// The same for input kept by retrospective capture.
     capture_dropped: AtomicU64,
+    /// RMS per track (left, right) over about 300 ms, after the fader,
+    /// as `f32` bits; then the master's.
+    rms: Vec<[AtomicU32; 2]>,
+    /// Frames of tapped audio the meters missed because the UI fell
+    /// behind.
+    meter_dropped: AtomicU64,
     /// Times playback has gone round the loop.
     loops: AtomicU64,
 }
@@ -127,6 +136,10 @@ impl Status {
             recording: AtomicBool::new(false),
             rec_dropped: AtomicU64::new(0),
             capture_dropped: AtomicU64::new(0),
+            rms: (0..=MAX_TRACKS)
+                .map(|_| [AtomicU32::new(0), AtomicU32::new(0)])
+                .collect(),
+            meter_dropped: AtomicU64::new(0),
             loops: AtomicU64::new(0),
         }
     }
@@ -198,6 +211,30 @@ impl Status {
     pub fn take_master_peak(&self) -> (f32, f32) {
         take_pair(&self.master_peaks)
     }
+
+    /// RMS (left, right) on a track over about the last 300 ms.
+    pub fn track_rms(&self, track: usize) -> (f32, f32) {
+        self.rms
+            .get(track.min(MAX_TRACKS - 1))
+            .map_or((0.0, 0.0), read_pair)
+    }
+
+    /// RMS (left, right) on the master bus over about the last 300 ms.
+    pub fn master_rms(&self) -> (f32, f32) {
+        read_pair(&self.rms[MAX_TRACKS])
+    }
+
+    /// Frames of tapped audio the meters have missed so far.
+    pub fn meter_dropped(&self) -> u64 {
+        self.meter_dropped.load(Ordering::Relaxed)
+    }
+}
+
+fn read_pair(p: &[AtomicU32; 2]) -> (f32, f32) {
+    (
+        f32::from_bits(p[0].load(Ordering::Relaxed)),
+        f32::from_bits(p[1].load(Ordering::Relaxed)),
+    )
 }
 
 fn take_pair(p: &[AtomicU32; 2]) -> (f32, f32) {
@@ -236,6 +273,7 @@ pub struct Controller {
     status: Arc<Status>,
     max_block: usize,
     from_tuner: Consumer<f32>,
+    from_meter: Consumer<f32>,
 }
 
 impl Controller {
@@ -312,6 +350,18 @@ impl Controller {
         }
     }
 
+    /// Moves the tapped bus's audio (see [`Command::SetMeterTap`]),
+    /// interleaved stereo, onto the end of `into`.
+    pub fn take_meter_samples(&mut self, into: &mut Vec<f32>) {
+        let n = self.from_meter.slots() & !1;
+        if let Ok(chunk) = self.from_meter.read_chunk(n) {
+            let (a, b) = chunk.as_slices();
+            into.extend_from_slice(a);
+            into.extend_from_slice(b);
+            chunk.commit_all();
+        }
+    }
+
     /// The block size graphs must be compiled for.
     pub fn max_block(&self) -> usize {
         self.max_block
@@ -356,8 +406,14 @@ pub struct Engine {
     count_offset: i64,
     /// Clicks for the current block, preallocated.
     click_buf: Vec<f32>,
-    /// Per-block track peaks, preallocated.
-    peaks: Vec<(f32, f32)>,
+    /// Per-block track levels, preallocated.
+    levels: Vec<Level>,
+    /// Mean squares behind [`Status::track_rms`], then the master's.
+    mean_sq: Vec<(f32, f32)>,
+    meter_tap: Option<Tap>,
+    /// A tapped track's block, preallocated.
+    tap_buf: [Vec<f32>; 2],
+    to_meter: Producer<f32>,
     recording: bool,
     /// See [`Command::SetPunch`].
     punch: Option<(i64, i64)>,
@@ -387,6 +443,11 @@ const REC_QUEUE: usize = 32_768;
 /// Tuner samples in flight: about a third of a second at 48 kHz, more
 /// than the UI needs between frames.
 const TUNER_QUEUE: usize = 16_384;
+/// Tapped samples in flight, stereo: over two seconds at 48 kHz, so the
+/// meters miss nothing while the UI is slow to draw.
+const METER_QUEUE: usize = 1 << 18;
+/// How long the RMS meters average over, in seconds.
+const RMS_TIME: f32 = 0.3;
 
 /// Creates a connected controller and engine. `max_block` is the largest
 /// block the audio callback will ask for; larger ones are split.
@@ -406,6 +467,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let takes = Arc::new(Mutex::new(Vec::new()));
     let capture = Arc::new(CaptureShared::default());
     let (tuner_tx, tuner_rx) = RingBuffer::new(TUNER_QUEUE);
+    let (meter_tx, meter_rx) = RingBuffer::new(METER_QUEUE);
     let recorder = Recorder::new(
         rec_rx,
         status.clone(),
@@ -428,6 +490,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             status: status.clone(),
             max_block,
             from_tuner: tuner_rx,
+            from_meter: meter_rx,
         },
         Engine {
             commands: cmd_rx,
@@ -446,7 +509,11 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             count_map: TempoMap::new(48_000, Tempo::bpm(120), TimeSignature::COMMON),
             count_offset: 0,
             click_buf: vec![0.0; max_block],
-            peaks: vec![(0.0, 0.0); MAX_TRACKS],
+            levels: vec![Level::default(); MAX_TRACKS],
+            mean_sq: vec![(0.0, 0.0); MAX_TRACKS + 1],
+            meter_tap: None,
+            tap_buf: [vec![0.0; max_block], vec![0.0; max_block]],
+            to_meter: meter_tx,
             recording: false,
             punch: None,
             stop_at: None,
@@ -561,6 +628,7 @@ impl Engine {
                 Command::StopAt(f) => self.stop_at = f.map(|f| f.0),
                 Command::SetCapture(on) => self.capture = on,
                 Command::SetTunerInput(ch) => self.tuner_input = ch,
+                Command::SetMeterTap(t) => self.meter_tap = t,
                 Command::SetPractice { speed, semitones } => {
                     self.speed = speed.clamp(stretch::SPEED_RANGE.0, stretch::SPEED_RANGE.1);
                     self.semitones = semitones.clamp(-stretch::SEMITONES, stretch::SEMITONES);
@@ -1003,28 +1071,71 @@ impl Engine {
             return;
         };
         let tracks = g.track_count();
+        let n = left.len();
+        let [tl, tr] = &mut self.tap_buf;
+        let tap = match self.meter_tap {
+            Some(Tap::Track(t)) if t < tracks => Some((t, &mut tl[..n], &mut tr[..n])),
+            _ => None,
+        };
         let missing = g.render(
             self.pos,
             self.looping,
             [left, right],
-            &mut self.peaks[..tracks],
+            &mut self.levels[..tracks],
             input,
             play,
             rate,
+            tap,
         );
         if missing > 0 {
             self.status
                 .underruns
                 .fetch_add(missing as u64, Ordering::Relaxed);
         }
-        for (slot, p) in self.status.track_peaks.iter().zip(&self.peaks[..tracks]) {
-            raise(&slot[0], p.0);
-            raise(&slot[1], p.1);
+        // Each block moves the RMS this far towards the block's own.
+        let k = 1.0 - (-(n as f32) / (RMS_TIME * g.tempo().sample_rate() as f32)).exp();
+        let per = 1.0 / n.max(1) as f32;
+        let status = &self.status;
+        let rms = |i: usize, sq: (f32, f32), ms: &mut (f32, f32)| {
+            ms.0 += k * (sq.0 * per - ms.0);
+            ms.1 += k * (sq.1 * per - ms.1);
+            status.rms[i][0].store(ms.0.max(0.0).sqrt().to_bits(), Ordering::Relaxed);
+            status.rms[i][1].store(ms.1.max(0.0).sqrt().to_bits(), Ordering::Relaxed);
+        };
+        for (i, l) in self.levels[..tracks].iter().enumerate() {
+            raise(&status.track_peaks[i][0], l.peak.0);
+            raise(&status.track_peaks[i][1], l.peak.1);
+            rms(i, l.sq, &mut self.mean_sq[i]);
         }
-        let ml = left.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        let mr = right.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        raise(&self.status.master_peaks[0], ml);
-        raise(&self.status.master_peaks[1], mr);
+        let (mut ml, mut mr, mut sl, mut sr) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for (a, b) in left.iter().zip(right.iter()) {
+            (ml, mr) = (ml.max(a.abs()), mr.max(b.abs()));
+            (sl, sr) = (sl + a * a, sr + b * b);
+        }
+        raise(&status.master_peaks[0], ml);
+        raise(&status.master_peaks[1], mr);
+        rms(MAX_TRACKS, (sl, sr), &mut self.mean_sq[MAX_TRACKS]);
+        let tapped = match self.meter_tap {
+            Some(Tap::Master) => Some((&*left, &*right)),
+            Some(Tap::Track(t)) if t < tracks => Some((&tl[..n], &tr[..n])),
+            _ => None,
+        };
+        if let Some((l, r)) = tapped {
+            // Whatever doesn't fit is dropped, and counted.
+            let frames = n.min(self.to_meter.slots() / 2);
+            if let Ok(mut chunk) = self.to_meter.write_chunk(2 * frames) {
+                let (a, b) = chunk.as_mut_slices();
+                for (k, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
+                    *slot = if k % 2 == 0 { l[k / 2] } else { r[k / 2] };
+                }
+                chunk.commit_all();
+            }
+            if frames < n {
+                status
+                    .meter_dropped
+                    .fetch_add((n - frames) as u64, Ordering::Relaxed);
+            }
+        }
     }
 }
 

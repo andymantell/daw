@@ -26,6 +26,13 @@ use crate::time::{Frames, TempoMap, Ticks};
 /// Most tracks a graph can hold; meters are sized to this up front.
 pub const MAX_TRACKS: usize = 256;
 
+/// One block's level on a track: (left, right) peak and sum of squares.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Level {
+    pub peak: (f32, f32),
+    pub sq: (f32, f32),
+}
+
 /// Decoded audio, one `Vec` per channel (1 or 2 channels).
 #[derive(Debug)]
 pub struct AudioData {
@@ -749,19 +756,21 @@ impl Graph {
     /// buffers, adds monitored input, applies the mixer, and adds the
     /// tracks into `out`. With `play` false (stopped, or counting in) only
     /// monitored input sounds. `looping` is the loop region while
-    /// playing: effects' latency compensation reads ahead round it. Peak
-    /// levels go to `peaks` (track by track, after the fader). Returns
-    /// how many frames of streamed audio were missing.
+    /// playing: effects' latency compensation reads ahead round it.
+    /// Levels go to `levels` (track by track, after the fader), and the
+    /// track `tap` names is copied out to its buffers for the meters.
+    /// Returns how many frames of streamed audio were missing.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render(
         &mut self,
         pos: i64,
         looping: Option<(i64, i64)>,
         out: [&mut [f32]; 2],
-        peaks: &mut [(f32, f32)],
+        levels: &mut [Level],
         input: InputBlock,
         play: bool,
         rate: Option<Rate>,
+        mut tap: Option<(usize, &mut [f32], &mut [f32])>,
     ) -> usize {
         let n = out[0].len();
         let mut missing = 0;
@@ -822,6 +831,11 @@ impl Graph {
             let (l0, r0) = t.last;
             let step = 1.0 / n.max(1) as f32;
             let mut peak = (0.0f32, 0.0f32);
+            let mut sq = (0.0f32, 0.0f32);
+            let mut tap = tap
+                .as_mut()
+                .filter(|t| t.0 == ti)
+                .map(|(_, l, r)| (&mut **l, &mut **r));
             for i in 0..n {
                 let k = (i + 1) as f32 * step;
                 let gl = l0 + (target.0 - l0) * k;
@@ -834,12 +848,17 @@ impl Graph {
                 };
                 let (a, b) = (a * gl, b * gr);
                 peak = (peak.0.max(a.abs()), peak.1.max(b.abs()));
+                sq = (sq.0 + a * a, sq.1 + b * b);
+                if let Some((tl, tr)) = &mut tap {
+                    tl[i] = a;
+                    tr[i] = b;
+                }
                 out_l[i] += a;
                 out_r[i] += b;
             }
             t.last = target;
-            if let Some(p) = peaks.get_mut(ti) {
-                *p = peak;
+            if let Some(l) = levels.get_mut(ti) {
+                *l = Level { peak, sq };
             }
         }
         for s in out_l.iter_mut().chain(out_r.iter_mut()) {

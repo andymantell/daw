@@ -1111,6 +1111,7 @@ dependencies = [
  "rustls",
  "ureq",
  "vst3",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -14,6 +14,7 @@ use eframe::egui::{self, Event, Key, Modifiers, RichText};
 
 use crate::App;
 use crate::project::{After, Dialog, find_projects};
+use crate::workspace::Pane;
 
 /// Every command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -47,6 +48,12 @@ pub(crate) enum Cmd {
     Loop,
     Metronome,
     CountIn,
+    Mixer,
+    FullSize,
+    /// Recalls saved layout n, counted from 0.
+    Layout(u8),
+    SaveLayout,
+    PaneWindows,
     Tuner,
     LessonNotes,
     Comments,
@@ -348,6 +355,111 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("One bar of clicks before playing")
     .words("pre-roll"),
+    info(Cmd::Mixer, "mixer", "View", "Mixer", &[])
+        .hint("Show or hide the mixer")
+        .words("pane faders tracks"),
+    info(
+        Cmd::FullSize,
+        "full-size",
+        "View",
+        "Full size",
+        &[key(CTRL_SHIFT, Key::F)],
+    )
+    .hint("Show the pane last clicked in full size, or all panes again")
+    .words("maximise maximize zoom pane"),
+    info(
+        Cmd::Layout(0),
+        "layout-1",
+        "View",
+        "Layout 1",
+        &[key(CTRL, Key::Num1)],
+    )
+    .hint("Recall saved layout 1")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(1),
+        "layout-2",
+        "View",
+        "Layout 2",
+        &[key(CTRL, Key::Num2)],
+    )
+    .hint("Recall saved layout 2")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(2),
+        "layout-3",
+        "View",
+        "Layout 3",
+        &[key(CTRL, Key::Num3)],
+    )
+    .hint("Recall saved layout 3")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(3),
+        "layout-4",
+        "View",
+        "Layout 4",
+        &[key(CTRL, Key::Num4)],
+    )
+    .hint("Recall saved layout 4")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(4),
+        "layout-5",
+        "View",
+        "Layout 5",
+        &[key(CTRL, Key::Num5)],
+    )
+    .hint("Recall saved layout 5")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(5),
+        "layout-6",
+        "View",
+        "Layout 6",
+        &[key(CTRL, Key::Num6)],
+    )
+    .hint("Recall saved layout 6")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(6),
+        "layout-7",
+        "View",
+        "Layout 7",
+        &[key(CTRL, Key::Num7)],
+    )
+    .hint("Recall saved layout 7")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(7),
+        "layout-8",
+        "View",
+        "Layout 8",
+        &[key(CTRL, Key::Num8)],
+    )
+    .hint("Recall saved layout 8")
+    .words("workspace arrangement panes"),
+    info(
+        Cmd::Layout(8),
+        "layout-9",
+        "View",
+        "Layout 9",
+        &[key(CTRL, Key::Num9)],
+    )
+    .hint("Recall saved layout 9")
+    .words("workspace arrangement panes"),
+    info(Cmd::SaveLayout, "save-layout", "View", "Save layout…", &[])
+        .hint("Name the arrangement of panes now, to recall with a key")
+        .words("workspace panes"),
+    info(
+        Cmd::PaneWindows,
+        "pane-windows",
+        "View",
+        "Panes in their own windows",
+        &[],
+    )
+    .hint("Let a pane open in a window of its own, to put on another screen")
+    .words("detach screens monitors undock float tear"),
     info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[]).words("tune pitch"),
     info(
         Cmd::LessonNotes,
@@ -429,6 +541,14 @@ impl Cmd {
 
     fn from_id(id: &str) -> Option<Cmd> {
         COMMANDS.iter().find(|i| i.id == id).map(|i| i.cmd)
+    }
+
+    /// Changes the workspace.
+    pub(crate) fn on_workspace(self) -> bool {
+        matches!(
+            self,
+            Cmd::Mixer | Cmd::FullSize | Cmd::Layout(_) | Cmd::SaveLayout | Cmd::PaneWindows
+        )
     }
 
     /// Run by the timeline, which knows what has the keyboard there.
@@ -653,13 +773,23 @@ impl Keymap {
 /// Commands matching what was typed, best first: every word typed must
 /// begin a word of the command's name, menu or other words, or appear
 /// in its name. Nothing typed lists them all, in menu order.
+#[cfg(test)]
 pub(crate) fn search(query: &str) -> Vec<Cmd> {
+    search_named(query, &BTreeMap::new())
+}
+
+/// As `search`, with some commands under the names in `names` (a
+/// layout's, say) as well as their own.
+pub(crate) fn search_named(query: &str, names: &BTreeMap<Cmd, String>) -> Vec<Cmd> {
     let query = query.trim().to_lowercase();
     let typed: Vec<&str> = query.split_whitespace().collect();
     let mut found: Vec<(u32, usize, Cmd)> = Vec::new();
     for (order, i) in COMMANDS.iter().enumerate() {
-        let name = i.name.to_lowercase();
-        let others = format!("{} {} {}", i.group, i.hint, i.words).to_lowercase();
+        let name = names
+            .get(&i.cmd)
+            .map_or(i.name, String::as_str)
+            .to_lowercase();
+        let others = format!("{} {} {} {}", i.name, i.group, i.hint, i.words).to_lowercase();
         let words = |t: &str| {
             t.split(|c: char| !c.is_alphanumeric())
                 .filter(|w| !w.is_empty())
@@ -724,6 +854,8 @@ pub(crate) struct Commands {
     pub(crate) editor: Editor,
     /// Commands for the timeline to run when it is next drawn.
     pub(crate) timeline: Vec<Cmd>,
+    /// Names shown instead of a command's own, such as a layout's.
+    pub(crate) names: BTreeMap<Cmd, String>,
 }
 
 impl Commands {
@@ -739,6 +871,7 @@ impl Commands {
             palette: Palette::default(),
             editor: Editor::default(),
             timeline: Vec::new(),
+            names: BTreeMap::new(),
         }
     }
 
@@ -763,6 +896,11 @@ impl Commands {
         if let Err(e) = write() {
             self.editor.note = Some(format!("Couldn't save the keys: {e}"));
         }
+    }
+
+    /// Its name as shown: a layout's, say, or its own.
+    pub(crate) fn name(&self, cmd: Cmd) -> &str {
+        self.names.get(&cmd).map_or(cmd.info().name, String::as_str)
     }
 
     /// For a hover text: its name and keys, such as "Play or stop (Space)".
@@ -867,7 +1005,7 @@ impl Commands {
         if !self.palette.open {
             return None;
         }
-        let found = search(&self.palette.query);
+        let found = search_named(&self.palette.query, &self.names);
         let mut run = None;
         let mut open = true;
         egui::Window::new("Find a command")
@@ -917,18 +1055,19 @@ impl Commands {
                     .show(ui, |ui| {
                         for (n, &cmd) in found.iter().enumerate() {
                             let i = cmd.info();
+                            let name = self.name(cmd).to_string();
                             let chosen = n == self.palette.chosen;
                             let enabled = can_run(cmd);
                             let row = egui::Button::selectable(
                                 chosen,
                                 (
-                                    i.name,
+                                    name.as_str(),
                                     RichText::new(format!("  {}", i.group)).weak().small(),
                                 ),
                             )
                             .right_text(RichText::new(self.keymap.text(cmd)).strong())
                             .min_size(egui::vec2(ui.available_width(), 0.0));
-                            let r = ui.add_enabled(enabled, row).accessible_name(i.name);
+                            let r = ui.add_enabled(enabled, row).accessible_name(&name);
                             if chosen && (up || down) {
                                 r.scroll_to_me(None);
                             }
@@ -1007,7 +1146,7 @@ impl Commands {
                     ui.label(n);
                 }
                 ui.separator();
-                let shown = search(&self.editor.filter);
+                let shown = search_named(&self.editor.filter, &self.names);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     egui::Grid::new("key commands")
                         .striped(true)
@@ -1039,7 +1178,7 @@ impl Commands {
     }
 
     fn editor_row(&mut self, ui: &mut egui::Ui, i: &Info) {
-        let r = ui.label(i.name);
+        let r = ui.label(self.name(i.cmd));
         if !i.hint.is_empty() {
             r.on_hover_text(i.hint);
         }
@@ -1116,7 +1255,9 @@ impl App {
             self.can_redo(),
             self.proj.bundle_job.is_none(),
         );
+        let layouts = self.workspace.saved.len();
         let chosen = self.commands.palette_window(ctx, |c| match c {
+            Cmd::Layout(n) => (n as usize) < layouts,
             Cmd::Undo => can_undo,
             Cmd::Redo => can_redo,
             Cmd::ExportBundle | Cmd::ImportBundle => idle,
@@ -1130,6 +1271,7 @@ impl App {
 
     fn can_run(&self, cmd: Cmd) -> bool {
         match cmd {
+            Cmd::Layout(n) => (n as usize) < self.workspace.saved.len(),
             Cmd::Undo => self.can_undo(),
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
@@ -1143,7 +1285,7 @@ impl App {
         let keys = self.commands.keymap.text(cmd);
         let mut r = ui.add_enabled(
             self.can_run(cmd),
-            egui::Button::new(i.name).shortcut_text(keys),
+            egui::Button::new(self.commands.name(cmd)).shortcut_text(keys),
         );
         if !i.hint.is_empty() {
             r = r.on_hover_text(i.hint);
@@ -1161,6 +1303,13 @@ impl App {
         }
         if cmd.on_timeline() {
             self.commands.timeline.push(cmd);
+            ctx.request_repaint();
+            return;
+        }
+        // Keys pressed in a pane's own window come while the workspace
+        // is being drawn: its commands wait until it has been.
+        if self.drawing_panes && cmd.on_workspace() {
+            self.workspace_cmds.push(cmd);
             ctx.request_repaint();
             return;
         }
@@ -1200,6 +1349,14 @@ impl App {
                 self.send(Command::SetMetronome(self.metronome));
             }
             Cmd::CountIn => self.count_in = !self.count_in,
+            Cmd::Mixer => self.workspace.toggle(Pane::Mixer),
+            Cmd::FullSize => self.workspace.toggle_full(),
+            Cmd::Layout(n) => self.workspace.recall(n as usize),
+            Cmd::SaveLayout => self.workspace.saving = Some(String::new()),
+            Cmd::PaneWindows => {
+                let on = !self.workspace.windows_allowed;
+                self.workspace.allow_windows(on);
+            }
             Cmd::Tuner => {
                 self.tuner.open = true;
                 let c = self.tuner.command();

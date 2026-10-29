@@ -87,52 +87,45 @@ impl Notes {
         tabs.push(t);
     }
 
-    /// The Lesson notes window. Edits `notes` and `tabs` in place.
-    pub fn window(
+    /// The Lesson notes pane. Edits `notes` and `tabs` in place.
+    pub fn pane(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         notes: &mut String,
         tabs: &mut Vec<TabBlock>,
         cx: &Ctx,
     ) -> Outcome {
         let mut out = Outcome::default();
-        let mut open = self.open;
-        egui::Window::new("Lesson notes")
-            .open(&mut open)
-            .default_size([460.0, 480.0])
-            .show(ctx, |ui| {
-                let editing = *self
-                    .editing
-                    .get_or_insert(notes.trim().is_empty() && tabs.is_empty());
-                let editing = editing && cx.may_edit;
-                self.toolbar(ui, notes, editing, cx);
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if editing {
-                            ui.add(
-                                egui::TextEdit::multiline(notes)
-                                    .id(text_id())
-                                    .desired_width(f32::INFINITY)
-                                    .desired_rows(10)
-                                    .hint_text(
-                                        "What to practise, chord shapes… \
-                                         # for a heading, - for a list, **bold**",
-                                    )
-                                    .font(egui::TextStyle::Monospace),
+        let editing = *self
+            .editing
+            .get_or_insert(notes.trim().is_empty() && tabs.is_empty());
+        let editing = editing && cx.may_edit;
+        self.toolbar(ui, notes, editing, cx);
+        ui.separator();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if editing {
+                    ui.add(
+                        egui::TextEdit::multiline(notes)
+                            .id(text_id())
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(10)
+                            .hint_text(
+                                "What to practise, chord shapes… \
+                                 # for a heading, - for a list, **bold**",
                             )
-                            .accessible_name("Lesson notes");
-                        } else if notes.trim().is_empty() {
-                            ui.label(RichText::new("No notes yet.").weak());
-                        } else {
-                            show_formatted(ui, notes);
-                        }
-                        ui.add_space(8.0);
-                        self.tab_blocks(ui, tabs, editing, cx, &mut out);
-                    });
+                            .font(egui::TextStyle::Monospace),
+                    )
+                    .accessible_name("Lesson notes");
+                } else if notes.trim().is_empty() {
+                    ui.label(RichText::new("No notes yet.").weak());
+                } else {
+                    show_formatted(ui, notes);
+                }
+                ui.add_space(8.0);
+                self.tab_blocks(ui, tabs, editing, cx, &mut out);
             });
-        self.open = open;
         out
     }
 

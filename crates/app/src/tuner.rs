@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! The chromatic tuner window and the reference pitch (roadmap 1.4).
+//! The chromatic tuner pane and the reference pitch (roadmap 1.4).
 
 use daw_engine::engine::{Command, Controller};
 use daw_engine::tuner::{Detector, Note, Smoother, window};
@@ -60,81 +60,77 @@ impl Tuner {
         self.shown = self.smoother.push(reading);
     }
 
-    /// Draws the window. Returns a command to send if the input or
-    /// open state changed.
-    pub fn window(&mut self, ctx: &egui::Context, inputs: usize) -> Option<Command> {
-        let before = (self.open, self.input);
-        let mut open = self.open;
-        egui::Window::new("Tuner")
-            .open(&mut open)
-            .resizable(false)
-            .default_width(300.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Input");
-                    if inputs == 0 {
-                        ui.label(RichText::new("none on this device").weak());
-                    } else {
-                        self.input = self.input.min(inputs - 1);
-                        egui::ComboBox::from_id_salt("tuner-input")
-                            .width(70.0)
-                            .selected_text(format!("In {}", self.input + 1))
-                            .show_ui(ui, |ui| {
-                                for c in 0..inputs {
-                                    ui.selectable_value(
-                                        &mut self.input,
-                                        c,
-                                        format!("In {}", c + 1),
-                                    );
-                                }
-                            })
-                            .response
-                            .accessible_name("Tuner input");
-                    }
-                    ui.separator();
-                    ui.label("A =");
-                    ui.add(
-                        egui::DragValue::new(&mut self.a4)
-                            .range(400.0..=480.0)
-                            .speed(0.1)
-                            .fixed_decimals(1)
-                            .suffix(" Hz"),
-                    )
-                    .on_hover_text("Reference pitch");
-                });
-                ui.add_space(8.0);
-                let note = self.shown.map(|hz| Note::from_hz(hz, self.a4));
-                ui.vertical_centered(|ui| {
-                    let (text, color) = match note {
-                        Some(n) if n.cents.abs() <= IN_TUNE => (
-                            format!("{}{}", n.name(), n.octave()),
-                            Color32::from_rgb(80, 210, 110),
-                        ),
-                        Some(n) => (
-                            format!("{}{}", n.name(), n.octave()),
-                            ui.visuals().strong_text_color(),
-                        ),
-                        None => ("–".into(), ui.visuals().weak_text_color()),
-                    };
-                    ui.label(RichText::new(text).size(48.0).color(color));
-                });
-                needle(ui, note.map(|n| n.cents));
-                ui.horizontal(|ui| match (self.shown, note) {
-                    (Some(hz), Some(n)) => {
-                        ui.label(format!("{hz:.2} Hz"));
-                        ui.label(RichText::new(format!("{:+.1} cents", n.cents)).weak());
-                    }
-                    _ => {
-                        ui.label(RichText::new("Play a single note").weak());
-                    }
-                });
-            });
+    /// Opens or closes it. Returns the command to send if that changed.
+    pub fn set_open(&mut self, open: bool) -> Option<Command> {
+        if open == self.open {
+            return None;
+        }
         self.open = open;
-        if !self.open {
+        if !open {
             self.shown = None;
             self.buf.clear();
         }
-        ((self.open, self.input) != before).then(|| self.command())
+        Some(self.command())
+    }
+
+    /// Draws the pane. Returns a command to send if the input changed.
+    pub fn pane(&mut self, ui: &mut egui::Ui, inputs: usize) -> Option<Command> {
+        let before = self.input;
+        ui.horizontal(|ui| {
+            ui.label("Input");
+            if inputs == 0 {
+                ui.label(RichText::new("none on this device").weak());
+            } else {
+                self.input = self.input.min(inputs - 1);
+                egui::ComboBox::from_id_salt("tuner-input")
+                    .width(70.0)
+                    .selected_text(format!("In {}", self.input + 1))
+                    .show_ui(ui, |ui| {
+                        for c in 0..inputs {
+                            ui.selectable_value(&mut self.input, c, format!("In {}", c + 1));
+                        }
+                    })
+                    .response
+                    .accessible_name("Tuner input");
+            }
+            ui.separator();
+            ui.label("A =");
+            ui.add(
+                egui::DragValue::new(&mut self.a4)
+                    .range(400.0..=480.0)
+                    .speed(0.1)
+                    .fixed_decimals(1)
+                    .suffix(" Hz"),
+            )
+            .on_hover_text("Reference pitch");
+        });
+        ui.add_space(8.0);
+        let note = self.shown.map(|hz| Note::from_hz(hz, self.a4));
+        ui.vertical_centered(|ui| {
+            let (text, color) = match note {
+                Some(n) if n.cents.abs() <= IN_TUNE => (
+                    format!("{}{}", n.name(), n.octave()),
+                    Color32::from_rgb(80, 210, 110),
+                ),
+                Some(n) => (
+                    format!("{}{}", n.name(), n.octave()),
+                    ui.visuals().strong_text_color(),
+                ),
+                None => ("–".into(), ui.visuals().weak_text_color()),
+            };
+            ui.label(RichText::new(text).size(48.0).color(color));
+        });
+        needle(ui, note.map(|n| n.cents));
+        ui.horizontal(|ui| match (self.shown, note) {
+            (Some(hz), Some(n)) => {
+                ui.label(format!("{hz:.2} Hz"));
+                ui.label(RichText::new(format!("{:+.1} cents", n.cents)).weak());
+            }
+            _ => {
+                ui.label(RichText::new("Play a single note").weak());
+            }
+        });
+        (self.input != before).then(|| self.command())
     }
 }
 

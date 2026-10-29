@@ -37,6 +37,7 @@ mod timeline;
 mod trainer;
 mod tuner;
 mod update;
+mod workspace;
 
 #[cfg(test)]
 mod a11y;
@@ -136,7 +137,7 @@ pub(crate) fn cache_dir() -> PathBuf {
 
 /// The product's name, until it has a real one: the window title and the
 /// folder for unsaved takes follow it.
-const APP_NAME: &str = "DAW";
+pub(crate) const APP_NAME: &str = "DAW";
 
 /// Where takes go until the project is saved, when they move into the
 /// project's folder: a visible folder in the user's profile (the owner's
@@ -232,6 +233,12 @@ struct App {
     people: people::People,
     /// The phone remote: its window and the phones connected.
     remote: remote::Remote,
+    /// The panes, and the layouts saved on this computer.
+    workspace: workspace::Workspace,
+    /// The panes are being drawn, so the workspace is out of `self`.
+    drawing_panes: bool,
+    /// Workspace commands that came while it was out.
+    workspace_cmds: Vec<Cmd>,
 }
 
 /// How often to look for a lost device.
@@ -311,6 +318,11 @@ impl App {
             me: people::load_identity(),
             people: people::People::default(),
             remote: remote::Remote::load(),
+            workspace: workspace::Workspace::new(
+                (!cfg!(test)).then(|| config_dir().join("layout.txt")),
+            ),
+            drawing_panes: false,
+            workspace_cmds: Vec::new(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -775,10 +787,7 @@ impl App {
     }
 
     /// Lesson notes and tab blocks (roadmap 1.7).
-    fn notes_window(&mut self, ctx: &egui::Context) {
-        if !self.notes_ui.open {
-            return;
-        }
+    fn notes_pane(&mut self, ui: &mut egui::Ui) {
         let map = self.tempo_map();
         let end_bar = self.with_song(|_, song| timeline::Timeline::end_bar(&map, song));
         let playhead = self.ctl.status().position();
@@ -790,9 +799,7 @@ impl App {
             me: &me,
             may_edit: self.may_edit_song(),
         };
-        let out = self
-            .notes_ui
-            .window(ctx, &mut self.notes, &mut self.tabs, &cx);
+        let out = self.notes_ui.pane(ui, &mut self.notes, &mut self.tabs, &cx);
         if let Some(bar) = out.go_to_bar {
             let f = map.frames_at(map.bar_start(bar));
             self.send(Command::Seek(f));
@@ -1207,6 +1214,14 @@ impl App {
                 Color32::YELLOW,
                 "Recording waits for normal speed and pitch",
             );
+        }
+    }
+
+    /// The device's input channels.
+    fn input_count(&self) -> usize {
+        match &self.audio {
+            Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
+            Audio::Stopped => 0,
         }
     }
 
@@ -1959,6 +1974,9 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                 });
+                ui.menu_button("View", |ui| {
+                    self.view_menu(ui);
+                });
                 ui.menu_button("Settings", |ui| {
                     for c in [
                         Cmd::AudioDevice,
@@ -2061,27 +2079,13 @@ impl eframe::App for App {
         if self.updates.newer().is_some() {
             egui::Panel::bottom("update note").show(ui, |ui| self.updates.note(ui));
         }
-        egui::Panel::bottom("mixer")
-            .resizable(true)
-            .default_size(260.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.mixer(ui));
-            });
-        if self.comment_ui.open {
-            egui::Panel::right("comments")
-                .resizable(true)
-                .default_size(320.0)
-                .show(ui, |ui| self.comments_panel(ui));
-        }
-        egui::CentralPanel::default().show(ui, |ui| self.timeline(ui));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(ui.style()).inner_margin(2.0))
+            .show(ui, |ui| self.panes(ui));
         self.device_window(&ctx);
         self.latency_window(&ctx);
         self.effects.manager_window(&ctx);
         self.effects.credits_window(&ctx);
-        let inputs = match &self.audio {
-            Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
-            Audio::Stopped => 0,
-        };
         self.poll_freezing(&ctx);
         self.export.poll();
         if self.export.busy() {
@@ -2097,9 +2101,6 @@ impl eframe::App for App {
             && let Err(e) = self.start_export(req)
         {
             self.message = Some(e);
-        }
-        if let Some(c) = self.tuner.window(&ctx, inputs) {
-            self.send(c);
         }
         self.tuner.update(&mut self.ctl, self.rate);
         if self.tuner.open {
@@ -2125,7 +2126,7 @@ impl eframe::App for App {
             }
         }
         self.perf_window(&ctx);
-        self.notes_window(&ctx);
+        self.layout_windows(&ctx);
         self.command_windows(&ctx);
         self.updates.poll(&ctx);
         self.updates.window(&ctx);

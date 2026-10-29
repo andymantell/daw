@@ -539,6 +539,13 @@ follow them. Checks are in `docs/review-queue/2.7-tempo.md`.*
   "Band demo").
 
 ### 2.9 Workspace: panes and multiple screens (M)
+*Built 2026-10-29, at risk. The timeline, mixer, comments, lesson notes
+and tuner are panes that can be dragged beside each other or tabbed,
+resized, collapsed, shown full size and closed; nine named layouts with a
+key each; optional windows of their own that return from a missing
+screen (Windows). Plugin editors as panes, and the project remembering
+open panes, are not built. Checks are in
+`docs/review-queue/2.9-panes-windows.md`.*
 - **One window by default.** The timeline, mixer, editors, browser, plugin
   editors and practice tools are panes inside the main window. They can be
   docked, split, resized, tabbed together, collapsed and shown full-size,

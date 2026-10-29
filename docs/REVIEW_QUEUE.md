@@ -407,6 +407,33 @@ back) and `app-lesson-notes.png`. Projects live in
       now; say what you would want first: headings, tab blocks pinned
       to sections, or something else.
 
+### Phase 1 app: installers, updates and crash reports
+
+How releases work is in [RELEASING.md](RELEASING.md). Built at risk on
+the 0.7 proposals under "Decisions to accept".
+
+- [ ] **1.8 Release signing key (owner step).** Make the key pair and add
+      the `RELEASE_SIGNING_KEY` secret, as in RELEASING.md, "The signing
+      key". Until then builds cannot check for updates, and releases are
+      made unsigned.
+- [ ] **1.8 First test release.** Say when you want one. A tag makes a
+      **draft** release only; nothing is public until you publish it.
+- [ ] **1.8 Windows installer.** From a run of the **release** workflow,
+      download `release-files` and run `daw-*-windows-x64-setup.exe`.
+      Windows warns because it is unsigned: More info, then Run anyway.
+      Pass: it installs without asking for administrator rights, DAW is
+      in the Start menu and starts, and Settings → Apps uninstalls it,
+      leaving your projects and settings alone.
+- [ ] **1.8 Update question wording.** At the first start of a build
+      with a key, the app asks "Check for new versions?" (screenshot
+      `app-update-question.png`). Say if the wording works for a
+      student, and whether it should ask at all or only offer the
+      setting in Help → Check for updates.
+- [ ] **1.8 Crash reports.** Screenshots `app-crash-note.png` and
+      `app-crash-report.png`. Reports stay on the computer, with names
+      and paths taken out. Say if the note at start-up is enough, or if
+      you want a "copy and open an issue" button later.
+
 ## On other networks
 
 Spike 0.5, live sessions without a server
@@ -483,9 +510,10 @@ is in the same download.
       Rosetta helper only while macOS allows it, with a warning that they
       will stop working.
 - [ ] **0.7 Updates:** opt-in daily check of the release page, notify only,
-      with signature checking; no self-install in version 1.
+      with signature checking; no self-install in version 1. *Built at
+      risk on 2026-10-28 ([RELEASING.md](RELEASING.md)).*
 - [ ] **0.7 Linux packaging:** AppImage plus `.tar.gz` first; Flatpak after
-      version 1.
+      version 1. *Built at risk on 2026-10-28.*
 
 ### Privacy and children's data (roadmap 1.8)
 

@@ -22,7 +22,10 @@ daw-plugins = { path = "../plugins" }
 daw-project = { path = "../project" }
 eframe = "0.37.0"
 hound = "3.5.1"
+minisign-verify = "0.3.0"
 rfd = "0.17.2"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+ureq = { version = "3.5.0", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 vst3 = "0.3.0"
 
 [dev-dependencies]

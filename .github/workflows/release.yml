@@ -1,0 +1,179 @@
+# Release builds (roadmap 1.8; see docs/RELEASING.md). Pushing a tag
+# such as v0.1.0 builds the Windows installer and .zip and the Linux
+# AppImage and .tar.gz, writes and signs latest.txt (the list the app's
+# update check reads), and attaches them all to a *draft* GitHub Release.
+# A person publishes the draft by hand; nothing here makes a release
+# public.
+#
+# On pull requests that touch packaging, and when run by hand, it builds
+# and packages everything without making a release, and keeps the files
+# as a workflow artifact for trying out.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The ASIO bindings are generated with bindgen, which needs libclang.
+      - name: libclang for bindgen
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo build --release --locked -p daw-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-windows
+          path: target/release/daw.exe
+          if-no-files-found: error
+
+  linux:
+    # The oldest supported Ubuntu LTS, so the binary runs on newer systems.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: cargo build --release --locked -p daw-app
+      - name: AppImage tools, pinned and checked
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools"
+          cd "$RUNNER_TEMP/tools"
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSL -o runtime \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          sha256sum -c <<'SUMS'
+          ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool
+          2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime
+          SUMS
+          chmod +x appimagetool
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          APPIMAGETOOL="$RUNNER_TEMP/tools/appimagetool" \
+          APPIMAGE_RUNTIME="$RUNNER_TEMP/tools/runtime" \
+            packaging/linux/build.sh "$version" target/release/daw dist
+          ls -l dist
+      - name: The packaged app starts
+        run: |
+          cd dist
+          tar xzf daw-*-linux-x86_64.tar.gz
+          # Prints its version and exits: shows the binary and the
+          # libraries it links against load.
+          ./daw-*-linux-x86_64/daw --version
+          ./daw-*-linux-x86_64.AppImage --appimage-extract-and-run --version
+          rm -r daw-*-linux-x86_64/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-linux
+          path: dist/
+          if-no-files-found: error
+
+  package:
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packaging tools
+        run: sudo apt-get update && sudo apt-get install -y nsis minisign zip
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-windows
+          path: build/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-linux
+          path: dist
+      - name: Windows installer and .zip
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          packaging/windows/build.sh "$version" build/windows/daw.exe dist
+      - name: File list
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          packaging/manifest.sh "$version" dist
+      # Only the release workflow holds the signing key (a repository
+      # secret). Without it the files are still built, unsigned.
+      - name: Sign the file list
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::warning::No RELEASE_SIGNING_KEY secret: latest.txt is not signed, so the app's update check will ignore this release (docs/RELEASING.md)"
+            exit 0
+          fi
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          key="$RUNNER_TEMP/release.key"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          minisign -S -s "$key" -m dist/latest.txt -t "DAW $version"
+          rm -f "$key"
+          # The key built into the app must match, or no app could check.
+          minisign -V -p packaging/release-key.pub -m dist/latest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+
+  draft:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: dist
+      - name: Make a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match the version in Cargo.toml ($version)"
+            exit 1
+          fi
+          {
+            echo "Unsigned test build: Windows will warn before running the installer (More info, then Run anyway)."
+            echo
+            echo "- Windows 10 22H2 or 11, 64-bit: daw-$version-windows-x64-setup.exe, or the .zip to run without installing."
+            echo "- Linux, 64-bit: the .AppImage (make it executable, then run it), or the .tar.gz."
+            echo
+            echo "latest.txt lists every file's SHA-256 checksum."
+            if [ ! -f dist/latest.txt.minisig ]; then
+              echo
+              echo "**Not signed:** the app's update check will not offer this release."
+            fi
+          } > notes.md
+          pre=()
+          case "$version" in *-*) pre=(--prerelease) ;; esac
+          gh release create "$TAG" dist/* --draft "${pre[@]}" \
+            --title "DAW $version" --notes-file notes.md

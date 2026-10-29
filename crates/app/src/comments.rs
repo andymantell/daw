@@ -60,6 +60,11 @@ pub struct Ctx<'a> {
     pub tracks: &'a [(String, String)],
     /// Who is writing: see [`my_author_id`](crate::App::my_author_id).
     pub me: &'a str,
+    /// The project's members, for authors' names.
+    pub members: &'a [daw_project::Member],
+    /// Whether this user may change anyone's comments, not only their
+    /// own.
+    pub may_change_any: bool,
 }
 
 /// What the app should do after the panel is drawn.
@@ -330,7 +335,7 @@ impl Comments {
 
     /// One comment: who wrote it, the text, and its own buttons.
     fn one(&mut self, ui: &mut egui::Ui, comments: &mut Vec<Comment>, c: &Comment, cx: &Ctx) {
-        ui.label(RichText::new(author_name(&c.author, cx.me)).weak());
+        ui.label(RichText::new(author_name(&c.author, cx.me, cx.members)).weak());
         if let Some((id, text)) = &mut self.editing
             && *id == c.id
         {
@@ -362,7 +367,7 @@ impl Comments {
             return;
         }
         ui.add(egui::Label::new(&c.text).wrap());
-        if !may_change(c, cx.me) {
+        if !may_change(c, cx.me, cx.may_change_any) {
             return;
         }
         ui.horizontal(|ui| {
@@ -440,20 +445,23 @@ pub fn delete(comments: &mut Vec<Comment>, id: &str) {
     comments.retain(|c| c.id != id && c.parent.as_deref() != Some(id));
 }
 
-/// Whether this user may edit or delete `c`. Anyone may for now; once
-/// projects have members, a commenter only their own (the project
-/// document refuses other changes from them anyway).
-pub fn may_change(_c: &Comment, _me: &str) -> bool {
-    true
+/// Whether this user may edit or delete `c`: the owner and editors
+/// any, commenters only their own (the project document refuses other
+/// changes from them anyway).
+pub fn may_change(c: &Comment, me: &str, any: bool) -> bool {
+    any || (!c.author.is_empty() && c.author == me)
 }
 
-/// Who wrote a comment, for showing.
-pub fn author_name(author: &str, me: &str) -> String {
+/// Who wrote a comment, for showing: their name as the project's
+/// members list has it, so a renamed person shows their new name.
+pub fn author_name(author: &str, me: &str, members: &[daw_project::Member]) -> String {
     if !author.is_empty() && author == me {
-        "You".into()
-    } else {
-        "Someone else".into()
+        return "You".into();
     }
+    members
+        .iter()
+        .find(|m| m.key == author)
+        .map_or("Someone else".into(), daw_project::Member::shown_name)
 }
 
 fn track_name(tracks: &[(String, String)], id: &Option<String>) -> String {

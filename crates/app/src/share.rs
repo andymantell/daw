@@ -56,6 +56,8 @@ pub(crate) struct Imported {
     dir: PathBuf,
     into: Dest,
     doc: Vec<u8>,
+    /// Merged into the project on disk already.
+    merged: bool,
 }
 
 /// Where a bundle goes.
@@ -166,7 +168,7 @@ impl App {
         for c in std::mem::take(&mut self.proj.incoming) {
             match c {
                 Change::Doc { from, bytes } => {
-                    if let Err(e) = self.proj.doc.merge(&bytes) {
+                    if let Err(e) = self.merge_or_ask(&bytes) {
                         let name = from.file_name().unwrap_or_default().to_string_lossy();
                         failed.push(format!("{name}: {e}"));
                     }
@@ -313,15 +315,24 @@ impl App {
                     return;
                 }
                 self.sync_doc(ctx, true);
-                if let Err(e) = self.proj.doc.merge(&i.doc) {
-                    self.message = Some(format!("Couldn't import: {e}"));
-                    return;
+                match self.merge_or_ask(&i.doc) {
+                    Ok(true) => {
+                        self.message = Some(format!("Merged the changes in the {} bundle", i.name));
+                    }
+                    // Waiting for the owner to let its people in.
+                    Ok(false) => {}
+                    Err(e) => {
+                        self.message = Some(format!("Couldn't import: {e}"));
+                        return;
+                    }
                 }
                 self.apply(self.proj.doc.get());
                 self.proj.dirty = true;
-                self.message = Some(format!("Merged the changes in the {} bundle", i.name));
             }
             Dest::Saved => {
+                if !i.merged {
+                    self.people.after_open = Some((i.dir.clone(), i.doc));
+                }
                 self.then(ctx, After::Open(i.dir));
                 self.message = Some(format!(
                     "Merged the {} bundle into your copy of the project",
@@ -348,18 +359,25 @@ fn unpack(path: &std::path::Path, into: Dest, dir: PathBuf) -> Result<Imported, 
         _ => ProjectFolder { dir: dir.clone() },
     };
     let b = bundle::unpack(path, &folder)?;
+    let mut merged = true;
     match into {
-        Dest::Open => {}
+        Dest::Open => merged = false,
         Dest::Saved => {
             let (folder, mut doc, _) = daw_collab::open_doc(&dir, daw_project::new_peer())?;
-            doc.merge(&b.doc)?;
-            let bytes = doc.to_bytes();
-            if doc.take_dropped() {
-                folder.save_dropping_backup(&bytes)?;
+            // Changes from people not let in are merged once the project
+            // is open, so its owner can be asked.
+            if doc.check(&b.doc)?.ok() {
+                doc.merge(&b.doc)?;
+                let bytes = doc.to_bytes();
+                if doc.take_dropped() {
+                    folder.save_dropping_backup(&bytes)?;
+                } else {
+                    folder.save(&bytes)?;
+                }
+                folder.save_device(device_id(), &bytes)?;
             } else {
-                folder.save(&bytes)?;
+                merged = false;
             }
-            folder.save_device(device_id(), &bytes)?;
         }
         Dest::New => {
             // Checked when it was peeked at, but checked again: the file
@@ -373,6 +391,7 @@ fn unpack(path: &std::path::Path, into: Dest, dir: PathBuf) -> Result<Imported, 
         dir,
         into,
         doc: b.doc,
+        merged,
     })
 }
 

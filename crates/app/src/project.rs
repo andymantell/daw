@@ -521,6 +521,7 @@ impl App {
         self.send(Command::Seek(Frames(0)));
         self.tracks.clear();
         self.proj = Proj::new();
+        self.sign_in();
         self.apply(Project {
             rate: self.rate,
             ..Project::default()
@@ -565,9 +566,11 @@ impl App {
                 proj.sources = l.sources;
                 proj.device_version = proj.doc.version();
                 self.proj = proj;
+                self.sign_in();
                 self.apply(self.proj.doc.get());
                 self.apply_practice();
                 self.watch_folder();
+                self.merge_bundle_after_open(ctx);
                 if !l.failed.is_empty() {
                     self.message = Some(format!("Couldn't open {}", l.failed.join("; ")));
                 }

@@ -10,10 +10,12 @@
 
 mod doc;
 mod folder;
+mod identity;
 mod model;
 
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
+pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
 pub use model::{
     Clip, Comment, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings,
 };

@@ -94,9 +94,10 @@ My Lesson.project/              (folder; a tar of it is a bundle)
 - **Time:** musical positions in integer ticks (**960 PPQ**), absolute
   positions in sample frames. Each clip declares its time base (decision
   0005).
-- **Identity:** each install has a key pair. Changes are attributed by
-  public key, and roles (owner/editor/commenter) are stored in the
-  document and enforced when merging.
+- **Identity:** each install keeps a secret, from which each project
+  gets its own key pair (so projects can't be linked by key). Changes
+  are attributed by public key, and roles (owner/editor/commenter) are
+  stored in the document and enforced when merging.
 - **Notation-ready note data:** notes carry optional performance
   attributes alongside pitch, time and velocity: string and fret,
   techniques (bend amount and shape, slide, hammer-on/pull-off, harmonic,

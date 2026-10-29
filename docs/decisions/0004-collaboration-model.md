@@ -24,7 +24,8 @@ often.
 - **Live transport candidates:** WebRTC data channels (STUN hole
   punching) or QUIC with UPnP/NAT-PMP/PCP port mapping. Encrypted and
   mutually authenticated with members' keys.
-- **Identity:** a per-install key pair. Roles are stored in the document
+- **Identity:** a key pair per project, worked out from one secret per
+  install (owner's choice, 2026-10-28). Roles are stored in the document
   and enforced on merge.
 
 ## Known limitation

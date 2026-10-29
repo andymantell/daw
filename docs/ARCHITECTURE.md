@@ -261,7 +261,7 @@ crates/
   schema/           # project document types, migrations
   engine/           # graph compiler, scheduler, real-time processing
   audio-io/         # device abstraction over the I/O library
-  devices/          # built-in processors (EQ, comp, amp sim, stretch, tuner…)
+  effects/          # built-in effects (EQ, comp, reverb; amp sim to come)
   plugin-host/      # out-of-process plugin host binary + IPC
   plugin-formats/   # VST 3 / CLAP / AU / ARA adapters
   collab/           # sessions, bundles, folder sync, asset transfer

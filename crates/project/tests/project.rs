@@ -40,6 +40,16 @@ fn song() -> Project {
             component: vec![1, 2, 3],
             controller: None,
         }),
+        ..Default::default()
+    });
+    guitar.effects.push(Effect {
+        id: "e2".into(),
+        name: "Compressor".into(),
+        bypass: true,
+        builtin: "compressor".into(),
+        // In order of name, as they are read back.
+        params: vec![("ratio".into(), 4.0), ("threshold".into(), -18.5)],
+        ..Default::default()
     });
     Project {
         tracks: vec![guitar, Track::new("t2".into(), "Bass".into())],
@@ -137,6 +147,24 @@ fn sync(a: &mut ProjectDoc, b: &mut ProjectDoc) {
     let to_a = b.updates_since(&a.version()).unwrap();
     b.merge(&to_b).unwrap();
     a.merge(&to_a).unwrap();
+}
+
+#[test]
+fn settings_of_a_built_in_effect_changed_apart_both_survive() {
+    let (mut a, mut b, p) = two_copies();
+    let mut pa = p.clone();
+    pa.tracks[0].effects[1].params[0].1 = 8.0;
+    a.set(&pa);
+    let mut pb = p.clone();
+    pb.tracks[0].effects[1].params[1].1 = -30.0;
+    b.set(&pb);
+    sync(&mut a, &mut b);
+    let (ga, gb) = (a.get(), b.get());
+    assert_eq!(ga, gb, "both copies agree");
+    assert_eq!(
+        ga.tracks[0].effects[1].params,
+        vec![("ratio".into(), 8.0), ("threshold".into(), -30.0)]
+    );
 }
 
 #[test]

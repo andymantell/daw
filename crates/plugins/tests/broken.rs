@@ -118,6 +118,7 @@ fn an_effects_settings_come_back_from_a_saved_project() {
             component: saved.component.clone(),
             controller: saved.controller.clone(),
         }),
+        ..Default::default()
     });
     let project = Project {
         tracks: vec![track],

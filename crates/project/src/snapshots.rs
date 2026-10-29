@@ -357,6 +357,7 @@ mod tests {
             bundle: String::new(),
             bypass: false,
             state: state(1),
+            ..Default::default()
         });
         doc.set_quietly(&p);
         let id = doc.take_snapshot("Clean", "", 10);

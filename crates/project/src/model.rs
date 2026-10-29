@@ -77,9 +77,10 @@ impl Track {
         }
     }
 
-    /// Whether the track needs frozen audio: it has an effect switched on.
+    /// Whether the track needs frozen audio: it has a plugin switched
+    /// on. Every computer has the built-in effects.
     pub fn wants_frozen(&self) -> bool {
-        self.effects.iter().any(|e| !e.bypass)
+        self.effects.iter().any(|e| !e.bypass && e.is_plugin())
     }
 
     /// A fingerprint of everything the track's frozen audio depends on:
@@ -110,6 +111,11 @@ impl Track {
                     field(s.controller.as_deref().unwrap_or(b"-"));
                 }
                 None => field(b"no state"),
+            }
+            field(e.builtin.as_bytes());
+            for (k, v) in &e.params {
+                field(k.as_bytes());
+                field(&v.to_le_bytes());
             }
         }
         h.finalize()[..16]
@@ -229,7 +235,7 @@ pub struct Clip {
     pub seq: i64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Effect {
     pub id: String,
     pub name: String,
@@ -242,6 +248,18 @@ pub struct Effect {
     /// document's copy as it is (the app reads plugin state only when
     /// saving).
     pub state: Option<EffectState>,
+    /// For an effect that comes with the app, which one (such as "eq");
+    /// empty for a plugin, whose `class` and `bundle` say which.
+    pub builtin: String,
+    /// A built-in effect's settings, by name.
+    pub params: Vec<(String, f64)>,
+}
+
+impl Effect {
+    /// Whether it is a plugin, which a computer may not have.
+    pub fn is_plugin(&self) -> bool {
+        self.builtin.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -298,6 +298,7 @@ fn edit(p: &mut Project, words: &[&str]) -> Result<(), String> {
             bundle: String::new(),
             bypass: false,
             state: None,
+            ..Default::default()
         }),
         ["bypass", t, id, v] => {
             track(p, t)?

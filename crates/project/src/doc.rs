@@ -663,6 +663,21 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         w.put(&em, "class", e.class.clone());
         w.put(&em, "bundle", e.bundle.as_str());
         w.put(&em, "bypass", e.bypass);
+        if !e.builtin.is_empty() {
+            w.put(&em, "builtin", e.builtin.as_str());
+            // One entry per setting, so two people changing different
+            // settings at once keep both.
+            let pm = w.child(&em, "params");
+            let keep: HashSet<&str> = e.params.iter().map(|(k, _)| k.as_str()).collect();
+            for k in keys(&pm) {
+                if !keep.contains(k.as_str()) {
+                    w.delete(&pm, &k);
+                }
+            }
+            for (k, v) in &e.params {
+                w.put(&pm, k, *v);
+            }
+        }
         if let Some(s) = &e.state {
             w.put(&em, "component", s.component.clone());
             w.put(
@@ -752,6 +767,17 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 bundle: string(e, "bundle").unwrap_or_default(),
                 bypass: boolean(e, "bypass").unwrap_or(false),
                 state,
+                builtin: string(e, "builtin").unwrap_or_default(),
+                params: match e.get("params") {
+                    Some(LoroValue::Map(pm)) => {
+                        let mut v: Vec<(String, f64)> = (pm.keys())
+                            .filter_map(|k| Some((k.to_string(), float(pm, k)?)))
+                            .collect();
+                        v.sort_by(|a, b| a.0.cmp(&b.0));
+                        v
+                    }
+                    _ => Vec::new(),
+                },
             });
         }
     }

@@ -559,6 +559,33 @@ follow them. Checks are in `docs/review-queue/2.7-tempo.md`.*
   the project.
 - Toolkit support: see [research/WORKSPACE_WINDOWS.md](research/WORKSPACE_WINDOWS.md).
 
+### 2.10 Themes: look and feel (M)
+**Goal:** the app ships several complete looks and switches between them
+while running. Each is an original design (see
+[CLEAN_ROOM.md](CLEAN_ROOM.md)). Mock-ups and the chosen directions are
+recorded in [research/THEMES.md](research/THEMES.md).
+- **A theme is data, not code.** One theme file defines colours, type
+  faces and sizes, corner radii, line weights, spacing, how waveforms are
+  drawn (filled, outlined, single line, glowing trace), textures and glow.
+  Every widget and the timeline renderer read from the active theme and
+  hard-code nothing. This starts in Phase 1, while the UI is small.
+- **First shipped themes:** *Valve Glow* (warm dark, amber light),
+  *Workshop* (warm matte greys, copper, layered panels) and *Vellum* (warm
+  paper, ink lines, red pencil for live state). More follow as the research
+  page settles.
+- **Light and dark variants** of each theme, with automatic switching by
+  the operating system's setting or the time of day.
+- Switching is instant, from settings or the command palette, and never
+  touches the project. Each collaborator runs their own theme.
+- **Contrast checks in CI** for every theme: text and controls meet the
+  WCAG AA ratio, and live state (record, playhead, loop) stays
+  distinguishable without relying on colour alone.
+- Track colours are defined per theme as a palette, so they fit the look
+  and stay distinguishable, and the same palette drives the mixer and the
+  phone remote.
+- **User themes:** a theme file can be copied, edited and loaded from the
+  settings folder. Sharing them is a Phase 4 nicety.
+
 **Exit criteria**
 - A 24+-track song with 10+ plugins can be recorded, comped, mixed with
   automation and exported with no dropouts at a 128-sample buffer on the
@@ -566,6 +593,9 @@ follow them. Checks are in `docs/review-queue/2.7-tempo.md`.*
 - Delay compensation is verified by automated null tests.
 - A sloppy multi-mic drum take is tightened to the grid at 70% strength,
   and the drum mics stay in phase.
+- Switching between the three shipped themes while playing causes no
+  dropout and no change to the project file, and every theme passes the
+  contrast checks in both variants.
 - On a three-screen setup, the timeline, mixer and a plugin editor each sit
   on their own screen. After the app restarts with one screen unplugged,
   every pane is still reachable, and the layout returns when the screen

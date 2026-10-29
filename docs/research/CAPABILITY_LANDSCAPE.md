@@ -172,6 +172,7 @@ end for what could not be verified.
 | User scripting (editor actions, MIDI) | 7 | M | Sandboxed. |
 | Controller scripting / control surfaces | 7 | M | |
 | Customisable key commands, command palette | 2 | L | |
+| Themes as data: several shipped looks, light/dark variants, instant switching, contrast checks in CI | 2 | M | Foundations from Phase 1. See [THEMES.md](THEMES.md). |
 | Docked panes in one window by default; optional detachable windows across several screens; saved layouts kept per computer | 2 | M | See [WORKSPACE_WINDOWS.md](WORKSPACE_WINDOWS.md). |
 
 ## 8. Non-linear / performance

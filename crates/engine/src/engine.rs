@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use crate::graph::{Graph, InputBlock, Level, MAX_TRACKS, Mix, Rate};
+use crate::graph::{Graph, GroupSpec, InputBlock, Level, MAX_TRACKS, Mix, Rate};
 use crate::meter::Tap;
 use crate::metronome::{self, Metronome, Voice};
 use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
@@ -53,6 +53,18 @@ pub enum Command {
     SetMix {
         track: usize,
         mix: Mix,
+    },
+    /// A control group's fader and mute, without a new graph.
+    SetGroup {
+        group: usize,
+        spec: GroupSpec,
+    },
+    /// A send's level and mute, without a new graph.
+    SetSend {
+        track: usize,
+        send: usize,
+        gain_db: f32,
+        mute: bool,
     },
     SetMetronome(Metronome),
     /// Records armed tracks whenever playing (after any count-in).
@@ -606,6 +618,7 @@ impl Engine {
                         g.adopt_chunks(old, |c| give_back(to_disk, c));
                         g.adopt_inserts(old);
                         g.adopt_stretchers(old);
+                        g.adopt_edges(old);
                     }
                     if let Some(old) = self.graph.replace(g) {
                         // The queue has room for every graph in flight;
@@ -618,6 +631,21 @@ impl Engine {
                 Command::SetMix { track, mix } => {
                     if let Some(g) = &mut self.graph {
                         g.set_mix(track, mix);
+                    }
+                }
+                Command::SetGroup { group, spec } => {
+                    if let Some(g) = &mut self.graph {
+                        g.set_group(group, spec);
+                    }
+                }
+                Command::SetSend {
+                    track,
+                    send,
+                    gain_db,
+                    mute,
+                } => {
+                    if let Some(g) = &mut self.graph {
+                        g.set_send(track, send, gain_db, mute);
                     }
                 }
                 Command::SetMetronome(m) => self.metronome = m,

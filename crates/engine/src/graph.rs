@@ -6,14 +6,25 @@
 //! a [`Graph`]: positions converted to frames, gains to linear factors,
 //! and every buffer allocated up front. The audio thread only reads it.
 //!
-//! Phase 1 graph: audio clips and, when monitoring, the track's input →
-//! the track's insert effects → track (gain, pan, mute, solo) → master.
+//! Each track: audio clips and, when monitoring, the track's input, plus
+//! whatever other tracks route into it → the track's insert effects →
+//! track (gain, pan, mute, solo, control group) → its output (the master
+//! or a bus) and its sends. A bus is a track with no clips of its own
+//! (roadmap 2.3). Sends take the audio after the effects and pan, with
+//! or without the fader. An effect can listen to another track's audio
+//! as a sidechain.
 //!
 //! Insert effects ([`Insert`]) are made off the audio thread and live
 //! across graphs: a new graph takes them over from the one it replaces
-//! by id, so editing the session never restarts a plugin. A track whose
-//! effects add latency has its clips read that far ahead, so it stays in
-//! time with the others.
+//! by id, so editing the session never restarts a plugin.
+//!
+//! Delay compensation: a track whose effects add latency has its clips
+//! read that far ahead, plus the latency of every bus on its way to the
+//! master, so it stays in time with the others. Where a track's audio
+//! takes two routes (its output and a send, or a sidechain) that wait
+//! different times before the master, the quicker route is delayed to
+//! match, so they meet lined up. [`Session::compile_with`] works it all
+//! out; `tests/routing.rs` proves it by null tests.
 
 use std::sync::Arc;
 
@@ -162,17 +173,73 @@ pub trait Insert: Send {
     /// Processes one block of stereo audio in place, at most the graph's
     /// `max_block` frames. Must not allocate, lock or block.
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+
+    /// As [`process`](Self::process), with a sidechain: another track's
+    /// audio for the same frames, already lined up in time, for an effect
+    /// that listens to it (a compressor ducking under a voice). An effect
+    /// with no use for it processes as usual.
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        let _ = key;
+        self.process(left, right);
+    }
 }
 
 /// A slot in a track's insert chain. The effect itself is handed to
 /// [`Session::compile_with`] once, when first added, under this `id`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InsertSpec {
     /// Unique for the life of the process.
     pub id: u64,
     pub bypass: bool,
     /// Frames of delay the effect reports, compensated on the track.
     pub latency: u32,
+    /// The track whose audio (after its effects and fader) the effect
+    /// listens to, lined up in time with this track's.
+    pub sidechain: Option<usize>,
+}
+
+/// Where a track's audio goes after its fader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Output {
+    #[default]
+    Master,
+    /// Another track in the session, used as a bus: it has no clips of
+    /// its own and sums what is routed to it, through its own effects
+    /// and fader.
+    Track(usize),
+}
+
+/// A copy of a track's audio sent to a bus, as well as its output: for
+/// an effect shared by several tracks (a reverb), with each track's
+/// amount set here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SendSpec {
+    pub to: usize,
+    pub gain_db: f32,
+    /// Taken before the track's volume (but after its effects, pan and
+    /// mute), so the volume fader leaves the send alone.
+    pub pre_fader: bool,
+    pub mute: bool,
+}
+
+impl SendSpec {
+    pub fn to(to: usize) -> SendSpec {
+        SendSpec {
+            to,
+            gain_db: 0.0,
+            pre_fader: false,
+            mute: false,
+        }
+    }
+}
+
+/// A control group: one fader and mute over several tracks. Its volume
+/// adds to each member's, in dB, and its mute silences them all, without
+/// their audio ever being summed.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GroupSpec {
+    pub gain_db: f32,
+    pub mute: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +254,11 @@ pub struct TrackSpec {
     pub arm: bool,
     /// Plays its input through the track (software monitoring).
     pub monitor: bool,
+    pub output: Output,
+    pub sends: Vec<SendSpec>,
+    /// The control group it belongs to, by index in
+    /// [`Session::groups`].
+    pub group: Option<usize>,
 }
 
 impl TrackSpec {
@@ -198,6 +270,9 @@ impl TrackSpec {
             input: None,
             arm: false,
             monitor: false,
+            output: Output::Master,
+            sends: Vec::new(),
+            group: None,
         }
     }
 }
@@ -273,12 +348,14 @@ impl Default for Mix {
     }
 }
 
-/// Everything the engine plays.
+/// Everything the engine plays. Tracks and buses are both
+/// [`TrackSpec`]s: a bus is a track with no clips that others route to.
 #[derive(Clone, Debug)]
 pub struct Session {
     pub tempo: TempoMap,
     pub tracks: Vec<TrackSpec>,
     pub master_db: f32,
+    pub groups: Vec<GroupSpec>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -290,6 +367,16 @@ pub enum CompileError {
         track: usize,
     },
     BadChannelCount {
+        track: usize,
+    },
+    /// An output, send, sidechain or control group names a track or
+    /// group that isn't there, or the track itself.
+    BadRoute {
+        track: usize,
+    },
+    /// Audio would go round in a circle: a bus routed, directly or
+    /// through others, back into a track that feeds it.
+    Cycle {
         track: usize,
     },
 }
@@ -307,6 +394,16 @@ impl std::fmt::Display for CompileError {
             }
             CompileError::BadChannelCount { track } => {
                 write!(f, "track {}: clip audio must be mono or stereo", track + 1)
+            }
+            CompileError::BadRoute { track } => {
+                write!(f, "track {}: routed to a track that isn't there", track + 1)
+            }
+            CompileError::Cycle { track } => {
+                write!(
+                    f,
+                    "track {}: its audio would come back round to itself",
+                    track + 1
+                )
             }
         }
     }
@@ -364,11 +461,20 @@ pub(crate) struct TrackNode {
     pub inserts: Vec<InsertNode>,
     /// Practice speed and transpose; used only when either is set.
     pub stretch: Box<Stretcher>,
-    /// Effects' total latency: clips are read this far ahead.
+    /// How far ahead of the play position the clips are read: the
+    /// effects' own latency, plus that of every bus on the way to the
+    /// master (see [`Graph::render`] on delay compensation).
     pub latency: i64,
     /// The source is mono but the effects are stereo: copy left to right
     /// before them.
     pub widen: bool,
+    pub group: Option<usize>,
+    /// Edges into this track (outputs and sends routed here, and the
+    /// sidechains its effects listen to), as indices into `Graph::edges`.
+    pub incoming: Vec<usize>,
+    /// Soloing: this track is heard because it, or a track routed into
+    /// it, is soloed.
+    pub heard: bool,
 }
 
 pub(crate) struct InsertNode {
@@ -376,6 +482,64 @@ pub(crate) struct InsertNode {
     pub bypass: bool,
     /// Taken over from the previous graph, or handed in when new.
     pub effect: Option<Box<dyn Insert>>,
+    /// The edge that brings its sidechain, if it has one.
+    pub key: Option<usize>,
+}
+
+/// What an edge carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Carry {
+    /// The track's output, after its fader.
+    Output,
+    /// A send: the index into the track's sends.
+    Send(usize),
+    /// A sidechain into the effect at this index of the target's chain.
+    Sidechain(usize),
+}
+
+/// Audio going from one track to another (or to the master), delayed so
+/// that every path from a sound to the master takes the same time.
+pub(crate) struct Edge {
+    pub from: usize,
+    /// `None` for the master.
+    pub to: Option<usize>,
+    pub carry: Carry,
+    /// Taken before the fader (sends only).
+    pub pre_fader: bool,
+    /// The gain asked for (a send's level, or 0 when muted), and the
+    /// gain reached at the end of the last block.
+    pub gain: f32,
+    pub last: f32,
+    /// A ring buffer of `delay` frames per channel, or empty for none.
+    pub line: [Vec<f32>; 2],
+    pub at: usize,
+}
+
+impl Edge {
+    fn delay(&self) -> usize {
+        self.line[0].len()
+    }
+
+    /// Runs `src` through the delay line, scaled by the gain ramping
+    /// from `last` to `gain`, adding the result into `dst`.
+    fn feed(&mut self, src: (&[f32], &[f32]), dst: (&mut [f32], &mut [f32])) {
+        let n = src.0.len();
+        let d = self.delay();
+        let step = 1.0 / n.max(1) as f32;
+        let (g0, g1) = (self.last, self.gain);
+        for i in 0..n {
+            let g = g0 + (g1 - g0) * (i + 1) as f32 * step;
+            let (mut a, mut b) = (src.0[i], src.1[i]);
+            if d > 0 {
+                a = std::mem::replace(&mut self.line[0][self.at], a);
+                b = std::mem::replace(&mut self.line[1][self.at], b);
+                self.at = (self.at + 1) % d;
+            }
+            dst.0[i] += a * g;
+            dst.1[i] += b * g;
+        }
+        self.last = g1;
+    }
 }
 
 impl ClipNode {
@@ -388,12 +552,18 @@ impl ClipNode {
 }
 
 impl TrackNode {
-    /// Left and right gains the mixer settings ask for.
-    fn target(&self, any_solo: bool) -> (f32, f32) {
-        if self.mix.mute || any_solo && !self.mix.solo {
+    /// Left and right gains the mixer settings ask for, with the fader
+    /// (`volume`) or without it (what a pre-fader send takes).
+    fn target(&self, any_solo: bool, groups: &[GroupSpec], volume: bool) -> (f32, f32) {
+        let group = self.group.and_then(|g| groups.get(g));
+        if self.mix.mute || group.is_some_and(|g| g.mute) || any_solo && !self.heard {
             return (0.0, 0.0);
         }
-        let g = db_to_gain(self.mix.gain_db);
+        let g = if volume {
+            db_to_gain(self.mix.gain_db + group.map_or(0.0, |g| g.gain_db))
+        } else {
+            1.0
+        };
         let (l, r) = pan_gains(self.mix.pan, self.stereo);
         (g * l, g * r)
     }
@@ -566,8 +736,23 @@ pub struct Graph {
     pub(crate) tracks: Vec<TrackNode>,
     pub(crate) master: f32,
     pub(crate) any_solo: bool,
-    /// Per-track scratch, two channels each, `max_block` long.
+    pub(crate) groups: Vec<GroupSpec>,
+    /// Per-track scratch, two channels each, `max_block` long: the
+    /// track's sum before its effects, then after them.
     pub(crate) scratch: Vec<[Vec<f32>; 2]>,
+    /// Per-track audio after the effects and pan, without the fader
+    /// (for pre-fader sends), and after the fader too.
+    pub(crate) pre: Vec<[Vec<f32>; 2]>,
+    pub(crate) post: Vec<[Vec<f32>; 2]>,
+    /// One sidechain block, filled just before the effect that listens
+    /// to it runs.
+    key: [Vec<f32>; 2],
+    pub(crate) edges: Vec<Edge>,
+    /// Edges into the master.
+    to_master: Vec<usize>,
+    /// Tracks in the order they must be rendered: every track before
+    /// the ones it feeds.
+    order: Vec<usize>,
     pub(crate) clicks: Clicks,
     pub(crate) streams: Vec<StreamNode>,
     /// The file each stream reads, for the disk thread.
@@ -581,7 +766,62 @@ impl Session {
             tempo,
             tracks: Vec::new(),
             master_db: 0.0,
+            groups: Vec::new(),
         }
+    }
+
+    /// Checks every route, and finds an order to render the tracks in
+    /// with each before the tracks it feeds. Fails on a route to a track
+    /// that isn't there, or one that goes round in a circle.
+    fn route_order(&self) -> Result<Vec<usize>, CompileError> {
+        let n = self.tracks.len();
+        let mut indegree = vec![0usize; n];
+        // Edges as (from, to) for the order.
+        let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, t) in self.tracks.iter().enumerate() {
+            let bad = CompileError::BadRoute { track: i };
+            let mut to = Vec::new();
+            if let Output::Track(j) = t.output {
+                to.push(j);
+            }
+            to.extend(t.sends.iter().map(|s| s.to));
+            for j in to {
+                if j >= n || j == i {
+                    return Err(bad);
+                }
+                out[i].push(j);
+                indegree[j] += 1;
+            }
+            // A sidechain comes the other way: its track feeds this one.
+            for j in t.inserts.iter().filter_map(|i| i.sidechain) {
+                if j >= n || j == i {
+                    return Err(bad);
+                }
+                out[j].push(i);
+                indegree[i] += 1;
+            }
+            if t.group.is_some_and(|g| g >= self.groups.len()) {
+                return Err(bad);
+            }
+        }
+        // Kahn's algorithm: tracks with nothing feeding them come first.
+        let mut ready: Vec<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+        ready.reverse();
+        let mut order = Vec::with_capacity(n);
+        while let Some(i) = ready.pop() {
+            order.push(i);
+            for &j in &out[i] {
+                indegree[j] -= 1;
+                if indegree[j] == 0 {
+                    ready.push(j);
+                }
+            }
+        }
+        if order.len() < n {
+            let track = (0..n).find(|&i| indegree[i] > 0).unwrap_or(0);
+            return Err(CompileError::Cycle { track });
+        }
+        Ok(order)
     }
 
     /// Builds the graph. Allocates; never call on the audio thread.
@@ -600,6 +840,7 @@ impl Session {
         if self.tracks.len() > MAX_TRACKS {
             return Err(CompileError::TooManyTracks);
         }
+        let order = self.route_order()?;
         let rate = self.tempo.sample_rate();
         let mut tracks = Vec::with_capacity(self.tracks.len());
         let mut streams: Vec<StreamNode> = Vec::new();
@@ -673,6 +914,7 @@ impl Session {
                         .iter()
                         .position(|(id, _)| *id == i.id)
                         .map(|k| new_effects.swap_remove(k).1),
+                    key: None,
                 })
                 .collect();
             let latency = t
@@ -681,6 +923,12 @@ impl Session {
                 .filter(|i| !i.bypass)
                 .map(|i| i.latency as i64)
                 .sum();
+            // A bus sums stereo audio.
+            let fed = self
+                .tracks
+                .iter()
+                .any(|o| o.output == Output::Track(ti) || o.sends.iter().any(|s| s.to == ti));
+            stereo |= fed;
             // Effects work in stereo, so a mono track becomes stereo.
             let widen = !stereo && !inserts.is_empty();
             stereo |= !inserts.is_empty();
@@ -696,27 +944,116 @@ impl Session {
                 latency,
                 widen,
                 stretch: Box::new(Stretcher::new(max_block)),
+                group: t.group,
+                incoming: Vec::new(),
+                heard: false,
             });
         }
-        let any_solo = tracks.iter().any(|t| t.mix.solo);
-        // Start each track at its settled gains, so a new graph does not
-        // fade in.
-        for t in &mut tracks {
-            t.last = t.target(any_solo);
+
+        // Delay compensation. Each track's audio must reach the master
+        // at the same time whichever way it goes. `downstream[i]` is the
+        // longest wait from track `i`'s fader to the master, over every
+        // route it takes (its output, sends and sidechains): the tracks
+        // on the way each add their effects' latency. Track `i` reads
+        // its clips ahead by its own effects' latency plus `downstream`,
+        // and each route that waits less than `downstream` is delayed by
+        // the difference, so they all line up again where they meet.
+        let n = tracks.len();
+        let own: Vec<i64> = tracks.iter().map(|t| t.latency).collect();
+        let mut downstream = vec![0i64; n];
+        let mut edges: Vec<Edge> = Vec::new();
+        let mut to_master = Vec::new();
+        // How long after the target's input its effect `k` runs: the
+        // latency of the effects before it.
+        let before = |j: usize, k: usize| -> i64 {
+            self.tracks[j].inserts[..k]
+                .iter()
+                .filter(|i| !i.bypass)
+                .map(|i| i.latency as i64)
+                .sum()
+        };
+        for &i in order.iter().rev() {
+            let t = &self.tracks[i];
+            // (to, carry, pre_fader, gain, the wait on that route)
+            let mut routes: Vec<(Option<usize>, Carry, bool, f32, i64)> = Vec::new();
+            let wait = |j: usize| downstream[j] + own[j];
+            match t.output {
+                Output::Master => routes.push((None, Carry::Output, false, 1.0, 0)),
+                Output::Track(j) => routes.push((Some(j), Carry::Output, false, 1.0, wait(j))),
+            }
+            for (k, s) in t.sends.iter().enumerate() {
+                let gain = if s.mute { 0.0 } else { db_to_gain(s.gain_db) };
+                routes.push((Some(s.to), Carry::Send(k), s.pre_fader, gain, wait(s.to)));
+            }
+            for (j, o) in self.tracks.iter().enumerate() {
+                for (k, ins) in o.inserts.iter().enumerate() {
+                    if ins.sidechain == Some(i) {
+                        let w = wait(j) - before(j, k);
+                        routes.push((Some(j), Carry::Sidechain(k), false, 1.0, w));
+                    }
+                }
+            }
+            let longest = routes.iter().map(|r| r.4).max().unwrap_or(0);
+            downstream[i] = longest;
+            for (to, carry, pre_fader, gain, w) in routes {
+                let delay = (longest - w) as usize;
+                let e = edges.len();
+                edges.push(Edge {
+                    from: i,
+                    to,
+                    carry,
+                    pre_fader,
+                    gain,
+                    last: gain,
+                    line: [vec![0.0; delay], vec![0.0; delay]],
+                    at: 0,
+                });
+                match to {
+                    None => to_master.push(e),
+                    Some(j) => {
+                        tracks[j].incoming.push(e);
+                        if let Carry::Sidechain(k) = carry {
+                            tracks[j].inserts[k].key = Some(e);
+                        }
+                    }
+                }
+            }
         }
-        Ok(Graph {
+        for (t, d) in tracks.iter_mut().zip(&downstream) {
+            t.latency += d;
+        }
+
+        let mut g = Graph {
             tempo: self.tempo.clone(),
-            scratch: (0..tracks.len())
+            scratch: (0..n)
                 .map(|_| [vec![0.0; max_block], vec![0.0; max_block]])
                 .collect(),
+            pre: (0..n)
+                .map(|_| [vec![0.0; max_block], vec![0.0; max_block]])
+                .collect(),
+            post: (0..n)
+                .map(|_| [vec![0.0; max_block], vec![0.0; max_block]])
+                .collect(),
+            key: [vec![0.0; max_block], vec![0.0; max_block]],
+            edges,
+            to_master,
+            order,
             tracks,
             master: db_to_gain(self.master_db),
-            any_solo,
+            any_solo: false,
+            groups: self.groups.clone(),
             clicks: Clicks::new(rate),
             streams,
             placements,
             max_block,
-        })
+        };
+        g.refresh_solo();
+        // Start each track at its settled gains, so a new graph does not
+        // fade in.
+        for i in 0..n {
+            g.tracks[i].last = g.tracks[i].target(g.any_solo, &g.groups, true);
+        }
+        Ok(g)
     }
 }
 
@@ -749,7 +1086,43 @@ impl Graph {
         if let Some(t) = self.tracks.get_mut(track) {
             t.mix = mix;
         }
+        self.refresh_solo();
+    }
+
+    pub(crate) fn set_group(&mut self, group: usize, spec: GroupSpec) {
+        if let Some(g) = self.groups.get_mut(group) {
+            *g = spec;
+        }
+    }
+
+    /// Changes a send's level or mute without a new graph.
+    pub(crate) fn set_send(&mut self, track: usize, send: usize, gain_db: f32, mute: bool) {
+        let gain = if mute { 0.0 } else { db_to_gain(gain_db) };
+        if let Some(e) = self
+            .edges
+            .iter_mut()
+            .find(|e| e.from == track && e.carry == Carry::Send(send))
+        {
+            e.gain = gain;
+        }
+    }
+
+    /// Works out which tracks soloing leaves audible: the soloed ones,
+    /// and every bus they are routed into, so soloing a track through a
+    /// bus still sounds.
+    fn refresh_solo(&mut self) {
         self.any_solo = self.tracks.iter().any(|t| t.mix.solo);
+        for k in 0..self.order.len() {
+            let i = self.order[k];
+            let mut heard = self.tracks[i].mix.solo;
+            for &e in &self.tracks[i].incoming {
+                let e = &self.edges[e];
+                if !matches!(e.carry, Carry::Sidechain(_)) && self.tracks[e.from].heard {
+                    heard = true;
+                }
+            }
+            self.tracks[i].heard = heard;
+        }
     }
 
     /// Plays frames `[pos, pos + n)` of every track into its scratch
@@ -775,11 +1148,28 @@ impl Graph {
         let n = out[0].len();
         let mut missing = 0;
         let [out_l, out_r] = out;
-        for (ti, t) in self.tracks.iter_mut().enumerate() {
+        let any_solo = self.any_solo;
+        let groups = &self.groups;
+        for k in 0..self.order.len() {
+            let ti = self.order[k];
+            let t = &mut self.tracks[ti];
             let [sl, sr] = &mut self.scratch[ti];
             let (sl, sr) = (&mut sl[..n], &mut sr[..n]);
             sl.fill(0.0);
             sr.fill(0.0);
+            // What other tracks route here, each delayed to line up.
+            for &e in &t.incoming {
+                let e = &mut self.edges[e];
+                if matches!(e.carry, Carry::Sidechain(_)) {
+                    continue;
+                }
+                let from = if e.pre_fader {
+                    &self.pre[e.from]
+                } else {
+                    &self.post[e.from]
+                };
+                e.feed((&from[0][..n], &from[1][..n]), (&mut *sl, &mut *sr));
+            }
             if t.monitor
                 && let Some(inp) = t.input
             {
@@ -822,11 +1212,24 @@ impl Graph {
             }
             for i in &mut t.inserts {
                 if let (false, Some(fx)) = (i.bypass, &mut i.effect) {
-                    fx.process(sl, sr);
+                    match i.key {
+                        Some(e) => {
+                            let e = &mut self.edges[e];
+                            let [kl, kr] = &mut self.key;
+                            let (kl, kr) = (&mut kl[..n], &mut kr[..n]);
+                            kl.fill(0.0);
+                            kr.fill(0.0);
+                            let from = &self.post[e.from];
+                            e.feed((&from[0][..n], &from[1][..n]), (&mut *kl, &mut *kr));
+                            fx.process_keyed(sl, sr, (kl, kr));
+                        }
+                        None => fx.process(sl, sr),
+                    }
                 }
             }
 
-            let target = t.target(self.any_solo);
+            let target = t.target(any_solo, groups, true);
+            let dry = t.target(any_solo, groups, false);
             // Ramp linearly from last block's gains so changes don't click.
             let (l0, r0) = t.last;
             let step = 1.0 / n.max(1) as f32;
@@ -836,6 +1239,8 @@ impl Graph {
                 .as_mut()
                 .filter(|t| t.0 == ti)
                 .map(|(_, l, r)| (&mut **l, &mut **r));
+            let [pre_l, pre_r] = &mut self.pre[ti];
+            let [post_l, post_r] = &mut self.post[ti];
             for i in 0..n {
                 let k = (i + 1) as f32 * step;
                 let gl = l0 + (target.0 - l0) * k;
@@ -846,6 +1251,8 @@ impl Graph {
                 } else {
                     (sl[i], sl[i])
                 };
+                pre_l[i] = a * dry.0;
+                pre_r[i] = b * dry.1;
                 let (a, b) = (a * gl, b * gr);
                 peak = (peak.0.max(a.abs()), peak.1.max(b.abs()));
                 sq = (sq.0 + a * a, sq.1 + b * b);
@@ -853,13 +1260,18 @@ impl Graph {
                     tl[i] = a;
                     tr[i] = b;
                 }
-                out_l[i] += a;
-                out_r[i] += b;
+                post_l[i] = a;
+                post_r[i] = b;
             }
             t.last = target;
             if let Some(l) = levels.get_mut(ti) {
                 *l = Level { peak, sq };
             }
+        }
+        for &e in &self.to_master {
+            let e = &mut self.edges[e];
+            let from = &self.post[e.from];
+            e.feed((&from[0][..n], &from[1][..n]), (&mut *out_l, &mut *out_r));
         }
         for s in out_l.iter_mut().chain(out_r.iter_mut()) {
             *s *= self.master;
@@ -900,6 +1312,21 @@ impl Graph {
     pub(crate) fn adopt_stretchers(&mut self, old: &mut Graph) {
         for (t, o) in self.tracks.iter_mut().zip(&mut old.tracks) {
             std::mem::swap(&mut t.stretch, &mut o.stretch);
+        }
+    }
+
+    /// Takes over the delay lines of `old` for routes this graph still
+    /// has with the same delay, so a graph change does not drop the
+    /// audio in flight on them.
+    pub(crate) fn adopt_edges(&mut self, old: &mut Graph) {
+        for e in &mut self.edges {
+            if let Some(o) = old.edges.iter_mut().find(|o| {
+                o.from == e.from && o.to == e.to && o.carry == e.carry && o.delay() == e.delay()
+            }) {
+                std::mem::swap(&mut e.line, &mut o.line);
+                e.at = o.at;
+                e.last = o.last;
+            }
         }
     }
 

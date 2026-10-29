@@ -145,6 +145,7 @@ fn the_engine_compensates_the_plugins_latency() {
         id: 1,
         bypass: false,
         latency: plugin.latency(),
+        sidechain: None,
     }];
     s.tracks = vec![dry, wet];
     let mut fx: Vec<(u64, Box<dyn Insert>)> = vec![(1, Box::new(fx))];

@@ -179,6 +179,7 @@ impl FxSlot {
             id: self.id,
             bypass: self.bypass,
             latency: self.latency,
+            sidechain: None,
         }
     }
 

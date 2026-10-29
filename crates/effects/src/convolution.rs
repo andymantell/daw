@@ -300,7 +300,7 @@ impl Convolution {
         let h = &self.rooms[room].head[ch];
         let x = &self.hist[self.pos + 1..self.pos + 1 + BLOCK];
         let mut lanes = [0f32; 8];
-        for (hc, xc) in h.chunks_exact(8).zip(x.chunks_exact(8)) {
+        for (hc, xc) in h.as_chunks::<8>().0.iter().zip(x.as_chunks::<8>().0) {
             for k in 0..8 {
                 lanes[k] += hc[k] * xc[k];
             }

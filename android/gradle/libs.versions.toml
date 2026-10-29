@@ -27,10 +27,3 @@ camerax-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "ca
 camerax-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camerax" }
 camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
-
-[plugins]
-android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

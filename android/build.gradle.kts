@@ -1,10 +1,21 @@
-// Plugin versions live in gradle/libs.versions.toml. The Kotlin plugins
-// share one artifact, so all of them are put on the classpath here, once;
-// the Android plugin is applied by app/ alone, so a core-only build never
-// resolves it.
-plugins {
-    alias(libs.plugins.kotlin.jvm) apply false
-    alias(libs.plugins.kotlin.android) apply false
-    alias(libs.plugins.kotlin.compose) apply false
-    alias(libs.plugins.kotlin.serialization) apply false
+// Every plugin goes on one classpath here, so the Kotlin plugin can see
+// the Android one when app/ applies both (plugins loaded by different
+// projects can't see each other). The Android plugin is left out of a
+// core-only build (-PcoreOnly), which then needs no Android SDK.
+// Versions live in gradle/libs.versions.toml; modules apply plugins by
+// id alone.
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        val kotlin = libs.versions.kotlin.get()
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin")
+        classpath("org.jetbrains.kotlin:kotlin-serialization:$kotlin")
+        classpath("org.jetbrains.kotlin:compose-compiler-gradle-plugin:$kotlin")
+        if (!providers.gradleProperty("coreOnly").isPresent) {
+            classpath("com.android.tools.build:gradle:${libs.versions.agp.get()}")
+        }
+    }
 }

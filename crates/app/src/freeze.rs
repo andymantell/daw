@@ -332,7 +332,7 @@ impl App {
 
 #[cfg(test)]
 #[path = "../../plugins/tests/common/bundle.rs"]
-mod test_plugin;
+pub(crate) mod test_plugin;
 
 #[cfg(test)]
 mod tests {

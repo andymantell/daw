@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! One plugin instance, split into its two sides.
 //!
-//! [`instantiate`] returns a [`Plugin`], kept by the UI (parameters,
-//! state, editor), and a [`Processor`], handed to the engine as a track
-//! insert and run on the audio thread. Both hold the same plugin objects;
-//! the plugin is shut down when the last of the two is dropped, which is
-//! always off the audio thread (the engine retires old graphs to the UI
-//! thread).
+//! [`instantiate`] returns a [`LocalPlugin`], kept by the UI (parameters,
+//! state, editor), and a [`LocalProcessor`], handed to the engine as a
+//! track insert and run on the audio thread. Both hold the same plugin
+//! objects; the plugin is shut down when the last of the two is dropped,
+//! which is always off the audio thread (the engine retires old graphs to
+//! the UI thread).
 //!
 //! Parameter changes from the UI and from the plugin's own editor reach
 //! the processor through a lock-free queue and are given to it with its
 //! next block, as VST 3 asks.
+//!
+//! [`Plugin`] and [`Processor`] are the two sides of a plugin wherever
+//! it runs: in this process, or in a helper process ([`crate::host`])
+//! that a crash takes down instead of the app.
 
 #![allow(non_snake_case)]
 
@@ -27,7 +31,9 @@ use vst3::{ComPtr, ComWrapper};
 use daw_engine::graph::Insert;
 
 use crate::com::{ComponentHandler, MemStream, ParamChanges, host_app, read_wstr};
+use crate::host::{RemotePlugin, RemoteProcessor};
 use crate::module::{Module, Result};
+use crate::proto::{ProgramList, Status};
 
 fn check(r: tresult, what: &str) -> Result<()> {
     if r == kResultOk {
@@ -70,17 +76,25 @@ impl Drop for Core {
 }
 
 /// A parameter as the plugin describes it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Param {
     pub id: u32,
     pub title: String,
     pub units: String,
     pub automatable: bool,
     pub bypass: bool,
+    /// Setting it picks one of the plugin's own programs (presets).
+    pub program_change: bool,
+    /// Steps for a stepped parameter, 0 for a continuous one.
+    pub steps: i32,
 }
 
-/// The UI side of a plugin.
-pub struct Plugin {
+/// The UI side of a plugin running in this process.
+pub struct LocalPlugin {
+    // Declared first so it is dropped first: the editor must be closed
+    // before its plugin.
+    #[cfg(windows)]
+    editor: Option<crate::editor_win::EditorWindow>,
     core: Arc<Core>,
     handler: ComWrapper<ComponentHandler>,
 }
@@ -95,7 +109,7 @@ pub fn instantiate(
     cid: &TUID,
     rate: f64,
     max_block: usize,
-) -> Result<(Plugin, Processor)> {
+) -> Result<(LocalPlugin, LocalProcessor)> {
     let host = host_app();
     let component: ComPtr<IComponent> = module
         .create(cid)
@@ -184,7 +198,9 @@ pub fn instantiate(
         connections,
         _module: module,
     });
-    let plugin = Plugin {
+    let plugin = LocalPlugin {
+        #[cfg(windows)]
+        editor: None,
         core: core.clone(),
         handler,
     };
@@ -218,11 +234,11 @@ pub fn instantiate(
         // Some plugins return kNotImplemented here, which is allowed.
         core.processor.setProcessing(1);
     }
-    let processor = Processor::new(core, rx, &inputs, &outputs, max_block);
+    let processor = LocalProcessor::new(core, rx, &inputs, &outputs, max_block);
     Ok((plugin, processor))
 }
 
-impl Plugin {
+impl LocalPlugin {
     /// Frames of delay the plugin adds.
     pub fn latency(&self) -> u32 {
         unsafe { self.core.processor.getLatencySamples() }
@@ -269,6 +285,10 @@ impl Plugin {
                     automatable: info.flags & ParameterInfo_::ParameterFlags_::kCanAutomate as i32
                         != 0,
                     bypass: info.flags & ParameterInfo_::ParameterFlags_::kIsBypass as i32 != 0,
+                    program_change: info.flags
+                        & ParameterInfo_::ParameterFlags_::kIsProgramChange as i32
+                        != 0,
+                    steps: info.stepCount,
                 })
             })
             .collect()
@@ -339,12 +359,95 @@ impl Plugin {
         Ok(())
     }
 
+    /// The plugin's own program (preset) lists, if it offers any.
+    pub fn programs(&self) -> Vec<ProgramList> {
+        let Some(c) = &self.core.controller else {
+            return Vec::new();
+        };
+        let Some(u) = c.cast::<IUnitInfo>() else {
+            return Vec::new();
+        };
+        let n = unsafe { u.getProgramListCount() };
+        (0..n)
+            .filter_map(|i| {
+                let mut info: ProgramListInfo = unsafe { std::mem::zeroed() };
+                if unsafe { u.getProgramListInfo(i, &mut info) } != kResultOk {
+                    return None;
+                }
+                let programs = (0..info.programCount)
+                    .map(|j| {
+                        let mut name: String128 = [0; 128];
+                        unsafe { u.getProgramName(info.id, j, &mut name) };
+                        read_wstr(&name)
+                    })
+                    .collect();
+                Some(ProgramList {
+                    id: info.id,
+                    name: read_wstr(&info.name),
+                    programs,
+                })
+            })
+            .collect()
+    }
+
+    /// What the plugin has flagged since last asked, and its latency.
+    pub fn poll(&mut self) -> Status {
+        #[cfg(windows)]
+        if self.editor.as_ref().is_some_and(|e| !e.is_open()) {
+            self.editor = None;
+        }
+        Status {
+            latency: self.latency(),
+            restart: self.take_restart_request(),
+            edited: self.take_edited(),
+            editor_open: self.editor_open(),
+        }
+    }
+
     /// The plugin's editor view, if it has one. Open and close it on the
     /// UI thread.
     pub fn create_editor(&self) -> Option<ComPtr<IPlugView>> {
         let c = self.core.controller.as_ref()?;
         let editor: &CStr = c"editor";
         unsafe { ComPtr::from_raw(c.createView(editor.as_ptr())) }
+    }
+
+    /// Opens the plugin's own editor in a window titled `title`, or
+    /// brings it to the front.
+    pub fn open_editor(&mut self, title: &str) -> Result<()> {
+        #[cfg(windows)]
+        {
+            if let Some(e) = &self.editor {
+                e.focus();
+                return Ok(());
+            }
+            let view = self
+                .create_editor()
+                .ok_or("this plugin has no editor of its own")?;
+            self.editor = Some(crate::editor_win::EditorWindow::open(view, title)?);
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = title;
+            Err("plugin windows are not supported on this platform yet".into())
+        }
+    }
+
+    pub fn editor_open(&self) -> bool {
+        #[cfg(windows)]
+        {
+            self.editor.as_ref().is_some_and(|e| e.is_open())
+        }
+        #[cfg(not(windows))]
+        false
+    }
+
+    pub fn close_editor(&mut self) {
+        #[cfg(windows)]
+        {
+            self.editor = None;
+        }
     }
 }
 
@@ -369,8 +472,9 @@ impl BusBufs {
     }
 }
 
-/// The audio side of a plugin: an [`Insert`] for the engine.
-pub struct Processor {
+/// The audio side of a plugin running in this process: an [`Insert`]
+/// for the engine.
+pub struct LocalProcessor {
     core: Arc<Core>,
     edits: Consumer<(ParamID, ParamValue)>,
     changes: ComWrapper<ParamChanges>,
@@ -385,16 +489,16 @@ pub struct Processor {
 }
 
 // The raw pointers point into buffers this struct owns and never resizes.
-unsafe impl Send for Processor {}
+unsafe impl Send for LocalProcessor {}
 
-impl Processor {
+impl LocalProcessor {
     fn new(
         core: Arc<Core>,
         edits: Consumer<(ParamID, ParamValue)>,
         inputs: &[usize],
         outputs: &[usize],
         max_block: usize,
-    ) -> Processor {
+    ) -> LocalProcessor {
         let changes = ComWrapper::new(ParamChanges::new());
         let changes_ptr = changes.to_com_ptr::<IParameterChanges>().unwrap();
         let out_changes = ComWrapper::new(ParamChanges::new());
@@ -413,7 +517,7 @@ impl Processor {
         };
         let in_buses = inputs.iter_mut().map(bus).collect();
         let out_buses = outputs.iter_mut().map(bus).collect();
-        Processor {
+        LocalProcessor {
             core,
             edits,
             changes,
@@ -495,7 +599,7 @@ impl Processor {
     }
 }
 
-impl Insert for Processor {
+impl Insert for LocalProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         // Blocks longer than the plugin was set up for go in pieces.
         let n = left.len().min(right.len());
@@ -505,6 +609,155 @@ impl Insert for Processor {
             let (l, r) = (&mut left[done..end], &mut right[done..end]);
             self.run(l, r);
             done = end;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// The UI side of a plugin, wherever it runs.
+pub enum Plugin {
+    Local(LocalPlugin),
+    Remote(RemotePlugin),
+}
+
+impl Plugin {
+    /// Frames of delay the plugin adds, counting any the helper process
+    /// adds to hand audio to and from it.
+    pub fn latency(&self) -> u32 {
+        match self {
+            Plugin::Local(p) => p.latency(),
+            Plugin::Remote(p) => p.latency(),
+        }
+    }
+
+    /// Anything the plugin has flagged since last asked.
+    pub fn poll(&mut self) -> Status {
+        match self {
+            Plugin::Local(p) => p.poll(),
+            Plugin::Remote(p) => p.poll(),
+        }
+    }
+
+    /// Why the plugin can no longer be used: its helper process crashed
+    /// or stopped answering. A plugin in this process never fails this
+    /// way (it takes the app with it instead).
+    pub fn failure(&self) -> Option<String> {
+        match self {
+            Plugin::Local(_) => None,
+            Plugin::Remote(p) => p.failure(),
+        }
+    }
+
+    /// True if the plugin runs in a helper process.
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Plugin::Remote(_))
+    }
+
+    pub fn params(&self) -> Vec<Param> {
+        match self {
+            Plugin::Local(p) => p.params(),
+            Plugin::Remote(p) => p.params(),
+        }
+    }
+
+    pub fn param(&self, id: u32) -> Option<f64> {
+        match self {
+            Plugin::Local(p) => p.param(id),
+            Plugin::Remote(p) => p.param(id),
+        }
+    }
+
+    pub fn param_text(&self, id: u32, value: f64) -> Option<String> {
+        match self {
+            Plugin::Local(p) => p.param_text(id, value),
+            Plugin::Remote(p) => p.param_text(id, value),
+        }
+    }
+
+    pub fn set_param(&self, id: u32, value: f64) {
+        match self {
+            Plugin::Local(p) => p.set_param(id, value),
+            Plugin::Remote(p) => p.set_param(id, value),
+        }
+    }
+
+    pub fn save_state(&self) -> Result<PluginState> {
+        match self {
+            Plugin::Local(p) => p.save_state(),
+            Plugin::Remote(p) => p.save_state(),
+        }
+    }
+
+    pub fn load_state(&self, state: &PluginState) -> Result<()> {
+        match self {
+            Plugin::Local(p) => p.load_state(state),
+            Plugin::Remote(p) => p.load_state(state),
+        }
+    }
+
+    pub fn programs(&self) -> Vec<ProgramList> {
+        match self {
+            Plugin::Local(p) => p.programs(),
+            Plugin::Remote(p) => p.programs(),
+        }
+    }
+
+    /// Picks program `index` of the plugin's own list `list`, through
+    /// its program-change parameter.
+    pub fn select_program(&self, list: &ProgramList, index: usize) -> Result<()> {
+        let count = list.programs.len();
+        if index >= count {
+            return Err("no such program".into());
+        }
+        let p = self
+            .params()
+            .into_iter()
+            .find(|p| p.program_change)
+            .ok_or("this plugin's programs can't be picked from here")?;
+        let steps = if p.steps > 0 {
+            p.steps as usize
+        } else {
+            count.saturating_sub(1)
+        };
+        self.set_param(p.id, index as f64 / steps.max(1) as f64);
+        Ok(())
+    }
+
+    pub fn open_editor(&mut self, title: &str) -> Result<()> {
+        match self {
+            Plugin::Local(p) => p.open_editor(title),
+            Plugin::Remote(p) => p.open_editor(title),
+        }
+    }
+
+    pub fn editor_open(&self) -> bool {
+        match self {
+            Plugin::Local(p) => p.editor_open(),
+            Plugin::Remote(p) => p.editor_open(),
+        }
+    }
+
+    pub fn close_editor(&mut self) {
+        match self {
+            Plugin::Local(p) => p.close_editor(),
+            Plugin::Remote(p) => p.close_editor(),
+        }
+    }
+}
+
+/// The audio side of a plugin, wherever it runs: an [`Insert`] for the
+/// engine.
+pub enum Processor {
+    Local(LocalProcessor),
+    Remote(RemoteProcessor),
+}
+
+impl Insert for Processor {
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        match self {
+            Processor::Local(p) => p.process(left, right),
+            Processor::Remote(p) => p.process(left, right),
         }
     }
 }

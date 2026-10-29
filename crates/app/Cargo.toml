@@ -34,4 +34,5 @@ vst3 = "0.3.0"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
 
 [dev-dependencies]
+daw-test-plugin = { path = "../test-plugin" }
 egui_kittest = { version = "0.37.0", features = ["eframe"] }

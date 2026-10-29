@@ -2,7 +2,10 @@
 //! Effects in the app: the list of installed plugins and scanning for
 //! them in the background (roadmap 1.3), the effects that come with the
 //! app (2.5), each track's insert slots, and the windows that manage
-//! them.
+//! them. Each plugin runs where the user chose for it (2.4): in the
+//! app, in a helper process shared with others, or in one of its own,
+//! so that a crash takes down the helper and not the app. Presets are
+//! saved and loaded from the effects window.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,16 +13,14 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use daw_engine::graph::{Insert, InsertSpec};
+use daw_plugins::presets::{self, Preset};
+use daw_plugins::proto::ProgramList;
 use daw_plugins::scan::{self, Available, PluginList};
-use daw_plugins::{Module, Plugin};
+use daw_plugins::{Host, Module, Plugin, PluginState, Processor, Sandbox};
 use eframe::egui::{self, Color32, RichText};
 
 /// One effect in a track's chain.
 pub struct FxSlot {
-    // Declared first so it is dropped first: the editor must be closed
-    // before its plugin.
-    #[cfg(windows)]
-    editor: Option<daw_plugins::editor_win::EditorWindow>,
     /// Matches the engine's insert id.
     pub id: u64,
     /// The effect's id in the project document.
@@ -27,8 +28,20 @@ pub struct FxSlot {
     pub name: String,
     pub bypass: bool,
     pub latency: u32,
+    /// Where it runs (in the app, for a built-in effect).
+    pub sandbox: Sandbox,
+    /// Why it stopped working: its helper process crashed or hung. The
+    /// audio passes through it unchanged until it is started again.
+    pub crashed: Option<String>,
+    /// The settings last saved or loaded, to start again from after a
+    /// crash.
+    last_state: Option<PluginState>,
     /// Show the host's own controls for its parameters.
     show_params: bool,
+    /// The name typed for a new preset.
+    preset_name: String,
+    /// The presets and program lists found, until something changes.
+    presets: Option<(Vec<Preset>, Vec<ProgramList>)>,
     kind: SlotKind,
 }
 
@@ -44,11 +57,16 @@ enum SlotKind {
 impl FxSlot {
     /// The plugin's own settings, for saving. None for a built-in
     /// effect, whose settings are always in the document.
-    pub fn state(&self) -> Option<daw_project::EffectState> {
+    pub fn state(&mut self) -> Option<daw_project::EffectState> {
         let SlotKind::Plugin { plugin, .. } = &self.kind else {
             return None;
         };
-        let s = plugin.save_state().ok()?;
+        let s = match plugin.save_state() {
+            Ok(s) => s,
+            // A crashed plugin keeps the settings it last had.
+            Err(_) => self.last_state.clone()?,
+        };
+        self.last_state = Some(s.clone());
         Some(daw_project::EffectState {
             component: s.component,
             controller: s.controller,
@@ -108,6 +126,46 @@ impl FxSlot {
         matches!(self.kind, SlotKind::Plugin { .. })
     }
 
+    /// The plugin behind this effect, if it is one.
+    fn plugin(&self) -> Option<&Plugin> {
+        match &self.kind {
+            SlotKind::Plugin { plugin, .. } => Some(plugin),
+            SlotKind::Builtin(_) => None,
+        }
+    }
+
+    fn plugin_mut(&mut self) -> Option<&mut Plugin> {
+        match &mut self.kind {
+            SlotKind::Plugin { plugin, .. } => Some(plugin),
+            SlotKind::Builtin(_) => None,
+        }
+    }
+
+    /// The plugin's class id, if it is one.
+    fn cid(&self) -> Option<&vst3::Steinberg::TUID> {
+        match &self.kind {
+            SlotKind::Plugin { cid, .. } => Some(cid),
+            SlotKind::Builtin(_) => None,
+        }
+    }
+
+    /// Where the effect runs, for the effects window.
+    pub fn runs(&self) -> &'static str {
+        match self.sandbox {
+            Sandbox::InApp => "in the app",
+            Sandbox::Shared => "in the shared helper",
+            Sandbox::Own => "in its own process",
+        }
+    }
+
+    /// Blocks the helper was late with, played as silence.
+    pub fn late(&self) -> u64 {
+        match self.plugin() {
+            Some(Plugin::Remote(p)) => p.late(),
+            _ => 0,
+        }
+    }
+
     pub fn spec(&self) -> InsertSpec {
         InsertSpec {
             id: self.id,
@@ -117,40 +175,45 @@ impl FxSlot {
     }
 
     /// Checks on the plugin once a frame. True if the graph needs
-    /// rebuilding (its latency changed).
+    /// rebuilding (its latency changed, or it just crashed and should
+    /// pass audio through).
     pub fn poll(&mut self) -> bool {
-        #[cfg(windows)]
-        if self.editor.as_ref().is_some_and(|e| !e.is_open()) {
-            self.editor = None;
+        if self.crashed.is_some() {
+            return false;
         }
-        let SlotKind::Plugin { plugin, .. } = &self.kind else {
+        let SlotKind::Plugin { plugin, .. } = &mut self.kind else {
             return false;
         };
-        if plugin.take_restart_request() {
-            let latency = plugin.latency();
-            if latency != self.latency {
-                self.latency = latency;
-                return true;
-            }
+        if let Some(why) = plugin.failure() {
+            self.crashed = Some(why);
+            return true;
+        }
+        let status = plugin.poll();
+        if status.latency != self.latency {
+            self.latency = status.latency;
+            return true;
         }
         false
     }
 
-    #[cfg(windows)]
     fn open_editor(&mut self) -> Result<(), String> {
-        if let Some(e) = &self.editor {
-            e.focus();
-            return Ok(());
+        if let Some(why) = &self.crashed {
+            return Err(why.clone());
         }
-        let SlotKind::Plugin { plugin, .. } = &self.kind else {
+        let title = self.name.clone();
+        let SlotKind::Plugin { plugin, .. } = &mut self.kind else {
             return Err("this effect has no window of its own".into());
         };
-        let view = plugin
-            .create_editor()
-            .ok_or("this plugin has no editor of its own")?;
-        self.editor = Some(daw_plugins::editor_win::EditorWindow::open(
-            view, &self.name,
-        )?);
+        plugin.open_editor(&title)
+    }
+
+    fn load(&mut self, state: &PluginState) -> Result<(), String> {
+        let SlotKind::Plugin { plugin, .. } = &self.kind else {
+            return Err("this effect has no settings to load".into());
+        };
+        plugin.load_state(state)?;
+        self.last_state = Some(state.clone());
+        self.latency = plugin.latency();
         Ok(())
     }
 }
@@ -169,6 +232,16 @@ pub struct Effects {
     pub list: PluginList,
     /// Where `list` is saved.
     list_path: PathBuf,
+    /// Where the user's presets are saved.
+    pub(crate) presets_dir: PathBuf,
+    /// The program run as a helper process: the app itself. None where
+    /// there is none (in tests), so every plugin runs in the app.
+    pub helper: Option<PathBuf>,
+    /// The helper shared by plugins set to share one, while it lives.
+    shared: Option<Host>,
+    /// Frames per block the audio device gives, so a live helper
+    /// processor can be set up to run one such block behind.
+    pub block: usize,
     /// Modules loaded so far, kept loaded for the life of the app.
     modules: HashMap<PathBuf, Arc<Module>>,
     /// Effects made but not yet in a graph, by insert id.
@@ -207,7 +280,13 @@ impl Effects {
             .unwrap_or_default();
         Effects {
             list,
+            presets_dir: list_path.with_file_name("presets"),
             list_path,
+            helper: (!cfg!(test))
+                .then(|| std::env::current_exe().ok())
+                .flatten(),
+            shared: None,
+            block: 256,
             modules: HashMap::new(),
             pending: Vec::new(),
             next_id: 1,
@@ -310,6 +389,59 @@ impl Effects {
         Ok(m)
     }
 
+    /// The shared helper, started if there is none or the last one
+    /// died.
+    fn shared_host(&mut self) -> Result<Host, String> {
+        if let Some(h) = &self.shared
+            && h.failure().is_none()
+        {
+            return Ok(h.clone());
+        }
+        let exe = self.helper.as_ref().ok_or("no plugin helper here")?;
+        let h = Host::spawn(exe)?;
+        self.shared = Some(h.clone());
+        Ok(h)
+    }
+
+    /// Makes the two sides of a plugin where `sandbox` says, live (one
+    /// block behind in a helper) or for rendering (waiting on it).
+    fn sides(
+        &mut self,
+        bundle: &Path,
+        cid: &vst3::Steinberg::TUID,
+        rate: u32,
+        sandbox: Sandbox,
+        live: bool,
+    ) -> Result<(Plugin, Processor), String> {
+        let sandbox = if self.helper.is_none() {
+            Sandbox::InApp
+        } else {
+            sandbox
+        };
+        let block = live.then_some(self.block);
+        match sandbox {
+            Sandbox::InApp => {
+                let module = self.module(bundle)?;
+                let (p, x) =
+                    daw_plugins::instantiate(module, cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
+                Ok((Plugin::Local(p), Processor::Local(x)))
+            }
+            Sandbox::Shared => {
+                let host = self.shared_host()?;
+                let (p, x) =
+                    host.instantiate(bundle, cid, rate as f64, daw_audio_io::MAX_BLOCK, block)?;
+                Ok((Plugin::Remote(p), Processor::Remote(x)))
+            }
+            Sandbox::Own => {
+                let exe = self.helper.as_ref().ok_or("no plugin helper here")?;
+                let host = Host::spawn(exe)?;
+                let (p, x) =
+                    host.instantiate(bundle, cid, rate as f64, daw_audio_io::MAX_BLOCK, block)?;
+                Ok((Plugin::Remote(p), Processor::Remote(x)))
+            }
+        }
+    }
+
     /// Makes a new effect; its audio side waits in `pending` for the
     /// next graph.
     pub fn create(&mut self, a: &Available, rate: u32) -> Result<FxSlot, String> {
@@ -328,14 +460,17 @@ impl Effects {
         let latency = processor.latency();
         self.pending.push((id, Box::new(processor)));
         FxSlot {
-            #[cfg(windows)]
-            editor: None,
             id,
             key: daw_project::new_id(),
             name: effect.kind().name().to_string(),
             bypass: false,
             latency,
+            sandbox: Sandbox::InApp,
+            crashed: None,
+            last_state: None,
             show_params: true,
+            preset_name: String::new(),
+            presets: None,
             kind: SlotKind::Builtin(effect),
         }
     }
@@ -347,21 +482,27 @@ impl Effects {
         name: &str,
         rate: u32,
     ) -> Result<FxSlot, String> {
-        let module = self.module(bundle)?;
-        let (plugin, processor) =
-            daw_plugins::instantiate(module, &cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
+        let sandbox = self.list.sandbox_of(&cid);
+        let (plugin, processor) = self.sides(bundle, &cid, rate, sandbox, true)?;
         let id = self.next_id;
         self.next_id += 1;
         self.pending.push((id, Box::new(processor)));
         Ok(FxSlot {
-            #[cfg(windows)]
-            editor: None,
             id,
             key: daw_project::new_id(),
             name: name.to_string(),
             bypass: false,
             latency: plugin.latency(),
+            sandbox: if plugin.is_remote() {
+                sandbox
+            } else {
+                Sandbox::InApp
+            },
+            crashed: None,
+            last_state: None,
             show_params: false,
+            preset_name: String::new(),
+            presets: None,
             kind: SlotKind::Plugin {
                 bundle: bundle.to_path_buf(),
                 cid,
@@ -414,12 +555,11 @@ impl Effects {
         let mut slot = self.make(&bundle, cid, &e.name, rate)?;
         slot.key = e.id.clone();
         slot.bypass = e.bypass;
-        if let (Some(s), SlotKind::Plugin { plugin, .. }) = (&e.state, &slot.kind) {
-            plugin.load_state(&daw_plugins::PluginState {
+        if let Some(s) = &e.state {
+            slot.load(&PluginState {
                 component: s.component.clone(),
                 controller: s.controller.clone(),
             })?;
-            slot.latency = plugin.latency();
         }
         Ok(slot)
     }
@@ -485,31 +625,47 @@ impl Effects {
         result
     }
 
-    /// Makes `slot`'s effect again for a new engine or sample rate,
-    /// keeping its settings.
+    /// Makes `slot`'s effect again for a new engine or sample rate, or
+    /// after a crash, keeping its settings (the last saved ones, after
+    /// a crash) and where the user now wants it to run.
     pub fn reload(&mut self, slot: &mut FxSlot, rate: u32) -> Result<(), String> {
-        let module = match &slot.kind {
+        let (bundle, cid) = match &slot.kind {
             SlotKind::Builtin(b) => {
                 let processor = b.processor(rate);
                 slot.latency = processor.latency();
                 self.pending.push((slot.id, Box::new(processor)));
                 return Ok(());
             }
-            SlotKind::Plugin { bundle, .. } => self.module(&bundle.clone())?,
+            SlotKind::Plugin { bundle, cid, .. } => (bundle.clone(), *cid),
         };
-        let SlotKind::Plugin { cid, plugin, .. } = &mut slot.kind else {
+        let state = match &slot.kind {
+            SlotKind::Plugin { plugin, .. } => match plugin.save_state() {
+                Ok(s) => Some(s),
+                Err(_) => slot.last_state.clone(),
+            },
+            SlotKind::Builtin(_) => unreachable!(),
+        };
+        let had_editor = slot.plugin().is_some_and(|p| p.editor_open());
+        if let Some(p) = slot.plugin_mut() {
+            p.close_editor();
+        }
+        let sandbox = self.list.sandbox_of(&cid);
+        let (fresh, processor) = self.sides(&bundle, &cid, rate, sandbox, true)?;
+        slot.sandbox = if fresh.is_remote() {
+            sandbox
+        } else {
+            Sandbox::InApp
+        };
+        slot.latency = fresh.latency();
+        let SlotKind::Plugin { plugin, .. } = &mut slot.kind else {
             unreachable!()
         };
-        let state = plugin.save_state()?;
-        #[cfg(windows)]
-        let had_editor = slot.editor.take().is_some();
-        let (fresh, processor) =
-            daw_plugins::instantiate(module, cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
-        fresh.load_state(&state)?;
-        slot.latency = fresh.latency();
         *plugin = fresh;
+        slot.crashed = None;
+        if let Some(s) = &state {
+            slot.load(s)?;
+        }
         self.pending.push((slot.id, Box::new(processor)));
-        #[cfg(windows)]
         if had_editor {
             let _ = slot.open_editor();
         }
@@ -527,11 +683,12 @@ impl Effects {
                 plugin,
             } => (bundle, cid, plugin),
         };
-        let state = plugin.save_state()?;
-        let module = self.module(bundle)?;
-        let (plugin, processor) =
-            daw_plugins::instantiate(module, cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
-        plugin.load_state(&state)?;
+        let state = plugin.save_state().ok().or_else(|| slot.last_state.clone());
+        let sandbox = self.list.sandbox_of(cid);
+        let (plugin, processor) = self.sides(bundle, cid, rate, sandbox, false)?;
+        if let Some(s) = &state {
+            plugin.load_state(s)?;
+        }
         Ok((Some(plugin), Box::new(processor)))
     }
 
@@ -572,8 +729,8 @@ impl Effects {
         let mut open = self.show_manager;
         egui::Window::new("Plugins")
             .open(&mut open)
-            .default_width(520.0)
-            .max_width(640.0)
+            .default_width(700.0)
+            .max_width(820.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let busy = self.scan.is_some();
@@ -607,11 +764,12 @@ impl Effects {
                     ui.label("No VST 3 plugins found.");
                 }
                 let mut toggles = Vec::new();
+                let mut sandboxes = Vec::new();
                 egui::ScrollArea::vertical()
                     .max_height(320.0)
                     .show(ui, |ui| {
                         egui::Grid::new("plugin-list")
-                            .num_columns(4)
+                            .num_columns(5)
                             .striped(true)
                             .show(ui, |ui| {
                                 for p in &plugins {
@@ -634,6 +792,30 @@ impl Effects {
                                         })
                                         .weak(),
                                     );
+                                    let mut sb = p.sandbox;
+                                    egui::ComboBox::from_id_salt((
+                                        "sandbox",
+                                        &p.bundle,
+                                        p.class.cid,
+                                    ))
+                                    .selected_text(sb.label())
+                                    .width(170.0)
+                                    .show_ui(ui, |ui| {
+                                        for choice in Sandbox::ALL {
+                                            ui.selectable_value(&mut sb, choice, choice.label());
+                                        }
+                                    })
+                                    .response
+                                    .accessible_name(format!("Where {} runs", p.class.name))
+                                    .on_hover_text(
+                                        "In a helper process a crash can't take the app \
+                                             down, at the cost of one block of extra delay. \
+                                             Applies to effects added from now on, or when \
+                                             an effect is restarted.",
+                                    );
+                                    if sb != p.sandbox {
+                                        sandboxes.push((p.class.cid, sb));
+                                    }
                                     ui.end_row();
                                 }
                             });
@@ -674,6 +856,17 @@ impl Effects {
                     self.list.set_enabled(&cid, on);
                     let _ = self.save();
                 }
+                for (cid, sb) in sandboxes {
+                    self.list.set_sandbox(&cid, sb);
+                    let _ = self.save();
+                }
+                if self.helper.is_none() {
+                    ui.label(
+                        RichText::new("No helper process here: every plugin runs in the app.")
+                            .small()
+                            .weak(),
+                    );
+                }
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(
@@ -704,6 +897,7 @@ impl Effects {
         let mut changed = false;
         let mut remove = None;
         let mut swap = None;
+        let mut restart = None;
         let mut picks = Vec::new();
         egui::Window::new(format!("Effects: {track}"))
             .id(egui::Id::unique("track-fx"))
@@ -733,14 +927,23 @@ impl Effects {
                             s.bypass = !on;
                             changed = true;
                         }
-                        ui.label(RichText::new(&s.name).strong());
+                        ui.label(RichText::new(&s.name).strong())
+                            .on_hover_text(format!("Runs {}", s.runs()));
                         if s.latency > 0 {
                             ui.label(RichText::new(format!("{} smp", s.latency)).weak())
                                 .on_hover_text(
-                                    "Delay this effect adds; other tracks are kept in time",
+                                    "Delay this effect adds (counting its helper process, \
+                                     if any); other tracks are kept in time",
                                 );
                         }
-                        #[cfg(windows)]
+                        let late = s.late();
+                        if late > 0 {
+                            ui.label(RichText::new(format!("late ×{late}")).weak())
+                                .on_hover_text(
+                                    "Blocks its helper process was late with, played as \
+                                     silence. A bigger audio buffer gives it more time.",
+                                );
+                        }
                         if s.is_plugin()
                             && ui
                                 .button("Edit")
@@ -752,6 +955,15 @@ impl Effects {
                         }
                         ui.toggle_value(&mut s.show_params, "Controls")
                             .on_hover_text("Show the effect's settings here");
+                        if s.is_plugin() {
+                            ui.menu_button("Presets", |ui| {
+                                if let Some(e) = presets_menu(ui, s, &self.presets_dir) {
+                                    *message = Some(format!("{}: {e}", s.name));
+                                }
+                            })
+                            .response
+                            .accessible_name(format!("Presets for {}", s.name));
+                        }
                         if ui.add_enabled(i > 0, egui::Button::new("▲")).clicked() {
                             swap = Some((i - 1, i));
                         }
@@ -762,7 +974,25 @@ impl Effects {
                             remove = Some(i);
                         }
                     });
+                    if let Some(why) = &s.crashed {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("Stopped: {why}. Its audio passes through."))
+                                    .color(Color32::LIGHT_RED),
+                            );
+                            if ui
+                                .button("Restart")
+                                .on_hover_text(
+                                    "Start the plugin again with its last saved settings",
+                                )
+                                .clicked()
+                            {
+                                restart = Some(i);
+                            }
+                        });
+                    }
                     if s.show_params
+                        && s.crashed.is_none()
                         && let Some(pick) = params(ui, s)
                     {
                         picks.push((i, pick));
@@ -867,6 +1097,12 @@ impl Effects {
         if let Some((a, b)) = swap {
             slots.swap(a, b);
             changed = true;
+        }
+        if let Some(i) = restart {
+            match self.reload(&mut slots[i], rate) {
+                Ok(()) => changed = true,
+                Err(e) => *message = Some(format!("{}: {e}", slots[i].name)),
+            }
         }
         if let Some(i) = remove {
             // The audio side is dropped with the graph it was in.
@@ -1039,6 +1275,121 @@ fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option
     pick
 }
 
+/// The presets menu for one plugin effect: save the settings as a new
+/// preset, load or delete the user's own, load the plugin's own, or
+/// pick one of its programs. Returns an error to show.
+fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String> {
+    let cid = *s.cid()?;
+    let mut error = None;
+    if s.presets.is_none() {
+        let programs = s.plugin().map(Plugin::programs).unwrap_or_default();
+        s.presets = Some((presets::list(dir, &cid), programs));
+    }
+    let (list, programs) = s.presets.clone().unwrap_or_default();
+    ui.set_min_width(240.0);
+    let mut save = false;
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut s.preset_name)
+                .hint_text("New preset name")
+                .desired_width(150.0),
+        )
+        .labelled_by(ui.label("Save as").id);
+        save = ui.button("Save").clicked();
+    });
+    if save {
+        let state = s.plugin()?.save_state();
+        match state.and_then(|state| presets::save(dir, &cid, &s.preset_name, &state)) {
+            Ok(_) => {
+                s.preset_name.clear();
+                s.presets = None;
+            }
+            Err(e) => error = Some(e),
+        }
+    }
+    let own: Vec<&Preset> = list.iter().filter(|p| p.own).collect();
+    let native: Vec<&Preset> = list.iter().filter(|p| !p.own).collect();
+    let mut load = None;
+    let mut delete = None;
+    if !own.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("Your presets").weak());
+        for p in own {
+            ui.horizontal(|ui| {
+                if ui.button(&p.name).clicked() {
+                    load = Some(p.clone());
+                }
+                if ui
+                    .small_button("✖")
+                    .on_hover_text("Delete this preset")
+                    .accessible_name(format!("Delete preset {}", p.name))
+                    .clicked()
+                {
+                    delete = Some(p.clone());
+                }
+            });
+        }
+    }
+    if !native.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("The plugin's presets").weak());
+        egui::ScrollArea::vertical()
+            .max_height(240.0)
+            .show(ui, |ui| {
+                for p in native {
+                    if ui
+                        .button(&p.name)
+                        .on_hover_text(p.path.display().to_string())
+                        .clicked()
+                    {
+                        load = Some(p.clone());
+                    }
+                }
+            });
+    }
+    let mut pick = None;
+    for l in &programs {
+        if l.programs.is_empty() {
+            continue;
+        }
+        ui.separator();
+        ui.label(RichText::new(&l.name).weak());
+        egui::ScrollArea::vertical()
+            .max_height(240.0)
+            .id_salt(("programs", l.id))
+            .show(ui, |ui| {
+                for (i, name) in l.programs.iter().enumerate() {
+                    if ui.button(name).clicked() {
+                        pick = Some((l.clone(), i));
+                    }
+                }
+            });
+    }
+    if list.is_empty() && programs.iter().all(|l| l.programs.is_empty()) {
+        ui.separator();
+        ui.label(RichText::new("No presets yet.").weak());
+    }
+    if let Some(p) = load {
+        match presets::load(&p.path, &cid).and_then(|state| s.load(&state)) {
+            Ok(()) => ui.close(),
+            Err(e) => error = Some(e),
+        }
+    }
+    if let Some(p) = delete {
+        match presets::delete(&p) {
+            Ok(()) => s.presets = None,
+            Err(e) => error = Some(e),
+        }
+    }
+    if let Some((l, i)) = pick {
+        match s.plugin()?.select_program(&l, i) {
+            Ok(()) => ui.close(),
+            Err(e) => error = Some(e),
+        }
+    }
+    error
+}
+
 fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
     const MOST: usize = 64;
     let list = plugin.params();
@@ -1089,8 +1440,10 @@ mod tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
-    use super::SlotKind;
+    use super::{Available, Effects, FxSlot, Sandbox, SlotKind, presets};
     use crate::App;
+    use crate::freeze::test_plugin;
+    use daw_test_plugin::PROCESSOR_CID;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("daw-builtin-{name}-{}", std::process::id()));
@@ -1399,5 +1752,134 @@ mod tests {
             let back = app.effects.restore(&saved, rate).unwrap();
             assert_eq!(back.value(), saved);
         }
+    }
+
+    fn effects(name: &str) -> Effects {
+        let dir = scratch(name);
+        let mut fx = Effects::new(dir.join("plugins.txt"));
+        fx.helper = Some(test_plugin::helper());
+        fx
+    }
+
+    fn plugin_of(s: &FxSlot) -> &daw_plugins::Plugin {
+        s.plugin().expect("a plugin")
+    }
+
+    /// Runs blocks through `slot`'s audio side (waiting in `pending`)
+    /// until its saved state carries `gain`: a parameter change reaches
+    /// the plugin's state with the next block, and a live helper
+    /// processor answers a little later.
+    fn run_block(fx: &mut Effects, slot: &FxSlot, gain: f64) {
+        let i = fx
+            .pending
+            .iter()
+            .position(|(id, _)| *id == slot.id)
+            .unwrap();
+        let start = std::time::Instant::now();
+        loop {
+            let (mut l, mut r) = (vec![0.0; 64], vec![0.0; 64]);
+            fx.pending[i].1.process(&mut l, &mut r);
+            let state = plugin_of(slot).save_state().unwrap();
+            if state.component == gain.to_le_bytes() {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the setting never reached the plugin's state"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn available(bundle: &Path) -> Available {
+        let class = daw_plugins::scan::scan_here(bundle)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.cid == PROCESSOR_CID)
+            .unwrap();
+        Available {
+            bundle: bundle.to_owned(),
+            class,
+            enabled: true,
+            sandbox: Sandbox::Shared,
+        }
+    }
+
+    #[test]
+    fn effects_run_where_the_user_chose_and_a_crash_can_be_restarted_from() {
+        let mut fx = effects("crash");
+        let good = available(&test_plugin::bundle());
+        let bad = available(&test_plugin::broken(
+            "DawTestCrashProcess",
+            "crash-on-process",
+        ));
+
+        // The default is the shared helper; the user picks the rest.
+        let mut g = fx.create(&good, 48_000).unwrap();
+        assert_eq!(g.sandbox, Sandbox::Shared);
+        assert!(plugin_of(&g).is_remote());
+        fx.list.set_sandbox(&PROCESSOR_CID, Sandbox::InApp);
+        let mut in_app = fx.create(&good, 48_000).unwrap();
+        assert_eq!(in_app.sandbox, Sandbox::InApp);
+        assert!(!plugin_of(&in_app).is_remote());
+        fx.list.set_sandbox(&PROCESSOR_CID, Sandbox::Shared);
+        // A built-in effect always runs in the app.
+        let eq = fx.create_builtin(Kind::Eq, 48_000);
+        assert_eq!(eq.sandbox, Sandbox::InApp);
+
+        // The helper's delay counts in the latency the engine makes up for.
+        assert_eq!(g.latency, daw_test_plugin::LATENCY + fx.block as u32);
+        assert_eq!(in_app.latency, daw_test_plugin::LATENCY);
+        assert!(!g.poll() && !in_app.poll());
+
+        // Settings are saved, and kept for after a crash.
+        plugin_of(&g).set_param(0, 0.25);
+        run_block(&mut fx, &g, 0.25);
+        let saved = g.state().expect("state is saved");
+        assert_eq!(saved.component, 0.25f64.to_le_bytes());
+
+        // A crash in the shared helper takes the good plugin's helper
+        // too; both report it, their audio passes through, and the
+        // settings last saved are still there.
+        let mut b = fx.create(&bad, 48_000).unwrap();
+        let (_p, mut render) = fx.fresh(&b, 48_000).unwrap();
+        let (mut l, mut r) = (vec![0.5; 64], vec![0.5; 64]);
+        render.process(&mut l, &mut r);
+        assert!(l.iter().all(|&x| x == 0.5));
+        assert!(b.poll(), "the graph is rebuilt so audio passes through");
+        assert!(b.crashed.as_deref().unwrap().contains("crashed"));
+        assert!(g.poll());
+        assert!(g.crashed.is_some());
+        assert!(!g.poll(), "reported once");
+        assert_eq!(g.state(), Some(saved.clone()));
+        assert!(in_app.crashed.is_none());
+
+        // Restarting makes a new helper and brings the settings back.
+        fx.reload(&mut g, 48_000).unwrap();
+        assert!(g.crashed.is_none());
+        assert_eq!(plugin_of(&g).param(0), Some(0.25));
+        assert_eq!(g.state(), Some(saved));
+        assert!(fx.pending.iter().any(|(id, _)| *id == g.id));
+    }
+
+    #[test]
+    fn presets_are_saved_beside_the_plugin_list_and_load_back() {
+        let mut fx = effects("presets");
+        let good = available(&test_plugin::bundle());
+        let mut slot = fx.create(&good, 48_000).unwrap();
+        plugin_of(&slot).set_param(0, 0.5);
+        run_block(&mut fx, &slot, 0.5);
+        let state = plugin_of(&slot).save_state().unwrap();
+        let cid = *slot.cid().unwrap();
+        let preset = presets::save(&fx.presets_dir, &cid, "Half", &state).unwrap();
+        assert!(preset.path.starts_with(fx.list_path.parent().unwrap()));
+        plugin_of(&slot).set_param(0, 1.0);
+        let back = presets::load(&preset.path, &cid).unwrap();
+        slot.load(&back).unwrap();
+        assert_eq!(plugin_of(&slot).param(0), Some(0.5));
+        let listed = presets::list(&fx.presets_dir, &cid);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "Half");
+        assert!(listed[0].own);
     }
 }

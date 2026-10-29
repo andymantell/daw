@@ -173,8 +173,10 @@ My Lesson.project/              (folder; a tar of it is a bundle)
 - **Scanning always runs out of process.** Results are cached, and plugins
   that crash or hang are blacklisted with a reason.
 - **Hosting modes** (Phase 2): in-process for lowest overhead, a shared
-  host process, or one process per plugin. Phase 1 uses the safest mode
-  that still meets the latency budget (decided in spike 0.1B).
+  host process, or one process per plugin, chosen per plugin. Phase 1
+  ran everything in-process; Phase 2's first cut (decision 0010) talks
+  to the host process over pipes, one block behind, with shared-memory
+  buffers as a later step if the pipe's cost shows.
 - **Editor windows:** the plugin's view is embedded in a native child
   window we create (HWND / NSView / X11 window), with resizing,
   DPI scaling, focus and keyboard forwarding handled per OS.

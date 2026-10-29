@@ -5,7 +5,9 @@
 //! spike 0.1 B. [`scan`] finds plugins, each module in a child process so
 //! a bad one cannot crash the app. [`plugin::instantiate`] loads one and
 //! splits it into a UI side and an audio side; the audio side is an
-//! engine [`Insert`](daw_engine::graph::Insert).
+//! engine [`Insert`](daw_engine::graph::Insert). [`host`] runs plugins
+//! in a helper process instead, so a crash cannot take the app down,
+//! and [`presets`] saves and finds their settings.
 
 // VST 3 enum types are signed on some platforms and unsigned on others,
 // so casts that are no-ops here are needed elsewhere.
@@ -14,9 +16,13 @@
 pub mod com;
 #[cfg(windows)]
 pub mod editor_win;
+pub mod host;
 pub mod module;
 pub mod plugin;
+pub mod presets;
+pub mod proto;
 pub mod scan;
 
+pub use host::{Host, Sandbox};
 pub use module::{ClassInfo, Module, cid_from_hex, cid_to_hex};
-pub use plugin::{Param, Plugin, PluginState, Processor, instantiate};
+pub use plugin::{LocalPlugin, LocalProcessor, Param, Plugin, PluginState, Processor, instantiate};

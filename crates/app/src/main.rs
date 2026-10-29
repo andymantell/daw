@@ -764,6 +764,10 @@ impl App {
         let underruns = self.ctl.status().underruns();
         let frames = status.last_frames.load(Ordering::Relaxed);
         let buffer = (frames > 0).then_some((frames, self.rate));
+        if frames > 0 {
+            // Helper processes for new effects run one such block behind.
+            self.effects.block = frames as usize;
+        }
         let effects: Vec<_> = (self.effects.list.plugins().into_iter())
             .filter(|p| p.enabled && !p.class.is_instrument())
             .collect();
@@ -1903,7 +1907,15 @@ impl eframe::App for App {
         rebuild |= self.processing.finish(&mut self.tracks, &mut self.message);
         for t in &mut self.tracks {
             for slot in &mut t.fx {
+                let was_fine = slot.crashed.is_none();
                 rebuild |= slot.poll();
+                if was_fine && let Some(why) = &slot.crashed {
+                    self.message = Some(format!(
+                        "{}: {why}. Its audio passes through; open the track's effects to \
+                         start it again.",
+                        slot.name
+                    ));
+                }
             }
         }
         if let Some(e) = self.effects.poll_scan() {
@@ -2182,6 +2194,13 @@ fn main() -> eframe::Result {
         && flag == daw_plugins::scan::SCAN_ARG
     {
         std::process::exit(daw_plugins::scan::child_main(bundle.as_ref()));
+    }
+    // Plugins run in a copy of the app (roadmap 2.4), so a crash in one
+    // ends that copy, not this one.
+    if let [flag] = args.as_slice()
+        && flag == daw_plugins::host::HOST_ARG
+    {
+        std::process::exit(daw_plugins::host::helper_main());
     }
     if let [flag] = args.as_slice()
         && flag == "--version"

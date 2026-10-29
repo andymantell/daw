@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! <project name>/project.daw          the document, first
-//! <project name>/Audio/<hash>.<ext>   the audio it uses
+//! <project name>/Audio/<hash>.<ext>   the audio it uses, frozen audio included
 //! ```
 //! It isn't compressed: audio barely compresses, and big bundles would
 //! only be slower to make and read. A bundle comes from outside, so

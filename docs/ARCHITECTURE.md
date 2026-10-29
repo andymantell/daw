@@ -59,7 +59,8 @@ My Lesson.project/              (folder; a tar of it is a bundle)
   project.doc                   CRDT document (binary) + schema version
   assets/ab/abcdef….flac        content-addressed audio (SHA-256)
   peaks/abcdef….peaks           multi-resolution waveform data
-  frozen/<track-id>-<hash>.flac frozen audio for plugin tracks
+  frozen/<track-id>-<hash>.flac frozen audio for plugin tracks (Phase 1: kept with the
+                                other audio, as content-addressed 24-bit WAV)
   snapshots/                    named CRDT state snapshots
   local/                        per-machine data, never shared (device profiles, UI layout)
 ```

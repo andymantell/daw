@@ -17,7 +17,8 @@ pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
 pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
 pub use model::{
-    Clip, Comment, Effect, EffectState, Marker, Practice, Project, TabBlock, Track, TrainerSettings,
+    Clip, Comment, Effect, EffectState, FROZEN_TAIL_SECONDS, Frozen, FrozenClip, Marker, Practice,
+    Project, TabBlock, Track, TrainerSettings,
 };
 
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -248,10 +248,28 @@ impl App {
             s.push(format!(".{EXT}"));
             PathBuf::from(s)
         };
+        // Frozen audio being made now belongs in the bundle: it is
+        // written once that is done.
+        if self.freezer.busy() {
+            self.freezer.then_bundle = Some(dest);
+            self.message = Some("Making frozen audio for the bundle first…".into());
+            return;
+        }
+        self.write_bundle(dest);
+    }
+
+    /// Writes the saved project's bundle to `dest` in the background.
+    pub(crate) fn write_bundle(&mut self, dest: PathBuf) {
+        let Some(folder) = self.proj.folder.clone() else {
+            return;
+        };
+        let name = folder.name();
         let doc = self.proj.doc.to_bytes();
         let assets: Vec<String> = (self.proj.doc.get().tracks.iter())
-            .flat_map(|t| &t.clips)
-            .map(|c| c.asset.clone())
+            .flat_map(|t| {
+                (t.clips.iter().map(|c| c.asset.clone()))
+                    .chain(t.frozen.iter().map(|f| f.asset.clone()))
+            })
             .collect();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {

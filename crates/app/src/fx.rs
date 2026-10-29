@@ -440,13 +440,17 @@ impl Effects {
         self.show_manager = open;
     }
 
-    /// The effects window for one track. Returns true if the chain
-    /// changed and the graph needs rebuilding.
+    /// The effects window for one track, with the names of its effects
+    /// whose plugins are missing here and a line about its frozen audio.
+    /// Returns true if the chain changed and the graph needs rebuilding.
+    #[allow(clippy::too_many_arguments)]
     pub fn track_window(
         &mut self,
         ctx: &egui::Context,
         track: &str,
         slots: &mut Vec<FxSlot>,
+        missing: &[String],
+        frozen: Option<&str>,
         rate: u32,
         message: &mut Option<String>,
     ) -> bool {
@@ -460,8 +464,15 @@ impl Effects {
             .default_pos(egui::pos2(300.0, 240.0))
             .default_width(420.0)
             .show(ctx, |ui| {
-                if slots.is_empty() {
+                if slots.is_empty() && missing.is_empty() {
                     ui.label("No effects on this track.");
+                }
+                for name in missing {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(name).strong().weak());
+                        ui.label(RichText::new("not installed here, kept as it is").weak());
+                    });
+                    ui.separator();
                 }
                 let n = slots.len();
                 for (i, s) in slots.iter_mut().enumerate() {
@@ -554,6 +565,10 @@ impl Effects {
                         self.show_manager = true;
                     }
                 });
+                if let Some(line) = frozen {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(line).weak());
+                }
             });
         if let Some((a, b)) = swap {
             slots.swap(a, b);

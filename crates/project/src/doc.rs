@@ -7,7 +7,9 @@
 //! `comments` map from id to comment. A
 //! track is a map of its settings, a `clips`
 //! map from id to clip, an `fx` map from id to effect and the effect
-//! order in the movable list `fx_order`. Every field is its own map entry,
+//! order in the movable list `fx_order`, and its frozen audio, if any, as
+//! one `frozen` value (so two renders saved at once never mix). Every
+//! other field is its own map entry,
 //! so two people changing different fields of the same clip both keep
 //! their change. A `practice` map holds each person's practice settings
 //! under their own key, which only they write.
@@ -31,7 +33,8 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Effect, EffectState, Marker, Practice, Project, TabBlock, Track, TrainerSettings,
+    Clip, Comment, Effect, EffectState, Frozen, FrozenClip, Marker, Practice, Project, TabBlock,
+    Track, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -668,6 +671,16 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
             );
         }
     }
+    match &t.frozen {
+        Some(f) => {
+            w.put(m, "frozen", frozen_value(f));
+        }
+        // Projects from before frozen audio have no entry: don't add one.
+        None if m.get("frozen").is_some() => {
+            w.put(m, "frozen", LoroValue::Null);
+        }
+        None => {}
+    }
     let Ok(order_list) = m.ensure_mergeable_movable_list("fx_order") else {
         return;
     };
@@ -685,6 +698,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         solo: boolean(t, "solo").unwrap_or(false),
         clips: Vec::new(),
         effects: Vec::new(),
+        frozen: t.get("frozen").and_then(read_frozen),
     };
     if let Some(LoroValue::Map(clips)) = t.get("clips") {
         for (cid, c) in clips.iter() {
@@ -739,6 +753,87 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         }
     }
     track
+}
+
+fn frozen_value(f: &Frozen) -> LoroValue {
+    let clips: Vec<LoroValue> = (f.clips.iter())
+        .map(|c| {
+            LoroValue::List(
+                vec![
+                    c.asset.as_str().into(),
+                    c.start.into(),
+                    c.offset.into(),
+                    c.len.into(),
+                ]
+                .into(),
+            )
+        })
+        .collect();
+    let chain: Vec<LoroValue> = (f.chain.iter())
+        .map(|(id, bypass)| LoroValue::List(vec![id.as_str().into(), (*bypass).into()].into()))
+        .collect();
+    let m: HashMap<String, LoroValue> = HashMap::from([
+        ("asset".to_string(), f.asset.as_str().into()),
+        ("rate".to_string(), (f.rate as i64).into()),
+        ("start".to_string(), f.start.into()),
+        ("len".to_string(), f.len.into()),
+        ("print".to_string(), f.print.as_str().into()),
+        ("clips".to_string(), LoroValue::List(clips.into())),
+        ("chain".to_string(), LoroValue::List(chain.into())),
+    ]);
+    LoroValue::Map(m.into())
+}
+
+/// Frozen audio as the document holds it. It may have come from anyone,
+/// so anything odd (an asset name that could point elsewhere, a
+/// negative length) means there is none.
+fn read_frozen(v: &LoroValue) -> Option<Frozen> {
+    let LoroValue::Map(m) = v else {
+        return None;
+    };
+    let asset = string(m, "asset").filter(|a| is_asset_name(a))?;
+    let rate = int(m, "rate").filter(|r| (1..=1_000_000).contains(r))? as u32;
+    let start = int(m, "start").filter(|v| *v >= 0)?;
+    let len = int(m, "len").filter(|v| *v > 0)?;
+    let list = |k: &str| match m.get(k) {
+        Some(LoroValue::List(l)) => Some(l.iter().cloned().collect::<Vec<_>>()),
+        _ => None,
+    };
+    let mut clips = Vec::new();
+    for c in list("clips")? {
+        let LoroValue::List(c) = c else { return None };
+        match &c[..] {
+            [
+                LoroValue::String(asset),
+                LoroValue::I64(start),
+                LoroValue::I64(offset),
+                LoroValue::I64(len),
+            ] => clips.push(FrozenClip {
+                asset: asset.to_string(),
+                start: *start,
+                offset: *offset,
+                len: *len,
+            }),
+            _ => return None,
+        }
+    }
+    let mut chain = Vec::new();
+    for e in list("chain")? {
+        let LoroValue::List(e) = e else { return None };
+        match &e[..] {
+            [LoroValue::String(id), LoroValue::Bool(b)] => chain.push((id.to_string(), *b)),
+            _ => return None,
+        }
+    }
+    Some(Frozen {
+        asset,
+        rate,
+        start,
+        len,
+        print: string(m, "print").unwrap_or_default(),
+        clips,
+        chain,
+    })
 }
 
 /// Writes values only where they differ, noting whether any did.

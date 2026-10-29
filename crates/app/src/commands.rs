@@ -33,6 +33,14 @@ pub(crate) enum Cmd {
     Delete,
     Marker,
     ClearSelection,
+    Crossfade,
+    ClipFades,
+    ZoomIn,
+    ZoomOut,
+    ZoomSelection,
+    Snap,
+    Ripple,
+    VolumeLines,
     PlayStop,
     ToStart,
     Record,
@@ -220,6 +228,78 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .words("deselect none"),
     info(
+        Cmd::Crossfade,
+        "crossfade",
+        "Edit",
+        "Crossfade where clips meet",
+        &[key(NONE, Key::X)],
+    )
+    .hint("Fade clips into each other where they meet: the selected ones, or all")
+    .words("join blend overlap"),
+    info(
+        Cmd::ClipFades,
+        "clip-fades",
+        "Edit",
+        "Fades and volume…",
+        &[key(NONE, Key::F)],
+    )
+    .hint("Fade in, fade out and volume of the selected clips")
+    .words("gain level fade curve envelope"),
+    info(
+        Cmd::ZoomIn,
+        "zoom-in",
+        "View",
+        "Zoom in",
+        &[key(NONE, Key::Equals)],
+    )
+    .repeat()
+    .words("magnify closer"),
+    info(
+        Cmd::ZoomOut,
+        "zoom-out",
+        "View",
+        "Zoom out",
+        &[key(NONE, Key::Minus)],
+    )
+    .repeat()
+    .words("further"),
+    info(
+        Cmd::ZoomSelection,
+        "zoom-selection",
+        "View",
+        "Zoom to the selected clips",
+        &[key(NONE, Key::Z)],
+    )
+    .hint("Show the selected clips across the timeline, or the whole song")
+    .words("fit"),
+    info(
+        Cmd::Snap,
+        "snap",
+        "View",
+        "Snap on or off",
+        &[key(NONE, Key::N)],
+    )
+    .hint("Snap clips to the grid while dragging")
+    .words("grid magnet"),
+    info(
+        Cmd::Ripple,
+        "ripple",
+        "View",
+        "Ripple editing on or off",
+        &[],
+    )
+    .hint("Deleting a clip, or trimming its end, moves the later clips on its track")
+    .words("close gaps shift"),
+    info(
+        Cmd::VolumeLines,
+        "volume-lines",
+        "View",
+        "Volume lines on or off",
+        &[],
+    )
+    .hint("Show each clip's volume line, to drag and add points to")
+    .words("gain envelope automation"),
+    info(
         Cmd::PlayStop,
         "play",
         "Transport",
@@ -355,7 +435,18 @@ impl Cmd {
     pub(crate) fn on_timeline(self) -> bool {
         matches!(
             self,
-            Cmd::Split | Cmd::Delete | Cmd::Marker | Cmd::ClearSelection
+            Cmd::Split
+                | Cmd::Delete
+                | Cmd::Marker
+                | Cmd::ClearSelection
+                | Cmd::Crossfade
+                | Cmd::ClipFades
+                | Cmd::ZoomIn
+                | Cmd::ZoomOut
+                | Cmd::ZoomSelection
+                | Cmd::Snap
+                | Cmd::Ripple
+                | Cmd::VolumeLines
         )
     }
 }
@@ -377,16 +468,16 @@ pub(crate) const FIXED: &[(&str, &str)] = &[
     ),
     (
         "Left, Right",
-        "Move the selected clips a beat earlier or later; a marker a bar",
+        "Move the selected clips a grid step earlier or later; a marker a bar",
     ),
     ("Shift+Left, Shift+Right", "Move the selected clips a bar"),
     (
         "Ctrl+Left, Ctrl+Right",
-        "Trim the focused clip's start a beat (with Shift, a bar)",
+        "Trim the focused clip's start a grid step (with Shift, a bar)",
     ),
     (
         "Alt+Left, Alt+Right",
-        "Trim the focused clip's end a beat (with Shift, a bar)",
+        "Trim the focused clip's end a grid step (with Shift, a bar)",
     ),
     (
         "Up, Down",
@@ -1130,7 +1221,18 @@ impl App {
             Cmd::CheckUpdates => self.updates.open = true,
             Cmd::CrashReports => self.crashes.open = true,
             Cmd::SoundCredits => self.effects.show_credits = true,
-            Cmd::Split | Cmd::Delete | Cmd::Marker | Cmd::ClearSelection => {}
+            Cmd::Split
+            | Cmd::Delete
+            | Cmd::Marker
+            | Cmd::ClearSelection
+            | Cmd::Crossfade
+            | Cmd::ClipFades
+            | Cmd::ZoomIn
+            | Cmd::ZoomOut
+            | Cmd::ZoomSelection
+            | Cmd::Snap
+            | Cmd::Ripple
+            | Cmd::VolumeLines => {}
         }
     }
 }

@@ -20,6 +20,7 @@ fn clip(id: &str, start: i64) -> Clip {
         take: None,
         muted: false,
         seq: 0,
+        ..Default::default()
     }
 }
 
@@ -480,4 +481,31 @@ fn audio_is_stored_once_by_content_and_takes_are_moved_in() {
         "a path elsewhere is not an asset"
     );
     assert!(!f.has_asset("missing.wav"));
+}
+
+#[test]
+fn clip_fades_gain_and_envelopes_are_saved() {
+    use daw_project::{Curve, Fade, GainPoint};
+    let mut p = song();
+    let c = &mut p.tracks[0].clips[0];
+    c.gain_db = -4.5;
+    c.fade_in = Fade {
+        len: 480,
+        curve: Curve::SCurve,
+    };
+    c.fade_out = Fade {
+        len: 4800,
+        curve: Curve::Linear,
+    };
+    c.envelope = vec![
+        GainPoint { at: 100, db: 0.0 },
+        GainPoint {
+            at: 9000,
+            db: -9.25,
+        },
+    ];
+    let mut doc = ProjectDoc::new(1);
+    doc.set(&p);
+    let back = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap().get();
+    assert_eq!(back, p);
 }

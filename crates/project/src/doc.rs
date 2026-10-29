@@ -37,8 +37,8 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Effect, EffectState, Frozen, FrozenClip, Marker, MeterChange, Practice, Project,
-    TabBlock, TempoChange, Track, TrainerSettings, is_asset_name,
+    Clip, Comment, Curve, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Marker,
+    MeterChange, Practice, Project, TabBlock, TempoChange, Track, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -707,6 +707,24 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         );
         w.put(&cm, "muted", c.muted);
         w.put(&cm, "seq", c.seq);
+        // Clips at their plain level, as all were before fades, gain no
+        // new entries.
+        let plain = |k: &str, unset: bool| unset && cm.get(k).is_none();
+        if !plain("gain_db", c.gain_db == 0.0) {
+            w.put(&cm, "gain_db", c.gain_db);
+        }
+        for (k, f) in [("fade_in", c.fade_in), ("fade_out", c.fade_out)] {
+            if !plain(k, f.len == 0) {
+                w.put(&cm, k, f.len);
+                w.put(&cm, &format!("{k}_curve"), f.curve.name());
+            }
+        }
+        if !plain("envelope", c.envelope.is_empty()) {
+            let points: Vec<LoroValue> = (c.envelope.iter())
+                .map(|p| LoroValue::List(vec![p.at.into(), p.db.into()].into()))
+                .collect();
+            w.put(&cm, "envelope", LoroValue::List(points.into()));
+        }
     }
 
     let fx = w.fixed(m, "fx");
@@ -793,6 +811,10 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 take: int(c, "take").map(|v| v as u32),
                 muted: boolean(c, "muted").unwrap_or(false),
                 seq: int(c, "seq").unwrap_or(0),
+                gain_db: float(c, "gain_db").filter(|g| g.is_finite()).unwrap_or(0.0),
+                fade_in: read_fade(c, "fade_in"),
+                fade_out: read_fade(c, "fade_out"),
+                envelope: read_envelope(c),
             });
         }
     }
@@ -847,18 +869,48 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
     track
 }
 
+fn read_fade(c: &LoroMapValue, k: &str) -> Fade {
+    Fade {
+        len: int(c, k).unwrap_or(0).max(0),
+        curve: Curve::from_name(&string(c, &format!("{k}_curve")).unwrap_or_default()),
+    }
+}
+
+/// A clip's envelope points, in order; anything odd is left out.
+fn read_envelope(c: &LoroMapValue) -> Vec<GainPoint> {
+    let Some(LoroValue::List(l)) = c.get("envelope") else {
+        return Vec::new();
+    };
+    let mut points: Vec<GainPoint> = (l.iter())
+        .filter_map(|p| match p {
+            LoroValue::List(p) => match &p[..] {
+                [LoroValue::I64(at), LoroValue::Double(db)] if *at >= 0 && db.is_finite() => {
+                    Some(GainPoint { at: *at, db: *db })
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    points.sort_by_key(|p| p.at);
+    points
+}
+
 fn frozen_value(f: &Frozen) -> LoroValue {
     let clips: Vec<LoroValue> = (f.clips.iter())
         .map(|c| {
-            LoroValue::List(
-                vec![
-                    c.asset.as_str().into(),
-                    c.start.into(),
-                    c.offset.into(),
-                    c.len.into(),
-                ]
-                .into(),
-            )
+            let mut v: Vec<LoroValue> = vec![
+                c.asset.as_str().into(),
+                c.start.into(),
+                c.offset.into(),
+                c.len.into(),
+            ];
+            // Only for a clip with fades or gain, so older versions
+            // still read the rest.
+            if !c.sound.is_empty() {
+                v.push(c.sound.as_str().into());
+            }
+            LoroValue::List(v.into())
         })
         .collect();
     let chain: Vec<LoroValue> = (f.chain.iter())
@@ -900,11 +952,17 @@ fn read_frozen(v: &LoroValue) -> Option<Frozen> {
                 LoroValue::I64(start),
                 LoroValue::I64(offset),
                 LoroValue::I64(len),
+                sound @ ..,
             ] => clips.push(FrozenClip {
                 asset: asset.to_string(),
                 start: *start,
                 offset: *offset,
                 len: *len,
+                sound: match sound {
+                    [] => String::new(),
+                    [LoroValue::String(s)] => s.to_string(),
+                    _ => return None,
+                },
             }),
             _ => return None,
         }
@@ -1055,5 +1113,58 @@ fn binary(m: &LoroMapValue, k: &str) -> Option<Vec<u8>> {
     match m.get(k) {
         Some(LoroValue::Binary(b)) => Some(b.to_vec()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Track;
+
+    #[test]
+    fn clips_at_their_plain_level_add_no_entries() {
+        // So a project from before fades saves as it did.
+        let mut t = Track::new("t1".into(), "Guitar".into());
+        t.clips.push(Clip {
+            id: "c1".into(),
+            asset: "a.wav".into(),
+            len: 100,
+            ..Default::default()
+        });
+        let mut p = Project {
+            tracks: vec![t],
+            ..Project::default()
+        };
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let keys = |doc: &ProjectDoc| {
+            let LoroValue::Map(t) = doc.tracks().get_deep_value() else {
+                panic!()
+            };
+            let Some(LoroValue::Map(t)) = t.get("t1") else {
+                panic!()
+            };
+            let Some(LoroValue::Map(c)) = t.get("clips") else {
+                panic!()
+            };
+            let Some(LoroValue::Map(c)) = c.get("c1") else {
+                panic!()
+            };
+            let mut k: Vec<String> = c.keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert!(
+            !keys(&doc)
+                .iter()
+                .any(|k| k.contains("fade") || k == "gain_db")
+        );
+        p.tracks[0].clips[0].fade_out.len = 10;
+        doc.set(&p);
+        assert!(keys(&doc).contains(&"fade_out_curve".to_string()));
+        // Taken off again, the entry stays, at none.
+        p.tracks[0].clips[0].fade_out.len = 0;
+        doc.set(&p);
+        assert_eq!(doc.get().tracks[0].clips[0].fade_out.len, 0);
     }
 }

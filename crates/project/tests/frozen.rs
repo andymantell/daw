@@ -19,6 +19,7 @@ fn track() -> Track {
         take: None,
         muted: false,
         seq: 0,
+        ..Default::default()
     });
     t.effects.push(Effect {
         id: "e1".into(),
@@ -184,4 +185,40 @@ fn two_renders_saved_at_once_never_mix() {
     let got = a.get().tracks[0].frozen.clone().unwrap();
     assert_eq!(b.get().tracks[0].frozen.as_ref(), Some(&got));
     assert!(got == fa || got == fb, "one render or the other, whole");
+}
+
+#[test]
+fn a_fade_or_gain_change_stops_frozen_audio_fitting() {
+    use daw_project::{Curve, Fade};
+    let t = track();
+    let f = frozen(&t);
+    assert!(f.fits(&t, RATE));
+    let mut faded = t.clone();
+    faded.clips[0].fade_in = Fade {
+        len: 4_800,
+        curve: Curve::EqualPower,
+    };
+    assert!(!f.fits(&faded, RATE));
+    assert_ne!(faded.freeze_print(RATE), t.freeze_print(RATE));
+    // Frozen with the fade, it fits, also read back from the document
+    // and at another rate.
+    let ff = frozen(&faded);
+    assert!(ff.fits(&faded, RATE));
+    let mut doc = ProjectDoc::new(1);
+    let mut fp = faded.clone();
+    fp.frozen = Some(ff.clone());
+    doc.set(&project(fp));
+    let back = doc.get().tracks[0].frozen.clone().unwrap();
+    assert_eq!(back, ff);
+    let mut at44 = faded.clone();
+    let k = 44_100.0 / RATE as f64;
+    for c in &mut at44.clips {
+        for v in [&mut c.start, &mut c.offset, &mut c.len, &mut c.fade_in.len] {
+            *v = (*v as f64 * k).round() as i64;
+        }
+    }
+    assert!(ff.fits(&at44, 44_100));
+    let mut louder = faded.clone();
+    louder.clips[0].gain_db = 3.0;
+    assert!(!ff.fits(&louder, RATE));
 }

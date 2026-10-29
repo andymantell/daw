@@ -33,6 +33,7 @@ fn project(dir: &Path) -> (ProjectFolder, ProjectDoc, Project) {
         take: None,
         muted: false,
         seq: 0,
+        ..Default::default()
     });
     let p = Project {
         tracks: vec![t],

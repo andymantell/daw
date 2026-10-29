@@ -282,6 +282,7 @@ fn edit(p: &mut Project, words: &[&str]) -> Result<(), String> {
                 take: None,
                 muted: false,
                 seq,
+                ..Default::default()
             });
         }
         ["move-clip", t, id, start] => clip(p, t, id)?.start = num(start)?,

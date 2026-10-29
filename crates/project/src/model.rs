@@ -109,6 +109,12 @@ impl Track {
             for v in [c.start, c.offset, c.len] {
                 field(&v.to_le_bytes());
             }
+            // Left out for a clip at its plain level, so prints made
+            // before fades still match.
+            let sound = c.sound_print(rate);
+            if !sound.is_empty() {
+                field(sound.as_bytes());
+            }
         }
         field(b"fx");
         for e in &self.effects {
@@ -145,6 +151,7 @@ impl Track {
                 start: c.start,
                 offset: c.offset,
                 len: c.len,
+                sound: c.sound_print(rate),
             })
             .collect();
         let first = clips.iter().map(|c| c.start).min().unwrap_or(0);
@@ -200,6 +207,8 @@ pub struct FrozenClip {
     pub start: i64,
     pub offset: i64,
     pub len: i64,
+    /// [`Clip::sound_print`]: its gain, fades and envelope.
+    pub sound: String,
 }
 
 impl Frozen {
@@ -222,11 +231,12 @@ impl Frozen {
                     && near(n.start, f.start)
                     && near(n.offset, f.offset)
                     && near(n.len, f.len)
+                    && n.sound == f.sound
             })
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Clip {
     pub id: String,
     /// The audio file's name in the project's assets folder.
@@ -244,6 +254,101 @@ pub struct Clip {
     pub muted: bool,
     /// Order among the track's clips; higher is on top.
     pub seq: i64,
+    /// The clip's own gain, in dB.
+    pub gain_db: f64,
+    /// Fades at the start and end, in frames at the project's rate.
+    pub fade_in: Fade,
+    pub fade_out: Fade,
+    /// The gain envelope, in order: levels at frames of the asset,
+    /// counted at the project's rate, so the line stays with the audio.
+    pub envelope: Vec<GainPoint>,
+}
+
+impl Clip {
+    /// A fingerprint of what sets the clip's level (gain, fades and
+    /// envelope), with frames counted at `rate`, or empty when it plays
+    /// as recorded, as clips from before fades did. Times go in as
+    /// milliseconds, so the same clip at another rate prints the same.
+    pub fn sound_print(&self, rate: u32) -> String {
+        if self.gain_db == 0.0
+            && self.fade_in.len == 0
+            && self.fade_out.len == 0
+            && self.envelope.is_empty()
+        {
+            return String::new();
+        }
+        let ms = |f: i64| (f as f64 * 1000.0 / rate.max(1) as f64).round() as i64;
+        let mut h = Sha256::new();
+        h.update(self.gain_db.to_le_bytes());
+        for f in [self.fade_in, self.fade_out] {
+            h.update(ms(f.len).to_le_bytes());
+            h.update(f.curve.name().as_bytes());
+            h.update([0]);
+        }
+        for p in &self.envelope {
+            h.update(ms(p.at).to_le_bytes());
+            h.update(p.db.to_le_bytes());
+        }
+        h.finalize()[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+/// A fade at one end of a clip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fade {
+    /// In frames; 0 for none.
+    pub len: i64,
+    pub curve: Curve,
+}
+
+/// A fade's shape, as it rises from silence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Curve {
+    Linear,
+    #[default]
+    EqualPower,
+    SCurve,
+    Fast,
+    Slow,
+}
+
+impl Curve {
+    /// As the document stores it. Never change one.
+    pub fn name(self) -> &'static str {
+        match self {
+            Curve::Linear => "linear",
+            Curve::EqualPower => "equal-power",
+            Curve::SCurve => "s-curve",
+            Curve::Fast => "fast",
+            Curve::Slow => "slow",
+        }
+    }
+
+    /// From the document; a shape this version doesn't know plays as
+    /// the default.
+    pub fn from_name(s: &str) -> Curve {
+        [
+            Curve::Linear,
+            Curve::EqualPower,
+            Curve::SCurve,
+            Curve::Fast,
+            Curve::Slow,
+        ]
+        .into_iter()
+        .find(|c| c.name() == s)
+        .unwrap_or_default()
+    }
+}
+
+/// A point on a clip's gain envelope.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GainPoint {
+    /// A frame of the clip's asset, at the project's rate.
+    pub at: i64,
+    pub db: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

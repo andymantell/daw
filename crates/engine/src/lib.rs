@@ -3,6 +3,7 @@
 
 pub mod engine;
 pub mod export;
+pub mod fade;
 pub mod graph;
 pub mod import;
 pub mod metronome;

@@ -574,6 +574,10 @@ impl App {
                 .map(|c| ClipSpec {
                     offset: c.offset,
                     len: Some(c.len),
+                    gain_db: c.gain_db,
+                    fade_in: c.fade_in,
+                    fade_out: c.fade_out,
+                    envelope: c.envelope.as_slice().into(),
                     ..ClipSpec::new(Frames(c.start), c.source.clone())
                 })
                 .collect();
@@ -1927,6 +1931,19 @@ impl eframe::App for App {
                     self.menu_item(ui, Cmd::Redo);
                     ui.separator();
                     for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::Crossfade, Cmd::ClipFades] {
+                        self.menu_item(ui, c);
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines] {
                         self.menu_item(ui, c);
                     }
                 });

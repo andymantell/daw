@@ -490,6 +490,15 @@ from audio.
   public compatibility list.
 
 ### 2.5 Built-in effects, set 1 (L)
+*Started 2026-10-29, at risk. Done so far: EQ, compressor, noise gate,
+look-ahead limiter, delay, an algorithmic reverb and a convolution reverb
+with four room responses we make ourselves, in a new `effects` crate.
+They are offered beside plugins in each track's effects list, run through
+the same insert interface, and are saved in the project setting by
+setting (so undo and merging work on them). Tracks with only built-in
+effects need no frozen audio. Still to do: loading your own impulse
+response files, amp and cabinet simulation, the neural amp model player
+and the tuner as an insert.*
 - EQ, compressor, gate, limiter, algorithmic and convolution reverb, delay.
 - Guitar amp and cabinet simulation (our own models and impulse
   responses). Tuner as an insert.

@@ -30,6 +30,7 @@ fn track() -> Track {
             component: vec![1, 2, 3],
             controller: None,
         }),
+        ..Default::default()
     });
     t
 }

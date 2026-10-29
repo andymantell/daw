@@ -222,16 +222,8 @@ impl App {
         for (i, c) in clips.iter_mut().enumerate() {
             c.seq = i as i64;
         }
-        let mut effects: Vec<daw_project::Effect> = (t.fx.iter())
-            .map(|s| daw_project::Effect {
-                id: s.key.clone(),
-                name: s.name.clone(),
-                class: s.class(),
-                bundle: s.bundle.to_string_lossy().into_owned(),
-                bypass: s.bypass,
-                state: None,
-            })
-            .collect();
+        let mut effects: Vec<daw_project::Effect> =
+            t.fx.iter().map(crate::fx::FxSlot::value).collect();
         // Missing effects keep their places, so the chain's order in the
         // document stays as the computers with them see it.
         for (i, e) in self.proj.missing_fx.get(&t.key).into_iter().flatten() {
@@ -429,6 +421,7 @@ impl App {
                 match had.remove(&pe.id) {
                     Some(mut s) => {
                         s.bypass = pe.bypass;
+                        s.set_params(&pe.params);
                         t.fx.push(s);
                     }
                     None => match self.effects.restore(pe, self.rate) {
@@ -552,8 +545,12 @@ impl App {
     pub(crate) fn write_plugin_states(&mut self) {
         let mut p = self.project();
         for (pt, t) in p.tracks.iter_mut().zip(&self.tracks) {
-            for (pe, s) in pt.effects.iter_mut().zip(&t.fx) {
-                pe.state = s.state();
+            // By id: effects missing here sit among them, and keep the
+            // settings they came with.
+            for pe in &mut pt.effects {
+                if let Some(s) = t.fx.iter().find(|s| s.key == pe.id) {
+                    pe.state = s.state();
+                }
             }
         }
         self.proj.doc.set_quietly(&p);

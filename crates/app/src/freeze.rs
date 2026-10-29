@@ -148,7 +148,7 @@ impl App {
         let mut fx = Vec::new();
         for slot in &self.tracks[i].fx {
             let (p, proc) = self.effects.fresh(slot, self.rate)?;
-            plugins.push(p);
+            plugins.extend(p);
             fx.push((slot.id, proc));
         }
         let graph = one
@@ -313,7 +313,7 @@ impl App {
             };
             return (Some(line), missing);
         }
-        if !t.fx.iter().any(|s| !s.bypass) {
+        if !t.fx.iter().any(|s| s.is_plugin() && !s.bypass) {
             return (None, missing);
         }
         let line = if self.freezer.making(&t.key) {
@@ -458,6 +458,7 @@ mod tests {
                 component: 0.5f64.to_le_bytes().to_vec(),
                 controller: None,
             }),
+            ..Default::default()
         };
         let app = h.state_mut();
         let slot = app.effects.restore(&effect, rate).unwrap();
@@ -569,6 +570,7 @@ mod tests {
                 component: 1f64.to_le_bytes().to_vec(),
                 controller: None,
             }),
+            ..Default::default()
         };
         let gain: Vec<u8> = class.cid.iter().map(|&b| b as u8).collect();
         let mut t = daw_project::Track::new("t1".into(), "Guitar".into());

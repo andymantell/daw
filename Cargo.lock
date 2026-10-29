@@ -1098,6 +1098,7 @@ version = "0.0.0"
 dependencies = [
  "daw-audio-io",
  "daw-collab",
+ "daw-effects",
  "daw-engine",
  "daw-plugins",
  "daw-project",
@@ -1127,6 +1128,14 @@ dependencies = [
  "daw-project",
  "loro",
  "tar",
+]
+
+[[package]]
+name = "daw-effects"
+version = "0.0.0"
+dependencies = [
+ "daw-engine",
+ "realfft",
 ]
 
 [[package]]

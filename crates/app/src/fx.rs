@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Plugin effects in the app (roadmap 1.3): the list of installed
-//! plugins, scanning for them in the background, each track's insert
-//! slots, and the windows that manage them.
+//! Effects in the app: the list of installed plugins and scanning for
+//! them in the background (roadmap 1.3), the effects that come with the
+//! app (2.5), each track's insert slots, and the windows that manage
+//! them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,28 +25,70 @@ pub struct FxSlot {
     /// The effect's id in the project document.
     pub key: String,
     pub name: String,
-    pub bundle: PathBuf,
-    pub cid: vst3::Steinberg::TUID,
     pub bypass: bool,
     pub latency: u32,
     /// Show the host's own controls for its parameters.
     show_params: bool,
-    plugin: Plugin,
+    kind: SlotKind,
+}
+
+enum SlotKind {
+    Plugin {
+        bundle: PathBuf,
+        cid: vst3::Steinberg::TUID,
+        plugin: Plugin,
+    },
+    Builtin(daw_effects::Effect),
 }
 
 impl FxSlot {
-    /// The plugin's own settings, for saving.
+    /// The plugin's own settings, for saving. None for a built-in
+    /// effect, whose settings are always in the document.
     pub fn state(&self) -> Option<daw_project::EffectState> {
-        let s = self.plugin.save_state().ok()?;
+        let SlotKind::Plugin { plugin, .. } = &self.kind else {
+            return None;
+        };
+        let s = plugin.save_state().ok()?;
         Some(daw_project::EffectState {
             component: s.component,
             controller: s.controller,
         })
     }
 
-    /// The class id as bytes, for the project document.
-    pub fn class(&self) -> Vec<u8> {
-        self.cid.iter().map(|&b| b as u8).collect()
+    /// The effect as the document has it, without a plugin's own
+    /// settings (read only when saving).
+    pub fn value(&self) -> daw_project::Effect {
+        let mut e = daw_project::Effect {
+            id: self.key.clone(),
+            name: self.name.clone(),
+            bypass: self.bypass,
+            ..Default::default()
+        };
+        match &self.kind {
+            SlotKind::Plugin { bundle, cid, .. } => {
+                e.class = cid.iter().map(|&b| b as u8).collect();
+                e.bundle = bundle.to_string_lossy().into_owned();
+            }
+            SlotKind::Builtin(b) => {
+                e.builtin = b.kind().id().into();
+                e.params = b.values();
+                // In the order the document reads them back.
+                e.params.sort_by(|a, b| a.0.cmp(&b.0));
+            }
+        }
+        e
+    }
+
+    /// Takes a built-in effect's settings from the document. Plugins'
+    /// settings come back by making the plugin again.
+    pub fn set_params(&mut self, params: &[(String, f64)]) {
+        if let SlotKind::Builtin(b) = &self.kind {
+            b.load(params);
+        }
+    }
+
+    pub fn is_plugin(&self) -> bool {
+        matches!(self.kind, SlotKind::Plugin { .. })
     }
 
     pub fn spec(&self) -> InsertSpec {
@@ -63,8 +106,11 @@ impl FxSlot {
         if self.editor.as_ref().is_some_and(|e| !e.is_open()) {
             self.editor = None;
         }
-        if self.plugin.take_restart_request() {
-            let latency = self.plugin.latency();
+        let SlotKind::Plugin { plugin, .. } = &self.kind else {
+            return false;
+        };
+        if plugin.take_restart_request() {
+            let latency = plugin.latency();
             if latency != self.latency {
                 self.latency = latency;
                 return true;
@@ -79,8 +125,10 @@ impl FxSlot {
             e.focus();
             return Ok(());
         }
-        let view = self
-            .plugin
+        let SlotKind::Plugin { plugin, .. } = &self.kind else {
+            return Err("this effect has no window of its own".into());
+        };
+        let view = plugin
             .create_editor()
             .ok_or("this plugin has no editor of its own")?;
         self.editor = Some(daw_plugins::editor_win::EditorWindow::open(
@@ -89,6 +137,10 @@ impl FxSlot {
         Ok(())
     }
 }
+
+/// Something that must outlive an offline render of an effect: the
+/// plugin behind it, if it is one.
+pub type Keep = Option<Plugin>;
 
 enum ScanMsg {
     Bundle(PathBuf),
@@ -228,6 +280,30 @@ impl Effects {
         self.make(&a.bundle, a.class.cid, &a.class.name, rate)
     }
 
+    /// Makes a new built-in effect with its default settings.
+    pub fn create_builtin(&mut self, kind: daw_effects::Kind, rate: u32) -> FxSlot {
+        self.builtin(daw_effects::Effect::new(kind), rate)
+    }
+
+    fn builtin(&mut self, effect: daw_effects::Effect, rate: u32) -> FxSlot {
+        let processor = effect.processor(rate);
+        let id = self.next_id;
+        self.next_id += 1;
+        let latency = processor.latency();
+        self.pending.push((id, Box::new(processor)));
+        FxSlot {
+            #[cfg(windows)]
+            editor: None,
+            id,
+            key: daw_project::new_id(),
+            name: effect.kind().name().to_string(),
+            bypass: false,
+            latency,
+            show_params: true,
+            kind: SlotKind::Builtin(effect),
+        }
+    }
+
     fn make(
         &mut self,
         bundle: &Path,
@@ -247,19 +323,35 @@ impl Effects {
             id,
             key: daw_project::new_id(),
             name: name.to_string(),
-            bundle: bundle.to_path_buf(),
-            cid,
             bypass: false,
             latency: plugin.latency(),
             show_params: false,
-            plugin,
+            kind: SlotKind::Plugin {
+                bundle: bundle.to_path_buf(),
+                cid,
+                plugin,
+            },
         })
     }
 
-    /// Makes an effect saved in a project, with its settings. The plugin
+    /// Makes an effect saved in a project, with its settings. A plugin
     /// is found by its class id among those installed here, or else
     /// where it was when saved.
     pub fn restore(&mut self, e: &daw_project::Effect, rate: u32) -> Result<FxSlot, String> {
+        if !e.is_plugin() {
+            let kind = daw_effects::Kind::from_id(&e.builtin)
+                .ok_or("it comes with a newer version of the app")?;
+            let effect = daw_effects::Effect::new(kind);
+            effect.load(&e.params);
+            let mut slot = self.builtin(effect, rate);
+            slot.key = e.id.clone();
+            slot.bypass = e.bypass;
+            slot.show_params = false;
+            if !e.name.is_empty() {
+                slot.name = e.name.clone();
+            }
+            return Ok(slot);
+        }
         let mut cid: vst3::Steinberg::TUID = Default::default();
         if e.class.len() != cid.len() {
             return Err("its plugin id is damaged".into());
@@ -280,28 +372,39 @@ impl Effects {
         let mut slot = self.make(&bundle, cid, &e.name, rate)?;
         slot.key = e.id.clone();
         slot.bypass = e.bypass;
-        if let Some(s) = &e.state {
-            slot.plugin.load_state(&daw_plugins::PluginState {
+        if let (Some(s), SlotKind::Plugin { plugin, .. }) = (&e.state, &slot.kind) {
+            plugin.load_state(&daw_plugins::PluginState {
                 component: s.component.clone(),
                 controller: s.controller.clone(),
             })?;
-            slot.latency = slot.plugin.latency();
+            slot.latency = plugin.latency();
         }
         Ok(slot)
     }
 
-    /// Makes `slot`'s plugin again for a new engine or sample rate,
+    /// Makes `slot`'s effect again for a new engine or sample rate,
     /// keeping its settings.
     pub fn reload(&mut self, slot: &mut FxSlot, rate: u32) -> Result<(), String> {
-        let state = slot.plugin.save_state()?;
+        let module = match &slot.kind {
+            SlotKind::Builtin(b) => {
+                let processor = b.processor(rate);
+                slot.latency = processor.latency();
+                self.pending.push((slot.id, Box::new(processor)));
+                return Ok(());
+            }
+            SlotKind::Plugin { bundle, .. } => self.module(&bundle.clone())?,
+        };
+        let SlotKind::Plugin { cid, plugin, .. } = &mut slot.kind else {
+            unreachable!()
+        };
+        let state = plugin.save_state()?;
         #[cfg(windows)]
         let had_editor = slot.editor.take().is_some();
-        let module = self.module(&slot.bundle)?;
-        let (plugin, processor) =
-            daw_plugins::instantiate(module, &slot.cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
-        plugin.load_state(&state)?;
-        slot.latency = plugin.latency();
-        slot.plugin = plugin;
+        let (fresh, processor) =
+            daw_plugins::instantiate(module, cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
+        fresh.load_state(&state)?;
+        slot.latency = fresh.latency();
+        *plugin = fresh;
         self.pending.push((slot.id, Box::new(processor)));
         #[cfg(windows)]
         if had_editor {
@@ -310,15 +413,23 @@ impl Effects {
         Ok(())
     }
 
-    /// A second instance of `slot`'s plugin with the same settings, for
-    /// rendering offline. Keep the [`Plugin`] until rendering is done.
-    pub fn fresh(&mut self, slot: &FxSlot, rate: u32) -> Result<(Plugin, Box<dyn Insert>), String> {
-        let state = slot.plugin.save_state()?;
-        let module = self.module(&slot.bundle)?;
+    /// A second instance of `slot`'s effect with the same settings, for
+    /// rendering offline. Keep the [`Keep`] until rendering is done.
+    pub fn fresh(&mut self, slot: &FxSlot, rate: u32) -> Result<(Keep, Box<dyn Insert>), String> {
+        let (bundle, cid, plugin) = match &slot.kind {
+            SlotKind::Builtin(b) => return Ok((None, Box::new(b.processor(rate)))),
+            SlotKind::Plugin {
+                bundle,
+                cid,
+                plugin,
+            } => (bundle, cid, plugin),
+        };
+        let state = plugin.save_state()?;
+        let module = self.module(bundle)?;
         let (plugin, processor) =
-            daw_plugins::instantiate(module, &slot.cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
+            daw_plugins::instantiate(module, cid, rate as f64, daw_audio_io::MAX_BLOCK)?;
         plugin.load_state(&state)?;
-        Ok((plugin, Box::new(processor)))
+        Ok((Some(plugin), Box::new(processor)))
     }
 
     /// The window listing installed plugins.
@@ -494,16 +605,17 @@ impl Effects {
                                 );
                         }
                         #[cfg(windows)]
-                        if ui
-                            .button("Edit")
-                            .on_hover_text("Open the plugin's own window")
-                            .clicked()
+                        if s.is_plugin()
+                            && ui
+                                .button("Edit")
+                                .on_hover_text("Open the plugin's own window")
+                                .clicked()
                             && let Err(e) = s.open_editor()
                         {
                             *message = Some(format!("{}: {e}", s.name));
                         }
                         ui.toggle_value(&mut s.show_params, "Controls")
-                            .on_hover_text("Show the plugin's parameters here");
+                            .on_hover_text("Show the effect's settings here");
                         if ui.add_enabled(i > 0, egui::Button::new("▲")).clicked() {
                             swap = Some((i - 1, i));
                         }
@@ -527,6 +639,7 @@ impl Effects {
                     .collect();
                 ui.horizontal(|ui| {
                     let mut pick = None;
+                    let mut pick_builtin = None;
                     egui::ComboBox::from_id_salt("add-fx")
                         .selected_text("Add effect…")
                         .width(220.0)
@@ -535,9 +648,24 @@ impl Effects {
                                 egui::TextEdit::singleline(&mut self.filter).hint_text("Search"),
                             );
                             let f = self.filter.to_lowercase();
-                            for p in effects.iter().filter(|p| {
-                                f.is_empty() || p.class.name.to_lowercase().contains(&f)
-                            }) {
+                            let fits =
+                                |name: &str| f.is_empty() || name.to_lowercase().contains(&f);
+                            ui.label(RichText::new("Built in").small().weak());
+                            for k in daw_effects::Kind::ALL
+                                .into_iter()
+                                .filter(|k| fits(k.name()))
+                            {
+                                if ui
+                                    .selectable_label(false, k.name())
+                                    .on_hover_text(k.about())
+                                    .clicked()
+                                {
+                                    pick_builtin = Some(k);
+                                }
+                            }
+                            ui.separator();
+                            ui.label(RichText::new("Plugins").small().weak());
+                            for p in effects.iter().filter(|p| fits(&p.class.name)) {
                                 if ui
                                     .selectable_label(false, &p.class.name)
                                     .on_hover_text(&p.class.vendor)
@@ -547,11 +675,19 @@ impl Effects {
                                 }
                             }
                             if effects.is_empty() {
-                                ui.label("No effects found. See Settings → Plugins.");
+                                ui.label(
+                                    RichText::new("No plugins found. See Settings → Plugins.")
+                                        .small()
+                                        .weak(),
+                                );
                             }
                         })
                         .response
                         .accessible_name("Add effect");
+                    if let Some(k) = pick_builtin {
+                        slots.push(self.create_builtin(k, rate));
+                        changed = true;
+                    }
                     if let Some(p) = pick {
                         match self.create(&p, rate) {
                             Ok(slot) => {
@@ -586,19 +722,81 @@ impl Effects {
     }
 }
 
-/// The host's own controls for a plugin's parameters.
+/// The settings of an effect: a built-in effect's own, or the host's
+/// controls for a plugin's parameters.
 fn params(ui: &mut egui::Ui, s: &mut FxSlot) {
+    match &s.kind {
+        SlotKind::Builtin(b) => builtin_params(ui, s.id, b),
+        SlotKind::Plugin { plugin, .. } => plugin_params(ui, s.id, plugin),
+    }
+}
+
+fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) {
+    let kind = b.kind();
+    egui::Grid::new(("builtin", id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            for (i, p) in kind.params().iter().enumerate() {
+                let mut v = b.get(i);
+                ui.label(p.name);
+                let changed = if p.unit == daw_effects::Unit::Switch {
+                    let mut on = v >= 0.5;
+                    let r = ui.checkbox(&mut on, "").accessible_name(p.name);
+                    v = if on { 1.0 } else { 0.0 };
+                    r.changed()
+                } else if p.unit == daw_effects::Unit::Choice {
+                    let mut pick = v as usize;
+                    let r = egui::ComboBox::from_id_salt(("choice", id, i))
+                        .selected_text(p.text(v))
+                        .show_index(ui, &mut pick, p.choices.len(), |c| p.choices[c]);
+                    v = pick as f64;
+                    r.changed()
+                } else {
+                    let text = |x: f64, _| p.text(x);
+                    ui.add(
+                        egui::Slider::new(&mut v, p.min..=p.max)
+                            .logarithmic(p.log)
+                            .custom_formatter(text)
+                            .min_decimals(1),
+                    )
+                    .accessible_name(p.name)
+                    .changed()
+                };
+                if changed {
+                    b.set(i, v);
+                }
+                ui.end_row();
+            }
+            if kind.has_meter() {
+                let db = b.reduction_db();
+                ui.label("Turning down");
+                let amount = (-db / 24.0).clamp(0.0, 1.0);
+                ui.add(
+                    egui::ProgressBar::new(amount)
+                        .desired_width(160.0)
+                        .text(format!("{:.1} dB", (-db).max(0.0))),
+                )
+                .on_hover_text("How far the level is being turned down now");
+                ui.end_row();
+                // The meter moves with the music.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(50));
+            }
+        });
+}
+
+fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
     const MOST: usize = 64;
-    let list = s.plugin.params();
+    let list = plugin.params();
     if list.is_empty() {
         ui.label(RichText::new("No parameters.").weak());
         return;
     }
-    egui::Grid::new(("params", s.id))
+    egui::Grid::new(("params", id))
         .num_columns(3)
         .show(ui, |ui| {
             for p in list.iter().filter(|p| !p.bypass).take(MOST) {
-                let Some(mut v) = s.plugin.param(p.id) else {
+                let Some(mut v) = plugin.param(p.id) else {
                     continue;
                 };
                 ui.label(&p.title);
@@ -606,9 +804,9 @@ fn params(ui: &mut egui::Ui, s: &mut FxSlot) {
                     .add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false))
                     .changed()
                 {
-                    s.plugin.set_param(p.id, v);
+                    plugin.set_param(p.id, v);
                 }
-                let text = s.plugin.param_text(p.id, v).unwrap_or_default();
+                let text = plugin.param_text(p.id, v).unwrap_or_default();
                 ui.label(format!("{text} {}", p.units).trim().to_string());
                 ui.end_row();
             }
@@ -622,5 +820,188 @@ fn params(ui: &mut egui::Ui, s: &mut FxSlot) {
             .small()
             .weak(),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use daw_effects::Kind;
+    use daw_engine::engine::render_with;
+    use daw_engine::time::Frames;
+    use daw_project::{ProjectDoc, ProjectFolder};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::SlotKind;
+    use crate::App;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("daw-builtin-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn harness() -> Harness<'static, App> {
+        let mut h = Harness::builder()
+            .with_size([1400.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| App::new(Vec::new()));
+        h.run();
+        h
+    }
+
+    fn until(h: &mut Harness<'_, App>, what: impl Fn(&App) -> bool) {
+        for _ in 0..1000 {
+            h.step();
+            if what(h.state()) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out");
+    }
+
+    /// A second of a tone, mono, at `rate`.
+    fn tone(dir: &Path, rate: u32) -> PathBuf {
+        let path = dir.join("guitar.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..rate {
+            let x = (i as f32 * 220.0 * std::f32::consts::TAU / rate as f32).sin();
+            w.write_sample((x * 16_000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    fn render(app: &mut App, frames: usize) -> Vec<f32> {
+        let s = app.session();
+        let mut keep = Vec::new();
+        let mut fx = Vec::new();
+        for slot in app.tracks.iter().flat_map(|t| &t.fx) {
+            let (p, proc) = app.effects.fresh(slot, app.rate).unwrap();
+            keep.extend(p);
+            fx.push((slot.id, proc));
+        }
+        let g = s.compile_with(daw_audio_io::MAX_BLOCK, &mut fx).unwrap();
+        let mut out = Vec::new();
+        render_with(g, Frames(0), frames, 256, |l, r| {
+            for (a, b) in l.iter().zip(r) {
+                out.extend([*a, *b]);
+            }
+            true
+        });
+        out
+    }
+
+    fn peak(x: &[f32]) -> f32 {
+        x.iter().fold(0f32, |m, v| m.max(v.abs()))
+    }
+
+    fn builtin(app: &App, i: usize) -> &daw_effects::Effect {
+        match &app.tracks[0].fx[i].kind {
+            SlotKind::Builtin(b) => b,
+            SlotKind::Plugin { .. } => panic!("a plugin"),
+        }
+    }
+
+    #[test]
+    fn a_built_in_effect_is_picked_heard_saved_undone_and_reopened() {
+        let dir = scratch("eq");
+        let mut h = harness();
+        let rate = h.state().rate;
+        h.state_mut().add_file(&tone(&dir, rate));
+        until(&mut h, |a| !a.tracks.is_empty());
+        let frames = rate as usize;
+
+        // Picked from the track's effects list, beside plugins.
+        h.state_mut().effects.open_track = Some(0);
+        h.run();
+        h.get_by_label("Add effect").click();
+        h.run();
+        h.get_by_label("EQ").click();
+        h.run();
+        assert_eq!(h.state().tracks[0].fx.len(), 1);
+        assert_eq!(h.state().tracks[0].fx[0].name, "EQ");
+        // Its settings show straight away.
+        assert!(h.query_all_by_label("Output").next().is_some());
+
+        // Heard: turning its output down 6 dB halves the level.
+        let dry = peak(&render(h.state_mut(), frames));
+        builtin(h.state(), 0).set(12, -6.0);
+        h.run();
+        let wet = peak(&render(h.state_mut(), frames));
+        assert!((wet / dry - 0.501).abs() < 0.01, "{dry} {wet}");
+
+        // Saved in the project, with no frozen audio: every computer has it.
+        let song = dir.join("Song");
+        let ctx = h.ctx.clone();
+        h.state_mut().save_in(&ctx, &song).unwrap();
+        h.run();
+        assert!(!h.state().freezer.busy());
+        let (_, bytes) = ProjectFolder::open(&song).unwrap();
+        let saved = ProjectDoc::from_bytes(&bytes, 1).unwrap().get();
+        let e = &saved.tracks[0].effects[0];
+        assert_eq!(e.builtin, "eq");
+        assert!(e.params.contains(&("output".into(), -6.0)));
+        assert!(saved.tracks[0].frozen.is_none());
+        assert!(
+            h.state().frozen_note(&h.state().tracks[0]).0.is_none(),
+            "no line about frozen audio"
+        );
+
+        // A change of setting is one undo step.
+        builtin(h.state(), 0).set(1, 4.0);
+        h.run();
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run();
+        assert_eq!(builtin(h.state(), 0).get(1), 0.0);
+        assert_eq!(builtin(h.state(), 0).get(12), -6.0);
+        h.state_mut().save(&ctx).unwrap();
+        drop(h);
+
+        // Reopened: the same effect and settings, heard the same.
+        let mut h = harness();
+        h.state_mut().open_project(song.clone());
+        until(&mut h, |a| !a.proj.loading());
+        h.run();
+        assert!(h.state().proj.missing_fx.is_empty());
+        assert_eq!(h.state().tracks[0].fx.len(), 1);
+        assert_eq!(builtin(h.state(), 0).get(12), -6.0);
+        let again = peak(&render(h.state_mut(), frames));
+        assert!((again - wet).abs() < 1e-4);
+    }
+
+    #[test]
+    fn an_effect_from_a_newer_version_is_kept_as_it_is() {
+        let mut h = harness();
+        let e = daw_project::Effect {
+            id: "e1".into(),
+            name: "Tape echo".into(),
+            builtin: "tape-echo".into(),
+            params: vec![("wow".into(), 0.5)],
+            ..Default::default()
+        };
+        let rate = h.state().rate;
+        let err = h.state_mut().effects.restore(&e, rate).err().unwrap();
+        assert!(err.contains("newer version"), "{err}");
+        // Each kind made from its saved form comes back as it was.
+        for k in Kind::ALL {
+            let app = h.state_mut();
+            let slot = app.effects.create_builtin(k, rate);
+            let saved = slot.value();
+            let back = app.effects.restore(&saved, rate).unwrap();
+            assert_eq!(back.value(), saved);
+        }
     }
 }

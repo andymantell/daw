@@ -645,7 +645,7 @@ impl App {
             let mut fx = Vec::new();
             for slot in tracks.iter().flat_map(|t| &t.fx) {
                 let (p, proc) = self.effects.fresh(slot, rate)?;
-                plugins.push(p);
+                plugins.extend(p);
                 fx.push((slot.id, proc));
             }
             s.compile_with(audio::MAX_BLOCK, &mut fx)

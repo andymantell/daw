@@ -60,6 +60,8 @@ pub fn recovery_file() -> PathBuf {
 #[derive(Clone)]
 pub enum After {
     New,
+    /// A new project made from a template.
+    NewFrom(Box<Project>),
     Open(PathBuf),
     Quit,
     /// Bring back the project found in the recovery file.
@@ -773,6 +775,14 @@ impl App {
 
     /// Starts afresh with an empty, unsaved project.
     pub(crate) fn new_project(&mut self) {
+        self.new_project_from(Project {
+            rate: self.rate,
+            ..Project::default()
+        });
+    }
+
+    /// Starts afresh with `p`, unsaved, as where undo begins.
+    pub(crate) fn new_project_from(&mut self, p: Project) {
         self.send(Command::Stop);
         self.send(Command::Seek(Frames(0)));
         self.tracks.clear();
@@ -781,10 +791,7 @@ impl App {
         proj.recovery = self.proj.recovery.take();
         self.proj = proj;
         self.sign_in();
-        self.apply(Project {
-            rate: self.rate,
-            ..Project::default()
-        });
+        self.apply(p);
         self.proj.committed = self.project();
         self.proj.doc.set_quietly(&self.proj.committed);
         self.apply_practice();
@@ -865,6 +872,7 @@ impl App {
         }
         match then {
             After::New => self.new_project(),
+            After::NewFrom(p) => self.new_project_from(*p),
             After::Open(p) => self.open_project(p),
             After::Recover => self.recover(),
             After::Quit => {

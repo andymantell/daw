@@ -21,7 +21,7 @@
 use loro::{Frontiers, LoroMap, LoroValue};
 
 use crate::doc::QUIET;
-use crate::{Project, ProjectDoc};
+use crate::{Difference, Project, ProjectDoc, differences};
 
 /// Where snapshots live in the document.
 const SNAPSHOTS: &str = "snapshots";
@@ -120,6 +120,18 @@ impl ProjectDoc {
         let mut p = ProjectDoc::wrap(then).get();
         p.comments = self.get().comments;
         Some(p)
+    }
+
+    /// What changed from snapshot `from` to snapshot `to`, or to the
+    /// project as it is now when `to` is `None`. `None` if either can't
+    /// be read from this copy.
+    pub fn snapshot_differences(&self, from: &str, to: Option<&str>) -> Option<Vec<Difference>> {
+        let before = self.snapshot_project(from)?;
+        let after = match to {
+            Some(id) => self.snapshot_project(id)?,
+            None => self.get(),
+        };
+        Some(differences(&before, &after))
     }
 
     /// Puts the project back as it was at the snapshot, as one undoable
@@ -368,6 +380,28 @@ mod tests {
         let back = doc.restore_snapshot(&id).unwrap();
         assert_eq!(back.tracks[0].effects[0].state, state(1));
         assert_eq!(doc.get().tracks[0].effects[0].state, state(1));
+    }
+
+    #[test]
+    fn snapshots_can_be_compared_with_each_other_and_with_now() {
+        let (mut doc, mut p) = lesson();
+        let a = doc.take_snapshot("Lesson 1", "", 10);
+        p.tempo_bpm = 96.0;
+        doc.set(&p);
+        let b = doc.take_snapshot("Lesson 2", "", 20);
+        p.markers.clear();
+        doc.set(&p);
+        let text = |d: Vec<Difference>| d.into_iter().map(|d| d.text).collect::<Vec<_>>();
+        assert_eq!(
+            text(doc.snapshot_differences(&a, Some(&b)).unwrap()),
+            ["Tempo 120 → 96 BPM"]
+        );
+        assert_eq!(
+            text(doc.snapshot_differences(&b, None).unwrap()),
+            ["Removed “Intro” (bar 1)"]
+        );
+        assert_eq!(doc.snapshot_differences(&a, None).unwrap().len(), 2);
+        assert!(doc.snapshot_differences("nope", None).is_none());
     }
 
     #[test]

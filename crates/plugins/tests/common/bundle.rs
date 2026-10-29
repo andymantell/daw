@@ -19,8 +19,11 @@ pub fn broken(name: &'static str, feature: &'static str) -> PathBuf {
     build(name, Some(feature))
 }
 
-/// Builds once per test run for each name. The builds share a target
-/// dir and overwrite each other's output, so they take turns.
+/// Builds once per test process for each name. Within a process the
+/// builds take turns. Test runners that start a process per test (such as
+/// nextest) build side by side, so each name has its own target dir, and
+/// the bundle is only replaced when its contents change, by a rename, so
+/// no process loads a half-written or overwritten library.
 fn build(name: &'static str, feature: Option<&'static str>) -> PathBuf {
     static BUILT: Mutex<Option<HashMap<&'static str, PathBuf>>> = Mutex::new(None);
     let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
@@ -38,7 +41,9 @@ fn build(name: &'static str, feature: Option<&'static str>) -> PathBuf {
         cmd.args(["--features", f]);
     }
     // A separate target dir avoids waiting on the lock held by `cargo test`.
-    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-plugin");
+    let target = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-plugin")
+        .join(name);
     cmd.arg("--target-dir").arg(&target);
     assert!(
         cmd.status().expect("run cargo").success(),
@@ -69,7 +74,14 @@ fn build(name: &'static str, feature: Option<&'static str>) -> PathBuf {
         .join(format!("{name}.vst3"));
     let dir = root.join("Contents").join(sub);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(target.join(profile).join(lib), dir.join(file)).unwrap();
+    let from = target.join(profile).join(lib);
+    let to = dir.join(file);
+    let new = std::fs::read(&from).unwrap();
+    if std::fs::read(&to).ok().as_deref() != Some(new.as_slice()) {
+        let part = dir.join(format!("{}.part", std::process::id()));
+        std::fs::write(&part, &new).unwrap();
+        std::fs::rename(&part, &to).unwrap();
+    }
     built.insert(name, root.clone());
     root
 }

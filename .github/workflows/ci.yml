@@ -12,8 +12,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
+  # No debug info in CI builds: smaller caches and faster compiling and
+  # linking. Panics still say which file and line.
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   # Pull requests that only touch docs skip the build and licence jobs.
@@ -42,6 +50,36 @@ jobs:
             echo code=false >> "$GITHUB_OUTPUT"
           fi
 
+  # Format is quick and needs no build, so it gets its own job.
+  fmt:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal -c rustfmt
+          rustup default stable
+      - run: cargo fmt --all --check
+
+  # Lints run beside the tests rather than before them, so the slowest
+  # platform takes the longer of the two, not both added together.
+  clippy:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Builds and tests on each platform. The job keeps the name "build" so
+  # its checks keep the names branch protection may require.
   build:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -52,25 +90,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: ALSA headers (Linux audio)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # The ASIO bindings are generated with bindgen, which needs libclang;
-      # the Windows runner ships LLVM. The build downloads the ASIO SDK.
-      - name: libclang for bindgen
-        if: runner.os == 'Windows'
-        shell: bash
-        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
-      - name: Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal -c clippy,rustfmt
-          rustup default stable
-      - name: Format
-        if: runner.os == 'Linux'
-        run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - uses: ./.github/actions/rust-setup
+      # nextest runs every test binary side by side instead of one after
+      # another; doc tests are run separately as nextest skips them.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --workspace --no-fail-fast
+      - run: cargo test --workspace --doc
       # A golden-render test that fails writes what it rendered here
       # (crates/engine/tests/golden.rs), to compare by ear.
       - name: Upload failed golden renders
@@ -80,28 +107,41 @@ jobs:
           name: golden-renders-${{ matrix.os }}
           path: target/tmp/golden
           if-no-files-found: ignore
-      # A Windows build of the app for trying on the owner's PC
-      # (docs/review-queue/).
-      - name: Build the Windows app
-        if: runner.os == 'Windows'
-        run: cargo build --release -p daw-app
+
+  # A Windows build of the app for trying on the owner's PC
+  # (docs/review-queue/). Built on main and when run by hand, not on
+  # every pull request: it was the slowest step of the slowest job.
+  windows-app:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+      - run: cargo build --release -p daw-app
       - name: Upload the Windows app
-        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: daw-windows-x64
           path: target/release/daw.exe
           if-no-files-found: error
-      # macos-latest is Apple Silicon; also make sure Intel Macs build.
-      - name: Build for Intel macOS
-        if: runner.os == 'macOS'
-        run: |
-          rustup target add x86_64-apple-darwin
-          cargo build --workspace --target x86_64-apple-darwin
+
+  # macos-latest is Apple Silicon; also make sure Intel Macs build. On
+  # main and when run by hand only, like the Windows app.
+  macos-intel:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          targets: x86_64-apple-darwin
+      - run: cargo build --workspace --target x86_64-apple-darwin
 
   # The phone remote's Android app (android/README.md): the shared
   # core's tests, then a debug package to sideload on the owner's phone
-  # (docs/review-queue/2.2-phone-remote.md).
+  # (docs/review-queue/2.2-phone-remote.md), on main only.
   android:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -113,10 +153,17 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Core tests and the app package
+      - name: Core tests
         working-directory: android
-        run: ./gradlew --no-daemon test assembleDebug
+        run: ./gradlew --no-daemon test
+      # The app package is built on main and when run by hand only, like
+      # the Windows app: pull requests build no app for any platform.
+      - name: The app package
+        if: github.event_name != 'pull_request'
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
       - name: Upload the Android app
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: daw-remote-android

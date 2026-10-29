@@ -45,5 +45,6 @@ git grep -n -- "- \[ \]" docs/review-queue
    into a chat thread.
 
 The app itself, `daw.exe`, is in the **daw-windows-x64** artifact of the
-latest **ci** run (not the spikes run). Screenshots named in the files are
+latest **ci** run on `main` (not the spikes run, and not a pull request:
+pull requests no longer build it). Screenshots named in the files are
 in the project files under `/mnt/project-files/screenshots/`.

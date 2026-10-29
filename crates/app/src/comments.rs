@@ -91,19 +91,6 @@ impl Comments {
     /// The side panel. Edits `comments` in place.
     pub fn panel(&mut self, ui: &mut egui::Ui, comments: &mut Vec<Comment>, cx: &Ctx) -> Outcome {
         let mut out = Outcome::default();
-        ui.horizontal(|ui| {
-            ui.heading("Comments");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("✕")
-                    .accessible_name("Close comments")
-                    .on_hover_text("Close")
-                    .clicked()
-                {
-                    self.open = false;
-                }
-            });
-        });
         self.new_comment(ui, comments, cx);
         ui.separator();
         let open = threads(comments).iter().filter(|c| !c.resolved).count();

@@ -40,6 +40,15 @@ cargo test --workspace
 
 Source files start with `// SPDX-License-Identifier: GPL-3.0-or-later`.
 
+## Steps for the owner
+
+Anything that needs the owner (a test on their PC, a listening check, a
+decision to accept) goes in the [review queue](docs/review-queue/README.md),
+in the same commit as the work. New work adds a **new file** there, named
+after its roadmap item (for example `docs/review-queue/1.2-recording.md`),
+rather than editing a shared list, so parallel pull requests don't
+conflict. Edit an existing file only for the feature it covers.
+
 ## Design changes
 
 Significant design decisions get a short record in

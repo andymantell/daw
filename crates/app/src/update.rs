@@ -27,8 +27,9 @@ use crate::APP_NAME;
 /// Where releases are published.
 pub(crate) const RELEASES: &str = "https://github.com/andymantell/daw/releases";
 /// The release workflow's public key, in the signing tool's format. The
-/// file holds no key until the owner makes one (docs/REVIEW_QUEUE.md);
-/// until then this build cannot check for updates.
+/// file holds no key until the owner makes one
+/// (docs/review-queue/1.8-releases.md); until then this build cannot check
+/// for updates.
 const PUBLIC_KEY: &str = include_str!("../../../packaging/release-key.pub");
 /// How often to look, when turned on.
 const EVERY: Duration = Duration::from_secs(24 * 60 * 60);

@@ -99,7 +99,7 @@ quickly to confirm. The result goes in decision 0003.
 - Status (2026-10-27): document half done (Loro preferred). Connection
   half built and passing on one machine (QUIC, codes swapped by hand,
   STUN, hole punching); real-network runs are in the
-  [review queue](REVIEW_QUEUE.md).
+  [review queue](review-queue/0.5-live-sessions.md).
 
 ### 0.6 Speed & pitch spike (M)
 - Real-time pitch-preserving playback at 50–150% speed, and transpose by
@@ -122,7 +122,8 @@ quickly to confirm. The result goes in decision 0003.
   No telemetry server.
 - *Status (2026-10-27): research written up in
   [PLATFORM_DISTRIBUTION.md](research/PLATFORM_DISTRIBUTION.md), with
-  proposals waiting on Andy in [REVIEW_QUEUE.md](REVIEW_QUEUE.md).*
+  proposals waiting on Andy in
+  [review-queue/0.7-platform.md](review-queue/0.7-platform.md).*
 
 **Exit criteria**
 - Decision 0003 is accepted (Rust or JUCE), with spike evidence attached.
@@ -344,7 +345,8 @@ No macOS release yet.*
   even without a server. *Reviewed 2026-10-28 in
   [research/PRIVACY_CHILD_DATA.md](research/PRIVACY_CHILD_DATA.md), with
   design rules for 1.6 identity, live sessions and comments, and decisions
-  in [REVIEW_QUEUE.md](REVIEW_QUEUE.md). The app is for the owner and their
+  in [review-queue/1.8-privacy.md](review-queue/1.8-privacy.md). The app
+  is for the owner and their
   teacher and not promoted to schools, so these are good practice;
   revisit if that changes or a hosted service is added.*
 

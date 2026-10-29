@@ -17,7 +17,7 @@ bundles and shared folders.
 > spike tests wait for the test machine (see
 > [decision 0003](docs/decisions/0003-implementation-language.md)). Steps
 > waiting for the owner are listed in the
-> [review queue](docs/REVIEW_QUEUE.md).
+> [review queue](docs/review-queue/README.md).
 
 ## Documents
 

@@ -204,8 +204,10 @@ mod tests {
         let selected = app.timeline.selected.clone();
         app.processing
             .start(&app.tracks, &selected, Process::Reverse);
+        // The status bar's spinner keeps repainting while it works.
         while h.state().processing.busy() > 0 {
-            h.run();
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
         h.run();
         let processed = h.state().tracks[0].clips[0].asset.clone();

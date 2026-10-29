@@ -141,7 +141,7 @@ jobs:
 
   # The phone remote's Android app (android/README.md): the shared
   # core's tests, then a debug package to sideload on the owner's phone
-  # (docs/review-queue/2.2-phone-remote.md).
+  # (docs/review-queue/2.2-phone-remote.md), on main only.
   android:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -153,10 +153,17 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Core tests and the app package
+      - name: Core tests
         working-directory: android
-        run: ./gradlew --no-daemon test assembleDebug
+        run: ./gradlew --no-daemon test
+      # The app package is built on main and when run by hand only, like
+      # the Windows app: pull requests build no app for any platform.
+      - name: The app package
+        if: github.event_name != 'pull_request'
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
       - name: Upload the Android app
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: daw-remote-android

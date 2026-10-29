@@ -1308,6 +1308,54 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_room_comes_with_the_app_and_the_project_names_it() {
+        let dir = scratch("room");
+        let mut h = harness();
+        let rate = h.state().rate;
+        h.state_mut().add_file(&tone(&dir, rate));
+        until(&mut h, |a| !a.tracks.is_empty());
+        let room = daw_effects::library::find("room:cathedral-york-minster").unwrap();
+        let reference = daw_effects::library::reference(room);
+
+        let app = h.state_mut();
+        let mut slot = app.effects.create_builtin(Kind::Convolution, rate);
+        builtin_of(&slot).set(2, 100.0);
+        app.effects
+            .set_response(&mut slot, &reference, rate)
+            .unwrap();
+        app.tracks[0].fx.push(slot);
+        app.rebuild();
+        h.run();
+        let frames = rate as usize * 2;
+        let heard = render(h.state_mut(), frames);
+        // The cathedral rings on after the second of tone ends.
+        assert!(peak(&heard[rate as usize * 3..]) > 1e-3);
+
+        // Saved by name only: nothing is copied into the project.
+        let song = dir.join("Song");
+        let ctx = h.ctx.clone();
+        h.state_mut().save_in(&ctx, &song).unwrap();
+        h.run();
+        let (_, bytes) = ProjectFolder::open(&song).unwrap();
+        let doc = ProjectDoc::from_bytes(&bytes, 1).unwrap();
+        let e = &doc.get().tracks[0].effects[0];
+        assert_eq!(e.response, reference);
+        assert!(!doc.assets_in_use().contains(&e.response));
+        assert!(!ProjectFolder { dir: song.clone() }.has_asset(&e.response));
+        drop(h);
+
+        // Reopened: the same room, heard the same.
+        let mut h = harness();
+        h.state_mut().open_project(song.clone());
+        until(&mut h, |a| !a.proj.loading());
+        h.run();
+        assert!(!builtin(h.state(), 0).response_missing());
+        let again = render(h.state_mut(), frames);
+        let worst = (heard.iter().zip(&again)).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(worst < 1e-3, "{worst}");
+    }
+
+    #[test]
     fn a_missing_response_file_is_kept_by_name() {
         let mut h = harness();
         let rate = h.state().rate;

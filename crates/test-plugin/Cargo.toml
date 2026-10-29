@@ -25,3 +25,7 @@ crash-on-load = []
 hang-on-load = []
 # The effect refuses every processing setup.
 refuse-setup = []
+# Aborts the process on its first block of audio.
+crash-on-process = []
+# Never returns from its first block of audio.
+hang-on-process = []

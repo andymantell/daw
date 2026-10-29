@@ -22,12 +22,12 @@ const RATE: f64 = 48_000.0;
 const BLOCK: usize = 256;
 
 fn scanner() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_daw-plugin-scan"))
+    Path::new(env!("CARGO_BIN_EXE_daw-plugin-helper"))
 }
 
 /// Runs a block of ones through `fx` and returns the left channel after
 /// the plugin's latency.
-fn ones_through(fx: &mut daw_plugins::Processor) -> Vec<f32> {
+fn ones_through(fx: &mut daw_plugins::LocalProcessor) -> Vec<f32> {
     let (mut a, mut b) = (vec![1.0; BLOCK], vec![1.0; BLOCK]);
     fx.process(&mut a, &mut b);
     a.split_off(LATENCY as usize)

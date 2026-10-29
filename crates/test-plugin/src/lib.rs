@@ -11,8 +11,8 @@
 //! at the event's exact sample offset and each note-off writes
 //! −velocity×gain, so the host's note timing can be checked to the sample.
 //!
-//! Cargo features build broken variants (crash or hang on load, refuse
-//! processing setup) for testing how the host copes.
+//! Cargo features build broken variants (crash or hang on load or while
+//! processing, refuse processing setup) for testing how the host copes.
 //!
 //! Written for this project from the public VST 3 interface definitions.
 
@@ -222,6 +222,14 @@ impl IAudioProcessorTrait for Processor {
         kResultOk
     }
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+        if cfg!(feature = "crash-on-process") {
+            std::process::abort();
+        }
+        if cfg!(feature = "hang-on-process") {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
         let data = unsafe { &*data };
 
         // Apply the last queued gain value for this block.

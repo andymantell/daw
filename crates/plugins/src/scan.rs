@@ -8,12 +8,13 @@
 //! kept in a [`PluginList`] saved as text, and a bundle is scanned again
 //! only when its modification time changes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::host::Sandbox;
 use crate::module::{ClassInfo, Module, Result, cid_from_hex, cid_to_hex};
 
 /// The argument that makes the app scan one bundle and exit.
@@ -202,6 +203,8 @@ pub struct Available {
     pub bundle: PathBuf,
     pub class: ClassInfo,
     pub enabled: bool,
+    /// Where the user wants it to run.
+    pub sandbox: Sandbox,
 }
 
 /// Every scanned bundle, and which plugins the user has turned off.
@@ -210,6 +213,8 @@ pub struct PluginList {
     pub bundles: Vec<BundleEntry>,
     /// Class IDs (hex) the user disabled.
     pub disabled: BTreeSet<String>,
+    /// Where each plugin runs, by class ID (hex), where the user chose.
+    pub sandbox: BTreeMap<String, Sandbox>,
 }
 
 impl PluginList {
@@ -259,6 +264,7 @@ impl PluginList {
                     .map(|c| Available {
                         bundle: b.path.clone(),
                         enabled: !self.disabled.contains(&cid_to_hex(&c.cid)),
+                        sandbox: self.sandbox_of(&c.cid),
                         class: c.clone(),
                     })
             })
@@ -283,6 +289,18 @@ impl PluginList {
         }
     }
 
+    /// Where a plugin runs: the user's choice, or the default.
+    pub fn sandbox_of(&self, cid: &vst3::Steinberg::TUID) -> Sandbox {
+        self.sandbox
+            .get(&cid_to_hex(cid))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn set_sandbox(&mut self, cid: &vst3::Steinberg::TUID, sandbox: Sandbox) {
+        self.sandbox.insert(cid_to_hex(cid), sandbox);
+    }
+
     /// Forgets a bundle's result so the next rescan tries it again.
     pub fn forget(&mut self, bundle: &Path) {
         self.bundles.retain(|b| b.path != bundle);
@@ -305,6 +323,9 @@ impl PluginList {
         }
         for d in &self.disabled {
             let _ = writeln!(s, "disabled\t{d}");
+        }
+        for (cid, sb) in &self.sandbox {
+            let _ = writeln!(s, "sandbox\t{cid}\t{}", sb.key());
         }
         s
     }
@@ -335,6 +356,11 @@ impl PluginList {
                 }
                 ["disabled", d] => {
                     list.disabled.insert(d.to_string());
+                }
+                ["sandbox", cid, key] => {
+                    if let Some(sb) = Sandbox::from_key(key) {
+                        list.sandbox.insert(cid.to_string(), sb);
+                    }
                 }
                 _ => {}
             }

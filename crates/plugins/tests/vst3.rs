@@ -32,7 +32,7 @@ fn scanning_finds_both_classes_in_a_child_process() {
     let dirs = vec![b.parent().unwrap().to_owned()];
     assert_eq!(scan::find_bundles(&dirs), vec![b.clone()]);
 
-    let exe = Path::new(env!("CARGO_BIN_EXE_daw-plugin-scan"));
+    let exe = Path::new(env!("CARGO_BIN_EXE_daw-plugin-helper"));
     let mut list = PluginList::default();
     let mut seen = Vec::new();
     list.rescan(
@@ -64,7 +64,7 @@ fn a_bundle_that_will_not_load_is_reported_not_fatal() {
     let bad = dir.join("Broken.vst3");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(&bad, b"not a plugin").unwrap();
-    let exe = Path::new(env!("CARGO_BIN_EXE_daw-plugin-scan"));
+    let exe = Path::new(env!("CARGO_BIN_EXE_daw-plugin-helper"));
     let err = scan::scan_in_child(exe, &bad, Duration::from_secs(60)).unwrap_err();
     assert!(err.contains("could not load"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);

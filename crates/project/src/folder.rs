@@ -87,6 +87,18 @@ impl ProjectFolder {
         fs::rename(&tmp, &doc).map_err(err)
     }
 
+    /// Like [`save`](Self::save), but the backup becomes a copy of the
+    /// new document rather than the old one: for when the old one holds
+    /// something that was deleted, such as a comment.
+    pub fn save_dropping_backup(&self, bytes: &[u8]) -> Result<(), String> {
+        self.save(bytes)?;
+        let doc = self.dir.join(DOC_FILE);
+        let err = |e: std::io::Error| format!("could not save {}: {e}", doc.display());
+        let tmp = doc.with_extension("daw.tmp");
+        fs::write(&tmp, bytes).map_err(err)?;
+        fs::rename(&tmp, backup(&doc)).map_err(err)
+    }
+
     /// Writes this computer's own copy of the document, named by
     /// `device`, whole or not at all.
     pub fn save_device(&self, device: &str, bytes: &[u8]) -> Result<(), String> {

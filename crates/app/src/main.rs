@@ -4,7 +4,7 @@
 //! and count-in, choose the audio device, and record: per track input, arm and monitor, with takes kept
 //! and switchable; VST 3 effects as track inserts; a tuner and practice
 //! mute; export of the mix and stems to WAV; a timeline to edit clips
-//! and mark sections.
+//! and mark sections; comments pinned to times in the song.
 //!
 //! Usage: `daw [file ...]`, or drop audio or video files on the window:
 //! WAV, MP3, FLAC, OGG, AAC/M4A, AIFF, or the sound of an MP4, MOV or MKV
@@ -14,6 +14,7 @@
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
+mod comments;
 mod export;
 mod fx;
 mod latency;
@@ -189,6 +190,9 @@ struct App {
     /// Lesson notes, and whether their window is open.
     notes: String,
     notes_open: bool,
+    /// Pinned comments, as in the project, and their panel.
+    comments: Vec<daw_project::Comment>,
+    comment_ui: comments::Comments,
     shortcuts_open: bool,
     proj: project::Proj,
     latency: latency::Latency,
@@ -305,6 +309,8 @@ impl App {
             perf: perf::Perf::default(),
             notes: String::new(),
             notes_open: false,
+            comments: Vec::new(),
+            comment_ui: comments::Comments::default(),
             shortcuts_open: false,
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
@@ -758,6 +764,42 @@ impl App {
         self.notes_open = open;
     }
 
+    /// Who this user is, for the comments they write: this computer's id
+    /// until projects have members, when it becomes the member's key.
+    pub(crate) fn my_author_id(&self) -> String {
+        if cfg!(test) {
+            "me".into()
+        } else {
+            share::device_id().to_string()
+        }
+    }
+
+    /// The comments panel, at the side.
+    fn comments_panel(&mut self, ui: &mut egui::Ui) {
+        let map = self.tempo_map();
+        let tracks: Vec<(String, String)> = (self.tracks.iter())
+            .map(|t| (t.key.clone(), t.name.clone()))
+            .collect();
+        let at = |bar: i64| map.frames_at(map.bar_start(bar)).0;
+        let me = self.my_author_id();
+        let cx = comments::Ctx {
+            map: &map,
+            playhead: self.ctl.status().position().0,
+            loop_frames: self
+                .looping
+                .then(|| (at(self.loop_bars.0), at(self.loop_bars.1))),
+            tracks: &tracks,
+            me: &me,
+        };
+        let out = self.comment_ui.panel(ui, &mut self.comments, &cx);
+        if let Some(f) = out.play_from {
+            self.send(Command::Seek(Frames(f)));
+            if !self.ctl.status().playing() {
+                self.toggle_play();
+            }
+        }
+    }
+
     /// Runs `f` on the timeline and the song it edits.
     fn with_song<R>(&mut self, f: impl FnOnce(&mut timeline::Timeline, &mut Song) -> R) -> R {
         let mut song = Song {
@@ -775,6 +817,8 @@ impl App {
     /// The timeline, with its outcome acted on.
     fn timeline(&mut self, ui: &mut egui::Ui) {
         let map = self.tempo_map();
+        let ids: Vec<String> = self.tracks.iter().map(|t| t.key.clone()).collect();
+        let pins = self.comment_ui.pins(&self.comments, &ids);
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -783,8 +827,19 @@ impl App {
             loop_bars: self.looping.then_some(self.loop_bars),
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
+            pins: &pins,
         };
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
+        if let Some(id) = out.pin {
+            self.comment_ui.show_thread(&id);
+        }
+        if let Some((lane, at)) = out.comment_at {
+            self.comment_ui.write_at(comments::Target {
+                track: lane.and_then(|l| self.tracks.get(l)).map(|t| t.key.clone()),
+                start: at,
+                end: None,
+            });
+        }
         if out.undo {
             self.undo(ui.ctx());
         }
@@ -1884,6 +1939,10 @@ impl eframe::App for App {
                         self.notes_open = true;
                         ui.close();
                     }
+                    if ui.button("Comments…").clicked() {
+                        self.comment_ui.open = true;
+                        ui.close();
+                    }
                 });
                 ui.menu_button("Help", |ui| {
                     if ui.button("Keyboard shortcuts…").clicked() {
@@ -1962,6 +2021,12 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.mixer(ui));
             });
+        if self.comment_ui.open {
+            egui::Panel::right("comments")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ui, |ui| self.comments_panel(ui));
+        }
         egui::CentralPanel::default().show(ui, |ui| self.timeline(ui));
         self.device_window(&ctx);
         self.latency_window(&ctx);

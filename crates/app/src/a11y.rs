@@ -98,9 +98,27 @@ fn every_control_has_a_spoken_name() {
     app.export.open = true;
     app.notes_open = true;
     app.shortcuts_open = true;
+    app.comment_ui.open = true;
+    app.comments.push(daw_project::Comment {
+        id: "c1".into(),
+        author: "me".into(),
+        parent: None,
+        track: None,
+        start: 0,
+        end: None,
+        text: "Rushing here".into(),
+        resolved: false,
+        created: 0,
+    });
     h.run();
     assert_eq!(unspoken(&h), Vec::<String>::new());
-    for name in ["Driver", "Rescan", "Add effect"] {
+    for name in [
+        "Driver",
+        "Rescan",
+        "Add effect",
+        "New comment",
+        "Delete comment: Rushing here",
+    ] {
         assert!(
             names(&h).iter().any(|n| n == name),
             "no control named {name}"
@@ -387,4 +405,51 @@ fn a_clip_can_be_dragged_to_another_track() {
     assert!(h.state().tracks[0].clips.is_empty(), "left Guitar");
     assert_eq!(h.state().tracks[1].clips.len(), 1, "landed on Bass");
     assert!(h.query_by_label_contains("backing on Bass").is_some());
+}
+
+/// A comment written, replied to, resolved and deleted in the panel ends
+/// up in the project document each time.
+#[test]
+fn comments_are_written_and_deleted_through_the_panel() {
+    let mut h = with_tracks();
+    h.state_mut().comment_ui.open = true;
+    h.run();
+    h.get_by_label("New comment").focus();
+    h.run();
+    h.get_by_label("New comment").type_text("Rushing here");
+    h.run();
+    h.get_by_label("Add comment").click();
+    h.run();
+    let doc = |h: &Harness<'_, App>| h.state().proj.doc.get().comments;
+    assert_eq!(doc(&h).len(), 1);
+    assert_eq!(doc(&h)[0].text, "Rushing here");
+    assert_eq!(doc(&h)[0].author, "me");
+
+    h.get_by_label("Reply").click();
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Reply")
+        .focus();
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Reply")
+        .type_text("Better now");
+    h.run();
+    h.get_by_label("Send reply").click();
+    h.run();
+    h.get_by_label("Resolve").click();
+    h.run();
+    let c = doc(&h);
+    assert_eq!(c.len(), 2);
+    let root = c.iter().find(|c| c.parent.is_none()).unwrap();
+    let reply = c.iter().find(|c| c.parent.is_some()).unwrap();
+    assert_eq!(reply.parent.as_deref(), Some(root.id.as_str()));
+    assert_eq!(reply.text, "Better now");
+    assert!(root.resolved);
+
+    h.state_mut().comment_ui.show_resolved = true;
+    h.run();
+    h.get_by_label("Delete comment: Rushing here").click();
+    h.run();
+    h.get_by_label("Delete it and its replies for good").click();
+    h.run();
+    assert!(doc(&h).is_empty());
 }

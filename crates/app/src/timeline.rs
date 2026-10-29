@@ -2,7 +2,7 @@
 //! The timeline (roadmap 1.5): each track's clips on a lane, with their
 //! waveforms. Select, move, trim, split and delete clips, snapped to
 //! beats or bars; markers on bar lines name the song's sections, and a
-//! section can be looped. Undo belongs to the project document; the
+//! section can be looped. Comments show as pins. Undo belongs to the project document; the
 //! timeline only asks for it.
 
 use std::collections::{HashMap, HashSet};
@@ -405,6 +405,19 @@ impl Song<'_> {
     }
 }
 
+/// A comment thread's pin on the timeline.
+pub struct Pin {
+    pub id: String,
+    /// The lane it is on, or `None` for the whole song.
+    pub lane: Option<usize>,
+    pub start: i64,
+    pub end: Option<i64>,
+    pub resolved: bool,
+    pub selected: bool,
+    /// The start of its text, shown on hover.
+    pub text: String,
+}
+
 /// Where things are, for one frame.
 pub struct View<'a> {
     pub map: &'a TempoMap,
@@ -414,6 +427,7 @@ pub struct View<'a> {
     pub loop_bars: Option<(i64, i64)>,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub pins: &'a [Pin],
 }
 
 /// What the app should do after the timeline is drawn.
@@ -426,6 +440,10 @@ pub struct Outcome {
     pub loop_bars: Option<(i64, i64)>,
     pub undo: bool,
     pub redo: bool,
+    /// A comment's pin was clicked.
+    pub pin: Option<String>,
+    /// Write a comment here: on a lane (or the whole song) at a frame.
+    pub comment_at: Option<(Option<usize>, i64)>,
 }
 
 /// Frames between waveform peaks at the finest level.
@@ -523,6 +541,7 @@ enum Zone {
 enum Hit {
     Ruler,
     Marker(usize),
+    Pin(usize),
     Clip { id: u64, zone: Zone },
     Lane,
 }
@@ -573,6 +592,8 @@ pub struct Timeline {
     waves: Waveforms,
     /// What was right-clicked, and where (timeline frame).
     menu: Option<(Hit, i64)>,
+    /// The lane right-clicked, or `None` for the ruler.
+    menu_lane: Option<usize>,
     /// A marker being renamed: its index and the text so far.
     rename: Option<(usize, String)>,
     /// The rename field has been given the keyboard.
@@ -595,6 +616,7 @@ impl Default for Timeline {
             scrubbing: false,
             waves: Waveforms::default(),
             menu: None,
+            menu_lane: None,
             rename: None,
             rename_focused: false,
             focus: None,
@@ -608,6 +630,13 @@ const HEADER: f32 = 110.0;
 const RULER: f32 = 26.0;
 /// Edge grab width for trimming, in points.
 const EDGE: f32 = 6.0;
+/// A comment pin's bubble.
+const PIN: egui::Vec2 = vec2(14.0, 11.0);
+
+/// A pin's bubble, ending at `x` with its top at `top`.
+fn pin_rect(x: f32, top: f32) -> Rect {
+    Rect::from_min_size(pos2(x - PIN.x, top + 1.0), PIN - vec2(0.0, 1.0))
+}
 
 const COLOURS: [Color32; 6] = [
     Color32::from_rgb(70, 130, 200),
@@ -1102,6 +1131,15 @@ impl Timeline {
             if !rect.contains(pos) || pos.x < left {
                 return None;
             }
+            for (i, p) in view.pins.iter().enumerate() {
+                let top = match p.lane {
+                    Some(l) => lane_top(l),
+                    None => rect.top() + RULER - PIN.y,
+                };
+                if pin_rect(x_of(p.start), top).expand(2.0).contains(pos) {
+                    return Some(Hit::Pin(i));
+                }
+            }
             if pos.y < rect.top() + RULER {
                 for (i, m) in song.markers.iter().enumerate() {
                     let x = x_of(view.map.frames_at(view.map.bar_start(m.bar)).0);
@@ -1282,6 +1320,10 @@ impl Timeline {
                     }
                     self.focus_next = Some(Focus::Clip(id));
                 }
+                Some(Hit::Pin(i)) => {
+                    out.pin = Some(view.pins[i].id.clone());
+                    out.seek = Some(view.pins[i].start);
+                }
                 Some(Hit::Marker(i)) => {
                     // To the start of its section.
                     let bar = view.map.bar_start(song.markers[i].bar);
@@ -1306,6 +1348,9 @@ impl Timeline {
             && let Some(p) = resp.interact_pointer_pos()
         {
             self.menu = hit(p, song).map(|h| (h, frame_of(p.x).max(0)));
+            self.menu_lane = (p.y >= rect.top() + RULER)
+                .then(|| ((p.y - rect.top() - RULER + vscroll) / lane_h) as usize)
+                .filter(|&l| l < song.lanes.len());
             if let Some((Hit::Clip { id, .. }, _)) = self.menu
                 && !self.selected.contains(&id)
             {
@@ -1605,6 +1650,56 @@ impl Timeline {
             }
         }
 
+        // Comment pins: a band over what a range covers, and a bubble at
+        // the start.
+        let hover = resp.hover_pos();
+        for p in view.pins {
+            let colour = if p.resolved {
+                visuals.weak_text_color()
+            } else {
+                crate::comments::COLOUR
+            };
+            let x = x_of(p.start);
+            let (top, bottom) = match p.lane {
+                Some(l) => (lane_top(l), lane_top(l) + lane_h),
+                None => (rect.top() + RULER, rect.bottom()),
+            };
+            if let Some(e) = p.end {
+                let band = Rect::from_x_y_ranges(x.max(left)..=x_of(e).max(left), top..=bottom);
+                let alpha = if p.selected { 0.22 } else { 0.1 };
+                lanes.rect_filled(band, 0.0, colour.gamma_multiply(alpha));
+            }
+            let line = Stroke::new(if p.selected { 2.0 } else { 1.0 }, colour);
+            lanes.line_segment([pos2(x, top), pos2(x, bottom)], line);
+            let bubble_top = match p.lane {
+                Some(_) => top,
+                None => rect.top() + RULER - PIN.y,
+            };
+            let r = pin_rect(x, bubble_top);
+            let on = if p.lane.is_some() { &lanes } else { &painter };
+            on.rect_filled(r, 3.0, colour);
+            if p.selected {
+                on.rect_stroke(
+                    r,
+                    3.0,
+                    Stroke::new(1.5, Color32::WHITE),
+                    StrokeKind::Outside,
+                );
+            }
+            if hover.is_some_and(|h| r.expand(2.0).contains(h)) {
+                let g = painter.layout_no_wrap(
+                    p.text.clone(),
+                    FontId::proportional(12.0),
+                    visuals.text_color(),
+                );
+                let tip =
+                    Rect::from_min_size(r.right_top() + vec2(4.0, 0.0), g.size() + vec2(8.0, 4.0));
+                painter.rect_filled(tip, 3.0, visuals.window_fill);
+                painter.rect_stroke(tip, 3.0, Stroke::new(1.0, colour), StrokeKind::Inside);
+                painter.galley(tip.min + vec2(4.0, 2.0), g, visuals.text_color());
+            }
+        }
+
         // Playhead.
         let px = x_of(view.playhead);
         if px >= left && px <= rect.right() {
@@ -1624,6 +1719,16 @@ impl Timeline {
                 }
                 if ui.button("Delete").clicked() {
                     out.changed |= self.delete_selected(song);
+                    ui.close();
+                }
+                if ui.button("Add comment here…").clicked() {
+                    out.comment_at = Some((self.menu_lane, snap_to(at)));
+                    ui.close();
+                }
+            }
+            Some((Hit::Pin(i), _)) if i < view.pins.len() => {
+                if ui.button("Show comment").clicked() {
+                    out.pin = Some(view.pins[i].id.clone());
                     ui.close();
                 }
             }
@@ -1646,6 +1751,14 @@ impl Timeline {
                 let bar = Self::bar_at(view.map, snap(view.map, at, Snap::Bar));
                 if ui.button(format!("Add marker at bar {bar}")).clicked() {
                     self.add_marker(song, bar);
+                    ui.close();
+                }
+                let on = match self.menu_lane.and_then(|l| song.lanes.get(l)) {
+                    Some(l) => format!("Add comment on {} here…", l.name),
+                    None => "Add comment on the whole song here…".into(),
+                };
+                if ui.button(on).clicked() {
+                    out.comment_at = Some((self.menu_lane, snap_to(at)));
                     ui.close();
                 }
             }

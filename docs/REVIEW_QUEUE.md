@@ -371,6 +371,37 @@ back) and `app-lesson-notes.png`. Projects live in
       the folder syncing (the take once its audio arrives, after the next
       save), nothing is lost, and the storage leaves no conflict copies.
       Each computer adds a file under the project's `Devices` folder.
+- [ ] **1.6 Comments.** Screenshots: `app-comments.png` (the panel, with
+      a range comment on the guitar selected and a reply under it),
+      `app-comment-pin-hover.png` (a pin's text on hover) and
+      `app-comment-from-timeline.png` (a comment started from the
+      timeline's right-click menu). Practice → Comments…, or right-click a
+      track or the ruler → Add comment here…. Write one at the playhead,
+      one on the loop (turn the loop on first), and one on a track; reply
+      to one, resolve it, then press its pin and its ▶ Play from here.
+      Save, close and reopen. Pass: pins sit where they were written,
+      pressing a pin selects its thread and moves the playhead there,
+      Play from here plays from the pin, resolved ones hide until
+      "Show resolved" is ticked, and everything comes back after
+      reopening. Say whether the pins are easy to see and hit, and
+      whether comments on a stretch of time (the shaded band) are useful
+      or a range should be set some other way.
+- [ ] **1.6 Deleted comments are really gone.** Write a comment with a
+      made-up phone number, save, then delete it (Delete, then Delete
+      for good) and save again. Also export a bundle. Search
+      `project.daw`, `project.daw.bak` and the bundle for the number,
+      for example in PowerShell:
+      `Select-String -Path project.daw,project.daw.bak -Pattern 07700 -SimpleMatch`.
+      Pass: no match in any of them. (The automated tests already check
+      this on the saved bytes and on the whole edit history.) Known
+      limits: copies already sent, and another computer's file in the
+      shared folder's `Devices`, keep the text until that computer opens
+      the project and saves.
+- [ ] **1.6 Who wrote a comment.** Until identity lands, comments show
+      "You" for ones written on this computer and "Someone else" for the
+      rest, and anyone can edit or delete any comment. Identity will show
+      names and limit commenters to their own. Nothing to test yet; say
+      if this order is fine.
 - [ ] **1.7 Lesson notes.** Practice → Lesson notes…, type a few lines,
       save, reopen. Pass: the notes come back. They are plain text for
       now; say what you would want first: headings, tab blocks pinned
@@ -473,4 +504,8 @@ items.
       linked to one person by key. Accept, or keep one key per install.
 - [ ] **Real deletion out of history:** deleting a comment, note or take
       removes it from the saved file and bundles. Useful anyway; confirm it
-      joins the 1.6 work, or leave it for later.
+      joins the 1.6 work, or leave it for later. *Done for comments on
+      2026-10-28 (deleted comments and the old text of edited ones are
+      blanked out of the saved history, backup and bundles). Lesson notes'
+      deleted text is still kept in history; say if notes should get the
+      same treatment next.*

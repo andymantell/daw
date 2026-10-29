@@ -354,7 +354,11 @@ fn unpack(path: &std::path::Path, into: Dest, dir: PathBuf) -> Result<Imported, 
             let (folder, mut doc, _) = daw_collab::open_doc(&dir, daw_project::new_peer())?;
             doc.merge(&b.doc)?;
             let bytes = doc.to_bytes();
-            folder.save(&bytes)?;
+            if doc.take_dropped() {
+                folder.save_dropping_backup(&bytes)?;
+            } else {
+                folder.save(&bytes)?;
+            }
             folder.save_device(device_id(), &bytes)?;
         }
         Dest::New => {

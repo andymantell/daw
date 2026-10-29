@@ -14,12 +14,14 @@ mod model;
 
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
-pub use model::{Clip, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings};
+pub use model::{
+    Clip, Comment, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings,
+};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A new id for a track, clip, effect or marker: 16 hex digits, unique
+/// A new id for a track, clip, effect, marker or comment: 16 hex digits, unique
 /// enough that two people adding things at once never pick the same one.
 pub fn new_id() -> String {
     format!("{:016x}", random_u64())

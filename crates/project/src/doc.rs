@@ -3,21 +3,32 @@
 //!
 //! Layout: a `song` map of settings, a `tracks` map from id to track,
 //! with the track order in the movable list `order`, a `markers` map, and
-//! the lesson notes as text. A track is a map of its settings, a `clips`
+//! the lesson notes as text, and a `comments` map from id to comment. A
+//! track is a map of its settings, a `clips`
 //! map from id to clip, an `fx` map from id to effect and the effect
 //! order in the movable list `fx_order`. Every field is its own map entry,
 //! so two people changing different fields of the same clip both keep
 //! their change. A `practice` map holds each person's practice settings
 //! under their own key, which only they write.
+//!
+//! Deleting a comment, or changing its text, has to take the old words
+//! out of the file too, not just out of the project as it stands: the
+//! document keeps its whole history, so they could otherwise be read
+//! back. [`ProjectDoc::to_bytes`] blanks every value that comments no
+//! longer show in the copy it writes (see [`scrub`]).
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use loro::{
-    ExportMode, LoroDoc, LoroMap, LoroMapValue, LoroMovableList, LoroText, LoroValue, UndoManager,
+    ContainerID, ContainerTrait, ExportMode, JsonMapOp, JsonOpContent, JsonSchema, LoroDoc,
+    LoroError, LoroMap, LoroMapValue, LoroMovableList, LoroText, LoroValue, UndoManager,
     UpdateOptions, VersionVector,
 };
 
-use crate::{Clip, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings};
+use crate::{
+    Clip, Comment, Effect, EffectState, Marker, Practice, Project, Track, TrainerSettings,
+};
 
 /// Commits with this origin (plugin state written at save time) are left
 /// out of undo.
@@ -26,6 +37,14 @@ const QUIET: &str = "quiet";
 pub struct ProjectDoc {
     doc: LoroDoc,
     undo: UndoManager,
+    /// Whether the history may hold comment text that comments no longer
+    /// show, so saving has to scrub it.
+    scrub: bool,
+    /// Whether a comment was deleted or changed since
+    /// [`take_dropped`](Self::take_dropped) was last asked.
+    dropped: bool,
+    /// The last scrubbed copy, and the version it was made at.
+    scrubbed: RefCell<Option<(VersionVector, Vec<u8>)>>,
 }
 
 impl ProjectDoc {
@@ -43,7 +62,11 @@ impl ProjectDoc {
         doc.import(bytes)
             .map_err(|e| format!("not a project file, or damaged: {e}"))?;
         doc.set_peer_id(peer).map_err(|e| e.to_string())?;
-        Ok(ProjectDoc::wrap(doc))
+        let mut d = ProjectDoc::wrap(doc);
+        // Written by an older version, or by a copy that hadn't heard of
+        // a deletion yet: check on the first save.
+        d.scrub = true;
+        Ok(d)
     }
 
     fn wrap(doc: LoroDoc) -> ProjectDoc {
@@ -52,12 +75,74 @@ impl ProjectDoc {
         undo.set_merge_interval(0);
         undo.set_max_undo_steps(500);
         undo.add_exclude_origin_prefix(QUIET);
-        ProjectDoc { doc, undo }
+        ProjectDoc {
+            doc,
+            undo,
+            scrub: false,
+            dropped: false,
+            scrubbed: RefCell::new(None),
+        }
     }
 
-    /// The whole document, history included, for saving.
+    /// The whole document, history included, for saving or sending,
+    /// with the text of deleted comments, and the old text of changed
+    /// ones, blanked out of the history.
     pub fn to_bytes(&self) -> Vec<u8> {
+        if !self.scrub {
+            return self.raw_bytes();
+        }
+        let vv = self.doc.oplog_vv();
+        if let Some((at, bytes)) = &*self.scrubbed.borrow()
+            && *at == vv
+        {
+            return bytes.clone();
+        }
+        let bytes = self.scrubbed_bytes().unwrap_or_else(|| self.raw_bytes());
+        *self.scrubbed.borrow_mut() = Some((vv, bytes.clone()));
+        bytes
+    }
+
+    /// Whether a comment has been deleted or changed (here or by someone
+    /// else) since this was last asked. Saving should then not keep the
+    /// save before as a backup, as it still holds the old text.
+    pub fn take_dropped(&mut self) -> bool {
+        std::mem::take(&mut self.dropped)
+    }
+
+    /// The document exactly as it is, history and all.
+    pub fn raw_bytes(&self) -> Vec<u8> {
         self.doc.export(ExportMode::Snapshot).unwrap_or_default()
+    }
+
+    /// A copy with the history scrubbed, checked to show the same
+    /// project. `None` if that fails, which should not happen.
+    fn scrubbed_bytes(&self) -> Option<Vec<u8>> {
+        let mut json = self
+            .doc
+            .export_json_updates_without_peer_compression(
+                &VersionVector::new(),
+                &self.doc.oplog_vv(),
+            )
+            .ok()?;
+        let live: HashSet<ContainerID> = self.comment_maps().into_iter().collect();
+        if scrub(&mut json, &self.comments().id(), &live) == 0 {
+            return Some(self.raw_bytes());
+        }
+        let copy = LoroDoc::new();
+        copy.import_json_updates(json).ok()?;
+        (shown(&copy) == shown(&self.doc))
+            .then(|| copy.export(ExportMode::Snapshot).ok())
+            .flatten()
+    }
+
+    /// The containers of the comments the project shows now.
+    fn comment_maps(&self) -> Vec<ContainerID> {
+        let comments = self.comments();
+        keys(&comments)
+            .iter()
+            .filter_map(|k| comments.get(k)?.into_container().ok()?.into_map().ok())
+            .map(|m| m.id())
+            .collect()
     }
 
     /// This document's version, to ask another copy for what is new.
@@ -75,10 +160,30 @@ impl ProjectDoc {
 
     /// Merges changes or a whole document from another copy.
     pub fn merge(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.doc
-            .import(bytes)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        let before = self.comments().get_deep_value();
+        if let Err(e) = self.doc.import(bytes) {
+            // A copy that was scrubbed, or wasn't when this one was, holds
+            // different values for changes both have, which Loro refuses
+            // as a clash. Take only the changes this copy lacks.
+            if !matches!(e, LoroError::UsedOpID { .. }) {
+                return Err(e.to_string());
+            }
+            let theirs = LoroDoc::new();
+            theirs.import(bytes).map_err(|e| e.to_string())?;
+            let new = theirs
+                .export(ExportMode::updates(&self.doc.oplog_vv()))
+                .map_err(|e| e.to_string())?;
+            self.doc.import(&new).map_err(|e| e.to_string())?;
+        }
+        // Someone else may have deleted or changed a comment, or sent
+        // history that still holds old text.
+        if self.comments().get_deep_value() != before {
+            self.scrub = true;
+            self.dropped = true;
+        } else if !self.comments().is_empty() {
+            self.scrub = true;
+        }
+        Ok(())
     }
 
     /// Writes what differs from `p` as one undoable edit. True if
@@ -202,6 +307,10 @@ impl ProjectDoc {
         })
     }
 
+    fn comments(&self) -> LoroMap {
+        self.doc.get_map("comments")
+    }
+
     fn write(&mut self, p: &Project) -> bool {
         let mut w = Writer::default();
         let song = self.song();
@@ -243,6 +352,31 @@ impl ProjectDoc {
         if notes.to_string() != p.notes {
             let _ = notes.update(&p.notes, UpdateOptions::default());
             w.changed = true;
+        }
+
+        let comments = self.comments();
+        let keep: HashSet<&str> = p.comments.iter().map(|c| c.id.as_str()).collect();
+        for id in keys(&comments) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&comments, &id);
+                self.scrub = true;
+                self.dropped = true;
+            }
+        }
+        for c in &p.comments {
+            let m = w.child(&comments, &c.id);
+            let had = m.get("text").is_some();
+            if w.put(&m, "text", c.text.as_str()) && had {
+                self.scrub = true;
+                self.dropped = true;
+            }
+            w.put(&m, "author", c.author.as_str());
+            w.put(&m, "parent", opt_str(&c.parent));
+            w.put(&m, "track", opt_str(&c.track));
+            w.put(&m, "start", c.start);
+            w.put(&m, "end", c.end.map_or(LoroValue::Null, LoroValue::I64));
+            w.put(&m, "resolved", c.resolved);
+            w.put(&m, "created", c.created);
         }
         w.changed
     }
@@ -304,8 +438,126 @@ impl ProjectDoc {
         if let Some(LoroValue::String(s)) = root.get("notes") {
             p.notes = s.to_string();
         }
+        if let Some(LoroValue::Map(cs)) = root.get("comments") {
+            for (id, c) in cs.iter() {
+                let LoroValue::Map(c) = c else { continue };
+                p.comments.push(Comment {
+                    id: id.to_string(),
+                    author: string(c, "author").unwrap_or_default(),
+                    parent: string(c, "parent"),
+                    track: string(c, "track"),
+                    start: int(c, "start").unwrap_or(0),
+                    end: int(c, "end"),
+                    text: string(c, "text").unwrap_or_default(),
+                    resolved: boolean(c, "resolved").unwrap_or(false),
+                    created: int(c, "created").unwrap_or(0),
+                });
+            }
+        }
+        p.comments
+            .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
         p
     }
+}
+
+/// Blanks, in `json` (a document's whole history), every value written
+/// into a comment that the document no longer shows: all of a deleted
+/// comment's fields, and the values a comment's fields had before they
+/// were last changed. Comments are the maps put into `root`; `live` are
+/// the ones still there. Returns how many values it blanked.
+///
+/// Only values are blanked, the same way `loro::json::redact` does, so
+/// every change keeps its id and the scrubbed copy still merges with
+/// copies that were never scrubbed: merging never brings the old text
+/// back, as those changes are already there.
+///
+/// `json` must be exported without peer compression, so that peers and
+/// container ids are written out in full.
+fn scrub(json: &mut JsonSchema, root: &ContainerID, live: &HashSet<ContainerID>) -> usize {
+    // Every comment there has ever been.
+    let mut ever: HashSet<ContainerID> = HashSet::new();
+    for ch in &json.changes {
+        for op in &ch.ops {
+            if op.container == *root
+                && let JsonOpContent::Map(JsonMapOp::Insert {
+                    value: LoroValue::Container(c),
+                    ..
+                }) = &op.content
+            {
+                ever.insert(c.clone());
+            }
+        }
+    }
+    // In a live comment, the write to each field that wins: the latest
+    // by Lamport time, then by peer, as Loro's maps decide.
+    let mut wins: HashMap<(&ContainerID, &str), (u32, u64)> = HashMap::new();
+    for ch in &json.changes {
+        for op in &ch.ops {
+            if !live.contains(&op.container) {
+                continue;
+            }
+            let key = match &op.content {
+                JsonOpContent::Map(JsonMapOp::Insert { key, .. })
+                | JsonOpContent::Map(JsonMapOp::Delete { key }) => key.as_str(),
+                _ => continue,
+            };
+            let at = (ch.lamport + (op.counter - ch.id.counter) as u32, ch.id.peer);
+            let w = wins.entry((&op.container, key)).or_insert(at);
+            *w = (*w).max(at);
+        }
+    }
+    let wins: HashMap<(ContainerID, String), (u32, u64)> = wins
+        .into_iter()
+        .map(|((c, k), v)| ((c.clone(), k.to_string()), v))
+        .collect();
+    let mut blanked = 0;
+    for ch in &mut json.changes {
+        let (lamport, counter, who) = (ch.lamport, ch.id.counter, ch.id.peer);
+        for op in &mut ch.ops {
+            if !ever.contains(&op.container) {
+                continue;
+            }
+            let JsonOpContent::Map(JsonMapOp::Insert { key, value }) = &mut op.content else {
+                continue;
+            };
+            if matches!(value, LoroValue::Null | LoroValue::Container(_)) {
+                continue;
+            }
+            let at = (lamport + (op.counter - counter) as u32, who);
+            let keep = live.contains(&op.container)
+                && wins.get(&(op.container.clone(), key.clone())) == Some(&at);
+            if !keep {
+                *value = LoroValue::Null;
+                blanked += 1;
+            }
+        }
+    }
+    blanked
+}
+
+/// What a document shows, leaving out root containers that are empty
+/// (which a document lists only once something has asked for them).
+fn shown(doc: &LoroDoc) -> Vec<(String, LoroValue)> {
+    let LoroValue::Map(root) = doc.get_deep_value() else {
+        return Vec::new();
+    };
+    let empty = |v: &LoroValue| match v {
+        LoroValue::Map(m) => m.is_empty(),
+        LoroValue::List(l) => l.is_empty(),
+        LoroValue::String(s) => s.is_empty(),
+        _ => false,
+    };
+    let mut all: Vec<(String, LoroValue)> = root
+        .iter()
+        .filter(|(_, v)| !empty(v))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all
+}
+
+fn opt_str(s: &Option<String>) -> LoroValue {
+    s.as_deref().map_or(LoroValue::Null, LoroValue::from)
 }
 
 fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
@@ -442,13 +694,16 @@ struct Writer {
 }
 
 impl Writer {
-    fn put(&mut self, m: &LoroMap, key: &str, v: impl Into<LoroValue>) {
+    /// True if it wrote.
+    fn put(&mut self, m: &LoroMap, key: &str, v: impl Into<LoroValue>) -> bool {
         let v = v.into();
         let now = m.get(key).and_then(|x| x.into_value().ok());
         if now.as_ref() != Some(&v) {
             let _ = m.insert(key, v);
             self.changed = true;
+            return true;
         }
+        false
     }
 
     fn delete(&mut self, m: &LoroMap, key: &str) {

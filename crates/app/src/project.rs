@@ -289,16 +289,24 @@ impl App {
 
     pub(crate) fn undo(&mut self, ctx: &egui::Context) {
         self.sync_doc(ctx, true);
+        let before = self.proj.doc.get();
         if self.proj.doc.undo() {
-            self.apply(self.proj.doc.get());
+            let after = self.proj.doc.get();
+            // Plugin settings a restore changed come back too.
+            self.reload_changed_fx(&before, &after);
+            self.apply(after);
             self.proj.dirty = true;
         }
     }
 
     pub(crate) fn redo(&mut self, ctx: &egui::Context) {
         self.sync_doc(ctx, true);
+        let before = self.proj.doc.get();
         if self.proj.doc.redo() {
-            self.apply(self.proj.doc.get());
+            let after = self.proj.doc.get();
+            // Plugin settings a restore changed come back too.
+            self.reload_changed_fx(&before, &after);
+            self.apply(after);
             self.proj.dirty = true;
         }
     }
@@ -541,7 +549,7 @@ impl App {
 
     /// Reads each plugin's settings into the document. Not an edit:
     /// kept out of undo.
-    fn write_plugin_states(&mut self) {
+    pub(crate) fn write_plugin_states(&mut self) {
         let mut p = self.project();
         for (pt, t) in p.tracks.iter_mut().zip(&self.tracks) {
             for (pe, s) in pt.effects.iter_mut().zip(&t.fx) {
@@ -1069,7 +1077,7 @@ impl App {
 }
 
 /// How long ago, in words: "just now", "5 minutes ago", "2 days ago".
-fn ago(d: Duration) -> String {
+pub(crate) fn ago(d: Duration) -> String {
     let s = d.as_secs();
     let (n, unit) = match s {
         0..60 => return "just now".into(),

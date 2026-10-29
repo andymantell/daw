@@ -61,11 +61,15 @@ My Lesson.project/              (folder; a tar of it is a bundle)
   peaks/abcdef….peaks           multi-resolution waveform data
   frozen/<track-id>-<hash>.flac frozen audio for plugin tracks (Phase 1: kept with the
                                 other audio, as content-addressed 24-bit WAV)
-  snapshots/                    named CRDT state snapshots
   local/                        per-machine data, never shared (device profiles, UI layout)
 ```
 
 - **Lossless master copies** (FLAC or WAV) in `assets/`.
+- **Snapshots** are names for versions of the document, kept in the
+  document itself (its `snapshots` map), so they travel with it. Restoring
+  one writes that version's project back as a new edit; history is never
+  wound back. A snapshot needs the history up to its version, so history
+  can't be trimmed past the oldest snapshot.
 - **Garbage collection** removes unreferenced assets after a retention
   period, never while any snapshot references them.
 - **Crash safety:** recordings stream to a temporary file and are moved

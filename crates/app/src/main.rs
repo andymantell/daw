@@ -28,6 +28,7 @@ mod perf;
 mod practice;
 mod project;
 mod share;
+mod snapshots;
 mod timeline;
 mod trainer;
 mod tuner;
@@ -208,6 +209,8 @@ struct App {
     /// Pinned comments, as in the project, and their panel.
     comments: Vec<daw_project::Comment>,
     comment_ui: comments::Comments,
+    /// The snapshots window.
+    snapshot_ui: snapshots::Snapshots,
     shortcuts_open: bool,
     proj: project::Proj,
     latency: latency::Latency,
@@ -333,6 +336,7 @@ impl App {
             notes_ui: notes::Notes::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
+            snapshot_ui: snapshots::Snapshots::default(),
             shortcuts_open: false,
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
@@ -1969,6 +1973,16 @@ impl eframe::App for App {
                     ui.separator();
                     self.share_menu(ui);
                     if ui
+                        .button("Snapshots…")
+                        .on_hover_text(
+                            "Name the project as it is now, or go back to a named moment",
+                        )
+                        .clicked()
+                    {
+                        self.snapshot_ui.open = true;
+                        ui.close();
+                    }
+                    if ui
                         .button("People…")
                         .on_hover_text("Who has this project, and what they may change")
                         .clicked()
@@ -2201,6 +2215,7 @@ impl eframe::App for App {
         self.crashes.window(&ctx);
         self.project_windows(&ctx);
         self.people_windows(&ctx);
+        self.snapshots_window(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.sync_doc(&ctx, false);

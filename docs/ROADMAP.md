@@ -349,7 +349,11 @@ release workflow into draft releases. An opt-in daily update check reads
 a signed file list and only shows a note with a link. Internal errors
 (panics) write a crash report to a local folder, with names and paths
 taken out, shown at the next start; native crashes are not caught yet.
-No macOS release yet.*
+No macOS release yet. Snapshots (File → Snapshots…) name a version of
+the project document; restoring writes that version back as one
+ordinary edit, so Undo takes it back and it merges with other people's
+changes. Comments and each person's practice settings stay as they
+are.*
 - Export mixdown as WAV, plus per-track stems.
 - Snapshots ("Lesson 3 end") and restore. Autosave. Crash recovery.
 - Signed, notarised installers for Windows and macOS. Linux build

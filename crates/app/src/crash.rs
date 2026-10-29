@@ -231,7 +231,7 @@ fn is_path_start(s: &[char]) -> bool {
 }
 
 /// `2026-10-28 21:08:41` from seconds since 1970.
-fn utc(secs: u64) -> String {
+pub(crate) fn utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     // Days to a civil date (proleptic Gregorian calendar).

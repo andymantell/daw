@@ -472,6 +472,28 @@ from audio.
 - Snapshots with a diff summary. Project templates (e.g. "Guitar lesson",
   "Band demo").
 
+### 2.9 Workspace: panes and multiple screens (M)
+- **One window by default.** The timeline, mixer, editors, browser, plugin
+  editors and practice tools are panes inside the main window. They can be
+  docked, split, resized, tabbed together, collapsed and shown full-size,
+  all without leaving that window.
+- **Detach on request:** any pane can be torn off into its own window and
+  docked back again, so the app can spread over several screens (e.g.
+  timeline on one, mixer on another, plugins on a third). Off by default.
+- **Saved layouts:** name and recall arrangements ("Recording", "Mixing",
+  "Lesson"), with a key command for each.
+- **Layouts belong to the computer, not the project.** Collaborators have
+  different screens, so window positions are kept in local settings and
+  never synced. The project only remembers which panes were open.
+- **Screen changes are safe:** if a saved screen is missing (laptop
+  undocked, monitor off), its windows come back onto a screen that exists,
+  and the layout returns when the screen does. Each window follows its
+  own screen's scaling (high-DPI).
+- Keyboard focus, shortcuts and the screen reader work the same in every
+  window. Closing a detached window docks its pane back. It never closes
+  the project.
+- Toolkit support: see [research/WORKSPACE_WINDOWS.md](research/WORKSPACE_WINDOWS.md).
+
 **Exit criteria**
 - A 24+-track song with 10+ plugins can be recorded, comped, mixed with
   automation and exported with no dropouts at a 128-sample buffer on the
@@ -479,6 +501,10 @@ from audio.
 - Delay compensation is verified by automated null tests.
 - A sloppy multi-mic drum take is tightened to the grid at 70% strength,
   and the drum mics stay in phase.
+- On a three-screen setup, the timeline, mixer and a plugin editor each sit
+  on their own screen. After the app restarts with one screen unplugged,
+  every pane is still reachable, and the layout returns when the screen
+  is plugged back in.
 - From the drum stool, a phone moves the start point to bar 17, arms the
   drum tracks, records a take with count-in, and stops, with the desktop
   out of reach. Turning off the phone's Wi-Fi mid-take does not affect the

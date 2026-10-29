@@ -309,6 +309,9 @@ mod tests {
         h.state_mut().toggle_play();
         assert!(until(&mut h, 5, |a| a.ctl.captured_frames() >= 24_000));
         h.state_mut().toggle_play();
+        // The audio thread stops in its own time; until then each frame
+        // asks for another.
+        assert!(until(&mut h, 2, |a| !a.ctl.status().playing()));
         h.run();
         h.get_by_label_contains("Keep last").click();
         assert!(until(&mut h, 2, |a| !a.tracks[0].clips.is_empty()));

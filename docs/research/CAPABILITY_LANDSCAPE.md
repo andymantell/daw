@@ -61,6 +61,7 @@ end for what could not be verified.
 | Speed change without pitch change; transpose without tempo change | 1 | M | Spike 0.6. |
 | Fine pitch (cents), tuning presets (e.g. half step down → standard), detected tuning offset | 1 | M | |
 | Play-along video clips: video files with full audio features | 3 | M | |
+| Scoring to picture: filmstrip of frames on the timeline that follows zoom, frame-accurate video window, timecode ruler and frame rates incl. drop-frame, hit points with tempo fit, export wrapped into the video | 3 | M | System decoders, no shipped codecs. See [VIDEO_SCORING.md](VIDEO_SCORING.md). |
 | Online video links as synced reference clips | 3 | H | Platform terms forbid audio processing, caching and offline use. Needs an embedded web view. |
 | Chromatic tuner | 1 | L | |
 | Metronome with accents, subdivisions; tempo trainer | 1 | L | |
@@ -244,7 +245,7 @@ mixer, not only behind physical buttons.
 | Sound similarity search, auto-tagging, browser history | 8 | M | On-device analysis only. |
 | Automatic mastering assistant | 8 | M | |
 | Bounce group in place; paste as rendered audio; parallel sample loading; start screen | 3 | L | |
-| Video track | 8 | M | |
+| Post-production sync: external timecode, several video tracks, conformed edits | 8 | M | |
 
 ## 11. Collaboration (our differentiator, serverless)
 

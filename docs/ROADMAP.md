@@ -771,6 +771,38 @@ recreation. See [research/VIDEO_STEMS_REPITCH.md](research/VIDEO_STEMS_REPITCH.m
 - Needs an embedded web view (depends on decision 0007). A spike measures
   sync accuracy between an embedded player and the engine.
 
+### 3.10 Scoring to picture (L)
+**Goal:** write music to a video file. Builds on the video clips of 3.9.
+See [research/VIDEO_SCORING.md](research/VIDEO_SCORING.md).
+- **Filmstrip on the timeline:** the video clip shows its frames as a
+  strip of thumbnails, so you can see what happens when, next to the
+  music. Zooming in shows more frames, zooming out fewer; at the finest
+  zoom every frame is shown and cuts are visible. Thumbnails are built on
+  import and cached, so scrolling stays smooth.
+- **Video window:** a pane (dockable or detached, see 2.9) for watching
+  the picture, showing the frame at the playhead with a timecode overlay. Frame-accurate during
+  play, scrub and nudge: the frame shown is the one that contains the
+  playhead sample. Step forward and back one frame at a time.
+- **Timecode:** a ruler and position display in hours:minutes:seconds:frames
+  alongside bars and beats. Frame rates 23.976, 24, 25, 29.97, 30, 50, 60,
+  with drop-frame counting for 29.97 and 30 (frame numbers 0 and 1 skipped
+  at the start of each minute except every tenth, as the standard says).
+  The video's start timecode and an offset are settable, so the film's
+  timecode and the project agree.
+- **Hit points:** markers placed on frames ("door slams", "cut to
+  exterior") and shown on the ruler and in the video window. A **tempo
+  fit** tool chooses a tempo (or a tempo change) so that chosen hit
+  points land on beats or bars, and shows how close each one gets.
+- **Decoding** uses each operating system's own media framework, so we
+  ship no codec code and rely on the decoders the system already has.
+  Decoded frames are cached at a reduced size for smooth scrubbing, with
+  full size for the current frame.
+- **The video's own sound** is an ordinary audio clip (3.9) that can be
+  muted, soloed or dropped. Export renders the mix and, as an option,
+  wraps it into a copy of the video without re-encoding the picture.
+- Collaboration: the video file travels in bundles and shared folders like
+  any asset. The project only references it.
+
 **Exit criteria (Phase 3)**
 - A song can be composed with built-in and third-party instruments.
 - A teacher can set an assignment and see the student's practice progress.
@@ -780,6 +812,11 @@ recreation. See [research/VIDEO_STEMS_REPITCH.md](research/VIDEO_STEMS_REPITCH.m
 - A student imports a MusicXML or MIDI file of a song, sees guitar tab, bass
   tab and a drum staff lined up under the original recording, and loops and
   slows a section while the notation follows.
+- A composer drops in a short film at 23.976 fps, marks three hit points on
+  the frames where they happen, fits a tempo so they fall on downbeats,
+  writes a cue, and exports a copy of the film with the cue mixed in. The
+  frame shown in the video window matches the frame a video editor sees at
+  the same timecode.
 - Tab and drum notation round-trip through MusicXML without losing notes,
   string/fret positions or supported techniques.
 
@@ -1051,8 +1088,9 @@ project, especially for guitarists and singers.
   lanes: all instruments, multi-staff scores, parts extraction and
   engraving-quality layout.
 - **Articulation/expression maps** (M). **Microtonal tuning** (M).
-- **Video track** (L): builds on the Phase 3 video clips with timecode,
-  frame rates and frame-accurate sync for post-production.
+- **Post-production sync** (L): builds on the Phase 3 scoring tools with
+  timecode in and out to external hardware, several video tracks, and
+  conformed edits (re-align cues when the picture is recut).
 - **Surround/immersive mixing** (XL): multichannel buses, panning, binaural
   monitoring. Format licensing reviewed before supporting any branded
   format.

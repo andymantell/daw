@@ -12,6 +12,7 @@ mod doc;
 mod folder;
 mod identity;
 mod model;
+mod snapshots;
 
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
@@ -20,6 +21,7 @@ pub use model::{
     Clip, Comment, Effect, EffectState, FROZEN_TAIL_SECONDS, Frozen, FrozenClip, Marker, Practice,
     Project, TabBlock, Track, TrainerSettings,
 };
+pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -21,6 +21,9 @@
 //! longer show in the copy it writes (see [`scrub`]). Tab blocks are laid
 //! out the same way, one value per field, so the same scrub could cover
 //! them; for now their old text, and the notes', stays in the history.
+//!
+//! Named versions of the project, and restoring them, are in
+//! `snapshots.rs`.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -78,7 +81,7 @@ impl ProjectDoc {
         Ok(d)
     }
 
-    fn wrap(doc: LoroDoc) -> ProjectDoc {
+    pub(crate) fn wrap(doc: LoroDoc) -> ProjectDoc {
         let mut undo = UndoManager::new(&doc);
         // One step per edit, however quickly they follow each other.
         undo.set_merge_interval(0);

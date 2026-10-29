@@ -265,12 +265,8 @@ impl App {
         };
         let name = folder.name();
         let doc = self.proj.doc.to_bytes();
-        let assets: Vec<String> = (self.proj.doc.get().tracks.iter())
-            .flat_map(|t| {
-                (t.clips.iter().map(|c| c.asset.clone()))
-                    .chain(t.frozen.iter().map(|f| f.asset.clone()))
-            })
-            .collect();
+        // Frozen audio, and audio that a snapshot would bring back, go too.
+        let assets = self.proj.doc.assets_in_use();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let r = bundle::write(&dest, &name, &doc, &folder, &assets).map(|()| dest);

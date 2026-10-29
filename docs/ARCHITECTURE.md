@@ -69,7 +69,12 @@ My Lesson.project/              (folder; a tar of it is a bundle)
   document itself (its `snapshots` map), so they travel with it. Restoring
   one writes that version's project back as a new edit; history is never
   wound back. A snapshot needs the history up to its version, so history
-  can't be trimmed past the oldest snapshot.
+  can't be trimmed past the oldest snapshot. Comparing two snapshots (or
+  one with now) reads both versions and lists what differs, matched by id.
+- **Templates** are project documents holding only a project's set-up
+  (tracks, effects, sections, tempo, notes; no audio or comments), kept
+  outside any project as `DAW/Templates/<name>.dawtemplate` in the user's
+  profile. A project started from one gets new ids throughout.
 - **Garbage collection** removes unreferenced assets after a retention
   period, never while any snapshot references them.
 - **Crash safety:** recordings stream to a temporary file and are moved

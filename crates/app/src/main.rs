@@ -35,6 +35,7 @@ mod recording;
 mod remote;
 mod share;
 mod snapshots;
+mod templates;
 mod tempo;
 mod timeline;
 mod trainer;
@@ -227,6 +228,8 @@ struct App {
     comment_ui: comments::Comments,
     /// The snapshots window.
     snapshot_ui: snapshots::Snapshots,
+    /// The New from template and Save as template windows.
+    template_ui: templates::Templates,
     /// Named commands, their keys, and their windows.
     commands: commands::Commands,
     proj: project::Proj,
@@ -313,6 +316,7 @@ impl App {
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
+            template_ui: templates::Templates::default(),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
@@ -1923,7 +1927,14 @@ impl eframe::App for App {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    for c in [Cmd::NewProject, Cmd::OpenProject, Cmd::Save, Cmd::SaveAs] {
+                    for c in [
+                        Cmd::NewProject,
+                        Cmd::NewFromTemplate,
+                        Cmd::OpenProject,
+                        Cmd::Save,
+                        Cmd::SaveAs,
+                        Cmd::SaveAsTemplate,
+                    ] {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
@@ -2152,6 +2163,7 @@ impl eframe::App for App {
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
         self.remote_tick(&ctx);
+        self.template_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.sync_doc(&ctx, false);

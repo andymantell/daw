@@ -4,10 +4,14 @@
 //! ordinary edit, so Undo takes it back and it merges with other
 //! people's changes; comments stay as they are (see
 //! `daw_project::ProjectDoc::restore_snapshot`).
+//!
+//! What changed… on a snapshot lists, in words, what changed from it to
+//! the project now (what a restore would undo), or to another snapshot
+//! (roadmap 2.8). Anyone may look, commenters included.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use daw_project::{MAX_SNAPSHOT_NAME, Project, Snapshot};
+use daw_project::{Difference, MAX_SNAPSHOT_NAME, Project, Snapshot};
 use eframe::egui::{self, RichText};
 
 use crate::App;
@@ -21,6 +25,18 @@ pub(crate) struct Snapshots {
     renaming: Option<(String, String)>,
     /// A snapshot whose Restore or Delete was pressed, waiting for yes.
     asked: Option<(String, Ask)>,
+    /// The two versions being compared: a snapshot, and another or the
+    /// project now (`None`).
+    compare: Option<(String, Option<String>)>,
+    /// What changed between them, worked out for that pair at a version
+    /// of the document; `None` if they can't be read from this copy.
+    found: Option<Found>,
+}
+
+struct Found {
+    pair: (String, Option<String>),
+    version: Vec<u8>,
+    changes: Option<Vec<Difference>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -49,11 +65,12 @@ impl Snapshots {
         may_edit: bool,
     ) -> Option<Action> {
         let mut open = self.open;
+        let changes = self.found.as_ref().map(|f| f.changes.clone());
         let mut action = None;
         egui::Window::new("Snapshots")
             .open(&mut open)
             .default_pos([300.0, 140.0])
-            .default_size([420.0, 360.0])
+            .default_size([420.0, 480.0])
             .show(ctx, |ui| {
                 ui.label("Name the project as it is now, to come back to it later.");
                 ui.add_enabled_ui(may_edit, |ui| {
@@ -85,6 +102,10 @@ impl Snapshots {
                     );
                 }
                 ui.separator();
+                if let Some(changes) = &changes {
+                    self.comparison(ui, list, changes.as_deref());
+                    ui.separator();
+                }
                 if list.is_empty() {
                     ui.label(RichText::new("No snapshots yet.").weak());
                 }
@@ -192,9 +213,106 @@ impl Snapshots {
                         }
                     });
                 });
+                if ui
+                    .add_enabled(s.restorable, egui::Button::new("What changed…"))
+                    .on_hover_text("What has changed since this snapshot")
+                    .clicked()
+                {
+                    self.compare = Some((s.id.clone(), None));
+                }
             }
         }
         action
+    }
+
+    /// The two versions being compared, which can be changed, and what
+    /// changed between them.
+    fn comparison(&mut self, ui: &mut egui::Ui, list: &[Snapshot], changes: Option<&[Difference]>) {
+        let Some((from, to)) = &mut self.compare else {
+            return;
+        };
+        let name = |id: &str| {
+            (list.iter())
+                .find(|s| s.id == id)
+                .map_or("(deleted)".to_string(), |s| s.name.clone())
+        };
+        let mut close = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Changes from");
+            egui::ComboBox::from_id_salt("compare from")
+                .selected_text(name(from))
+                .show_ui(ui, |ui| {
+                    for s in list.iter().filter(|s| s.restorable) {
+                        ui.selectable_value(from, s.id.clone(), &s.name);
+                    }
+                })
+                .response
+                .accessible_name("Compare from snapshot");
+            ui.label("to");
+            let to_name = to.as_deref().map_or("now".to_string(), name);
+            egui::ComboBox::from_id_salt("compare to")
+                .selected_text(to_name)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(to, None, "now");
+                    for s in list.iter().filter(|s| s.restorable) {
+                        ui.selectable_value(to, Some(s.id.clone()), &s.name);
+                    }
+                })
+                .response
+                .accessible_name("Compare to");
+            close = ui.button("Close").clicked();
+        });
+        match changes {
+            None => {
+                ui.label(
+                    RichText::new("Can't compare these from this copy of the project.").weak(),
+                );
+            }
+            Some([]) => {
+                ui.label(RichText::new("Nothing has changed.").weak());
+            }
+            Some(changes) => {
+                egui::ScrollArea::vertical()
+                    .id_salt("changes")
+                    .max_height(220.0)
+                    .show(ui, |ui| {
+                        let mut place = None;
+                        for d in changes {
+                            if place != Some(&d.place) {
+                                ui.label(RichText::new(&d.place).strong());
+                                place = Some(&d.place);
+                            }
+                            ui.label(format!("  {}", d.text));
+                        }
+                    });
+            }
+        }
+        if close {
+            self.compare = None;
+            self.found = None;
+        }
+    }
+
+    /// Works out what changed between the pair being compared, unless
+    /// that is already known for this version of the document.
+    fn find_changes(&mut self, doc: &daw_project::ProjectDoc) {
+        let Some(pair) = &self.compare else {
+            self.found = None;
+            return;
+        };
+        let version = doc.version();
+        if let Some(f) = &self.found
+            && f.pair == *pair
+            && f.version == version
+        {
+            return;
+        }
+        let changes = doc.snapshot_differences(&pair.0, pair.1.as_deref());
+        self.found = Some(Found {
+            pair: pair.clone(),
+            version,
+            changes,
+        });
     }
 }
 
@@ -203,6 +321,12 @@ impl App {
         if !self.snapshot_ui.open {
             return;
         }
+        let ui = &self.snapshot_ui;
+        if ui.compare.is_some() && ui.found.as_ref().map(|f| &f.pair) != ui.compare.as_ref() {
+            // Plugin settings as they are now, for a new comparison.
+            self.write_plugin_states();
+        }
+        self.snapshot_ui.find_changes(&self.proj.doc);
         let list = self.proj.doc.snapshots();
         let may_edit = self.may_edit_song();
         let doc = &self.proj.doc;
@@ -358,6 +482,35 @@ mod tests {
         assert_eq!(app.tempo_bpm, 120.0, "undo takes the restore back");
         assert_eq!(app.markers.len(), 2);
         assert_eq!(app.proj.doc.snapshots().len(), 1, "the snapshot stays");
+    }
+
+    #[test]
+    fn changes_since_a_snapshot_are_listed_in_words() {
+        let mut h = app();
+        h.state_mut().tempo_bpm = 96.0;
+        h.run();
+        let ctx = h.ctx.clone();
+        h.state_mut().take_snapshot(&ctx, "Lesson 3 end");
+        add_marker(&mut h, "Solo", 9);
+        h.state_mut().tempo_bpm = 120.0;
+        h.run();
+        h.state_mut().snapshot_ui.open = true;
+        h.run();
+        h.get_by_label("What changed…").click();
+        h.run();
+        h.get_by_label_contains("Tempo 96 → 120 BPM");
+        h.get_by_label_contains("Added “Solo” at bar 9");
+
+        // Undone, the list follows.
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run();
+        h.run();
+        assert!(h.query_by_label_contains("Tempo 96").is_none());
+        h.get_by_label_contains("Added “Solo” at bar 9");
+        h.get_by_label("Close").click();
+        h.run();
+        assert!(h.query_by_label_contains("Added “Solo”").is_none());
     }
 
     #[test]

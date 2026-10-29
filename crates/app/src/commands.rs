@@ -20,9 +20,11 @@ use crate::workspace::Pane;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Cmd {
     NewProject,
+    NewFromTemplate,
     OpenProject,
     Save,
     SaveAs,
+    SaveAsTemplate,
     ExportBundle,
     ImportBundle,
     Snapshots,
@@ -153,6 +155,15 @@ impl Info {
 pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::NewProject, "new-project", "File", "New project", &[]).words("start empty"),
     info(
+        Cmd::NewFromTemplate,
+        "new-from-template",
+        "File",
+        "New from template…",
+        &[],
+    )
+    .hint("Start a project with tracks, sections and notes laid out")
+    .words("start lesson band demo"),
+    info(
         Cmd::OpenProject,
         "open-project",
         "File",
@@ -164,6 +175,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         .hint("Save the project")
         .typing(),
     info(Cmd::SaveAs, "save-as", "File", "Save as…", &[]).words("copy rename"),
+    info(
+        Cmd::SaveAsTemplate,
+        "save-as-template",
+        "File",
+        "Save as template…",
+        &[],
+    )
+    .hint("Keep this project's tracks, effects, sections and notes to start from")
+    .words("layout set-up"),
     info(
         Cmd::ExportBundle,
         "export-bundle",
@@ -1318,6 +1338,8 @@ impl App {
         }
         match cmd {
             Cmd::NewProject => self.then(ctx, After::New),
+            Cmd::NewFromTemplate => self.choose_template(),
+            Cmd::SaveAsTemplate => self.template_ui.saving = Some(String::new()),
             Cmd::OpenProject => {
                 self.proj.dialog = Some(Dialog::Open {
                     found: find_projects(),

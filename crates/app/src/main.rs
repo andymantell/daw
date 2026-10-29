@@ -16,6 +16,7 @@
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
+mod commands;
 mod comments;
 mod crash;
 mod export;
@@ -43,6 +44,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use commands::Cmd;
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running, SavedProfiles};
 use daw_engine::engine::{self, Command, Controller};
 use daw_engine::graph::{ClipSpec, Input, Mix, Session, TrackSpec};
@@ -51,7 +53,7 @@ use daw_engine::metronome::Metronome;
 use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
 use daw_engine::time::{Frames, Tempo, TempoMap, TimeSignature};
-use eframe::egui::{self, Color32, Key, RichText, Sense, Stroke, vec2};
+use eframe::egui::{self, Color32, RichText, Sense, Stroke, vec2};
 use fx::{Effects, FxSlot};
 use timeline::{Clip, Lane, Marker, Song};
 
@@ -211,7 +213,8 @@ struct App {
     comment_ui: comments::Comments,
     /// The snapshots window.
     snapshot_ui: snapshots::Snapshots,
-    shortcuts_open: bool,
+    /// Named commands, their keys, and their windows.
+    commands: commands::Commands,
     proj: project::Proj,
     latency: latency::Latency,
     updates: update::Updates,
@@ -220,60 +223,6 @@ struct App {
     me: daw_project::Identity,
     people: people::People,
 }
-
-/// Every keyboard shortcut, for Help → Keyboard shortcuts. Letters work
-/// when no text field has the keyboard.
-const SHORTCUTS: &[(&str, &str)] = &[
-    ("Space", "Play or stop"),
-    ("Home", "Back to the start"),
-    ("R", "Record on or off: armed tracks record while playing"),
-    ("L", "Loop on or off"),
-    ("K", "Metronome on or off"),
-    ("C", "Count-in on or off"),
-    ("Tab, Shift+Tab", "Move between controls"),
-    (
-        "Enter",
-        "Press the focused button, or open the focused list",
-    ),
-    ("Ctrl+S", "Save the project"),
-    ("Ctrl+Z", "Undo"),
-    ("Ctrl+Shift+Z, Ctrl+Y", "Redo"),
-    ("S", "Split clips at the playhead"),
-    ("Delete", "Delete the selected clips, or the focused marker"),
-    ("M", "Mark a section at the playhead's bar"),
-    ("Esc", "Clear the clip selection"),
-    ("Tab", "Move through the timeline's clips and markers"),
-    (
-        "Enter",
-        "On a clip: select it and go to its start. On a marker: go to its section",
-    ),
-    (
-        "Ctrl+Enter",
-        "On a clip: add it to or take it out of the selection. On a marker: loop its section",
-    ),
-    (
-        "Left, Right",
-        "Move the selected clips a beat earlier or later; a marker a bar",
-    ),
-    ("Shift+Left, Shift+Right", "Move the selected clips a bar"),
-    (
-        "Ctrl+Left, Ctrl+Right",
-        "Trim the focused clip's start a beat (with Shift, a bar)",
-    ),
-    (
-        "Alt+Left, Alt+Right",
-        "Trim the focused clip's end a beat (with Shift, a bar)",
-    ),
-    (
-        "Up, Down",
-        "Move to the nearest clip on the track above or below",
-    ),
-    (
-        "Ctrl+Up, Ctrl+Down",
-        "Move the selected clips to the track above or below",
-    ),
-    ("F2", "Rename the focused marker"),
-];
 
 /// How often to look for a lost device.
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
@@ -337,7 +286,7 @@ impl App {
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
-            shortcuts_open: false,
+            commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
             updates: update::Updates::new((!cfg!(test)).then(|| config_dir().join("updates.txt"))),
@@ -901,6 +850,7 @@ impl App {
         let map = self.tempo_map();
         let ids: Vec<String> = self.tracks.iter().map(|t| t.key.clone()).collect();
         let pins = self.comment_ui.pins(&self.comments, &ids);
+        let commands = std::mem::take(&mut self.commands.timeline);
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -910,6 +860,7 @@ impl App {
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
             pins: &pins,
+            commands: &commands,
         };
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
         if let Some(id) = out.pin {
@@ -959,62 +910,12 @@ impl App {
         }
     }
 
-    /// The transport's keys, which work anywhere except while typing.
-    /// Space always plays or stops; Enter presses the focused control.
-    fn keys(&mut self, ctx: &egui::Context) {
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S)) {
-            self.save_or_ask(ctx);
-        }
-        // A clip or marker holding the keyboard is not a text field.
-        if ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx) {
-            return;
-        }
-        let key = |k| ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
-        if key(Key::Space) {
-            self.toggle_play();
-        }
-        if key(Key::Home) {
-            self.send(Command::Seek(Frames(0)));
-        }
-        if key(Key::R) {
-            self.recording = !self.recording;
-            self.send(Command::SetRecording(self.recording));
-        }
-        if key(Key::L) {
-            self.looping = !self.looping;
-            self.send_loop();
-        }
-        if key(Key::K) {
-            self.metronome.enabled = !self.metronome.enabled;
-            self.send(Command::SetMetronome(self.metronome));
-        }
-        if key(Key::C) {
-            self.count_in = !self.count_in;
-        }
-    }
-
-    /// Help → Keyboard shortcuts.
-    fn shortcuts_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Keyboard shortcuts")
-            .open(&mut self.shortcuts_open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                egui::Grid::new("shortcuts").striped(true).show(ui, |ui| {
-                    for (keys, what) in SHORTCUTS {
-                        ui.strong(*keys);
-                        ui.label(*what);
-                        ui.end_row();
-                    }
-                });
-            });
-    }
-
     fn transport(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let playing = self.ctl.status().playing();
             if ui
                 .button(if playing { "⏹ Stop" } else { "▶ Play" })
-                .on_hover_text("Space")
+                .on_hover_text(self.commands.hover(Cmd::PlayStop))
                 .clicked()
             {
                 self.toggle_play();
@@ -1022,7 +923,7 @@ impl App {
             if ui
                 .button("⏮")
                 .accessible_name("Back to the start")
-                .on_hover_text("Back to the start (Home)")
+                .on_hover_text(self.commands.hover(Cmd::ToStart))
                 .clicked()
             {
                 self.send(Command::Seek(Frames(0)));
@@ -1034,7 +935,7 @@ impl App {
             });
             if ui
                 .selectable_label(self.recording, rec)
-                .on_hover_text("Armed tracks record while playing (R)")
+                .on_hover_text(self.commands.hover(Cmd::Record))
                 .clicked()
             {
                 self.recording = !self.recording;
@@ -1071,7 +972,8 @@ impl App {
         });
         ui.horizontal(|ui| {
             let mut m = self.metronome;
-            ui.checkbox(&mut m.enabled, "Metronome").on_hover_text("K");
+            ui.checkbox(&mut m.enabled, "Metronome")
+                .on_hover_text(self.commands.hover(Cmd::Metronome));
             egui::ComboBox::from_id_salt("subdivision")
                 .width(90.0)
                 .selected_text(match m.subdivision {
@@ -1100,12 +1002,12 @@ impl App {
                 self.send(Command::SetMetronome(m));
             }
             ui.checkbox(&mut self.count_in, "Count-in")
-                .on_hover_text("One bar of clicks before playing (C)");
+                .on_hover_text(self.commands.hover(Cmd::CountIn));
             ui.separator();
 
             let mut changed = ui
                 .checkbox(&mut self.looping, "Loop bars")
-                .on_hover_text("L")
+                .on_hover_text(self.commands.hover(Cmd::Loop))
                 .changed();
             changed |= ui
                 .add(egui::DragValue::new(&mut self.loop_bars.0).range(1..=999))
@@ -1964,114 +1866,67 @@ impl eframe::App for App {
         if !self.imports.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        self.keys(&ctx);
+        self.command_keys(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    self.project_menu(ui);
-                    ui.separator();
-                    self.share_menu(ui);
-                    if ui
-                        .button("Snapshots…")
-                        .on_hover_text(
-                            "Name the project as it is now, or go back to a named moment",
-                        )
-                        .clicked()
-                    {
-                        self.snapshot_ui.open = true;
-                        ui.close();
-                    }
-                    if ui
-                        .button("People…")
-                        .on_hover_text("Who has this project, and what they may change")
-                        .clicked()
-                    {
-                        self.people.open = true;
-                        ui.close();
+                    for c in [Cmd::NewProject, Cmd::OpenProject, Cmd::Save, Cmd::SaveAs] {
+                        self.menu_item(ui, c);
                     }
                     ui.separator();
-                    if ui.button("Export…").clicked() {
-                        self.export.open = true;
-                        ui.close();
+                    for c in [
+                        Cmd::ExportBundle,
+                        Cmd::ImportBundle,
+                        Cmd::Snapshots,
+                        Cmd::People,
+                    ] {
+                        self.menu_item(ui, c);
                     }
+                    ui.separator();
+                    self.menu_item(ui, Cmd::Export);
                 });
                 ui.menu_button("Edit", |ui| {
-                    if ui
-                        .add_enabled(self.can_undo(), egui::Button::new("Undo"))
-                        .on_hover_text("Ctrl+Z")
-                        .clicked()
-                    {
-                        self.undo(&ctx);
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(self.can_redo(), egui::Button::new("Redo"))
-                        .on_hover_text("Ctrl+Shift+Z")
-                        .clicked()
-                    {
-                        self.redo(&ctx);
-                        ui.close();
-                    }
+                    self.menu_item(ui, Cmd::Undo);
+                    self.menu_item(ui, Cmd::Redo);
                     ui.separator();
-                    if ui.button("Split at playhead").clicked() {
-                        let at = self.ctl.status().position().0;
-                        if self.with_song(|tl, song| tl.split_at(song, at)) {
-                            self.rebuild();
-                        }
-                        ui.close();
+                    for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
+                        self.menu_item(ui, c);
                     }
-                    if ui.button("Delete selected clips").clicked() {
-                        if self.with_song(|tl, song| tl.delete_selected(song)) {
-                            self.rebuild();
-                        }
-                        ui.close();
+                });
+                ui.menu_button("Transport", |ui| {
+                    for c in [
+                        Cmd::PlayStop,
+                        Cmd::ToStart,
+                        Cmd::Record,
+                        Cmd::Loop,
+                        Cmd::Metronome,
+                        Cmd::CountIn,
+                    ] {
+                        self.menu_item(ui, c);
                     }
                 });
                 ui.menu_button("Settings", |ui| {
-                    if ui.button("Audio device…").clicked() {
-                        self.show_devices = true;
-                        ui.close();
-                    }
-                    if ui.button("Plugins…").clicked() {
-                        self.effects.show_manager = true;
-                        ui.close();
-                    }
-                    if ui.button("Performance check…").clicked() {
-                        self.perf.open = true;
-                        ui.close();
+                    for c in [
+                        Cmd::AudioDevice,
+                        Cmd::Plugins,
+                        Cmd::PerformanceCheck,
+                        Cmd::KeyCommands,
+                    ] {
+                        self.menu_item(ui, c);
                     }
                 });
                 ui.menu_button("Practice", |ui| {
-                    if ui.button("Tuner…").clicked() {
-                        self.tuner.open = true;
-                        let c = self.tuner.command();
-                        self.send(c);
-                        ui.close();
-                    }
-                    if ui.button("Lesson notes…").clicked() {
-                        self.notes_ui.open = true;
-                        ui.close();
-                    }
-                    if ui.button("Comments…").clicked() {
-                        self.comment_ui.open = true;
-                        ui.close();
+                    for c in [Cmd::Tuner, Cmd::LessonNotes, Cmd::Comments] {
+                        self.menu_item(ui, c);
                     }
                 });
                 ui.menu_button("Help", |ui| {
-                    if ui.button("Keyboard shortcuts…").clicked() {
-                        self.shortcuts_open = true;
-                        ui.close();
-                    }
+                    self.menu_item(ui, Cmd::FindCommand);
+                    self.menu_item(ui, Cmd::KeyCommands);
                     ui.separator();
-                    if ui.button("Check for updates…").clicked() {
-                        self.updates.open = true;
-                        ui.close();
-                    }
-                    if ui.button("Crash reports…").clicked() {
-                        self.crashes.open = true;
-                        ui.close();
-                    }
+                    self.menu_item(ui, Cmd::CheckUpdates);
+                    self.menu_item(ui, Cmd::CrashReports);
                 });
                 ui.separator();
                 match &self.audio {
@@ -2208,7 +2063,7 @@ impl eframe::App for App {
         }
         self.perf_window(&ctx);
         self.notes_window(&ctx);
-        self.shortcuts_window(&ctx);
+        self.command_windows(&ctx);
         self.updates.poll(&ctx);
         self.updates.window(&ctx);
         self.updates.ask_window(&ctx);

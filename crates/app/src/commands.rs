@@ -1,0 +1,1237 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Named commands (roadmap 2.1): every action in the menus and on the
+//! keyboard is one, found by typing in the command search (Ctrl+K), with
+//! keys the user can change in Settings → Key commands. Keys are kept in
+//! `keys.txt` beside the device settings, only where they differ from
+//! the defaults.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use daw_engine::engine::Command;
+use daw_engine::time::Frames;
+use eframe::egui::{self, Event, Key, Modifiers, RichText};
+
+use crate::App;
+use crate::project::{After, Dialog, find_projects};
+
+/// Every command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum Cmd {
+    NewProject,
+    OpenProject,
+    Save,
+    SaveAs,
+    ExportBundle,
+    ImportBundle,
+    Snapshots,
+    People,
+    Export,
+    Undo,
+    Redo,
+    Split,
+    Delete,
+    Marker,
+    ClearSelection,
+    PlayStop,
+    ToStart,
+    Record,
+    Loop,
+    Metronome,
+    CountIn,
+    Tuner,
+    LessonNotes,
+    Comments,
+    AudioDevice,
+    Plugins,
+    PerformanceCheck,
+    KeyCommands,
+    FindCommand,
+    CheckUpdates,
+    CrashReports,
+}
+
+/// A key with the modifiers held for it. Ctrl means Cmd on a Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Shortcut {
+    pub(crate) mods: Modifiers,
+    pub(crate) key: Key,
+}
+
+const NONE: Modifiers = Modifiers::NONE;
+const CTRL: Modifiers = Modifiers::COMMAND;
+const CTRL_SHIFT: Modifiers = Modifiers {
+    shift: true,
+    ..Modifiers::COMMAND
+};
+
+const fn key(mods: Modifiers, key: Key) -> Shortcut {
+    Shortcut { mods, key }
+}
+
+/// What the user sees of a command, and its keys out of the box.
+pub(crate) struct Info {
+    pub(crate) cmd: Cmd,
+    /// Kept in `keys.txt`: never change one.
+    id: &'static str,
+    pub(crate) name: &'static str,
+    /// The menu it is in.
+    pub(crate) group: &'static str,
+    /// Said on hover, and searched.
+    hint: &'static str,
+    /// Other words to find it by.
+    words: &'static str,
+    keys: &'static [Shortcut],
+    /// Its keys work in a text field too.
+    typing: bool,
+    /// Holding its key down repeats it.
+    repeat: bool,
+}
+
+const fn info(
+    cmd: Cmd,
+    id: &'static str,
+    group: &'static str,
+    name: &'static str,
+    keys: &'static [Shortcut],
+) -> Info {
+    Info {
+        cmd,
+        id,
+        name,
+        group,
+        hint: "",
+        words: "",
+        keys,
+        typing: false,
+        repeat: false,
+    }
+}
+
+impl Info {
+    const fn hint(self, hint: &'static str) -> Info {
+        Info { hint, ..self }
+    }
+
+    const fn words(self, words: &'static str) -> Info {
+        Info { words, ..self }
+    }
+
+    const fn typing(self) -> Info {
+        Info {
+            typing: true,
+            ..self
+        }
+    }
+
+    const fn repeat(self) -> Info {
+        Info {
+            repeat: true,
+            ..self
+        }
+    }
+}
+
+/// Every command, in menu order.
+pub(crate) const COMMANDS: &[Info] = &[
+    info(Cmd::NewProject, "new-project", "File", "New project", &[]).words("start empty"),
+    info(
+        Cmd::OpenProject,
+        "open-project",
+        "File",
+        "Open project…",
+        &[],
+    )
+    .words("load"),
+    info(Cmd::Save, "save", "File", "Save", &[key(CTRL, Key::S)])
+        .hint("Save the project")
+        .typing(),
+    info(Cmd::SaveAs, "save-as", "File", "Save as…", &[]).words("copy rename"),
+    info(
+        Cmd::ExportBundle,
+        "export-bundle",
+        "File",
+        "Export bundle…",
+        &[],
+    )
+    .hint("The project and its audio in one file, to send by any means")
+    .words("share send"),
+    info(
+        Cmd::ImportBundle,
+        "import-bundle",
+        "File",
+        "Import bundle…",
+        &[],
+    )
+    .hint("Merges into your copy of the project if you have one")
+    .words("share receive"),
+    info(Cmd::Snapshots, "snapshots", "File", "Snapshots…", &[])
+        .hint("Name the project as it is now, or go back to a named moment")
+        .words("restore version history"),
+    info(Cmd::People, "people", "File", "People…", &[])
+        .hint("Who has this project, and what they may change")
+        .words("roles join name"),
+    info(Cmd::Export, "export", "File", "Export…", &[])
+        .hint("The mix or each track's stem as a WAV file")
+        .words("render bounce stems wav mixdown"),
+    info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)]).repeat(),
+    info(
+        Cmd::Redo,
+        "redo",
+        "Edit",
+        "Redo",
+        &[key(CTRL_SHIFT, Key::Z), key(CTRL, Key::Y)],
+    )
+    .repeat(),
+    info(
+        Cmd::Split,
+        "split",
+        "Edit",
+        "Split at playhead",
+        &[key(NONE, Key::S)],
+    )
+    .hint("Split clips at the playhead: the selected ones, or all under it")
+    .words("cut"),
+    info(
+        Cmd::Delete,
+        "delete",
+        "Edit",
+        "Delete selected clips",
+        &[key(NONE, Key::Delete), key(NONE, Key::Backspace)],
+    )
+    .hint("Delete the selected clips, or the focused marker")
+    .words("remove erase"),
+    info(
+        Cmd::Marker,
+        "marker",
+        "Edit",
+        "Mark a section",
+        &[key(NONE, Key::M)],
+    )
+    .hint("Mark a section at the playhead's bar")
+    .words("marker add"),
+    info(
+        Cmd::ClearSelection,
+        "clear-selection",
+        "Edit",
+        "Clear the selection",
+        &[key(NONE, Key::Escape)],
+    )
+    .words("deselect none"),
+    info(
+        Cmd::PlayStop,
+        "play",
+        "Transport",
+        "Play or stop",
+        &[key(NONE, Key::Space)],
+    )
+    .words("start pause"),
+    info(
+        Cmd::ToStart,
+        "to-start",
+        "Transport",
+        "Back to the start",
+        &[key(NONE, Key::Home)],
+    )
+    .words("rewind beginning"),
+    info(
+        Cmd::Record,
+        "record",
+        "Transport",
+        "Record on or off",
+        &[key(NONE, Key::R)],
+    )
+    .hint("Armed tracks record while playing"),
+    info(
+        Cmd::Loop,
+        "loop",
+        "Transport",
+        "Loop on or off",
+        &[key(NONE, Key::L)],
+    )
+    .words("repeat cycle"),
+    info(
+        Cmd::Metronome,
+        "metronome",
+        "Transport",
+        "Metronome on or off",
+        &[key(NONE, Key::K)],
+    )
+    .words("click"),
+    info(
+        Cmd::CountIn,
+        "count-in",
+        "Transport",
+        "Count-in on or off",
+        &[key(NONE, Key::C)],
+    )
+    .hint("One bar of clicks before playing")
+    .words("pre-roll"),
+    info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[]).words("tune pitch"),
+    info(
+        Cmd::LessonNotes,
+        "lesson-notes",
+        "Practice",
+        "Lesson notes…",
+        &[],
+    )
+    .words("tab text"),
+    info(Cmd::Comments, "comments", "Practice", "Comments…", &[]).words("pins feedback"),
+    info(
+        Cmd::AudioDevice,
+        "audio-device",
+        "Settings",
+        "Audio device…",
+        &[],
+    )
+    .words("interface sound card input output latency"),
+    info(Cmd::Plugins, "plugins", "Settings", "Plugins…", &[]).words("effects scan"),
+    info(
+        Cmd::PerformanceCheck,
+        "performance-check",
+        "Settings",
+        "Performance check…",
+        &[],
+    )
+    .words("dsp cpu load"),
+    info(
+        Cmd::KeyCommands,
+        "key-commands",
+        "Settings",
+        "Key commands…",
+        &[],
+    )
+    .hint("See and change the key for each command")
+    .words("keyboard shortcuts keys"),
+    info(
+        Cmd::FindCommand,
+        "find-command",
+        "Help",
+        "Find a command…",
+        &[key(CTRL, Key::K)],
+    )
+    .hint("Type part of a command's name and press Enter to run it")
+    .words("search palette")
+    .typing(),
+    info(
+        Cmd::CheckUpdates,
+        "check-updates",
+        "Help",
+        "Check for updates…",
+        &[],
+    )
+    .words("version new"),
+    info(
+        Cmd::CrashReports,
+        "crash-reports",
+        "Help",
+        "Crash reports…",
+        &[],
+    ),
+];
+
+impl Cmd {
+    pub(crate) fn info(self) -> &'static Info {
+        COMMANDS
+            .iter()
+            .find(|i| i.cmd == self)
+            .expect("every command is in the table")
+    }
+
+    fn from_id(id: &str) -> Option<Cmd> {
+        COMMANDS.iter().find(|i| i.id == id).map(|i| i.cmd)
+    }
+
+    /// Run by the timeline, which knows what has the keyboard there.
+    pub(crate) fn on_timeline(self) -> bool {
+        matches!(
+            self,
+            Cmd::Split | Cmd::Delete | Cmd::Marker | Cmd::ClearSelection
+        )
+    }
+}
+
+/// Keys that work the same everywhere and can't be given to a command.
+/// The timeline's own keys act on the focused clip or marker.
+pub(crate) const FIXED: &[(&str, &str)] = &[
+    (
+        "Tab, Shift+Tab",
+        "Move between controls, and through the timeline's clips and markers",
+    ),
+    (
+        "Enter",
+        "Press the focused button or open the focused list. On a clip: select it and go to its start. On a marker: go to its section",
+    ),
+    (
+        "Ctrl+Enter",
+        "On a clip: add it to or take it out of the selection. On a marker: loop its section",
+    ),
+    (
+        "Left, Right",
+        "Move the selected clips a beat earlier or later; a marker a bar",
+    ),
+    ("Shift+Left, Shift+Right", "Move the selected clips a bar"),
+    (
+        "Ctrl+Left, Ctrl+Right",
+        "Trim the focused clip's start a beat (with Shift, a bar)",
+    ),
+    (
+        "Alt+Left, Alt+Right",
+        "Trim the focused clip's end a beat (with Shift, a bar)",
+    ),
+    (
+        "Up, Down",
+        "Move to the nearest clip on the track above or below",
+    ),
+    (
+        "Ctrl+Up, Ctrl+Down",
+        "Move the selected clips to the track above or below",
+    ),
+    ("F2", "Rename the focused marker"),
+];
+
+impl Shortcut {
+    /// As pressed: Ctrl and Cmd count as one.
+    fn pressed(key: Key, m: Modifiers) -> Shortcut {
+        Shortcut {
+            key,
+            mods: Modifiers {
+                alt: m.alt,
+                shift: m.shift,
+                command: m.command || m.ctrl || m.mac_cmd,
+                ctrl: false,
+                mac_cmd: false,
+            },
+        }
+    }
+
+    /// Why this key can't be given to a command, if it can't.
+    fn fixed(self) -> Option<&'static str> {
+        match self.key {
+            Key::Tab => Some("Tab moves between controls"),
+            Key::Enter => Some("Enter presses the focused control"),
+            Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown => {
+                Some("The arrow keys move and trim what has the keyboard")
+            }
+            Key::F2 if self.mods == NONE => Some("F2 renames the focused marker"),
+            _ => None,
+        }
+    }
+
+    /// Such as `Ctrl+Shift+Z`, as shown and as kept in `keys.txt`.
+    pub(crate) fn text(self) -> String {
+        let mut t = String::new();
+        if self.mods.command {
+            t.push_str(if cfg!(target_os = "macos") {
+                "Cmd+"
+            } else {
+                "Ctrl+"
+            });
+        }
+        if self.mods.alt {
+            t.push_str("Alt+");
+        }
+        if self.mods.shift {
+            t.push_str("Shift+");
+        }
+        t.push_str(self.key.name());
+        t
+    }
+
+    pub(crate) fn parse(text: &str) -> Option<Shortcut> {
+        let mut parts: Vec<&str> = text.trim().split('+').map(str::trim).collect();
+        let key = Key::from_name(parts.pop()?)?;
+        let mut mods = NONE;
+        for p in parts {
+            match p.to_ascii_lowercase().as_str() {
+                "ctrl" | "cmd" => mods.command = true,
+                "alt" => mods.alt = true,
+                "shift" => mods.shift = true,
+                _ => return None,
+            }
+        }
+        Some(Shortcut { mods, key })
+    }
+}
+
+/// The keys of every command.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Keymap {
+    keys: BTreeMap<Cmd, Vec<Shortcut>>,
+}
+
+impl Default for Keymap {
+    fn default() -> Keymap {
+        Keymap {
+            keys: COMMANDS.iter().map(|i| (i.cmd, i.keys.to_vec())).collect(),
+        }
+    }
+}
+
+impl Keymap {
+    /// One line per command whose keys differ from the defaults: its id,
+    /// then its keys separated by commas, or `none`.
+    pub(crate) fn from_text(text: &str) -> Keymap {
+        let mut map = Keymap::default();
+        for line in text.lines() {
+            let (id, rest) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+            let Some(cmd) = Cmd::from_id(id) else {
+                continue;
+            };
+            let keys = match rest.trim() {
+                "none" => Vec::new(),
+                rest => rest
+                    .split(',')
+                    .filter_map(Shortcut::parse)
+                    .filter(|s| s.fixed().is_none())
+                    .collect(),
+            };
+            map.keys.insert(cmd, keys);
+        }
+        map
+    }
+
+    pub(crate) fn to_text(&self) -> String {
+        let mut t = String::new();
+        for i in COMMANDS {
+            let keys = self.of(i.cmd);
+            if keys != i.keys {
+                let list: Vec<String> = keys.iter().map(|s| s.text()).collect();
+                let list = if list.is_empty() {
+                    "none".to_string()
+                } else {
+                    list.join(", ")
+                };
+                t.push_str(&format!("{} {list}\n", i.id));
+            }
+        }
+        t
+    }
+
+    pub(crate) fn of(&self, cmd: Cmd) -> &[Shortcut] {
+        self.keys.get(&cmd).map_or(&[], Vec::as_slice)
+    }
+
+    /// Its keys, as shown beside it.
+    pub(crate) fn text(&self, cmd: Cmd) -> String {
+        let keys: Vec<String> = self.of(cmd).iter().map(|s| s.text()).collect();
+        keys.join(", ")
+    }
+
+    /// The command a key runs, in menu order if two share it.
+    pub(crate) fn find(&self, s: Shortcut) -> Option<Cmd> {
+        COMMANDS
+            .iter()
+            .map(|i| i.cmd)
+            .find(|c| self.of(*c).contains(&s))
+    }
+
+    /// Gives the key to `cmd`, taking it from any other command.
+    pub(crate) fn assign(&mut self, cmd: Cmd, s: Shortcut) {
+        for keys in self.keys.values_mut() {
+            keys.retain(|k| *k != s);
+        }
+        self.keys.entry(cmd).or_default().push(s);
+    }
+
+    pub(crate) fn remove(&mut self, cmd: Cmd, s: Shortcut) {
+        if let Some(keys) = self.keys.get_mut(&cmd) {
+            keys.retain(|k| *k != s);
+        }
+    }
+
+    /// Back to its default keys, taking them from any command that has
+    /// one of them now.
+    pub(crate) fn reset(&mut self, cmd: Cmd) {
+        self.keys.insert(cmd, Vec::new());
+        for &s in cmd.info().keys {
+            self.assign(cmd, s);
+        }
+    }
+}
+
+/// Commands matching what was typed, best first: every word typed must
+/// begin a word of the command's name, menu or other words, or appear
+/// in its name. Nothing typed lists them all, in menu order.
+pub(crate) fn search(query: &str) -> Vec<Cmd> {
+    let query = query.trim().to_lowercase();
+    let typed: Vec<&str> = query.split_whitespace().collect();
+    let mut found: Vec<(u32, usize, Cmd)> = Vec::new();
+    for (order, i) in COMMANDS.iter().enumerate() {
+        let name = i.name.to_lowercase();
+        let others = format!("{} {} {}", i.group, i.hint, i.words).to_lowercase();
+        let words = |t: &str| {
+            t.split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let (name_words, other_words) = (words(&name), words(&others));
+        let mut score = 0;
+        let mut all = true;
+        for t in &typed {
+            if name_words.iter().any(|w| w.starts_with(t)) {
+                score += 3;
+            } else if name.contains(t) {
+                score += 2;
+            } else if other_words.iter().any(|w| w.starts_with(t)) {
+                score += 1;
+            } else {
+                all = false;
+                break;
+            }
+        }
+        if !all {
+            continue;
+        }
+        if !query.is_empty() && name.starts_with(&query) {
+            score += 10;
+        }
+        found.push((score, order, i.cmd));
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    found.into_iter().map(|(_, _, c)| c).collect()
+}
+
+/// The command search.
+#[derive(Default)]
+struct Palette {
+    open: bool,
+    query: String,
+    /// The highlighted row.
+    chosen: usize,
+    /// Its text field takes the keyboard when it opens.
+    focus: bool,
+}
+
+/// The key commands window.
+#[derive(Default)]
+pub(crate) struct Editor {
+    open: bool,
+    filter: String,
+    /// Waiting for a key to give this command.
+    pub(crate) capturing: Option<Cmd>,
+    /// A key pressed for the first command that the second has.
+    clash: Option<(Cmd, Shortcut, Cmd)>,
+    note: Option<String>,
+}
+
+pub(crate) struct Commands {
+    pub(crate) keymap: Keymap,
+    /// Where the keys are kept; none in tests.
+    path: Option<PathBuf>,
+    palette: Palette,
+    pub(crate) editor: Editor,
+    /// Commands for the timeline to run when it is next drawn.
+    pub(crate) timeline: Vec<Cmd>,
+}
+
+impl Commands {
+    pub(crate) fn new(path: Option<PathBuf>) -> Commands {
+        let keymap = path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| Keymap::from_text(&t))
+            .unwrap_or_default();
+        Commands {
+            keymap,
+            path,
+            palette: Palette::default(),
+            editor: Editor::default(),
+            timeline: Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn palette_open(&self) -> bool {
+        self.palette.open
+    }
+
+    fn save(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            // Written whole and renamed, so a crash never leaves half a file.
+            let tmp = path.with_extension("tmp");
+            std::fs::write(&tmp, self.keymap.to_text())?;
+            std::fs::rename(tmp, path)
+        };
+        if let Err(e) = write() {
+            self.editor.note = Some(format!("Couldn't save the keys: {e}"));
+        }
+    }
+
+    /// For a hover text: its name and keys, such as "Play or stop (Space)".
+    pub(crate) fn hover(&self, cmd: Cmd) -> String {
+        let i = cmd.info();
+        let what = if i.hint.is_empty() { i.name } else { i.hint };
+        match self.keymap.text(cmd) {
+            k if k.is_empty() => what.to_string(),
+            k => format!("{what} ({k})"),
+        }
+    }
+
+    /// Takes the pressed keys that run commands out of this frame's
+    /// input. While a text field has the keyboard (`typing`), only the
+    /// few commands meant for that run; while the search, a menu or a
+    /// list is open, none do.
+    fn pressed(&mut self, ctx: &egui::Context, typing: bool) -> Vec<Cmd> {
+        if let Some(cmd) = self.editor.capturing {
+            self.capture(ctx, cmd);
+            return Vec::new();
+        }
+        // The search takes its own keys (Esc closes it).
+        if self.palette.open || egui::Popup::is_any_open(ctx) {
+            return Vec::new();
+        }
+        let mut run = Vec::new();
+        let keymap = &self.keymap;
+        ctx.input_mut(|i| {
+            i.events.retain(|e| {
+                let Event::Key {
+                    key,
+                    pressed: true,
+                    repeat,
+                    modifiers,
+                    ..
+                } = e
+                else {
+                    return true;
+                };
+                let Some(cmd) = keymap.find(Shortcut::pressed(*key, *modifiers)) else {
+                    return true;
+                };
+                let info = cmd.info();
+                if typing && !info.typing {
+                    return true;
+                }
+                if !*repeat || info.repeat {
+                    run.push(cmd);
+                }
+                false
+            });
+        });
+        run
+    }
+
+    /// The next key pressed goes to `cmd`; Esc stops waiting.
+    fn capture(&mut self, ctx: &egui::Context, cmd: Cmd) {
+        let pressed = ctx.input_mut(|i| {
+            let at = i.events.iter().position(|e| {
+                matches!(
+                    e,
+                    Event::Key {
+                        pressed: true,
+                        repeat: false,
+                        ..
+                    }
+                )
+            })?;
+            match i.events.remove(at) {
+                Event::Key { key, modifiers, .. } => Some(Shortcut::pressed(key, modifiers)),
+                _ => None,
+            }
+        });
+        let Some(s) = pressed else {
+            return;
+        };
+        self.editor.capturing = None;
+        if s.key == Key::Escape && s.mods == NONE {
+            return;
+        }
+        if let Some(why) = s.fixed() {
+            self.editor.note = Some(format!("{why}, so it can't be given to a command."));
+            return;
+        }
+        match self.keymap.find(s) {
+            Some(c) if c == cmd => {}
+            Some(other) => self.editor.clash = Some((cmd, s, other)),
+            None => {
+                self.keymap.assign(cmd, s);
+                self.editor.note = Some(format!("{} is now {}.", s.text(), cmd.info().name));
+                self.save();
+            }
+        }
+    }
+
+    /// The command search, which gives back the command chosen.
+    fn palette_window(
+        &mut self,
+        ctx: &egui::Context,
+        can_run: impl Fn(Cmd) -> bool,
+    ) -> Option<Cmd> {
+        if !self.palette.open {
+            return None;
+        }
+        let found = search(&self.palette.query);
+        let mut run = None;
+        let mut open = true;
+        egui::Window::new("Find a command")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 60.0))
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                // Taken before the text field sees them.
+                let (up, down, enter, esc) = ui.input_mut(|i| {
+                    (
+                        i.consume_key(NONE, Key::ArrowUp),
+                        i.consume_key(NONE, Key::ArrowDown),
+                        i.consume_key(NONE, Key::Enter),
+                        i.consume_key(NONE, Key::Escape),
+                    )
+                });
+                let field = ui.add(
+                    egui::TextEdit::singleline(&mut self.palette.query)
+                        .hint_text("Type to find a command")
+                        .desired_width(f32::INFINITY),
+                );
+                let field = field.accessible_name("Type a command's name");
+                if self.palette.focus {
+                    field.request_focus();
+                    self.palette.focus = false;
+                }
+                if field.changed() {
+                    self.palette.chosen = 0;
+                }
+                let last = found.len().saturating_sub(1);
+                if up {
+                    self.palette.chosen = self.palette.chosen.saturating_sub(1);
+                }
+                if down {
+                    self.palette.chosen = (self.palette.chosen + 1).min(last);
+                }
+                self.palette.chosen = self.palette.chosen.min(last);
+                if esc {
+                    open = false;
+                }
+                if found.is_empty() {
+                    ui.weak("No command has that name.");
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (n, &cmd) in found.iter().enumerate() {
+                            let i = cmd.info();
+                            let chosen = n == self.palette.chosen;
+                            let enabled = can_run(cmd);
+                            let row = egui::Button::selectable(
+                                chosen,
+                                (
+                                    i.name,
+                                    RichText::new(format!("  {}", i.group)).weak().small(),
+                                ),
+                            )
+                            .right_text(RichText::new(self.keymap.text(cmd)).strong())
+                            .min_size(egui::vec2(ui.available_width(), 0.0));
+                            let r = ui.add_enabled(enabled, row).accessible_name(i.name);
+                            if chosen && (up || down) {
+                                r.scroll_to_me(None);
+                            }
+                            if r.clicked() || (chosen && enter && enabled) {
+                                run = Some(cmd);
+                            }
+                        }
+                    });
+            });
+        if run.is_some() || !open {
+            self.palette.open = false;
+            ctx.request_repaint();
+        }
+        run
+    }
+
+    /// Settings → Key commands: every command's keys, to change.
+    fn editor_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.editor.open;
+        egui::Window::new("Key commands")
+            .open(&mut open)
+            .default_width(560.0)
+            .default_height(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.editor.filter)
+                            .hint_text("Find a command")
+                            .desired_width(240.0),
+                    )
+                    .accessible_name("Find a command to change");
+                    if ui
+                        .button("Reset all")
+                        .on_hover_text("Every command back to its keys out of the box")
+                        .clicked()
+                    {
+                        self.keymap = Keymap::default();
+                        self.editor.note = Some("Every command has its first keys again.".into());
+                        self.save();
+                    }
+                });
+                if let Some(cmd) = self.editor.capturing {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!(
+                            "Press the key for {}, with Ctrl, Alt or Shift if you like. Esc to stop.",
+                            cmd.info().name
+                        ),
+                    );
+                }
+                if let Some((cmd, s, other)) = self.editor.clash {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!(
+                            "{} is already {}. Move it to {}?",
+                            s.text(),
+                            other.info().name,
+                            cmd.info().name
+                        ));
+                        if ui.button("Move it").clicked() {
+                            self.keymap.assign(cmd, s);
+                            self.editor.clash = None;
+                            self.editor.note = Some(format!(
+                                "{} is now {}, and no longer {}.",
+                                s.text(),
+                                cmd.info().name,
+                                other.info().name
+                            ));
+                            self.save();
+                        }
+                        if ui.button("Leave it").clicked() {
+                            self.editor.clash = None;
+                        }
+                    });
+                }
+                if let Some(n) = &self.editor.note {
+                    ui.label(n);
+                }
+                ui.separator();
+                let shown = search(&self.editor.filter);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::Grid::new("key commands")
+                        .striped(true)
+                        .min_col_width(60.0)
+                        .num_columns(4)
+                        .show(ui, |ui| {
+                            for i in COMMANDS.iter().filter(|i| shown.contains(&i.cmd)) {
+                                self.editor_row(ui, i);
+                                ui.end_row();
+                            }
+                        });
+                    ui.add_space(8.0);
+                    ui.strong("Keys that can't be changed");
+                    egui::Grid::new("fixed keys").striped(true).show(ui, |ui| {
+                        for (keys, what) in FIXED {
+                            ui.strong(*keys);
+                            ui.label(*what);
+                            ui.end_row();
+                        }
+                    });
+                    ui.weak("Letters, Space and the like work when no text field has the keyboard.");
+                });
+            });
+        self.editor.open = open;
+        if !open {
+            self.editor.capturing = None;
+            self.editor.clash = None;
+        }
+    }
+
+    fn editor_row(&mut self, ui: &mut egui::Ui, i: &Info) {
+        let r = ui.label(i.name);
+        if !i.hint.is_empty() {
+            r.on_hover_text(i.hint);
+        }
+        ui.weak(i.group);
+        ui.horizontal(|ui| {
+            let keys = self.keymap.of(i.cmd).to_vec();
+            if keys.is_empty() {
+                ui.weak("no key");
+            }
+            for s in keys {
+                if ui
+                    .add(
+                        egui::Button::new(format!("{} ✕", s.text()))
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                    )
+                    .accessible_name(format!("Remove {} from {}", s.text(), i.name))
+                    .on_hover_text("Remove this key")
+                    .clicked()
+                {
+                    self.keymap.remove(i.cmd, s);
+                    self.save();
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            let waiting = self.editor.capturing == Some(i.cmd);
+            if ui
+                .add(egui::Button::selectable(
+                    waiting,
+                    if waiting { "Press a key…" } else { "Add key" },
+                ))
+                .accessible_name(format!("Add a key for {}", i.name))
+                .clicked()
+            {
+                self.editor.capturing = (!waiting).then_some(i.cmd);
+                self.editor.clash = None;
+                self.editor.note = None;
+            }
+            let default = self.keymap.of(i.cmd) == i.keys;
+            if ui
+                .add_enabled(!default, egui::Button::new("Reset"))
+                .accessible_name(format!("Reset the keys for {}", i.name))
+                .on_hover_text(match i.keys {
+                    [] => "Back to no key".to_string(),
+                    keys => format!(
+                        "Back to {}",
+                        keys.iter().map(|s| s.text()).collect::<Vec<_>>().join(", ")
+                    ),
+                })
+                .clicked()
+            {
+                self.keymap.reset(i.cmd);
+                self.save();
+            }
+        });
+    }
+}
+
+impl App {
+    /// Runs the commands whose keys were pressed. Called before
+    /// anything is drawn, so they come before the controls see the keys.
+    pub(crate) fn command_keys(&mut self, ctx: &egui::Context) {
+        // A clip or marker holding the keyboard is not a text field.
+        let typing = ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx);
+        for cmd in self.commands.pressed(ctx, typing) {
+            self.run(ctx, cmd);
+        }
+    }
+
+    /// The command search and key commands windows.
+    pub(crate) fn command_windows(&mut self, ctx: &egui::Context) {
+        let (can_undo, can_redo, idle) = (
+            self.can_undo(),
+            self.can_redo(),
+            self.proj.bundle_job.is_none(),
+        );
+        let chosen = self.commands.palette_window(ctx, |c| match c {
+            Cmd::Undo => can_undo,
+            Cmd::Redo => can_redo,
+            Cmd::ExportBundle | Cmd::ImportBundle => idle,
+            _ => true,
+        });
+        if let Some(cmd) = chosen {
+            self.run(ctx, cmd);
+        }
+        self.commands.editor_window(ctx);
+    }
+
+    fn can_run(&self, cmd: Cmd) -> bool {
+        match cmd {
+            Cmd::Undo => self.can_undo(),
+            Cmd::Redo => self.can_redo(),
+            Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
+            _ => true,
+        }
+    }
+
+    /// A menu entry for the command, with its keys beside it.
+    pub(crate) fn menu_item(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
+        let i = cmd.info();
+        let keys = self.commands.keymap.text(cmd);
+        let mut r = ui.add_enabled(
+            self.can_run(cmd),
+            egui::Button::new(i.name).shortcut_text(keys),
+        );
+        if !i.hint.is_empty() {
+            r = r.on_hover_text(i.hint);
+        }
+        if r.clicked() {
+            ui.close();
+            let ctx = ui.ctx().clone();
+            self.run(&ctx, cmd);
+        }
+    }
+
+    pub(crate) fn run(&mut self, ctx: &egui::Context, cmd: Cmd) {
+        if !self.can_run(cmd) {
+            return;
+        }
+        if cmd.on_timeline() {
+            self.commands.timeline.push(cmd);
+            ctx.request_repaint();
+            return;
+        }
+        match cmd {
+            Cmd::NewProject => self.then(ctx, After::New),
+            Cmd::OpenProject => {
+                self.proj.dialog = Some(Dialog::Open {
+                    found: find_projects(),
+                });
+            }
+            Cmd::Save => self.save_or_ask(ctx),
+            Cmd::SaveAs => {
+                self.proj.dialog = Some(Dialog::SaveAs {
+                    name: String::new(),
+                    then: None,
+                });
+            }
+            Cmd::ExportBundle => self.export_bundle(ctx),
+            Cmd::ImportBundle => self.pick_bundle(),
+            Cmd::Snapshots => self.snapshot_ui.open = true,
+            Cmd::People => self.people.open = true,
+            Cmd::Export => self.export.open = true,
+            Cmd::Undo => self.undo(ctx),
+            Cmd::Redo => self.redo(ctx),
+            Cmd::PlayStop => self.toggle_play(),
+            Cmd::ToStart => self.send(Command::Seek(Frames(0))),
+            Cmd::Record => {
+                self.recording = !self.recording;
+                self.send(Command::SetRecording(self.recording));
+            }
+            Cmd::Loop => {
+                self.looping = !self.looping;
+                self.send_loop();
+            }
+            Cmd::Metronome => {
+                self.metronome.enabled = !self.metronome.enabled;
+                self.send(Command::SetMetronome(self.metronome));
+            }
+            Cmd::CountIn => self.count_in = !self.count_in,
+            Cmd::Tuner => {
+                self.tuner.open = true;
+                let c = self.tuner.command();
+                self.send(c);
+            }
+            Cmd::LessonNotes => self.notes_ui.open = true,
+            Cmd::Comments => self.comment_ui.open = true,
+            Cmd::AudioDevice => self.show_devices = true,
+            Cmd::Plugins => self.effects.show_manager = true,
+            Cmd::PerformanceCheck => self.perf.open = true,
+            Cmd::KeyCommands => self.commands.editor.open = true,
+            Cmd::FindCommand => {
+                let p = &mut self.commands.palette;
+                p.open = true;
+                p.query.clear();
+                p.chosen = 0;
+                p.focus = true;
+            }
+            Cmd::CheckUpdates => self.updates.open = true,
+            Cmd::CrashReports => self.crashes.open = true,
+            Cmd::Split | Cmd::Delete | Cmd::Marker | Cmd::ClearSelection => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_unique_and_every_command_is_listed_once() {
+        for (n, i) in COMMANDS.iter().enumerate() {
+            assert!(
+                COMMANDS[n + 1..]
+                    .iter()
+                    .all(|j| j.id != i.id && j.cmd != i.cmd),
+                "{} twice",
+                i.id
+            );
+            assert_eq!(Cmd::from_id(i.id), Some(i.cmd));
+        }
+    }
+
+    #[test]
+    fn no_two_commands_share_a_key_out_of_the_box() {
+        let mut seen = Vec::new();
+        for i in COMMANDS {
+            for s in i.keys {
+                assert!(s.fixed().is_none(), "{} is fixed", s.text());
+                assert!(!seen.contains(s), "{} twice", s.text());
+                seen.push(*s);
+            }
+        }
+    }
+
+    #[test]
+    fn keys_are_written_and_read_back() {
+        for text in [
+            "Ctrl+Shift+Z",
+            "Space",
+            "Alt+F5",
+            "Ctrl+Alt+Shift+Delete",
+            "Home",
+            "Ctrl+K",
+        ] {
+            let s = Shortcut::parse(text).unwrap();
+            assert_eq!(Shortcut::parse(&s.text()), Some(s));
+        }
+        assert_eq!(
+            Shortcut::parse("ctrl + shift + z"),
+            Some(key(CTRL_SHIFT, Key::Z))
+        );
+        assert_eq!(Shortcut::parse("Hyper+Z"), None);
+        assert_eq!(Shortcut::parse("Ctrl+"), None);
+    }
+
+    #[test]
+    fn only_changed_keys_are_kept() {
+        let mut map = Keymap::default();
+        assert_eq!(map.to_text(), "");
+        map.assign(Cmd::Loop, key(Modifiers::SHIFT, Key::L));
+        map.remove(Cmd::Metronome, key(NONE, Key::K));
+        let text = map.to_text();
+        assert_eq!(text, "loop L, Shift+L\nmetronome none\n");
+        assert_eq!(Keymap::from_text(&text), map);
+        // Lines it doesn't know, and keys that can't be given, are passed over.
+        let read = Keymap::from_text("tempo-tap T\nloop Tab, F6\n");
+        assert_eq!(read.of(Cmd::Loop), &[key(NONE, Key::F6)]);
+    }
+
+    #[test]
+    fn a_key_given_to_another_command_moves() {
+        let mut map = Keymap::default();
+        let s = key(NONE, Key::S);
+        assert_eq!(map.find(s), Some(Cmd::Split));
+        map.assign(Cmd::Save, s);
+        assert_eq!(map.find(s), Some(Cmd::Save));
+        assert!(map.of(Cmd::Split).is_empty());
+        assert_eq!(map.of(Cmd::Save), &[key(CTRL, Key::S), s]);
+        // Resetting Split takes S back.
+        map.reset(Cmd::Split);
+        assert_eq!(map.find(s), Some(Cmd::Split));
+        assert_eq!(map.of(Cmd::Save), &[key(CTRL, Key::S)]);
+    }
+
+    #[test]
+    fn pressed_keys_count_ctrl_and_cmd_as_one() {
+        let ctrl = Modifiers { ctrl: true, ..NONE };
+        let mac = Modifiers {
+            mac_cmd: true,
+            command: true,
+            ..NONE
+        };
+        let map = Keymap::default();
+        for m in [ctrl, mac, Modifiers::COMMAND] {
+            assert_eq!(map.find(Shortcut::pressed(Key::S, m)), Some(Cmd::Save));
+        }
+        // Shift makes it another key.
+        assert_eq!(map.find(Shortcut::pressed(Key::S, Modifiers::SHIFT)), None);
+    }
+
+    #[test]
+    fn search_finds_by_the_start_of_words_and_other_words() {
+        assert_eq!(search("metro")[0], Cmd::Metronome);
+        assert_eq!(search("click")[0], Cmd::Metronome);
+        assert_eq!(search("save")[..2], [Cmd::Save, Cmd::SaveAs]);
+        assert_eq!(search("save as")[0], Cmd::SaveAs);
+        assert_eq!(search("LOOP")[0], Cmd::Loop);
+        assert_eq!(search("bundle"), [Cmd::ExportBundle, Cmd::ImportBundle]);
+        assert_eq!(search("shortcuts")[0], Cmd::KeyCommands);
+        assert!(search("zzz").is_empty());
+        assert_eq!(search("").len(), COMMANDS.len());
+        assert_eq!(search(" ")[0], Cmd::NewProject);
+    }
+}

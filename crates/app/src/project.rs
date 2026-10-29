@@ -834,32 +834,6 @@ impl App {
         }
     }
 
-    /// File menu items for projects.
-    pub(crate) fn project_menu(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        if ui.button("New project").clicked() {
-            self.then(&ctx, After::New);
-            ui.close();
-        }
-        if ui.button("Open project…").clicked() {
-            self.proj.dialog = Some(Dialog::Open {
-                found: find_projects(),
-            });
-            ui.close();
-        }
-        if ui.button("Save").on_hover_text("Ctrl+S").clicked() {
-            self.save_or_ask(&ctx);
-            ui.close();
-        }
-        if ui.button("Save as…").clicked() {
-            self.proj.dialog = Some(Dialog::SaveAs {
-                name: String::new(),
-                then: None,
-            });
-            ui.close();
-        }
-    }
-
     pub(crate) fn save_or_ask(&mut self, ctx: &egui::Context) {
         if self.proj.folder.is_some() {
             if let Err(e) = self.save(ctx) {

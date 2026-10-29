@@ -8,6 +8,7 @@ use egui_kittest::kittest::{NodeT as _, Queryable as _};
 
 use daw_engine::graph::Input;
 
+use crate::commands::Cmd;
 use crate::{App, Track};
 
 fn harness() -> Harness<'static, App> {
@@ -97,7 +98,6 @@ fn every_control_has_a_spoken_name() {
     app.perf.open = true;
     app.export.open = true;
     app.notes_ui.open = true;
-    app.shortcuts_open = true;
     app.comment_ui.open = true;
     app.comments.push(daw_project::Comment {
         id: "c1".into(),
@@ -110,6 +110,9 @@ fn every_control_has_a_spoken_name() {
         resolved: false,
         created: 0,
     });
+    let ctx = h.ctx.clone();
+    h.state_mut().run(&ctx, Cmd::KeyCommands);
+    h.state_mut().run(&ctx, Cmd::FindCommand);
     h.run();
     assert_eq!(unspoken(&h), Vec::<String>::new());
     for name in [
@@ -121,6 +124,11 @@ fn every_control_has_a_spoken_name() {
         "Lesson notes",
         "Add tab block",
         "Section for the new tab block",
+        "Type a command's name",
+        "Find a command to change",
+        "Add a key for Loop on or off",
+        "Remove Space from Play or stop",
+        "Reset the keys for Loop on or off",
     ] {
         assert!(
             names(&h).iter().any(|n| n == name),
@@ -455,4 +463,110 @@ fn comments_are_written_and_deleted_through_the_panel() {
     h.get_by_label("Delete it and its replies for good").click();
     h.run();
     assert!(doc(&h).is_empty());
+}
+
+/// Ctrl+K opens the command search: typing narrows it, the arrow keys
+/// move through it and Enter runs the command.
+#[test]
+fn commands_are_found_by_typing_and_run_with_enter() {
+    let mut h = with_tracks();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run();
+    assert!(
+        h.get_by_label("Type a command's name").is_focused(),
+        "the search has the keyboard"
+    );
+    h.get_by_label("Type a command's name").type_text("metro");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().metronome.enabled, "Enter ran Metronome on or off");
+    assert!(!h.state().commands.palette_open(), "and closed it");
+
+    // Letters typed into the search don't run their commands.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run();
+    h.get_by_label("Type a command's name").type_text("loop");
+    h.run();
+    assert!(!h.state().looping);
+    h.key_press(Key::ArrowDown);
+    h.key_press(Key::ArrowUp);
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().looping, "Loop on or off is first for \"loop\"");
+
+    // Esc closes it without running anything.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run();
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().commands.palette_open());
+    assert!(h.state().looping && h.state().metronome.enabled);
+}
+
+/// A key is given to a command in Settings → Key commands, by pressing
+/// it; one that another command has moves only when asked.
+#[test]
+fn keys_are_changed_in_the_key_commands_window() {
+    let mut h = with_tracks();
+    let ctx = h.ctx.clone();
+    h.state_mut().run(&ctx, Cmd::KeyCommands);
+    h.run();
+    // Typing narrows the list, as in the command search.
+    h.get_by_label("Find a command to change").focus();
+    h.run();
+    h.get_by_label("Find a command to change")
+        .type_text("o on or");
+    h.run();
+    assert!(h.query_by_label("Add a key for Save").is_none());
+    h.get_by_label("Add a key for Loop on or off").click();
+    h.run();
+    assert!(h.state().commands.editor.capturing.is_some());
+    h.key_press(Key::F6);
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Loop), "L, F6");
+    h.key_press(Key::F6);
+    h.run();
+    assert!(h.state().looping, "F6 loops now");
+
+    // K is the metronome's: asked first, then moved.
+    h.get_by_label("Add a key for Loop on or off").click();
+    h.run();
+    h.key_press(Key::K);
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Metronome), "K");
+    h.get_by_label("Move it").click();
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Loop), "L, F6, K");
+    assert_eq!(h.state().commands.keymap.text(Cmd::Metronome), "");
+
+    // Keys that move the keyboard around can't be given.
+    h.get_by_label("Add a key for Loop on or off").click();
+    h.run();
+    h.key_press(Key::Tab);
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Loop), "L, F6, K");
+
+    h.get_by_label("Remove L from Loop on or off").click();
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Loop), "F6, K");
+    h.get_by_label("Reset the keys for Loop on or off").click();
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Loop), "L");
+    h.get_by_label("Reset the keys for Metronome on or off")
+        .click();
+    h.run();
+    assert_eq!(h.state().commands.keymap.text(Cmd::Metronome), "K");
+}
+
+/// Menu entries run the same commands and show their keys.
+#[test]
+fn menus_show_each_commands_keys() {
+    let mut h = with_tracks();
+    h.get_by_label("Transport").click();
+    h.run();
+    assert!(h.query_by_label_contains("Ctrl+K").is_none());
+    h.get_by_label_contains("Metronome on or off").click();
+    h.run();
+    assert!(h.state().metronome.enabled);
 }

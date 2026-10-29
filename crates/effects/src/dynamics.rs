@@ -78,23 +78,43 @@ impl Dsp for Compressor {
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let x = db(l.abs().max(r.abs()) as f64);
-            let want = self.reduce(x);
-            let a = if want > self.level {
-                self.attack
-            } else {
-                self.release
-            };
-            self.level = a * self.level + (1.0 - a) * want;
-            let g = (gain(-self.level) * self.makeup) as f32;
-            let g = 1.0 - self.wet + self.wet * g;
+            let g = self.step(l.abs().max(r.abs()));
             *l *= g;
             *r *= g;
         }
     }
 
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        for (i, (l, r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+            let g = self.step(key.0[i].abs().max(key.1[i].abs()));
+            *l *= g;
+            *r *= g;
+        }
+    }
+
+    fn takes_key(&self) -> bool {
+        true
+    }
+
     fn reduction_db(&self) -> f32 {
         -self.level as f32
+    }
+}
+
+impl Compressor {
+    /// The gain for one frame whose level (own or sidechain) is `peak`.
+    #[inline]
+    fn step(&mut self, peak: f32) -> f32 {
+        let x = db(peak as f64);
+        let want = self.reduce(x);
+        let a = if want > self.level {
+            self.attack
+        } else {
+            self.release
+        };
+        self.level = a * self.level + (1.0 - a) * want;
+        let g = (gain(-self.level) * self.makeup) as f32;
+        1.0 - self.wet + self.wet * g
     }
 }
 
@@ -159,36 +179,56 @@ impl Dsp for Gate {
 
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
-            let a = l.abs().max(r.abs()) as f64;
-            self.env = if a > self.env {
-                a
-            } else {
-                self.env * self.env_fall
-            };
-            if self.env >= self.open_at {
-                self.open = true;
-                self.holding = self.hold;
-            } else if self.open && self.env < self.close_at {
-                if self.holding == 0 {
-                    self.open = false;
-                } else {
-                    self.holding -= 1;
-                }
-            }
-            let (target, c) = if self.open {
-                (0.0, self.attack)
-            } else {
-                (-self.depth, self.release)
-            };
-            self.gain_db = target + (self.gain_db - target) * c;
-            let g = gain(self.gain_db) as f32;
+            let g = self.step(l.abs().max(r.abs()));
             *l *= g;
             *r *= g;
         }
     }
 
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        for (i, (l, r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+            let g = self.step(key.0[i].abs().max(key.1[i].abs()));
+            *l *= g;
+            *r *= g;
+        }
+    }
+
+    fn takes_key(&self) -> bool {
+        true
+    }
+
     fn reduction_db(&self) -> f32 {
         self.gain_db as f32
+    }
+}
+
+impl Gate {
+    /// The gain for one frame whose level (own or sidechain) is `peak`.
+    #[inline]
+    fn step(&mut self, peak: f32) -> f32 {
+        let a = peak as f64;
+        self.env = if a > self.env {
+            a
+        } else {
+            self.env * self.env_fall
+        };
+        if self.env >= self.open_at {
+            self.open = true;
+            self.holding = self.hold;
+        } else if self.open && self.env < self.close_at {
+            if self.holding == 0 {
+                self.open = false;
+            } else {
+                self.holding -= 1;
+            }
+        }
+        let (target, c) = if self.open {
+            (0.0, self.attack)
+        } else {
+            (-self.depth, self.release)
+        };
+        self.gain_db = target + (self.gain_db - target) * c;
+        gain(self.gain_db) as f32
     }
 }
 
@@ -342,6 +382,46 @@ mod tests {
         let out = 20.0 * peak(&l[40_000..]).log10();
         assert!(out < -10.0 && out > -16.0, "{out}");
         assert!(e.reduction_db() < -10.0);
+    }
+
+    #[test]
+    fn a_sidechain_drives_the_compressor_and_gate_instead_of_their_own_audio() {
+        // A quiet tone, with a loud one on the sidechain: the compressor
+        // turns the quiet tone down as if it were the loud one.
+        let e = Effect::new(Kind::Compressor);
+        e.set(0, -20.0);
+        e.set(1, 4.0);
+        e.set(4, 0.0);
+        let mut p = e.processor(48_000);
+        let mut l = sine(48_000, 0.1);
+        let mut r = l.clone();
+        let loud = sine(48_000, 1.0);
+        p.process_keyed(&mut l, &mut r, (&loud, &loud));
+        let out = 20.0 * (peak(&l[40_000..]) / 0.1).log10();
+        assert!(out < -10.0 && out > -16.0, "{out}");
+
+        // A gate on silence opens when the sidechain plays.
+        let e = Effect::new(Kind::Gate);
+        e.set(0, -40.0);
+        let mut p = e.processor(48_000);
+        let mut l = vec![0.01; 24_000];
+        let mut r = l.clone();
+        let key = sine(24_000, 0.5);
+        p.process_keyed(&mut l, &mut r, (&key, &key));
+        assert!(peak(&l[12_000..]) > 0.0099, "open on the key");
+        let mut l = vec![0.01; 24_000];
+        let mut r = l.clone();
+        let silence = vec![0.0; 24_000];
+        p.process_keyed(&mut l, &mut r, (&silence, &silence));
+        assert!(peak(&l[22_000..]) < 0.0001, "closed on a silent key");
+
+        // An effect without a key ignores it.
+        let e = Effect::new(Kind::Eq);
+        let mut p = e.processor(48_000);
+        let mut l = sine(1000, 0.5);
+        let mut r = l.clone();
+        p.process_keyed(&mut l, &mut r, (&silence[..1000], &silence[..1000]));
+        assert!((peak(&l) - 0.5).abs() < 0.01);
     }
 
     #[test]

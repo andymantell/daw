@@ -336,6 +336,7 @@ impl App {
         if !cfg!(test) {
             app.effects.start_scan();
         }
+        app.look_for_recovery();
         app.audio = app.open_device(eng);
         app.sign_in();
         if people::ask_name_at_start(&app.me) {

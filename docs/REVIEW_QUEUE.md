@@ -415,6 +415,20 @@ back) and `app-lesson-notes.png`. Projects live in
       comment in File → People… and change the tempo on the second.
       Pass: that change is refused on the first, with a message saying
       why. Say if the wording of the windows is clear.
+- [ ] **1.8 Crash recovery for a project never saved.** Screenshots:
+      `app-crash-recovery.png` (the offer at start) and
+      `app-crash-recovered.png` (after Restore). Start a new project,
+      drop in two files, record a take and add a marker. Wait 15
+      seconds, then end the app in Task Manager (End task) instead of
+      closing it. Start it again. Pass: it offers to restore the unsaved
+      project, Restore brings back the tracks, take and marker, still
+      unsaved, and Save works as usual. Then repeat and pick Discard:
+      nothing comes back, and the next start offers nothing. The copy
+      lives in `%USERPROFILE%\DAW\Recovery`; check that folder is empty
+      after saving, and after closing with Don't save. Known limits: a
+      take still being recorded at the moment of the crash isn't in the
+      copy (its file stays in `Unsaved takes`), and two copies of the
+      app open at once share one recovery file.
 - [ ] **1.7 Lesson notes.** Practice → Lesson notes…, type a few lines,
       save, reopen. Pass: the notes come back. They are plain text for
       now; say what you would want first: headings, tab blocks pinned

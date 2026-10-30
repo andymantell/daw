@@ -857,7 +857,7 @@ pub enum Plugin {
     Local(LocalPlugin),
     Remote(RemotePlugin),
     /// A plugin in the CLAP format, in this process.
-    Clap(ClapPlugin),
+    Clap(Box<ClapPlugin>),
 }
 
 impl Plugin {
@@ -1089,7 +1089,7 @@ impl Library {
             Library::Clap(m) => {
                 let (p, x) =
                     crate::clap::instantiate_with(m.clone(), cid, rate, max_block, layout)?;
-                (Plugin::Clap(p), Processor::Clap(x))
+                (Plugin::Clap(Box::new(p)), Processor::Clap(x))
             }
         })
     }

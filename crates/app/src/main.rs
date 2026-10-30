@@ -18,6 +18,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod agent;
+mod audio_setup;
 mod automation;
 mod browser;
 mod commands;
@@ -411,6 +412,8 @@ struct App {
     simple: simple_mode::Simple,
     proj: project::Proj,
     latency: latency::Latency,
+    /// The guided audio setup.
+    audio_setup: audio_setup::AudioSetup,
     updates: update::Updates,
     crashes: crash::Crashes,
     /// This install's identity, and the people windows.
@@ -555,6 +558,9 @@ impl App {
             ),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
+            audio_setup: audio_setup::AudioSetup::new(
+                (!cfg!(test)).then(|| config_dir().join("audio-setup.txt")),
+            ),
             updates: update::Updates::new((!cfg!(test)).then(|| config_dir().join("updates.txt"))),
             crashes: crash::Crashes::new(if cfg!(test) {
                 std::env::temp_dir().join("daw-test-no-crash-reports")
@@ -581,6 +587,10 @@ impl App {
         }
         app.look_for_recovery();
         app.audio = app.open_device(eng);
+        // First run with no device settings: the guide helps pick one.
+        if app.audio_setup.first_run(!app.saved.profiles.is_empty()) {
+            app.audio_setup_command(Cmd::AudioSetup);
+        }
         app.midi.start(&mut app.ctl);
         app.send_capture();
         app.sign_in();
@@ -687,7 +697,7 @@ impl App {
         }
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
-        self.send(self.tuner.command());
+        self.send_input_tap();
         self.send(self.meters.command());
         self.send(self.practice());
         self.send_loop();
@@ -1803,6 +1813,7 @@ impl App {
     fn device_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_devices;
         let mut apply = false;
+        let mut guide = false;
         egui::Window::new("Audio device")
             .open(&mut open)
             .resizable(false)
@@ -2031,6 +2042,9 @@ impl App {
                     if ui.button("Apply").clicked() {
                         apply = true;
                     }
+                    if ui.button("Guided setup…").on_hover_text("Step by step, with checks").clicked() {
+                        guide = true;
+                    }
                     if ui.button("Rescan devices").clicked() {
                         self.hosts = audio::list();
                         self.input_devices = input_names(&draft_host(&self.draft));
@@ -2042,6 +2056,9 @@ impl App {
         self.show_devices = open;
         if apply {
             self.apply_draft();
+        }
+        if guide {
+            self.run(ctx, Cmd::AudioSetup);
         }
     }
 
@@ -2581,6 +2598,8 @@ impl eframe::App for App {
                 self.top_menu(ui, "Settings", |app, ui| {
                     for c in [
                         Cmd::AudioDevice,
+                        Cmd::AudioSetup,
+                        Cmd::MeasureLatency,
                         Cmd::Plugins,
                         Cmd::PerformanceCheck,
                         Cmd::DrumKits,
@@ -2728,6 +2747,7 @@ impl eframe::App for App {
             .show(ui, |ui| self.panes(ui));
         self.device_window(&ctx);
         self.latency_window(&ctx);
+        self.audio_setup_update(&ctx);
         self.effects.manager_window(&ctx);
         self.effects.credits_window(&ctx);
         self.poll_freezing(&ctx);

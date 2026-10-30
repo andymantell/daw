@@ -45,6 +45,15 @@ pub struct Project {
     pub timecode: TimecodeSetup,
     /// Moments in the picture to write music to, in time order.
     pub hit_points: Vec<HitPoint>,
+    /// The song's key and scale, if one is set: the note editor shades
+    /// it and can keep notes on it. A note clip can have its own.
+    pub scale: Option<crate::Scale>,
+    /// Groove templates: timing and accents taken from a part, to put
+    /// other parts in the same feel. In the order made.
+    pub grooves: Vec<Groove>,
+    /// Controls on MIDI devices tied to settings (MIDI learn), in the
+    /// order made.
+    pub midi_maps: Vec<MidiMap>,
 }
 
 impl Default for Project {
@@ -69,6 +78,9 @@ impl Default for Project {
             cue_mixes: Vec::new(),
             timecode: TimecodeSetup::default(),
             hit_points: Vec::new(),
+            scale: None,
+            grooves: Vec::new(),
+            midi_maps: Vec::new(),
         }
     }
 }
@@ -925,6 +937,139 @@ pub struct HitPoint {
     pub name: String,
 }
 
+/// What a note clip's controller lane plays (see
+/// [`NoteClip::controllers`]), with the lane's `param` naming it:
+/// `cc:<number>`, `bend` or `pressure`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Controller {
+    /// A MIDI controller, 0 to 127 (1 is the mod wheel, 64 the sustain
+    /// pedal), with values 0 to 127.
+    Cc(u8),
+    /// The pitch wheel, −8192 to 8191, 0 at rest.
+    PitchBend,
+    /// Pressure on the whole keyboard, 0 to 127.
+    Pressure,
+}
+
+impl Controller {
+    /// The ones offered first, as most parts use them.
+    pub const COMMON: [Controller; 8] = [
+        Controller::Cc(1),
+        Controller::PitchBend,
+        Controller::Cc(64),
+        Controller::Cc(11),
+        Controller::Cc(7),
+        Controller::Cc(10),
+        Controller::Cc(74),
+        Controller::Pressure,
+    ];
+
+    pub fn param(self) -> String {
+        match self {
+            Controller::Cc(n) => format!("cc:{n}"),
+            Controller::PitchBend => "bend".into(),
+            Controller::Pressure => "pressure".into(),
+        }
+    }
+
+    pub fn from_param(p: &str) -> Option<Controller> {
+        match p {
+            "bend" => Some(Controller::PitchBend),
+            "pressure" => Some(Controller::Pressure),
+            _ => {
+                let n: u8 = p.strip_prefix("cc:")?.parse().ok()?;
+                (n <= 127).then_some(Controller::Cc(n))
+            }
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Controller::Cc(n) => match n {
+                1 => "Mod wheel (CC 1)".into(),
+                2 => "Breath (CC 2)".into(),
+                4 => "Foot pedal (CC 4)".into(),
+                7 => "Volume (CC 7)".into(),
+                10 => "Pan (CC 10)".into(),
+                11 => "Expression (CC 11)".into(),
+                64 => "Sustain pedal (CC 64)".into(),
+                71 => "Resonance (CC 71)".into(),
+                74 => "Brightness (CC 74)".into(),
+                _ => format!("Controller {n}"),
+            },
+            Controller::PitchBend => "Pitch wheel".into(),
+            Controller::Pressure => "Pressure".into(),
+        }
+    }
+
+    /// The lowest and highest values, and where it rests.
+    pub fn range(self) -> (f64, f64, f64) {
+        match self {
+            Controller::PitchBend => (-8192.0, 8191.0, 0.0),
+            Controller::Cc(7) => (0.0, 127.0, 100.0),
+            Controller::Cc(10) => (0.0, 127.0, 64.0),
+            Controller::Cc(11) => (0.0, 127.0, 127.0),
+            Controller::Cc(74) => (0.0, 127.0, 64.0),
+            Controller::Cc(_) | Controller::Pressure => (0.0, 127.0, 0.0),
+        }
+    }
+}
+
+/// A groove template (roadmap 3.1): the feel of a part, as how far each
+/// step of a grid is pushed early or late and how hard it is played,
+/// over a stretch (a bar, say) that repeats. Taken from notes or from
+/// audio; applying it moves notes towards it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Groove {
+    pub id: String,
+    pub name: String,
+    /// The grid step, in ticks at [`PPQ`].
+    pub step: i64,
+    /// One per step over the stretch it repeats after, from the start
+    /// of a bar.
+    pub steps: Vec<GrooveStep>,
+}
+
+impl Groove {
+    /// How long it is before it repeats, in ticks.
+    pub fn len(&self) -> i64 {
+        self.step * self.steps.len() as i64
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+}
+
+/// One step of a [`Groove`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GrooveStep {
+    /// How far from the grid line notes on it land, in ticks (negative
+    /// for early).
+    pub offset: i64,
+    /// How hard, against the part's average: 1 as played on average,
+    /// above for an accent.
+    pub accent: f64,
+    /// Whether the part played on this step; a step it never played
+    /// keeps the grid and leaves velocities alone.
+    pub played: bool,
+}
+
+/// A control on a MIDI device tied to a setting (MIDI learn): moving it
+/// sets the setting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MidiMap {
+    pub id: String,
+    /// The controller's channel (0 to 15) and number (0 to 127).
+    pub channel: u8,
+    pub cc: u8,
+    /// The track whose setting it is, by id.
+    pub track: String,
+    /// Which setting, named as an automation lane names it (see
+    /// [`Lane::param`]).
+    pub param: String,
+}
+
 /// A change of time signature, from the start of a bar.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeterChange {
@@ -1082,6 +1227,10 @@ pub struct Note {
     pub articulation: Option<Articulation>,
     /// 0 to 1: the chance the note plays at all, for patterns; 1 always.
     pub chance: f64,
+    /// How the note changes while it sounds: a line each for its pitch,
+    /// pressure and timbre (see [`Note::PITCH`] and the others), with
+    /// points in ticks from the note's start. Empty for most notes.
+    pub expression: Vec<Lane>,
 }
 
 impl Note {
@@ -1099,7 +1248,36 @@ impl Note {
             techniques: Vec::new(),
             articulation: None,
             chance: 1.0,
+            expression: Vec::new(),
         }
+    }
+
+    /// Per-note expression: the pitch, in semitones from the note's
+    /// own (−48 to +48).
+    pub const PITCH: &'static str = "pitch";
+    /// Per-note expression: pressure, 0 to 1.
+    pub const PRESSURE: &'static str = "pressure";
+    /// Per-note expression: timbre (brightness), 0 to 1.
+    pub const TIMBRE: &'static str = "timbre";
+    /// The kinds of per-note expression, in the order shown.
+    pub const EXPRESSIONS: [&'static str; 3] = [Note::PITCH, Note::PRESSURE, Note::TIMBRE];
+
+    /// The note's line for one kind of expression, if it has one with
+    /// points.
+    pub fn expression(&self, kind: &str) -> Option<&Lane> {
+        (self.expression.iter()).find(|l| l.param == kind && !l.points.is_empty())
+    }
+
+    /// The note's line for one kind of expression, made if missing.
+    pub fn expression_mut(&mut self, kind: &str) -> &mut Lane {
+        let i = match self.expression.iter().position(|l| l.param == kind) {
+            Some(i) => i,
+            None => {
+                self.expression.push(Lane::new(kind));
+                self.expression.len() - 1
+            }
+        };
+        &mut self.expression[i]
     }
 
     pub fn end(&self) -> i64 {
@@ -1127,6 +1305,7 @@ impl Note {
             && self.techniques == other.techniques
             && self.articulation == other.articulation
             && self.chance == other.chance
+            && self.expression == other.expression
     }
 }
 
@@ -1319,6 +1498,12 @@ pub struct NoteClip {
     /// Which recorded pass made it (from 0), or `None` for one drawn or
     /// imported.
     pub take: Option<u32>,
+    /// Its own key and scale, over the project's.
+    pub scale: Option<crate::Scale>,
+    /// Controller lanes: a line each for a MIDI controller, the pitch
+    /// wheel or pressure (see [`Controller`]), with points in ticks from
+    /// the clip's content start, in the controller's own MIDI units.
+    pub controllers: Vec<Lane>,
 }
 
 impl NoteClip {
@@ -1332,7 +1517,22 @@ impl NoteClip {
             notes: Vec::new(),
             muted: false,
             take: None,
+            scale: None,
+            controllers: Vec::new(),
         }
+    }
+
+    /// The clip's controller lane for `c`, made if missing.
+    pub fn controller_mut(&mut self, c: Controller) -> &mut Lane {
+        let param = c.param();
+        let i = match self.controllers.iter().position(|l| l.param == param) {
+            Some(i) => i,
+            None => {
+                self.controllers.push(Lane::new(param));
+                self.controllers.len() - 1
+            }
+        };
+        &mut self.controllers[i]
     }
 
     pub fn end(&self) -> i64 {

@@ -233,6 +233,9 @@ impl App {
             cue_mixes: self.cues.mixes.clone(),
             timecode: self.timecode.clone(),
             hit_points: self.hit_points.clone(),
+            scale: self.scale,
+            grooves: self.grooves.clone(),
+            midi_maps: self.midi_maps.clone(),
         }
     }
 
@@ -461,6 +464,9 @@ impl App {
                 ..h.clone()
             })
             .collect();
+        self.scale = p.scale;
+        self.grooves = p.grooves.clone();
+        self.midi_maps = p.midi_maps.clone();
         let mut old: HashMap<String, Track> = (self.tracks.drain(..))
             .map(|t| (t.key.clone(), t))
             .collect();

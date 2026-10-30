@@ -306,9 +306,10 @@ impl App {
         if captured.is_empty() {
             return false;
         }
+        let learned = self.midi_learn(&captured);
         let passes = self.midi.take(&captured, self.rate);
         if passes.is_empty() {
-            return false;
+            return learned;
         }
         let map = self.tempo_map();
         let mode = self.midi.mode;

@@ -7,8 +7,8 @@
 use std::sync::{Arc, Mutex};
 
 use daw_engine::engine::{self, Command};
-use daw_engine::graph::{InstrumentSpec, NoteSpec, Session, TrackSpec};
-use daw_engine::midi::{Captured, Event, Instrument, Kind, LiveEvent};
+use daw_engine::graph::{Control, ControlSpec, ExprSpec, InstrumentSpec, NoteSpec, Session, TrackSpec};
+use daw_engine::midi::{Captured, Event, Expression, Instrument, Kind, LiveEvent};
 use daw_engine::synth::{SimpleSynth, SynthParams};
 use daw_engine::time::{Frames, PPQ, Tempo, TempoMap, Ticks, TimeSignature};
 
@@ -45,6 +45,7 @@ fn note(beat: f64, beats: f64, pitch: u8) -> NoteSpec {
         pitch,
         velocity: 100,
         channel: 0,
+        expr: (0, 0),
     }
 }
 
@@ -59,6 +60,20 @@ fn track(notes: Vec<NoteSpec>, latency: u32) -> TrackSpec {
 /// `from`, with the loop and practice settings given, and returns what
 /// the instrument saw: (frame, kind) for note-ons and note-offs.
 fn play(
+    s: &Session,
+    from: i64,
+    frames: usize,
+    looping: Option<(i64, i64)>,
+    practice: Option<(f64, f64)>,
+) -> Vec<(i64, Kind)> {
+    play_all(s, from, frames, looping, practice)
+        .into_iter()
+        .filter(|(_, k)| matches!(k, Kind::NoteOn { .. } | Kind::NoteOff { .. }))
+        .collect()
+}
+
+/// As [`play`], with every event the instrument saw.
+fn play_all(
     s: &Session,
     from: i64,
     frames: usize,
@@ -94,14 +109,10 @@ fn play(
         eng.process(&mut l[..n], &mut r[..n]);
         done += n;
     }
-    let out: Vec<(i64, Kind)> = log
-        .lock()
+    log.lock()
         .unwrap()
         .iter()
         .map(|(f, e)| (*f, e.kind))
-        .collect();
-    out.into_iter()
-        .filter(|(_, k)| matches!(k, Kind::NoteOn { .. } | Kind::NoteOff { .. }))
         .collect()
 }
 
@@ -366,4 +377,97 @@ fn the_simple_synth_plays_a_clips_note_through_the_engine() {
     assert_eq!(peak(&l[..BEAT as usize / 2]), 0.0);
     assert!(peak(&l[BEAT as usize / 2..BEAT as usize]) > 0.05);
     assert_eq!(peak(&l[BEAT as usize + 2000..]), 0.0);
+}
+
+#[test]
+fn controller_lanes_play_and_catch_up_after_a_jump() {
+    let mut s = session();
+    let mut t = track(vec![note(0.0, 4.0, 60)], 0);
+    t.controls = vec![ControlSpec {
+        channel: 1,
+        control: Control::Cc(1),
+        points: vec![(Ticks(0), 10), (Ticks(PPQ), 64), (Ticks(PPQ * 2), 127)].into(),
+    }];
+    s.tracks.push(t);
+    let cc = |v: u8| Kind::Control {
+        number: 1,
+        value: v,
+    };
+    // From the start: each point on its beat.
+    let got = play_all(&s, 0, (BEAT * 3) as usize, None, None);
+    let ctl: Vec<(i64, Kind)> = got
+        .iter()
+        .copied()
+        .filter(|(_, k)| matches!(k, Kind::Control { .. }))
+        .collect();
+    assert_eq!(ctl, vec![(0, cc(10)), (BEAT, cc(64)), (2 * BEAT, cc(127))]);
+    // From half way through the second beat: the value in force first.
+    let got = play_all(&s, BEAT + BEAT / 2, BEAT as usize, None, None);
+    let ctl: Vec<(i64, Kind)> = got
+        .iter()
+        .copied()
+        .filter(|(_, k)| matches!(k, Kind::Control { .. }))
+        .collect();
+    assert_eq!(ctl, vec![(0, cc(64)), (BEAT / 2, cc(127))]);
+    // Round a loop over beats 2 to 3: caught up again each time round.
+    let got = play_all(&s, BEAT, (BEAT * 2) as usize, Some((BEAT, 2 * BEAT)), None);
+    let firsts = got
+        .iter()
+        .filter(|(_, k)| *k == cc(64))
+        .count();
+    assert_eq!(firsts, 2, "{got:?}");
+}
+
+#[test]
+fn a_notes_expression_reaches_the_instrument_while_it_sounds() {
+    let mut s = session();
+    let mut n = note(1.0, 1.0, 60);
+    n.expr = (0, 3);
+    let mut t = track(vec![note(0.0, 0.5, 48), n], 0);
+    t.expression = vec![
+        ExprSpec {
+            at: Ticks(PPQ),
+            kind: Expression::Tuning,
+            value: 0.0,
+        },
+        ExprSpec {
+            at: Ticks(PPQ + PPQ / 2),
+            kind: Expression::Tuning,
+            value: 1.0,
+        },
+        // After the note ends: never sent.
+        ExprSpec {
+            at: Ticks(PPQ * 3),
+            kind: Expression::Pressure,
+            value: 1.0,
+        },
+    ]
+    .into();
+    s.tracks.push(t);
+    let got = play_all(&s, 0, (BEAT * 4) as usize, None, None);
+    let on_frame = got.iter().find(|(_, k)| on(60)(k)).unwrap().0;
+    let id = match got.iter().find(|(_, k)| on(60)(k)).unwrap().1 {
+        Kind::NoteOn { id, .. } => id,
+        _ => unreachable!(),
+    };
+    let exprs: Vec<(i64, Kind)> = got
+        .iter()
+        .copied()
+        .filter(|(_, k)| matches!(k, Kind::NoteExpression { .. }))
+        .collect();
+    let at = |value: f32| Kind::NoteExpression {
+        id,
+        pitch: 60,
+        kind: Expression::Tuning,
+        value,
+    };
+    assert_eq!(
+        exprs,
+        vec![(on_frame, at(0.0)), (BEAT + BEAT / 2, at(1.0))],
+        "{got:?}"
+    );
+    // The note-on comes before its first expression on the same frame.
+    let i_on = got.iter().position(|(_, k)| on(60)(k)).unwrap();
+    let i_x = got.iter().position(|(_, k)| *k == at(0.0)).unwrap();
+    assert!(i_on < i_x);
 }

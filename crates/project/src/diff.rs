@@ -59,6 +59,23 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
             ),
         );
     }
+    if before.scale != after.scale {
+        let name = |s: Option<crate::Scale>| s.map_or("no key".to_string(), |s| s.label());
+        say(
+            "Song",
+            format!("Key {} → {}", name(before.scale), name(after.scale)),
+        );
+    }
+    if before.grooves.len() != after.grooves.len() {
+        say(
+            "Song",
+            format!(
+                "Grooves {} → {}",
+                before.grooves.len(),
+                after.grooves.len()
+            ),
+        );
+    }
     // Tempo and time signature changes later in the song.
     let was: HashMap<&str, _> = (before.tempo_changes.iter())
         .map(|c| (c.id.as_str(), c))
@@ -519,7 +536,7 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                 if (b.start, b.len, b.offset) != (c.start, c.len, c.offset) {
                     moved.push(c);
                 }
-                if b.notes != c.notes {
+                if b.notes != c.notes || b.controllers != c.controllers || b.scale != c.scale {
                     edited.push(c);
                 }
                 if b.muted != c.muted {

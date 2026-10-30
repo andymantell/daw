@@ -5,7 +5,11 @@
 //! square, the last two band-limited), an attack/decay/sustain/release
 //! envelope on the level and a low-pass filter. Sixteen voices; the
 //! oldest is taken when all are busy. The pitch wheel bends two
-//! semitones each way.
+//! semitones each way; the mod wheel adds vibrato; volume (7) and
+//! expression (11) set the level and brightness (74) moves the filter.
+//! Each note's own expression (roadmap 3.1) bends its pitch, its
+//! pressure sets its level and its timbre moves its filter, as does
+//! pressure on the whole keyboard for every note on the channel.
 //!
 //! Its settings are shared with the UI as atomics ([`SynthParams`]), so
 //! moving a control while it plays needs no new graph.
@@ -13,7 +17,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::midi::{Event, Instrument, Kind, pitch_hz};
+use crate::midi::{Event, Expression, Instrument, Kind, pitch_hz};
 
 /// Which waveform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +156,13 @@ struct Voice {
     stage: Stage,
     channel: u8,
     pitch: u8,
+    /// The note's id, for its expression.
+    id: u32,
+    /// The note's own expression: semitones of tuning, pressure (as a
+    /// level, 1 when none came) and timbre (0.5 as set).
+    tune: f32,
+    pressure: f32,
+    timbre: f32,
     /// Oscillator phase, 0 to 1.
     phase: f32,
     /// Envelope level, 0 to 1.
@@ -168,6 +179,10 @@ impl Voice {
         stage: Stage::Off,
         channel: 0,
         pitch: 0,
+        id: 0,
+        tune: 0.0,
+        pressure: 1.0,
+        timbre: 0.5,
         phase: 0.0,
         env: 0.0,
         velocity: 0.0,
@@ -187,6 +202,14 @@ pub struct SimpleSynth {
     /// Sustain pedal per channel: notes released while it is down wait.
     pedal: [bool; 16],
     held: [[bool; 128]; 16],
+    /// Per channel: the level from volume and expression (and pressure
+    /// on the whole keyboard), the filter's shift in octaves from
+    /// brightness, and the mod wheel's vibrato depth in semitones.
+    level: [[f32; 3]; 16],
+    bright: [f32; 16],
+    vibrato: [f32; 16],
+    /// The vibrato's phase, 0 to 1.
+    lfo: f32,
     clock: u64,
 }
 
@@ -199,6 +222,10 @@ impl SimpleSynth {
             bend: [0.0; 16],
             pedal: [false; 16],
             held: [[false; 128]; 16],
+            level: [[1.0; 3]; 16],
+            bright: [0.0; 16],
+            vibrato: [0.0; 16],
+            lfo: 0.0,
             clock: 0,
         }
     }
@@ -207,7 +234,7 @@ impl SimpleSynth {
         &self.params
     }
 
-    fn note_on(&mut self, channel: u8, pitch: u8, velocity: u8) {
+    fn note_on(&mut self, channel: u8, pitch: u8, velocity: u8, id: u32) {
         self.clock += 1;
         let (ch, p) = (channel as usize & 15, pitch as usize & 127);
         self.held[ch][p] = true;
@@ -220,6 +247,10 @@ impl SimpleSynth {
             stage: Stage::Attack,
             channel: ch as u8,
             pitch: p as u8,
+            id,
+            tune: 0.0,
+            pressure: 1.0,
+            timbre: 0.5,
             phase: if keep_env { v.phase } else { 0.0 },
             env: if keep_env { v.env } else { 0.0 },
             velocity: velocity.clamp(1, 127) as f32 / 127.0,
@@ -261,8 +292,39 @@ impl SimpleSynth {
     fn event(&mut self, e: &Event) {
         match e.kind {
             Kind::NoteOn {
-                pitch, velocity, ..
-            } => self.note_on(e.channel, pitch, velocity),
+                pitch,
+                velocity,
+                id,
+            } => self.note_on(e.channel, pitch, velocity, id),
+            Kind::NoteExpression {
+                id,
+                pitch,
+                kind,
+                value,
+            } => {
+                for v in (self.voices.iter_mut()).filter(|v| {
+                    v.stage != Stage::Off && v.id == id && v.pitch == pitch && v.channel == e.channel
+                }) {
+                    match kind {
+                        Expression::Tuning => v.tune = value.clamp(-48.0, 48.0),
+                        Expression::Pressure => v.pressure = value.clamp(0.0, 1.0),
+                        Expression::Timbre => v.timbre = value.clamp(0.0, 1.0),
+                    }
+                }
+            }
+            Kind::Control { number, value } if matches!(number, 1 | 7 | 11 | 74) => {
+                let ch = e.channel as usize & 15;
+                let v = value as f32 / 127.0;
+                match number {
+                    1 => self.vibrato[ch] = v * 0.5,
+                    7 => self.level[ch][0] = v * v,
+                    11 => self.level[ch][1] = v * v,
+                    _ => self.bright[ch] = (value as f32 - 64.0) / 64.0 * 2.0,
+                }
+            }
+            Kind::Pressure(value) => {
+                self.level[e.channel as usize & 15][2] = value as f32 / 127.0;
+            }
             Kind::NoteOff { pitch, .. } => self.note_off(e.channel, pitch),
             Kind::PitchBend(b) => self.bend[e.channel as usize & 15] = b as f32 / 8192.0 * 2.0,
             Kind::Control { number: 64, value } => {
@@ -281,6 +343,14 @@ impl SimpleSynth {
                 }
             }
             Kind::Control { number: 120, .. } | Kind::AllNotesOff => self.all_off(),
+            Kind::Control { number: 121, .. } => {
+                // Reset all controllers.
+                let ch = e.channel as usize & 15;
+                self.level[ch] = [1.0; 3];
+                self.bright[ch] = 0.0;
+                self.vibrato[ch] = 0.0;
+                self.bend[ch] = 0.0;
+            }
             _ => {}
         }
     }
@@ -297,16 +367,28 @@ impl SimpleSynth {
         let decay = 1.0 / (p.read(&p.decay).max(0.0005) * rate);
         let sustain = p.read(&p.sustain).clamp(0.0, 1.0);
         let release = 1.0 / (p.read(&p.release).max(0.0005) * rate);
-        let cutoff = p.read(&p.cutoff).clamp(20.0, rate * 0.45);
-        // One-pole coefficient for the cutoff, applied twice.
-        let k = 1.0 - (-2.0 * std::f32::consts::PI * cutoff / rate).exp();
+        let cutoff = p.read(&p.cutoff);
         let gain = 10f32.powf(p.read(&p.level_db) / 20.0);
+        // The vibrato for this stretch, at 5.5 Hz, taken at its middle.
+        let lfo = (self.lfo + 5.5 * (to - from) as f32 / rate / 2.0).fract();
+        let wobble = (lfo * std::f32::consts::TAU).sin();
+        self.lfo = (self.lfo + 5.5 * (to - from) as f32 / rate).fract();
         for v in &mut self.voices {
             if v.stage == Stage::Off {
                 continue;
             }
-            let hz = pitch_hz(v.pitch as f64 + self.bend[v.channel as usize] as f64, 440.0) as f32;
+            let ch = v.channel as usize;
+            let semis = self.bend[ch] + v.tune + self.vibrato[ch] * wobble;
+            let hz = pitch_hz(v.pitch as f64 + semis as f64, 440.0) as f32;
             let dt = hz / rate;
+            // One-pole coefficient for the cutoff (moved by brightness
+            // and the note's timbre, two octaves each way), applied
+            // twice.
+            let shift = self.bright[ch] + (v.timbre - 0.5) * 4.0;
+            let cut = (cutoff * 2f32.powf(shift)).clamp(20.0, rate * 0.45);
+            let k = 1.0 - (-2.0 * std::f32::consts::PI * cut / rate).exp();
+            let [vol, expr, press] = self.level[ch];
+            let gain = gain * vol * expr * press * v.pressure;
             for i in from..to {
                 match v.stage {
                     Stage::Attack => {
@@ -439,6 +521,71 @@ mod tests {
             .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
             .count();
         assert!((215..=225).contains(&(crossings / 2)), "{crossings}");
+    }
+
+    #[test]
+    fn a_notes_expression_bends_it_and_pressure_sets_its_level() {
+        let p = Arc::new(SynthParams::default());
+        p.set("wave", 0.0);
+        p.set("attack", 0.001);
+        p.set("cutoff", 20_000.0);
+        let mut s = SimpleSynth::new(48_000, p);
+        let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
+        let x = |kind, value| Event {
+            frame: 0,
+            channel: 0,
+            kind: Kind::NoteExpression {
+                id: 9,
+                pitch: 69,
+                kind,
+                value,
+            },
+        };
+        s.process(
+            &[
+                Event::note_on(0, 0, 69, 127, 9),
+                // An octave up: 880 Hz.
+                x(Expression::Tuning, 12.0),
+            ],
+            &mut l,
+            &mut r,
+        );
+        let tail = &l[24_000..];
+        let crossings = tail
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count();
+        assert!((435..=445).contains(&(crossings / 2)), "{crossings}");
+        let loud = peak(tail);
+        // Another note's expression changes nothing.
+        let other = Event {
+            kind: Kind::NoteExpression {
+                id: 3,
+                pitch: 69,
+                kind: Expression::Pressure,
+                value: 0.0,
+            },
+            ..x(Expression::Pressure, 0.0)
+        };
+        l.fill(0.0);
+        s.process(&[other], &mut l, &mut r);
+        assert!((peak(&l[1000..]) - loud).abs() < loud * 0.05);
+        l.fill(0.0);
+        s.process(&[x(Expression::Pressure, 0.25)], &mut l, &mut r);
+        let soft = peak(&l[1000..]);
+        assert!((soft / loud - 0.25).abs() < 0.03, "{soft} {loud}");
+        // Volume on the channel does the same for every note.
+        l.fill(0.0);
+        let vol = Event {
+            frame: 0,
+            channel: 0,
+            kind: Kind::Control {
+                number: 7,
+                value: 0,
+            },
+        };
+        s.process(&[vol], &mut l, &mut r);
+        assert!(peak(&l[1000..]) < 1e-6);
     }
 
     #[test]

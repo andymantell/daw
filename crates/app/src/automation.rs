@@ -135,15 +135,15 @@ const MOST_PLUGIN_PARAMS: usize = 64;
 const PLUGIN_SLACK: f64 = 1e-3;
 
 /// One setting a lane can be on, as the pane lists it.
-struct Choice {
-    param: String,
-    name: String,
+pub(crate) struct Choice {
+    pub(crate) param: String,
+    pub(crate) name: String,
 }
 
 /// A setting's range for the pane: lowest, highest, and whether it moves
 /// in ratio (frequencies, times).
 #[derive(Clone, Copy)]
-struct Range {
+pub(crate) struct Range {
     min: f64,
     max: f64,
     log: bool,
@@ -151,7 +151,7 @@ struct Range {
 
 impl Range {
     /// Where `v` sits in the range, 0 to 1.
-    fn fraction(self, v: f64) -> f64 {
+    pub(crate) fn fraction(self, v: f64) -> f64 {
         let v = v.clamp(self.min, self.max);
         if self.log && self.min > 0.0 {
             (v.ln() - self.min.ln()) / (self.max.ln() - self.min.ln())
@@ -160,7 +160,7 @@ impl Range {
         }
     }
 
-    fn value(self, k: f64) -> f64 {
+    pub(crate) fn value(self, k: f64) -> f64 {
         let k = k.clamp(0.0, 1.0);
         if self.log && self.min > 0.0 {
             (self.min.ln() + (self.max.ln() - self.min.ln()) * k).exp()
@@ -232,7 +232,7 @@ fn control(t: &Track, param: &str) -> Option<f64> {
 }
 
 /// Sets a track's control.
-fn set_control(t: &mut Track, param: &str, v: f64) {
+pub(crate) fn set_control(t: &mut Track, param: &str, v: f64) {
     match Lane::new(param).target() {
         LaneTarget::Gain => t.mix.gain_db = v as f32,
         LaneTarget::Pan => t.mix.pan = v as f32,
@@ -259,7 +259,7 @@ fn set_control(t: &mut Track, param: &str, v: f64) {
 }
 
 /// The setting's range, if it is there.
-fn range(t: &Track, param: &str) -> Option<Range> {
+pub(crate) fn range(t: &Track, param: &str) -> Option<Range> {
     match Lane::new(param).target() {
         LaneTarget::Gain | LaneTarget::Send(_) => Some(DB),
         LaneTarget::Pan => Some(PAN),
@@ -306,7 +306,7 @@ fn engine_target(t: &Track, sends: &[(&daw_project::Send, usize)], param: &str) 
 }
 
 /// The setting's name, with its effect's.
-fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> String {
+pub(crate) fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> String {
     match Lane::new(param).target() {
         LaneTarget::Gain => "Volume".into(),
         LaneTarget::Pan => "Pan".into(),
@@ -356,7 +356,7 @@ fn text_of(t: &Track, param: &str, v: f64) -> String {
 }
 
 /// Every setting of the track a lane can be on, the track's own first.
-fn choices(t: &Track, buses: &[(String, String)]) -> Vec<Choice> {
+pub(crate) fn choices(t: &Track, buses: &[(String, String)]) -> Vec<Choice> {
     let mut out = vec![
         Choice {
             param: Lane::GAIN.into(),

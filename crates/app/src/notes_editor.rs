@@ -59,7 +59,7 @@ impl Grid {
 
     /// The grid's step in ticks, at the time signature in force at
     /// `at` (a bar's length depends on it).
-    fn ticks(self, map: &TempoMap, at: i64) -> i64 {
+    pub(crate) fn ticks(self, map: &TempoMap, at: i64) -> i64 {
         let sig = map.signature_at(Ticks(at));
         match self {
             Grid::Bar => sig.bar_ticks(),

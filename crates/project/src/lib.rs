@@ -15,6 +15,8 @@ mod identity;
 mod lessons;
 pub mod midifile;
 mod model;
+pub mod noteops;
+mod scale;
 mod snapshots;
 mod templates;
 
@@ -27,11 +29,12 @@ pub use lessons::{
 };
 pub use model::{
     Articulation, Assignment, AutoPoint, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup,
-    CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen,
-    FrozenClip, GainPoint, HitPoint, Lane, LaneTarget, Marker, MeterChange, Note, NoteClip, PPQ,
+    Controller, CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen,
+    FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, Lane, LaneTarget, Marker, MeterChange, MidiMap, Note, NoteClip, PPQ,
     Practice, Project, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
     TrainerSettings,
 };
+pub use scale::{ROOTS, Scale, ScaleKind};
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{
     TEMPLATE_EXTENSION, Template, built_in_templates, template_from_bytes, template_to_bytes,

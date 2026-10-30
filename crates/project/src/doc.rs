@@ -45,8 +45,9 @@ use loro::{
 use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
-    CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, HitPoint,
-    Lane, Marker, MeterChange, Note, NoteClip, Practice, Project, Send, TabBlock, Technique,
+    CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
+    GrooveStep, HitPoint, Lane, Marker, MeterChange, MidiMap, Note, NoteClip, Practice, Project,
+    Scale, Send, TabBlock, Technique,
     TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
@@ -349,6 +350,51 @@ impl ProjectDoc {
             w.put(&song, "tc_offset", p.timecode.offset);
             w.put(&song, "tc_shown", p.timecode.shown);
         }
+        if p.scale.is_some() || song.get("scale").is_some() {
+            w.put(
+                &song,
+                "scale",
+                p.scale.map_or(LoroValue::Null, |s| s.to_text().into()),
+            );
+        }
+
+        // Grooves and MIDI learn: entries only once a project has one.
+        if !p.grooves.is_empty() || self.doc.get_by_str_path("grooves").is_some() {
+            let grooves = self.doc.get_map("grooves");
+            let keep: HashSet<&str> = p.grooves.iter().map(|g| g.id.as_str()).collect();
+            for id in keys(&grooves) {
+                if !keep.contains(id.as_str()) {
+                    w.delete(&grooves, &id);
+                }
+            }
+            for g in &p.grooves {
+                let m = w.child(&grooves, &g.id);
+                w.put(&m, "name", g.name.as_str());
+                w.put(&m, "step", g.step);
+                let steps: Vec<LoroValue> = (g.steps.iter())
+                    .map(|s| {
+                        LoroValue::List(vec![s.offset.into(), s.accent.into(), s.played.into()].into())
+                    })
+                    .collect();
+                w.put(&m, "steps", LoroValue::List(steps.into()));
+            }
+        }
+        if !p.midi_maps.is_empty() || self.doc.get_by_str_path("midi_maps").is_some() {
+            let maps = self.doc.get_map("midi_maps");
+            let keep: HashSet<&str> = p.midi_maps.iter().map(|g| g.id.as_str()).collect();
+            for id in keys(&maps) {
+                if !keep.contains(id.as_str()) {
+                    w.delete(&maps, &id);
+                }
+            }
+            for mm in &p.midi_maps {
+                let m = w.child(&maps, &mm.id);
+                w.put(&m, "channel", mm.channel as i64);
+                w.put(&m, "cc", mm.cc as i64);
+                w.put(&m, "track", mm.track.as_str());
+                w.put(&m, "param", mm.param.as_str());
+            }
+        }
 
         let tracks = self.tracks();
         let keep: HashSet<&str> = p.tracks.iter().map(|t| t.id.as_str()).collect();
@@ -560,7 +606,58 @@ impl ProjectDoc {
             tc.start = string(s, "tc_start").unwrap_or(tc.start.clone());
             tc.offset = int(s, "tc_offset").unwrap_or(tc.offset);
             tc.shown = boolean(s, "tc_shown").unwrap_or(tc.shown);
+            p.scale = string(s, "scale").and_then(|t| Scale::from_text(&t));
         }
+        if let Some(LoroValue::Map(gs)) = root.get("grooves") {
+            for (id, g) in gs.iter() {
+                let LoroValue::Map(g) = g else { continue };
+                let steps = match g.get("steps") {
+                    Some(LoroValue::List(l)) => (l.iter())
+                        .filter_map(|s| match s {
+                            LoroValue::List(s) => match &s[..] {
+                                [
+                                    LoroValue::I64(offset),
+                                    LoroValue::Double(accent),
+                                    LoroValue::Bool(played),
+                                ] if accent.is_finite() => Some(GrooveStep {
+                                    offset: *offset,
+                                    accent: accent.clamp(0.0, 8.0),
+                                    played: *played,
+                                }),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                p.grooves.push(Groove {
+                    id: id.to_string(),
+                    name: string(g, "name").unwrap_or_default(),
+                    step: int(g, "step").unwrap_or(crate::PPQ / 4).max(1),
+                    steps,
+                });
+            }
+        }
+        p.grooves
+            .sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        if let Some(LoroValue::Map(ms)) = root.get("midi_maps") {
+            for (id, m) in ms.iter() {
+                let LoroValue::Map(m) = m else { continue };
+                let (Some(track), Some(param)) = (string(m, "track"), string(m, "param")) else {
+                    continue;
+                };
+                p.midi_maps.push(MidiMap {
+                    id: id.to_string(),
+                    channel: int(m, "channel").unwrap_or(0).clamp(0, 15) as u8,
+                    cc: int(m, "cc").unwrap_or(0).clamp(0, 127) as u8,
+                    track,
+                    param,
+                });
+            }
+        }
+        p.midi_maps
+            .sort_by(|a, b| (a.channel, a.cc, &a.id).cmp(&(b.channel, b.cc, &b.id)));
         let empty = LoroMapValue::default();
         let tracks = match root.get("tracks") {
             Some(LoroValue::Map(m)) => m,
@@ -1130,6 +1227,17 @@ fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
                 c.take.map_or(LoroValue::Null, |t| LoroValue::I64(t as i64)),
             );
         }
+        if c.scale.is_some() || cm.get("scale").is_some() {
+            w.put(
+                &cm,
+                "scale",
+                c.scale.map_or(LoroValue::Null, |s| s.to_text().into()),
+            );
+        }
+        if !c.controllers.is_empty() || cm.get("controllers").is_some() {
+            let lanes = w.fixed(&cm, "controllers");
+            write_lines(w, &lanes, &c.controllers);
+        }
         let notes = w.fixed(&cm, "notes");
         let keep: HashSet<&str> = c.notes.iter().map(|n| n.id.as_str()).collect();
         for id in keys(&notes) {
@@ -1174,8 +1282,49 @@ fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
             if !plain("chance", n.chance == 1.0) {
                 w.put(&nm, "chance", n.chance);
             }
+            if !plain("expression", n.expression.is_empty()) {
+                let lanes = w.fixed(&nm, "expression");
+                write_lines(w, &lanes, &n.expression);
+            }
         }
     }
+}
+
+/// Lines (controller lanes, a note's expression): an entry per line,
+/// each its points as one list, as automation lanes are kept.
+fn write_lines(w: &mut Writer, lanes: &LoroMap, lines: &[Lane]) {
+    let keep: HashSet<&str> = lines.iter().map(|l| l.param.as_str()).collect();
+    for id in keys(lanes) {
+        if !keep.contains(id.as_str()) {
+            w.delete(lanes, &id);
+        }
+    }
+    for l in lines {
+        let lm = w.child(lanes, &l.param);
+        let points: Vec<LoroValue> = (l.points.iter())
+            .map(|p| LoroValue::List(vec![p.at.into(), p.value.into()].into()))
+            .collect();
+        w.put(&lm, "points", LoroValue::List(points.into()));
+    }
+}
+
+/// Lines as [`write_lines`] keeps them, by name.
+fn read_lines(m: Option<&LoroValue>) -> Vec<Lane> {
+    let Some(LoroValue::Map(lanes)) = m else {
+        return Vec::new();
+    };
+    let mut params: Vec<&str> = lanes.keys().map(|k| k.as_str()).collect();
+    params.sort_unstable();
+    params
+        .into_iter()
+        .filter_map(|param| match lanes.get(param) {
+            Some(LoroValue::Map(lm)) => Some(Lane {
+                param: param.to_string(),
+                points: read_points(lm),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A track's note clips, in time order, each with its notes in order.
@@ -1195,6 +1344,8 @@ fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
         clip.offset = int(c, "offset").unwrap_or(0).max(0);
         clip.muted = boolean(c, "muted").unwrap_or(false);
         clip.take = int(c, "take").and_then(|v| u32::try_from(v).ok());
+        clip.scale = string(c, "scale").and_then(|t| Scale::from_text(&t));
+        clip.controllers = read_lines(c.get("controllers"));
         if let Some(LoroValue::Map(notes)) = c.get("notes") {
             for (nid, n) in notes.iter() {
                 let LoroValue::Map(n) = n else { continue };
@@ -1229,6 +1380,7 @@ fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
                     .filter(|c| c.is_finite())
                     .unwrap_or(1.0)
                     .clamp(0.0, 1.0);
+                note.expression = read_lines(n.get("expression"));
                 clip.notes.push(note);
             }
         }
@@ -2228,6 +2380,78 @@ mod tests {
         a.set(&out);
         let low = &a.get().tracks[0].effects[1];
         assert_eq!((low.container.as_deref(), low.branch), (None, 0));
+    }
+
+    #[test]
+    fn keys_controller_lanes_expression_grooves_and_midi_maps_round_trip() {
+        use crate::{Controller, Groove, GrooveStep, MidiMap, Scale, ScaleKind};
+        let mut p = Project {
+            scale: Some(Scale::new(9, ScaleKind::Minor)),
+            grooves: vec![Groove {
+                id: "g1".into(),
+                name: "Shuffle".into(),
+                step: PPQ / 2,
+                steps: vec![
+                    GrooveStep {
+                        offset: 0,
+                        accent: 1.25,
+                        played: true,
+                    },
+                    GrooveStep {
+                        offset: 80,
+                        accent: 0.75,
+                        played: true,
+                    },
+                    GrooveStep {
+                        offset: 0,
+                        accent: 1.0,
+                        played: false,
+                    },
+                ],
+            }],
+            midi_maps: vec![MidiMap {
+                id: "m1".into(),
+                channel: 2,
+                cc: 21,
+                track: "t1".into(),
+                param: "gain".into(),
+            }],
+            ..Project::default()
+        };
+        let mut t = Track::new("t1".into(), "Keys".into());
+        let mut clip = NoteClip::new("nc1".into(), "Riff".into(), 0, PPQ * 4);
+        clip.scale = Some(Scale::new(2, ScaleKind::Dorian));
+        clip.controller_mut(Controller::Cc(1)).put(0, 0.0);
+        clip.controller_mut(Controller::Cc(1)).put(PPQ, 127.0);
+        clip.controller_mut(Controller::PitchBend).put(PPQ / 2, -4096.0);
+        let mut n = Note::new(0, PPQ, 60, 100);
+        n.expression_mut(Note::PITCH).put(0, 0.0);
+        n.expression_mut(Note::PITCH).put(PPQ / 2, 1.0);
+        n.expression_mut(Note::TIMBRE).put(10, 0.5);
+        clip.notes.push(n);
+        t.note_clips.push(clip);
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let back = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap().get();
+        let mut want = p.clone();
+        // Lines come back by name.
+        want.tracks[0].note_clips[0]
+            .controllers
+            .sort_by(|a, b| a.param.cmp(&b.param));
+        want.tracks[0].note_clips[0].notes[0]
+            .expression
+            .sort_by(|a, b| a.param.cmp(&b.param));
+        assert_eq!(back, want);
+        // Clearing them takes the entries away.
+        p.scale = None;
+        p.grooves.clear();
+        p.midi_maps.clear();
+        p.tracks[0].note_clips[0].controllers.clear();
+        p.tracks[0].note_clips[0].scale = None;
+        p.tracks[0].note_clips[0].notes[0].expression.clear();
+        doc.set(&p);
+        assert_eq!(doc.get(), p);
     }
 
     #[test]

@@ -450,6 +450,8 @@ impl ProjectDoc {
             w.put(&m, "name", mk.name.as_str());
         }
 
+        crate::pattern::write_patterns(&mut w, &self.doc, &p.patterns);
+
         let hits = self.doc.get_map("hit_points");
         let keep: HashSet<&str> = p.hit_points.iter().map(|h| h.id.as_str()).collect();
         for id in keys(&hits) {
@@ -773,6 +775,7 @@ impl ProjectDoc {
         }
         p.hit_points
             .sort_by(|a, b| a.at.cmp(&b.at).then(a.id.cmp(&b.id)));
+        p.patterns = crate::pattern::read_patterns(&root);
         if let Some(LoroValue::Map(cs)) = root.get("tempo_changes") {
             for (id, c) in cs.iter() {
                 let LoroValue::Map(c) = c else { continue };
@@ -876,6 +879,7 @@ impl ProjectDoc {
         }
         p.edit_groups
             .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
+        crate::fill_pattern_clips(&p.patterns, &mut p.tracks);
         p
     }
 }
@@ -1240,14 +1244,26 @@ fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
             let lanes = w.fixed(&cm, "controllers");
             write_lines(w, &lanes, &c.controllers);
         }
+        if c.pattern.is_some() || cm.get("pattern").is_some() {
+            w.put(
+                &cm,
+                "pattern",
+                c.pattern
+                    .as_deref()
+                    .map_or(LoroValue::Null, LoroValue::from),
+            );
+        }
+        // A pattern clip's notes come from its pattern, so none are kept.
+        let none = Vec::new();
+        let kept = if c.pattern.is_some() { &none } else { &c.notes };
         let notes = w.fixed(&cm, "notes");
-        let keep: HashSet<&str> = c.notes.iter().map(|n| n.id.as_str()).collect();
+        let keep: HashSet<&str> = kept.iter().map(|n| n.id.as_str()).collect();
         for id in keys(&notes) {
             if !keep.contains(id.as_str()) {
                 w.delete(&notes, &id);
             }
         }
-        for n in &c.notes {
+        for n in kept {
             let nm = w.child(&notes, &n.id);
             w.put(&nm, "start", n.start);
             w.put(&nm, "len", n.len);
@@ -1287,6 +1303,17 @@ fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
             if !plain("expression", n.expression.is_empty()) {
                 let lanes = w.fixed(&nm, "expression");
                 write_lines(w, &lanes, &n.expression);
+            }
+            if !plain("group", n.group.is_none()) {
+                w.put(
+                    &nm,
+                    "group",
+                    n.group
+                        .map_or(LoroValue::Null, |g| LoroValue::I64(g as i64)),
+                );
+            }
+            if !plain("one_of", !n.one_of) {
+                w.put(&nm, "one_of", n.one_of);
             }
         }
     }
@@ -1348,6 +1375,7 @@ fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
         clip.take = int(c, "take").and_then(|v| u32::try_from(v).ok());
         clip.scale = string(c, "scale").and_then(|t| Scale::from_text(&t));
         clip.controllers = read_lines(c.get("controllers"));
+        clip.pattern = string(c, "pattern");
         if let Some(LoroValue::Map(notes)) = c.get("notes") {
             for (nid, n) in notes.iter() {
                 let LoroValue::Map(n) = n else { continue };
@@ -1383,6 +1411,8 @@ fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
                     .unwrap_or(1.0)
                     .clamp(0.0, 1.0);
                 note.expression = read_lines(n.get("expression"));
+                note.group = int(n, "group").and_then(|g| u32::try_from(g).ok());
+                note.one_of = boolean(n, "one_of").unwrap_or(false);
                 clip.notes.push(note);
             }
         }

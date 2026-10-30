@@ -348,13 +348,22 @@ pub struct GroupSpec {
 /// Where events for a MIDI output go: the port, and the event.
 pub type MidiOut<'a> = &'a mut dyn FnMut(usize, &Event);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoteSpec {
     pub start: Ticks,
     pub len: Ticks,
     pub pitch: u8,
     pub velocity: u8,
     pub channel: u8,
+    /// 0 to 1: the chance it plays, rolled afresh each time the
+    /// timeline jumps (a seek, going round the loop, pressing play).
+    pub chance: f32,
+    /// Notes with the same key share one roll, so they play or don't
+    /// together; of `of` (above 1) sharing one, only the one numbered
+    /// `pick` plays, chosen at random each time round.
+    pub key: u64,
+    pub pick: u16,
+    pub of: u16,
     /// Its expression: the range of [`TrackSpec::expression`] that is
     /// this note's, empty for most notes.
     pub expr: (u32, u32),
@@ -403,6 +412,24 @@ pub struct ControlSpec {
     pub channel: u8,
     pub control: Control,
     pub points: Arc<[(Ticks, i32)]>,
+}
+
+impl NoteSpec {
+    /// A note that always plays.
+    pub fn new(start: Ticks, len: Ticks, pitch: u8, velocity: u8, channel: u8) -> NoteSpec {
+        NoteSpec {
+            start,
+            len,
+            pitch,
+            velocity,
+            channel,
+            chance: 1.0,
+            key: 0,
+            pick: 0,
+            of: 1,
+            expr: (0, 0),
+        }
+    }
 }
 
 /// An instrument on a track: the slot the engine hands the block's
@@ -657,6 +684,10 @@ pub(crate) struct NoteNode {
     pub pitch: u8,
     pub velocity: u8,
     pub channel: u8,
+    pub chance: f32,
+    pub key: u64,
+    pub pick: u16,
+    pub of: u16,
     /// Its expression points, as a range of the track's `exprs`.
     pub expr: (usize, usize),
 }
@@ -673,6 +704,31 @@ pub(crate) struct ControlNode {
     pub channel: u8,
     pub control: Control,
     pub points: Vec<(i64, i32)>,
+}
+
+impl NoteNode {
+    /// Whether it plays this time round: `pass` counts the timeline's
+    /// jumps, so each time round rolls afresh, the same way for every
+    /// note sharing its key.
+    fn plays(&self, pass: u64) -> bool {
+        if self.of > 1 && mix(self.key, pass) % self.of as u64 != self.pick as u64 {
+            return false;
+        }
+        if self.chance >= 1.0 {
+            return true;
+        }
+        let u = (mix(self.key ^ 0x5eed, pass) >> 11) as f64 / (1u64 << 53) as f64;
+        u < self.chance as f64
+    }
+}
+
+/// SplitMix64 of `a` and `b`.
+fn mix(a: u64, b: u64) -> u64 {
+    let mut z = a ^ b.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 pub(crate) struct InstrumentNode {
@@ -706,6 +762,9 @@ pub(crate) struct TrackNode {
     /// Where the last block's notes ended on the timeline, so a jump
     /// (a seek, the loop) stops the notes still sounding.
     pub notes_at: Option<i64>,
+    /// How many times the timeline has jumped, for rolling notes'
+    /// chance afresh each time round.
+    pub pass: u64,
     pub mix: Mix,
     /// Gains reached at the end of the last block, for smoothing.
     pub last: (f32, f32),
@@ -1041,8 +1100,8 @@ fn mix_chunk(
 /// the loop), with each output frame covering `speed` timeline frames:
 /// notes starting in the block go on, sounding notes ending in it go
 /// off. A jump in the timeline (a seek, or going round the loop) stops
-/// every sounding note first. Events are added to `events` in frame
-/// order, up to its capacity.
+/// every sounding note first, and counts one more `pass`, for chance.
+/// Events are added to `events` in frame order, up to its capacity.
 #[allow(clippy::too_many_arguments)]
 fn schedule_notes(
     notes: &[NoteNode],
@@ -1050,6 +1109,7 @@ fn schedule_notes(
     controls: &[ControlNode],
     sounding: &mut Vec<usize>,
     at: &mut Option<i64>,
+    pass: &mut u64,
     looping: Option<(i64, i64)>,
     from: f64,
     speed: f64,
@@ -1139,6 +1199,9 @@ fn schedule_notes(
                 });
             }
         };
+        if at.is_none_or(|a| a != start) {
+            *pass = pass.wrapping_add(1);
+        }
         // Notes ending in this stretch.
         let mut k = 0;
         while k < sounding.len() {
@@ -1162,6 +1225,9 @@ fn schedule_notes(
         for (i, nn) in notes.iter().enumerate().skip(first) {
             if nn.start >= end {
                 break;
+            }
+            if !nn.plays(*pass) {
+                continue;
             }
             push(Event::note_on(
                 frame_of(nn.start),
@@ -1393,6 +1459,10 @@ impl Session {
                         velocity: n.velocity.clamp(1, 127),
                         channel: n.channel & 15,
                         expr: (from, exprs.len()),
+                        chance: n.chance.clamp(0.0, 1.0),
+                        key: n.key,
+                        pick: n.pick,
+                        of: n.of.max(1),
                     }
                 })
                 .collect();
@@ -1461,6 +1531,7 @@ impl Session {
                 sounding: Vec::with_capacity(MAX_SOUNDING),
                 was_playing: false,
                 notes_at: None,
+                pass: 0,
                 mix: t.mix,
                 last: (0.0, 0.0),
                 stereo,
@@ -1793,6 +1864,7 @@ impl Graph {
                     &t.controls,
                     &mut t.sounding,
                     &mut t.notes_at,
+                    &mut t.pass,
                     looping,
                     from,
                     speed,
@@ -1981,6 +2053,7 @@ impl Graph {
                 // The notes sounding carry on where this graph has the
                 // same note; one that is gone is stopped now.
                 t.notes_at = o.notes_at;
+                t.pass = o.pass;
                 t.was_playing = o.was_playing;
                 for &k in &o.sounding {
                     let on = &o.notes[k];

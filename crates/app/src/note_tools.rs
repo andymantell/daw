@@ -103,10 +103,10 @@ pub(crate) fn specs(clips: &[NoteClip]) -> (Vec<NoteSpec>, Vec<ExprSpec>, Vec<Co
         note_clips: clips.to_vec(),
         ..daw_project::Track::new(String::new(), String::new())
     }
-    .placed_notes();
+    .played_notes();
     let mut exprs = Vec::new();
     let notes = (placed.iter())
-        .map(|n| {
+        .map(|(n, roll)| {
             let from = exprs.len() as u32;
             for l in n.expression.iter().filter(|l| !l.points.is_empty()) {
                 let Some(kind) = expression_kind(&l.param) else {
@@ -134,6 +134,10 @@ pub(crate) fn specs(clips: &[NoteClip]) -> (Vec<NoteSpec>, Vec<ExprSpec>, Vec<Co
                 pitch: n.pitch,
                 velocity: n.velocity,
                 channel: n.channel,
+                chance: n.chance as f32,
+                key: roll.key,
+                pick: roll.pick,
+                of: roll.of,
                 expr: (from, exprs.len() as u32),
             }
         })

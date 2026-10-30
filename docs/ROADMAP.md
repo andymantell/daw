@@ -760,6 +760,14 @@ expression, grooves and MIDI learn (owner checks in
 - Probability across groups of notes (a whole group plays or doesn't), and
   "play one note of this chord at random".
 
+*Built 2026-10-30, at risk. A pattern editor with lanes of steps at their
+own length, rate and direction; swing, per-step velocity, pitch, chance,
+repeats, offset, gate and velocity variance; Euclidean fills; patterns as
+linked clips that can be made unique or turned into notes; and chance on
+any note, rolled each time round, with groups that play together or pick
+one at random. Not yet: note-repeat and recording from pads, which wait
+on the drum machine (3.4). Checks in `docs/review-queue/3.3-patterns.md`.*
+
 ### 3.4 Built-in instruments & content (L)
 - Multi-zone sampler, drum sampler, and a synth of our own design.
 - **Drum machine instrument:** pads with several layers each, mixing

@@ -39,6 +39,7 @@ mod monitor;
 mod note_tools;
 mod notes;
 mod notes_editor;
+mod patterns;
 mod people;
 mod perf;
 mod practice;
@@ -388,6 +389,9 @@ struct App {
     /// The note editor pane, and the track whose instrument window is
     /// open.
     notes_editor: notes_editor::Editor,
+    /// Drum patterns that note clips play (roadmap 3.3).
+    patterns: Vec<daw_project::Pattern>,
+    pattern_editor: patterns::Editor,
     instrument_open: Option<usize>,
     /// The content browser, and whether a preview was just sent to the
     /// engine (so its silence a moment ago doesn't mean it finished).
@@ -474,6 +478,8 @@ impl App {
             midi: midi::Midi::default(),
             pending_instruments: Vec::new(),
             notes_editor: notes_editor::Editor::default(),
+            patterns: Vec::new(),
+            pattern_editor: patterns::Editor::default(),
             instrument_open: None,
             practice_log: practice::Logger::default(),
             edit_groups: Vec::new(),
@@ -749,6 +755,7 @@ impl App {
 
     /// Compiles the session and sends it to the engine.
     fn rebuild(&mut self) {
+        self.fill_patterns();
         let s = self.session();
         match s.compile_all(
             audio::MAX_BLOCK,
@@ -1217,6 +1224,23 @@ impl App {
         if let Some(key) = out.edit_notes {
             self.notes_editor.edit(&key);
             self.workspace.open(workspace::Pane::NotesEditor);
+        }
+        match out.pattern {
+            Some(timeline::PatternAsk::Add(lane, at)) => {
+                self.add_pattern_clip(lane, at);
+            }
+            Some(timeline::PatternAsk::Edit(key)) => self.edit_pattern_of(&key),
+            // Through the commands, so they act the same from the menu,
+            // the keys and outside the app.
+            Some(timeline::PatternAsk::Unique(key)) => {
+                self.timeline.note_sel = Some(key);
+                self.run(ui.ctx(), commands::Cmd::MakePatternUnique);
+            }
+            Some(timeline::PatternAsk::ToNotes(key)) => {
+                self.timeline.note_sel = Some(key);
+                self.run(ui.ctx(), commands::Cmd::PatternToNotes);
+            }
+            None => {}
         }
         if let Some(how) = out.process {
             self.processing

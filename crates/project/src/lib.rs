@@ -16,6 +16,7 @@ mod lessons;
 pub mod midifile;
 mod model;
 pub mod noteops;
+mod pattern;
 mod scale;
 mod snapshots;
 mod templates;
@@ -33,6 +34,10 @@ pub use model::{
     Frozen, FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, Lane, LaneTarget, Marker,
     MeterChange, MidiMap, Note, NoteClip, PPQ, Practice, Project, Send, TabBlock, Technique,
     TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings,
+};
+pub use pattern::{
+    DRUM_LANES, Direction, MAX_GATE, MAX_REPEATS, MAX_STEPS, MIN_GATE, Pattern, PatternLane, Roll,
+    Step, StepRate, euclid, fill_pattern_clip, fill_pattern_clips, next_group,
 };
 pub use scale::{ROOTS, Scale, ScaleKind};
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};

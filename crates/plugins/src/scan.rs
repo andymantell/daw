@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Finding installed VST 3 plugins and remembering what they are.
+//! Finding installed plugins, VST 3 and CLAP, and remembering what
+//! they are.
 //!
 //! Loading a module runs its code, and a broken one can crash or hang
 //! the process that loads it. So each bundle is opened in a child
@@ -27,9 +28,46 @@ pub const SCAN_ARG: &str = "--scan-vst3";
 /// How long a bundle may take to load before it is given up on.
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The standard VST 3 folders for this platform, as Steinberg's
-/// "Plug-in Locations" documentation lists them.
+/// The standard plugin folders for this platform: VST 3's, as its
+/// "Plug-in Locations" documentation lists them, then CLAP's
+/// ([`clap_dirs`]).
 pub fn default_dirs() -> Vec<PathBuf> {
+    let mut dirs = vst3_dirs();
+    dirs.extend(clap_dirs());
+    dirs
+}
+
+/// The standard CLAP folders for this platform, as the CLAP headers
+/// (`entry.h`) list them, and those in the `CLAP_PATH` variable.
+pub fn clap_dirs() -> Vec<PathBuf> {
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let mut dirs = Vec::new();
+    if cfg!(windows) {
+        if let Some(common) = env("CommonProgramFiles") {
+            dirs.push(common.join("CLAP"));
+        }
+        if let Some(local) = env("LOCALAPPDATA") {
+            dirs.push(local.join("Programs").join("Common").join("CLAP"));
+        }
+    } else if cfg!(target_os = "macos") {
+        dirs.push("/Library/Audio/Plug-Ins/CLAP".into());
+        if let Some(home) = env("HOME") {
+            dirs.push(home.join("Library/Audio/Plug-Ins/CLAP"));
+        }
+    } else {
+        if let Some(home) = env("HOME") {
+            dirs.push(home.join(".clap"));
+        }
+        dirs.push("/usr/lib/clap".into());
+    }
+    if let Some(path) = std::env::var_os("CLAP_PATH") {
+        dirs.extend(std::env::split_paths(&path).filter(|p| !p.as_os_str().is_empty()));
+    }
+    dirs
+}
+
+/// The standard VST 3 folders for this platform.
+pub fn vst3_dirs() -> Vec<PathBuf> {
     let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
     let mut dirs = Vec::new();
     if cfg!(windows) {
@@ -54,7 +92,8 @@ pub fn default_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Every `.vst3` bundle (or single file) under `dirs`, sorted.
+/// Every `.vst3` and `.clap` bundle (or single file) under `dirs`,
+/// sorted.
 pub fn find_bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
     fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -62,10 +101,10 @@ pub fn find_bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
         };
         for e in entries.flatten() {
             let path = e.path();
-            let is_vst3 = path
+            let is_plugin = path
                 .extension()
-                .is_some_and(|x| x.eq_ignore_ascii_case("vst3"));
-            if is_vst3 {
+                .is_some_and(|x| x.eq_ignore_ascii_case("vst3") || x.eq_ignore_ascii_case("clap"));
+            if is_plugin {
                 out.push(path);
             } else if depth < 8 && path.is_dir() {
                 walk(&path, depth + 1, out);
@@ -84,6 +123,9 @@ pub fn find_bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
 /// Loads `bundle` in this process and lists its classes, with what
 /// each replaces.
 pub fn scan_here(bundle: &Path) -> Result<Vec<ClassInfo>> {
+    if crate::clap::is_clap(bundle) {
+        return Ok(crate::clap::ClapModule::load(bundle)?.classes());
+    }
     let module = Module::load(bundle)?;
     let replaces = crate::compat::of_module(&module);
     let mut classes = module.classes();
@@ -234,6 +276,22 @@ pub struct Available {
     pub enabled: bool,
     /// Where the user wants it to run.
     pub sandbox: Sandbox,
+}
+
+impl Available {
+    /// The plugin's format, for showing: "CLAP" or "VST 3".
+    pub fn format(&self) -> &'static str {
+        format_of(&self.bundle)
+    }
+}
+
+/// The format of the plugin file at `path`, for showing.
+pub fn format_of(path: &Path) -> &'static str {
+    if crate::clap::is_clap(path) {
+        "CLAP"
+    } else {
+        "VST 3"
+    }
 }
 
 /// Every scanned bundle, and which plugins the user has turned off.

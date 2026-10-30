@@ -15,6 +15,9 @@
 //! extra output, a delay that changes while it plays, and declares that
 //! it replaces an older version of itself.
 //!
+//! The same library is also a CLAP plugin ([`clap`]), a gain effect
+//! with a sidechain and an extra output, for the CLAP host's tests.
+//!
 //! Cargo features build broken variants (crash or hang on load or while
 //! processing, refuse processing setup) for testing how the host copes.
 //!
@@ -35,7 +38,9 @@ use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComRef, ComWrapper, uid};
 
+pub mod clap;
 pub mod router;
+pub use clap::{CLAP_ID, CLAP_NAME, GAIN_PARAM, LEVEL_PARAM, LOOKAHEAD_PARAM};
 pub use router::{
     OLD_LOOKAHEAD_PARAM, OLD_ROUTER_CID, ROUTER_CID, ROUTER_LOOKAHEAD, ROUTER_NAME, sdk_string,
 };

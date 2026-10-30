@@ -9,11 +9,13 @@ publish.workspace = true
 
 # A tiny VST 3 effect (and test instrument) for the plugin host's automated
 # tests: stereo gain with one automatable parameter, a fixed reported
-# latency and saved state. Never shipped.
+# latency and saved state. The same library is a CLAP test effect too.
+# Never shipped.
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+clap-sys = "0.5.0"
 vst3 = "0.3.0"
 
 # Misbehaving builds, for testing how the host copes with broken plugins.

@@ -21,7 +21,7 @@ use daw_engine::graph::{Insert, InsertSpec};
 use daw_plugins::presets::{self, Preset};
 use daw_plugins::proto::ProgramList;
 use daw_plugins::scan::{self, Available, PluginList};
-use daw_plugins::{Host, Layout, Module, Plugin, PluginState, Processor, Sandbox};
+use daw_plugins::{Host, Layout, Library, Plugin, PluginState, Processor, Sandbox};
 use eframe::egui::{self, RichText};
 
 /// One effect in a track's chain.
@@ -316,7 +316,7 @@ pub struct Effects {
     /// processor can be set up to run one such block behind.
     pub block: usize,
     /// Modules loaded so far, kept loaded for the life of the app.
-    modules: HashMap<PathBuf, Arc<Module>>,
+    modules: HashMap<PathBuf, Library>,
     /// Effects made but not yet in a graph, by insert id.
     pub pending: Vec<(u64, Box<dyn Insert>)>,
     next_id: u64,
@@ -555,11 +555,11 @@ impl Effects {
         std::fs::rename(tmp, &self.list_path)
     }
 
-    fn module(&mut self, bundle: &Path) -> Result<Arc<Module>, String> {
+    fn module(&mut self, bundle: &Path) -> Result<Library, String> {
         if let Some(m) = self.modules.get(bundle) {
             return Ok(m.clone());
         }
-        let m = Arc::new(Module::load(bundle)?);
+        let m = Library::load(bundle)?;
         self.modules.insert(bundle.to_owned(), m.clone());
         Ok(m)
     }
@@ -598,14 +598,7 @@ impl Effects {
         match sandbox {
             Sandbox::InApp => {
                 let module = self.module(bundle)?;
-                let (p, x) = daw_plugins::instantiate_with(
-                    module,
-                    cid,
-                    rate as f64,
-                    daw_audio_io::MAX_BLOCK,
-                    layout,
-                )?;
-                Ok((Plugin::Local(p), Processor::Local(x)))
+                module.instantiate(cid, rate as f64, daw_audio_io::MAX_BLOCK, layout)
             }
             Sandbox::Shared | Sandbox::Own => {
                 let host = match sandbox {
@@ -1062,7 +1055,7 @@ impl Effects {
                 });
                 ui.label(
                     RichText::new(format!(
-                        "VST 3 folders: {}",
+                        "Plugin folders (VST 3 and CLAP): {}",
                         scan::default_dirs()
                             .iter()
                             .map(|d| d.display().to_string())
@@ -1075,7 +1068,7 @@ impl Effects {
                 ui.separator();
                 let plugins = self.list.plugins();
                 if plugins.is_empty() && self.scan.is_none() {
-                    ui.label("No VST 3 plugins found.");
+                    ui.label("No VST 3 or CLAP plugins found.");
                 }
                 let mut toggles = Vec::new();
                 let mut sandboxes = Vec::new();
@@ -1099,11 +1092,15 @@ impl Effects {
                                         .on_hover_text(p.bundle.display().to_string());
                                     ui.label(RichText::new(&p.class.vendor).weak());
                                     ui.label(
-                                        RichText::new(if p.class.is_instrument() {
-                                            "Instrument"
-                                        } else {
-                                            "Effect"
-                                        })
+                                        RichText::new(format!(
+                                            "{} · {}",
+                                            if p.class.is_instrument() {
+                                                "Instrument"
+                                            } else {
+                                                "Effect"
+                                            },
+                                            p.format()
+                                        ))
                                         .weak(),
                                     );
                                     let mut sb = p.sandbox;
@@ -2586,6 +2583,59 @@ mod tests {
         let mut gone = old.clone();
         gone.class = vec![9; 16];
         assert!(fx.restore(&gone, 48_000).is_err());
+    }
+
+    #[test]
+    fn a_clap_effect_is_added_saved_and_restored_like_any_plugin() {
+        use daw_test_plugin::{CLAP_ID, CLAP_NAME, GAIN_PARAM, LATENCY};
+
+        for sandbox in [Sandbox::InApp, Sandbox::Shared] {
+            let mut fx = effects("clap");
+            fx.helper = Some(test_plugin::helper());
+            let file = test_plugin::clap();
+            let classes = daw_plugins::scan::scan_here(&file).unwrap();
+            fx.list.bundles = vec![daw_plugins::scan::BundleEntry {
+                path: file.clone(),
+                modified: 0,
+                result: Ok(classes),
+            }];
+            let a = fx.list.plugins().remove(0);
+            assert_eq!(a.class.name, CLAP_NAME);
+            let cid = daw_plugins::clap::cid_of(CLAP_ID);
+            fx.list.set_sandbox(&cid, sandbox);
+            let mut s = fx.create(&a, 48_000).unwrap();
+            assert_eq!(s.sandbox, sandbox);
+            // In a helper, one block more.
+            assert!(s.latency >= LATENCY);
+            assert_eq!(s.latency == LATENCY, sandbox == Sandbox::InApp);
+            // Gain 0.5 of the plugin's 0 to 2, lookahead off.
+            let mut bytes = 0.5f64.to_le_bytes().to_vec();
+            bytes.push(0);
+            let state = daw_plugins::PluginState {
+                component: bytes,
+                controller: None,
+            };
+            plugin_of(&s).load_state(&state).unwrap();
+            let saved = daw_project::Effect {
+                state: Some(s.state().unwrap()),
+                ..s.value()
+            };
+            assert_eq!(
+                saved.class,
+                cid.iter().map(|&b| b as u8).collect::<Vec<_>>()
+            );
+            assert_eq!(saved.bundle, file.display().to_string());
+
+            // Found again by its id, its settings kept.
+            let back = fx.restore(&saved, 48_000).unwrap();
+            assert_eq!(back.cid(), Some(&cid));
+            assert_eq!(back.name, CLAP_NAME);
+            assert_eq!(
+                plugin_of(&back).param(GAIN_PARAM),
+                Some(0.25),
+                "{sandbox:?}"
+            );
+        }
     }
 
     #[test]

@@ -10,12 +10,19 @@
 //! and [`presets`] saves and finds their settings. [`compat`] finds the
 //! newer version of a plugin that stands in for an older one, and
 //! [`check`] tries each plugin out for the compatibility list.
+//!
+//! Plugins in the open CLAP format ([`clap`]) are hosted beside VST 3
+//! ones: a [`Library`] is a loaded plugin file of either format, and
+//! [`Plugin`] and [`Processor`] cover both.
 
 // VST 3 enum types are signed on some platforms and unsigned on others,
 // so casts that are no-ops here are needed elsewhere.
 #![allow(clippy::unnecessary_cast)]
 
 pub mod check;
+pub mod clap;
+#[cfg(windows)]
+pub mod clap_editor_win;
 pub mod com;
 pub mod compat;
 #[cfg(windows)]
@@ -30,6 +37,6 @@ pub mod scan;
 pub use host::{Host, Sandbox};
 pub use module::{ClassInfo, Module, cid_from_hex, cid_to_hex};
 pub use plugin::{
-    Bus, Buses, Layout, LocalPlugin, LocalProcessor, Param, Plugin, PluginState, Processor,
-    instantiate, instantiate_with,
+    Bus, Buses, Layout, Library, LocalPlugin, LocalProcessor, Param, Plugin, PluginState,
+    Processor, instantiate, instantiate_with,
 };

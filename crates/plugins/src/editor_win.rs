@@ -40,14 +40,14 @@ pub fn per_monitor_dpi() {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 }
 
-fn wide(s: &str) -> Vec<u16> {
+pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
-const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+pub(crate) const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
 /// Outer window size for a given client size, at `dpi`.
-fn outer(style: u32, w: i32, h: i32, dpi: u32) -> (i32, i32) {
+pub(crate) fn outer(style: u32, w: i32, h: i32, dpi: u32) -> (i32, i32) {
     let mut r = RECT {
         left: 0,
         top: 0,

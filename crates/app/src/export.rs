@@ -23,7 +23,8 @@ use eframe::egui::{self, RichText};
 type Lines = Vec<(String, Result<Written, String>)>;
 
 /// A file written, and what went wrong if anything did.
-#[cfg(test)]
+// Only the video tests, which need a system that reads video, use it.
+#[cfg(all(test, any(target_os = "linux", windows)))]
 pub type Outcome<'a> = (&'a str, Option<&'a str>);
 
 /// One file to write.
@@ -244,7 +245,7 @@ impl Export {
 
     /// The last export's folder and its files, each with what went
     /// wrong if it did, once it has finished.
-    #[cfg(test)]
+    #[cfg(all(test, any(target_os = "linux", windows)))]
     pub fn finished(&self) -> Option<(&Path, Vec<Outcome<'_>>)> {
         let (folder, lines) = self.result.as_ref()?;
         let lines = (lines.iter())

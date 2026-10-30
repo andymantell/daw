@@ -48,6 +48,11 @@ impl Latency {
         }
     }
 
+    /// The last measurement's result, if one ran.
+    pub fn last(&self) -> Option<&Result<Measured, String>> {
+        self.last.as_ref()
+    }
+
     pub fn cancel(&mut self) {
         self.measuring = None;
     }

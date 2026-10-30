@@ -162,6 +162,12 @@ pub(crate) enum Cmd {
     ExportTextTab,
     PrintNotation,
     AudioDevice,
+    AudioSetup,
+    AudioSetupNext,
+    AudioSetupSkip,
+    AudioSetupBack,
+    AudioSetupCancel,
+    MeasureLatency,
     Plugins,
     PerformanceCheck,
     DrumKits,
@@ -1321,6 +1327,59 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .words("interface sound card input output latency")
     .everyday(),
+    info(
+        Cmd::AudioSetup,
+        "audio-setup",
+        "Settings",
+        "Guided audio setup…",
+        &[],
+    )
+    .hint("Step by step: the interface, its driver, buffer size, input level and latency, with what to fix")
+    .words("interface sound card wizard first run driver asio buffer gain level monitoring latency help")
+    .everyday(),
+    info(
+        Cmd::AudioSetupNext,
+        "audio-setup-next",
+        "Settings",
+        "Audio setup: next step",
+        &[],
+    )
+    .hint("Use what this step shows and go on")
+    .words("guided setup wizard"),
+    info(
+        Cmd::AudioSetupSkip,
+        "audio-setup-skip",
+        "Settings",
+        "Audio setup: skip this step",
+        &[],
+    )
+    .hint("Go on without changing this")
+    .words("guided setup wizard"),
+    info(
+        Cmd::AudioSetupBack,
+        "audio-setup-back",
+        "Settings",
+        "Audio setup: back a step",
+        &[],
+    )
+    .words("guided setup wizard"),
+    info(
+        Cmd::AudioSetupCancel,
+        "audio-setup-cancel",
+        "Settings",
+        "Audio setup: close",
+        &[],
+    )
+    .words("guided setup wizard cancel"),
+    info(
+        Cmd::MeasureLatency,
+        "measure-latency",
+        "Settings",
+        "Measure latency…",
+        &[],
+    )
+    .hint("Measure the round trip with a loopback cable, so recordings line up exactly")
+    .words("loopback recording offset delay round trip"),
     info(Cmd::Plugins, "plugins", "Settings", "Plugins…", &[]).words("effects scan"),
     info(
         Cmd::PerformanceCheck,
@@ -2405,6 +2464,11 @@ impl App {
             | Cmd::TempoFromClip
             | Cmd::TempoFromClipApply => self.has_stretch_clips(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
+            Cmd::AudioSetupNext
+            | Cmd::AudioSetupSkip
+            | Cmd::AudioSetupBack
+            | Cmd::AudioSetupCancel => self.audio_setup.open,
+            Cmd::MeasureLatency => !self.recording && !self.latency.busy(),
             _ => true,
         }
     }
@@ -2647,6 +2711,17 @@ impl App {
             Cmd::FasterSpeed => self.nudge_speed(5.0),
             Cmd::NormalSpeed => self.normal_speed(),
             Cmd::AudioDevice => self.show_devices = true,
+            Cmd::AudioSetup
+            | Cmd::AudioSetupNext
+            | Cmd::AudioSetupSkip
+            | Cmd::AudioSetupBack
+            | Cmd::AudioSetupCancel => self.audio_setup_command(cmd),
+            Cmd::MeasureLatency => {
+                self.latency.open = true;
+                if let Some(d) = &self.draft {
+                    self.latency.inputs = crate::input_channels(&d.host, d.input.as_deref());
+                }
+            }
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::DrumKits

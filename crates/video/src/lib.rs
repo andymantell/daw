@@ -90,6 +90,23 @@ impl Info {
     }
 }
 
+/// A frame rate as the file states it, tidied to the usual fraction it
+/// is meant to be when it is within a hair of one: a file may say
+/// 2500000/208333 for 12, or 2997/100 for 29.97 (30000/1001).
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+pub(crate) fn tidy_rate((n, d): (u32, u32)) -> (u32, u32) {
+    let fps = n as f64 / d.max(1) as f64;
+    let whole = fps.round();
+    if whole >= 1.0 && (fps - whole).abs() < 1e-4 * whole {
+        return (whole as u32, 1);
+    }
+    let ntsc = (fps * 1.001).round();
+    if ntsc >= 1.0 && (fps - ntsc / 1.001).abs() < 1e-3 {
+        return (ntsc as u32 * 1000, 1001);
+    }
+    (n, d.max(1))
+}
+
 /// One decoded picture: rows of red, green, blue and alpha bytes, top
 /// row first.
 #[derive(Clone, PartialEq)]
@@ -254,6 +271,15 @@ mod tests {
         assert_eq!(i.frame_at(1e9), 239, "held to the last");
         assert_eq!(i.fit((320, 320)), (320, 180));
         assert_eq!(i.fit((4000, 4000)), (1920, 1080), "never made bigger");
+    }
+
+    #[test]
+    fn rates_near_a_usual_one_are_tidied_to_it() {
+        assert_eq!(tidy_rate((2_500_000, 208_333)), (12, 1));
+        assert_eq!(tidy_rate((2997, 100)), (30000, 1001));
+        assert_eq!(tidy_rate((24000, 1001)), (24000, 1001));
+        assert_eq!(tidy_rate((25, 1)), (25, 1));
+        assert_eq!(tidy_rate((15, 2)), (15, 2), "7.5 stays");
     }
 
     #[test]

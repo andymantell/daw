@@ -102,7 +102,7 @@ pub(crate) fn probe(path: &Path) -> Result<Info, Error> {
     Ok(Info {
         width: ((w as i64 * par.0 as i64) / par.1 as i64).max(1) as u32,
         height: h.max(1) as u32,
-        rate,
+        rate: crate::tidy_rate(rate),
         seconds,
     })
 }

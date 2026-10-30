@@ -453,6 +453,7 @@ impl ProjectDoc {
                 w.put(&m, "start", v.start);
                 w.put(&m, "offset", v.offset);
                 w.put(&m, "len", v.len);
+                w.put(&m, "sound", opt_str(&v.sound));
                 w.put(&m, "seq", i as i64);
             }
         }
@@ -788,6 +789,7 @@ impl ProjectDoc {
                         start: int(v, "start").unwrap_or(0),
                         offset: int(v, "offset").unwrap_or(0),
                         len: int(v, "len").unwrap_or(0),
+                        sound: string(v, "sound"),
                     },
                 ));
             }
@@ -2362,6 +2364,7 @@ mod tests {
             start: 48_000,
             offset: 2_400,
             len: 480_000,
+            sound: Some("c1".into()),
         };
         let titles = VideoClip {
             id: "v0".into(),

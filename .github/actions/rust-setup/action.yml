@@ -10,10 +10,15 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: ALSA headers (Linux audio)
+    # ALSA for audio; the system media framework's headers for video,
+    # and its base decoders for the video tests' Ogg file.
+    - name: ALSA and media framework headers (Linux)
       if: runner.os == 'Linux'
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libasound2-dev libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base
     # The ASIO bindings are generated with bindgen, which needs libclang;
     # the Windows runner ships LLVM. The build downloads the ASIO SDK.
     - name: libclang for bindgen

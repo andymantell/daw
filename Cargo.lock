@@ -1202,6 +1202,7 @@ dependencies = [
  "daw-project",
  "daw-remote",
  "daw-test-plugin",
+ "daw-video",
  "eframe",
  "egui_kittest",
  "hound",

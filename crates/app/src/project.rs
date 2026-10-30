@@ -237,6 +237,7 @@ impl App {
             grooves: self.grooves.clone(),
             midi_maps: self.midi_maps.clone(),
             patterns: self.patterns.clone(),
+            videos: self.video.clips.iter().map(|c| c.value()).collect(),
         }
     }
 
@@ -471,6 +472,12 @@ impl App {
         self.grooves = p.grooves.clone();
         self.midi_maps = p.midi_maps.clone();
         self.patterns = p.patterns.clone();
+        let folder = self.proj.folder.clone();
+        let video_path = |a: &str| match &folder {
+            Some(f) if f.has_asset(a) => f.asset(a),
+            _ => PathBuf::from(a),
+        };
+        self.video.apply(&p.videos, &video_path, &scale);
         let mut old: HashMap<String, Track> = (self.tracks.drain(..))
             .map(|t| (t.key.clone(), t))
             .collect();
@@ -756,6 +763,15 @@ impl App {
             let name = folder.add_asset(Path::new(&r), false)?;
             self.effects.remember_as(&r, &name);
             s.rename_response(&name);
+        }
+        // And videos.
+        let videos: Vec<String> = (self.video.clips.iter())
+            .map(|c| c.asset.clone())
+            .filter(|a| !folder.has_asset(a) && Path::new(a).is_file())
+            .collect();
+        for old in videos {
+            let name = folder.add_asset(Path::new(&old), false)?;
+            self.video.saved_as(&old, &name, &folder.asset(&name));
         }
         self.effects.folder = Some(folder.dir.clone());
         self.rebuild();

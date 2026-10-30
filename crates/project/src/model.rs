@@ -771,6 +771,9 @@ pub struct VideoClip {
     /// How far into the video it starts, and how long it plays.
     pub offset: i64,
     pub len: i64,
+    /// The audio clip holding the video's sound, by id, which moves
+    /// with it.
+    pub sound: Option<String>,
 }
 
 /// A comp: which take plays where, chosen from a track's takes

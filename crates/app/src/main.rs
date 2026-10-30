@@ -61,6 +61,7 @@ mod timing;
 mod trainer;
 mod tuner;
 mod update;
+mod video;
 mod workspace;
 
 #[cfg(test)]
@@ -422,6 +423,8 @@ struct App {
     /// engine (so its silence a moment ago doesn't mean it finished).
     browser: browser::Browser,
     browser_sent: bool,
+    /// Video clips' pictures, and the Video pane.
+    video: video::Videos,
 }
 
 /// How often to look for a lost device.
@@ -538,6 +541,7 @@ impl App {
             themes: theme::Themes::new((!cfg!(test)).then(config_dir).as_deref()),
             browser: browser::Browser::new((!cfg!(test)).then(|| config_dir().join("browser.txt"))),
             browser_sent: false,
+            video: video::Videos::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -698,6 +702,11 @@ impl App {
     fn add_file_at(&mut self, path: &Path, at: i64) {
         // In full, so the project can find it from anywhere.
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        // A video's picture goes above the tracks; its sound comes in
+        // as any audio does.
+        if daw_video::is_video(&path) {
+            self.video.add(&path, at);
+        }
         self.start_import(path, false, at);
     }
 
@@ -767,10 +776,15 @@ impl App {
                             path.file_stem()
                                 .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
                         );
-                        t.clips.push(Clip::new(source, path, im.at.max(0), None));
+                        let c = Clip::new(source, path, im.at.max(0), None);
+                        self.video.sound_added(&im.path, &c.key);
+                        t.clips.push(c);
                         self.tracks.push(t);
                     }
                 }
+                // A video with no sound we can read still has its
+                // picture.
+                Err(_) if self.video.has(&im.path) => {}
                 Err(e) => self.message = Some(e),
             }
         }
@@ -1240,7 +1254,36 @@ impl App {
             can_paste: !self.renders.copied.is_empty(),
         };
         self.timeline.groups = self.lane_groups();
+        self.timeline.band = if self.video.clips.is_empty() && !self.video.busy() {
+            0.0
+        } else {
+            video::BAND
+        };
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
+        if let Some(r) = out.band {
+            let snap = self.timeline.snap.then_some(self.timeline.grid);
+            let band = self.video.band(
+                ui,
+                r,
+                timeline::HEADER,
+                self.timeline.x_view(),
+                self.rate,
+                view.playhead,
+                &map,
+                snap,
+            );
+            if let Some((key, by)) = band.moved
+                && let Some(c) = (self.tracks.iter_mut())
+                    .flat_map(|t| t.clips.iter_mut())
+                    .find(|c| c.key == key)
+            {
+                c.start = (c.start + by).max(0);
+                self.rebuild();
+            }
+            if let Some(f) = band.seek {
+                self.send(Command::Seek(Frames(f)));
+            }
+        }
         if let Some(id) = out.pin {
             self.comment_ui.show_thread(&id);
         }
@@ -2139,6 +2182,13 @@ impl eframe::App for App {
             }
         }
         let mut rebuild = self.finish_imports() | self.finish_takes() | self.finish_notes();
+        let (added, why) = self.video.poll(self.rate);
+        if added {
+            self.workspace.layout.open(workspace::Pane::Video);
+        }
+        if why.is_some() {
+            self.message = why;
+        }
         if self.midi.changed() {
             // A device came or went: open them again on a fresh engine.
             self.restart_audio();

@@ -64,7 +64,8 @@ pub struct Slot {
     /// Which built-in instrument, as the project names it.
     pub builtin: String,
     inner: Inner,
-    /// The drum machine's pad and the sampler's zone shown.
+    /// The drum machine's pad shown, and the sampler's zone or the
+    /// slicer's slice.
     pad: usize,
     zone: usize,
     /// The drum machine's part shown: sounds, effects, or outputs.
@@ -311,14 +312,11 @@ impl Slot {
                     return sound_name(&s.reference);
                 }
             } else if src > 0 {
-                let name = dm::SOURCES.get(src).copied().unwrap_or("Pad");
-                // The kit's own names where the pad still has its drum.
-                let kit = dm::kit_name(p);
-                return if kit.starts_with(name) || name.contains(kit) {
-                    kit.into()
-                } else {
-                    name.into()
-                };
+                // The kit's own name where the pad still has its drum.
+                if l == 0 && src as f64 == dm::kit_source(p) {
+                    return dm::kit_name(p).into();
+                }
+                return dm::SOURCES.get(src).copied().unwrap_or("Pad").into();
             }
         }
         format!("Pad {}", p + 1)
@@ -897,7 +895,7 @@ fn drum_machine_controls(
         });
     ui.separator();
     ui.horizontal(|ui| {
-        for (k, name) in ["Sounds", "Effects", "Outputs and sends"]
+        for (k, name) in ["Sounds", "Pad effects", "Outputs and sends"]
             .into_iter()
             .enumerate()
         {
@@ -1119,6 +1117,7 @@ fn drum_machine_controls(
 fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Shown) -> bool {
     let id = slot.id;
     let (mut sensitivity, mut parts) = (slot.sensitivity, slot.parts);
+    let mut chosen = slot.zone;
     let Some(b) = slot.builtin_mut() else {
         return false;
     };
@@ -1139,8 +1138,15 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
     // The loop's shape, with a line where each slice starts.
     if let Some(s) = b.loop_sample() {
         let slices = b.slices();
-        let (rect, _) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 72.0), egui::Sense::hover());
+        let (rect, r) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 72.0), egui::Sense::click());
+        // Clicking shows the slice clicked in.
+        if r.clicked()
+            && let Some(at) = r.interact_pointer_pos()
+        {
+            let f = ((at.x - rect.left()) / rect.width().max(1.0) * s.len() as f32) as usize;
+            chosen = slices.iter().rposition(|&x| x <= f).unwrap_or(0);
+        }
         let painter = ui.painter_at(rect);
         let visuals = ui.visuals();
         painter.rect_filled(rect, 4.0, visuals.extreme_bg_color);
@@ -1164,7 +1170,10 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
             let x = rect.left() + f as f32 / n as f32 * rect.width();
             painter.line_segment(
                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                egui::Stroke::new(1.5, visuals.selection.bg_fill),
+                egui::Stroke::new(
+                    if k == chosen { 3.0 } else { 1.5 },
+                    visuals.selection.bg_fill,
+                ),
             );
             painter.text(
                 egui::pos2(x + 3.0, rect.top() + 2.0),
@@ -1207,6 +1216,22 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
     });
     let p = b.params().clone();
     params_grid(ui, "slicer", id, &p, 0, slicer::at::SLICES);
+    let n = b.slices().len();
+    if n > 0 {
+        chosen = chosen.min(n - 1);
+        ui.separator();
+        let key =
+            |k: usize| daw_instruments::params::note_name(slicer::FIRST_NOTE as i32 + k as i32);
+        egui::ComboBox::from_label("Slice")
+            .selected_text(format!("Slice {} ({})", chosen + 1, key(chosen)))
+            .show_ui(ui, |ui| {
+                for k in 0..n {
+                    ui.selectable_value(&mut chosen, k, format!("Slice {} ({})", k + 1, key(k)));
+                }
+            });
+        let from = slicer::slice_at(chosen, slicer::slice::TUNE);
+        params_grid(ui, "slice", id, &p, from, slicer::slice_at(chosen + 1, 0));
+    }
     if ui
         .button("Make notes that play the loop")
         .on_hover_text(
@@ -1219,6 +1244,7 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
     }
     slot.sensitivity = sensitivity;
     slot.parts = parts;
+    slot.zone = chosen;
     renew
 }
 

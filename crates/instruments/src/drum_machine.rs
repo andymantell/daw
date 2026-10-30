@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! A drum machine (roadmap 3.4): sixteen pads, one for each key from C1
+//! A drum machine (roadmap 3.4): sixteen pads, one for each key from C2
 //! (note 36, the kick in the standard drum key map). Each pad layers up
 //! to four sounds, samples or drums made here ([`crate::drum_voice`]),
 //! each played over a range of velocities, so a soft hit and a hard one
@@ -162,6 +162,11 @@ const KIT: [(&str, Drum, f64, f64, f64); PADS] = [
 /// The pads' names in the kit made here.
 pub fn kit_name(p: usize) -> &'static str {
     KIT.get(p).map_or("Pad", |k| k.0)
+}
+
+/// The sound (as a layer's source) on pad `p` in the kit made here.
+pub fn kit_source(p: usize) -> f64 {
+    KIT.get(p).map_or(0.0, |k| 2.0 + k.1 as usize as f64)
 }
 
 /// Sets up the kit made here: a drum on each pad, the hi-hats choking

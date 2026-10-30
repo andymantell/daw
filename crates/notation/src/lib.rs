@@ -13,5 +13,8 @@ pub mod drums;
 pub mod fretting;
 pub mod glyphs;
 pub mod layout;
+pub mod musicxml;
+pub mod render;
 pub mod score;
+pub mod text_tab;
 pub mod tuning;

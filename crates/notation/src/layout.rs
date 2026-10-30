@@ -1753,7 +1753,7 @@ fn plan_bar(part: &Part, bar: &Bar, time: TimeSig, key: i8, sp: f32) -> BarPlan 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::drums::DrumMap;
     use crate::score::{ChordSymbol, Event, Note};

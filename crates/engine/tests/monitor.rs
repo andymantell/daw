@@ -68,6 +68,7 @@ fn delay(id: u64, d: usize) -> (InsertSpec, (u64, Box<dyn Insert>)) {
             bypass: false,
             latency: d as u32,
             sidechain: None,
+            ..Default::default()
         },
         (
             id,

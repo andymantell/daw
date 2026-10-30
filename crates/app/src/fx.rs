@@ -227,6 +227,7 @@ impl FxSlot {
             bypass: self.bypass,
             latency: self.latency,
             sidechain: None,
+            ..Default::default()
         }
     }
 

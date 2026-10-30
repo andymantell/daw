@@ -4,7 +4,9 @@
 //! saturation, delay, chorus, flanger, phaser, tremolo, an algorithmic
 //! reverb, a convolution reverb, a guitar amp, speaker cabinets and a
 //! player for amp captures. Each runs as a track insert, like a hosted
-//! plugin.
+//! plugin. Effect containers (3.5) are built in too: they split the
+//! audio into chains of effects (built in or plugins) and join them
+//! again.
 //!
 //! An [`Effect`] holds the settings, shared without locks with the
 //! [`Processor`] made from it, which runs on the audio thread. Every
@@ -14,12 +16,13 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use daw_engine::graph::Insert;
+use daw_engine::graph::{Insert, Lanes, Split};
 
 mod amp;
 mod biquad;
 mod cabinet;
 pub mod capture;
+mod container;
 mod convolution;
 mod deesser;
 mod delay;
@@ -65,11 +68,16 @@ pub enum Kind {
     Amp,
     Cabinet,
     Capture,
+    /// Containers: see [`Kind::is_container`].
+    Parallel,
+    Bands,
+    MidSide,
+    LeftRight,
 }
 
 impl Kind {
     /// In the order the effects list shows them.
-    pub const ALL: [Kind; 18] = [
+    pub const ALL: [Kind; 22] = [
         Kind::Eq,
         Kind::Compressor,
         Kind::Gate,
@@ -88,6 +96,10 @@ impl Kind {
         Kind::Amp,
         Kind::Cabinet,
         Kind::Capture,
+        Kind::Parallel,
+        Kind::Bands,
+        Kind::MidSide,
+        Kind::LeftRight,
     ];
 
     /// How projects name it. Never change one.
@@ -111,6 +123,10 @@ impl Kind {
             Kind::Amp => "amp",
             Kind::Cabinet => "cabinet",
             Kind::Capture => "amp-capture",
+            Kind::Parallel => "parallel",
+            Kind::Bands => "band-split",
+            Kind::MidSide => "mid-side",
+            Kind::LeftRight => "left-right",
         }
     }
 
@@ -139,16 +155,33 @@ impl Kind {
             Kind::Amp => "Guitar amp",
             Kind::Cabinet => "Speaker cabinet",
             Kind::Capture => "Amp capture",
+            Kind::Parallel => "Parallel chains",
+            Kind::Bands => "Split by frequency",
+            Kind::MidSide => "Mid/side split",
+            Kind::LeftRight => "Left/right split",
         }
     }
 
-    /// A line saying what it does.
+    /// Whether it is a container: it holds chains of other effects.
+    pub fn is_container(self) -> bool {
+        matches!(
+            self,
+            Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight
+        )
+    }
+
+    /// What a container's chain `branch` is called, of `count`.
+    pub fn chain_name(self, branch: usize, count: usize) -> String {
+        container::chain_name(self, branch, count)
+    }
+
     /// Whether the effect can listen to another track (a sidechain):
     /// the compressor and gate react to its level instead of their own.
     pub fn takes_key(self) -> bool {
         matches!(self, Kind::Compressor | Kind::Gate)
     }
 
+    /// A line saying what it does.
     pub fn about(self) -> &'static str {
         match self {
             Kind::Eq => "Cut or boost bass, middle and treble, and cut rumble or hiss",
@@ -173,6 +206,12 @@ impl Kind {
             Kind::Amp => "A guitar amp, from clean to high gain, with a speaker cabinet",
             Kind::Cabinet => "A speaker cabinet, for after an amp or a capture made without one",
             Kind::Capture => "Plays a capture file of a real amp or pedal (.nam) that you supply",
+            Kind::Parallel => {
+                "Up to four chains of effects side by side, mixed with the untouched sound"
+            }
+            Kind::Bands => "Two to four frequency bands, each with its own chain of effects",
+            Kind::MidSide => "One chain for what's in the middle, one for the sides",
+            Kind::LeftRight => "One chain for the left, one for the right",
         }
     }
 
@@ -196,6 +235,10 @@ impl Kind {
             Kind::Amp => amp::PARAMS,
             Kind::Cabinet => cabinet::PARAMS,
             Kind::Capture => capture::PARAMS,
+            Kind::Parallel => container::PARALLEL,
+            Kind::Bands => container::BANDS,
+            Kind::MidSide => container::MID_SIDE,
+            Kind::LeftRight => container::LEFT_RIGHT,
         }
     }
 
@@ -489,6 +532,19 @@ impl Effect {
         f32::from_bits(self.shared.reduction.load(Ordering::Relaxed))
     }
 
+    /// For a container, how many chains it has with its settings now;
+    /// 0 for an effect that isn't one.
+    pub fn chains(&self) -> usize {
+        let values: Vec<f64> = (0..self.kind.params().len()).map(|i| self.get(i)).collect();
+        container::chains(self.kind, &values)
+    }
+
+    /// Whether the setting `key` means anything with the settings now
+    /// (a container's crossovers and levels past its last chain don't).
+    pub fn shown(&self, key: &str) -> bool {
+        !self.kind.is_container() || container::shown(self.kind, key, self.chains())
+    }
+
     /// Makes the audio side, at `rate`. Allocates; not for the audio
     /// thread.
     pub fn processor(&self, rate: u32) -> Processor {
@@ -520,6 +576,9 @@ impl Effect {
             }
             Kind::Amp => Box::new(amp::Amp::new(rate)),
             Kind::Capture => Box::new(capture::Player::new(rate, self.capture().as_deref())),
+            Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight => {
+                Box::new(container::Container::new(self.kind, rate))
+            }
         };
         let mut p = Processor {
             params: self.kind.params(),
@@ -561,6 +620,11 @@ trait Dsp: Send {
     /// How far it is turning the level down now, in dB.
     fn reduction_db(&self) -> f32 {
         0.0
+    }
+    /// A container, which the engine splits and joins instead of
+    /// processing.
+    fn container(&mut self) -> Option<&mut container::Container> {
+        None
     }
 }
 
@@ -668,6 +732,36 @@ impl Insert for Processor {
         self.shared
             .reduction
             .store(self.dsp.reduction_db().to_bits(), Ordering::Relaxed);
+    }
+
+    fn as_split(&mut self) -> Option<&mut dyn Split> {
+        if self.dsp.container().is_some() {
+            Some(self)
+        } else {
+            None
+        }
+    }
+}
+
+impl Split for Processor {
+    fn split(&mut self, left: &[f32], right: &[f32], lanes: &mut Lanes) {
+        let n = left.len().min(right.len()).min(lanes.frames());
+        let mut at = 0;
+        while at < n {
+            let end = (at + CHUNK).min(n);
+            self.read();
+            self.glide();
+            if let Some(c) = self.dsp.container() {
+                c.split(&left[at..end], &right[at..end], lanes, at);
+            }
+            at = end;
+        }
+    }
+
+    fn join(&mut self, dry: (&[f32], &[f32]), lanes: &Lanes, left: &mut [f32], right: &mut [f32]) {
+        if let Some(c) = self.dsp.container() {
+            c.join(dry, lanes, left, right);
+        }
     }
 }
 

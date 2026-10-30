@@ -84,12 +84,14 @@ fn effects_run_in_order_and_bypass_skips_them() {
             bypass: false,
             latency: 0,
             sidechain: None,
+            ..Default::default()
         },
         InsertSpec {
             id: 2,
             bypass: true,
             latency: 0,
             sidechain: None,
+            ..Default::default()
         },
     ];
     s.tracks.push(t);
@@ -120,6 +122,7 @@ fn latency_is_compensated_so_tracks_stay_in_time() {
         bypass: false,
         latency: 100,
         sidechain: None,
+        ..Default::default()
     }];
     s.tracks = vec![dry, wet];
     let mut fx = vec![(7, DelayGain::make(100, 1.0).0)];
@@ -147,6 +150,7 @@ fn a_mono_track_is_widened_before_its_effects() {
         bypass: false,
         latency: 0,
         sidechain: None,
+        ..Default::default()
     }];
     s.tracks.push(t);
     let mut fx = vec![(3, DelayGain::make(0, 1.0).0)];
@@ -165,6 +169,7 @@ fn effects_carry_over_when_the_graph_changes() {
         bypass: false,
         latency: 0,
         sidechain: None,
+        ..Default::default()
     }];
     s.tracks.push(t);
     let (fx, processed) = DelayGain::make(0, 1.0);
@@ -211,6 +216,7 @@ fn loop_through_delay(delay: u32, from: i64, a: i64, b: i64, blocks: usize) -> V
         bypass: false,
         latency: delay,
         sidechain: None,
+        ..Default::default()
     }];
     s.tracks.push(t);
     let mut fx = vec![(11, DelayGain::make(delay as usize, 1.0).0)];

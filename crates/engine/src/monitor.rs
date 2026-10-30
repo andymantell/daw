@@ -280,7 +280,7 @@ impl CueLine {
     }
 
     /// Delays the block in place.
-    fn run(&mut self, l: &mut [f32], r: &mut [f32]) {
+    pub(crate) fn run(&mut self, l: &mut [f32], r: &mut [f32]) {
         let d = self.delay();
         if d == 0 {
             return;

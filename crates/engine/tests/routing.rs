@@ -56,6 +56,7 @@ fn insert(id: u64, latency: u32) -> InsertSpec {
         bypass: false,
         latency,
         sidechain: None,
+        ..Default::default()
     }
 }
 

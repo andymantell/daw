@@ -282,6 +282,54 @@ pub struct Captured {
 /// which is counted; a real performance never comes near.
 pub const MAX_EVENTS: usize = 1024;
 
+/// The extra outputs of an instrument that has more than one (a drum
+/// machine sending a pad to a track of its own), as the graph hands
+/// them over for a block. Output 0 is the track itself, so these count
+/// from 1. Only outputs that go somewhere are given; an instrument
+/// should play one that doesn't through the track instead, or leave it
+/// out (a send to nowhere).
+pub struct Outputs<'a> {
+    bufs: &'a mut [[Vec<f32>; 2]],
+    routed: &'a [bool],
+    n: usize,
+}
+
+impl<'a> Outputs<'a> {
+    /// `bufs[k - 1]` is output `k`, each at least `n` frames long and
+    /// silent; `routed[k - 1]` says whether it goes anywhere.
+    pub fn new(bufs: &'a mut [[Vec<f32>; 2]], routed: &'a [bool], n: usize) -> Outputs<'a> {
+        Outputs { bufs, routed, n }
+    }
+
+    /// No extra outputs.
+    pub fn none() -> Outputs<'static> {
+        Outputs {
+            bufs: &mut [],
+            routed: &[],
+            n: 0,
+        }
+    }
+
+    /// Output `k` (from 1), left and right, if it goes somewhere.
+    pub fn get(&mut self, k: usize) -> Option<(&mut [f32], &mut [f32])> {
+        let i = k.checked_sub(1)?;
+        if !self.routed.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        let [l, r] = self.bufs.get_mut(i)?;
+        let n = self.n.min(l.len()).min(r.len());
+        Some((&mut l[..n], &mut r[..n]))
+    }
+
+    /// Whether output `k` (from 1) goes somewhere.
+    pub fn routed(&self, k: usize) -> bool {
+        k.checked_sub(1)
+            .and_then(|i| self.routed.get(i).copied())
+            .unwrap_or(false)
+            && k <= self.bufs.len()
+    }
+}
+
 /// An instrument on a track: given the block's events, it writes the
 /// block's audio. Run on the audio thread.
 pub trait Instrument: Send {
@@ -290,6 +338,20 @@ pub trait Instrument: Send {
     /// frame order. The buffers hold the track's audio clips already;
     /// an instrument adds to them. Must not allocate, lock or block.
     fn process(&mut self, events: &[Event], left: &mut [f32], right: &mut [f32]);
+
+    /// As [`process`](Self::process), with the instrument's extra
+    /// outputs (see [`Outputs`]) to add to as well. An instrument with
+    /// one output plays as usual.
+    fn process_outputs(
+        &mut self,
+        events: &[Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outputs: &mut Outputs,
+    ) {
+        let _ = outputs;
+        self.process(events, left, right);
+    }
 
     /// Frames of delay the instrument adds, for compensation.
     fn latency(&self) -> u32 {

@@ -33,7 +33,7 @@ use crate::automation::{LaneSpec, Target};
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
-use crate::midi::{Event, Expression, Instrument, Kind, MAX_EVENTS};
+use crate::midi::{Event, Expression, Instrument, Kind, MAX_EVENTS, Outputs};
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
@@ -444,6 +444,19 @@ pub struct InstrumentSpec {
     pub latency: u32,
 }
 
+/// One of an instrument's extra outputs (see [`Outputs`]) going to a
+/// bus: a drum machine's pad on a track of its own, say. It leaves
+/// straight from the instrument, before the track's effects and fader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuxSpec {
+    /// The output, from 1 (0 is the track itself).
+    pub output: u32,
+    pub to: usize,
+}
+
+/// The most extra outputs an instrument can have routed.
+pub const MAX_AUX: u32 = 32;
+
 #[derive(Clone, Debug)]
 pub struct TrackSpec {
     pub clips: Vec<ClipSpec>,
@@ -455,6 +468,10 @@ pub struct TrackSpec {
     /// Controller lanes, played with the notes.
     pub controls: Vec<ControlSpec>,
     pub instrument: Option<InstrumentSpec>,
+    /// Where the instrument's extra outputs go. One route per output;
+    /// an output without one is the instrument's to play through the
+    /// track or leave out.
+    pub instrument_outputs: Vec<AuxSpec>,
     /// Live notes from MIDI devices play through the instrument (and go
     /// to the MIDI output) as they arrive.
     pub notes_live: bool,
@@ -489,6 +506,7 @@ impl TrackSpec {
             expression: Arc::new([]),
             controls: Vec::new(),
             instrument: None,
+            instrument_outputs: Vec::new(),
             notes_live: false,
             midi_out: None,
             mix: Mix::default(),
@@ -823,6 +841,8 @@ pub(crate) enum Carry {
     Send(usize),
     /// A sidechain into the effect at this index of the target's chain.
     Sidechain(usize),
+    /// An extra output of the track's instrument, from 1.
+    Aux(u32),
 }
 
 /// Audio going from one track to another (or to the master), delayed so
@@ -1270,6 +1290,10 @@ pub struct Graph {
     /// One sidechain block, filled just before the effect that listens
     /// to it runs.
     key: [Vec<f32>; 2],
+    /// Per track, its instrument's extra outputs (see [`Outputs`]) this
+    /// block, and which of them go somewhere.
+    aux: Vec<Vec<[Vec<f32>; 2]>>,
+    aux_routed: Vec<Vec<bool>>,
     pub(crate) edges: Vec<Edge>,
     /// Edges into the master.
     to_master: Vec<usize>,
@@ -1308,6 +1332,12 @@ impl Session {
                 to.push(j);
             }
             to.extend(t.sends.iter().map(|s| s.to));
+            for a in &t.instrument_outputs {
+                if a.output == 0 || a.output > MAX_AUX {
+                    return Err(bad);
+                }
+                to.push(a.to);
+            }
             for j in to {
                 if j >= n || j == i {
                     return Err(bad);
@@ -1381,6 +1411,10 @@ impl Session {
         let mut placements = Vec::new();
         // For each track, how long after its input each effect runs.
         let mut befores: Vec<Vec<i64>> = Vec::with_capacity(self.tracks.len());
+        // Each track's effects' latency, without its instrument's.
+        let mut chain_latency: Vec<i64> = Vec::with_capacity(self.tracks.len());
+        let mut aux: Vec<Vec<[Vec<f32>; 2]>> = Vec::with_capacity(self.tracks.len());
+        let mut aux_routed: Vec<Vec<bool>> = Vec::with_capacity(self.tracks.len());
         for (ti, t) in self.tracks.iter().enumerate() {
             let mut clips = Vec::with_capacity(t.clips.len());
             let mut stereo = false;
@@ -1508,12 +1542,32 @@ impl Session {
             let built = chain::build(&t.inserts, max_block);
             let latency = built.latency;
             befores.push(built.before);
+            chain_latency.push(latency);
+            // Buffers for the instrument's routed extra outputs, up to
+            // the highest.
+            let routes = if t.instrument.is_some() {
+                &t.instrument_outputs[..]
+            } else {
+                &[]
+            };
+            let count = routes.iter().map(|a| a.output as usize).max().unwrap_or(0);
+            aux.push(
+                (0..count)
+                    .map(|_| [vec![0.0; max_block], vec![0.0; max_block]])
+                    .collect(),
+            );
+            aux_routed.push(
+                (1..=count)
+                    .map(|k| routes.iter().any(|a| a.output as usize == k))
+                    .collect(),
+            );
             let latency = latency + t.instrument.map_or(0, |i| i.latency as i64);
             // A bus sums stereo audio.
-            let fed = self
-                .tracks
-                .iter()
-                .any(|o| o.output == Output::Track(ti) || o.sends.iter().any(|s| s.to == ti));
+            let fed = self.tracks.iter().any(|o| {
+                o.output == Output::Track(ti)
+                    || o.sends.iter().any(|s| s.to == ti)
+                    || o.instrument.is_some() && o.instrument_outputs.iter().any(|a| a.to == ti)
+            });
             stereo |= fed;
             // Effects and instruments work in stereo, so a mono track
             // becomes stereo.
@@ -1585,6 +1639,19 @@ impl Session {
                 let gain = if s.mute { 0.0 } else { db_to_gain(s.gain_db) };
                 routes.push((Some(s.to), Carry::Send(k), s.pre_fader, gain, wait(s.to)));
             }
+            // An extra output leaves before the track's effects, so it
+            // waits that much less than the fader's audio.
+            if t.instrument.is_some() {
+                let mut seen = Vec::new();
+                for a in &t.instrument_outputs {
+                    if seen.contains(&a.output) {
+                        continue;
+                    }
+                    seen.push(a.output);
+                    let w = wait(a.to) - chain_latency[i];
+                    routes.push((Some(a.to), Carry::Aux(a.output), false, 1.0, w));
+                }
+            }
             for (j, o) in self.tracks.iter().enumerate() {
                 for (k, ins) in o.inserts.iter().enumerate() {
                     if ins.sidechain == Some(i) {
@@ -1593,7 +1660,7 @@ impl Session {
                     }
                 }
             }
-            let longest = routes.iter().map(|r| r.4).max().unwrap_or(0);
+            let longest = routes.iter().map(|r| r.4).max().unwrap_or(0).max(0);
             downstream[i] = longest;
             for (to, carry, pre_fader, gain, w) in routes {
                 let delay = (longest - w) as usize;
@@ -1644,6 +1711,8 @@ impl Session {
                 .map(|_| [vec![0.0; max_block], vec![0.0; max_block]])
                 .collect(),
             key: [vec![0.0; max_block], vec![0.0; max_block]],
+            aux,
+            aux_routed,
             edges,
             to_master,
             order,
@@ -1806,6 +1875,12 @@ impl Graph {
                 if matches!(e.carry, Carry::Sidechain(_)) {
                     continue;
                 }
+                if let Carry::Aux(k) = e.carry {
+                    if let Some([l, r]) = self.aux[e.from].get(k as usize - 1) {
+                        e.feed((&l[..n], &r[..n]), (&mut *sl, &mut *sr));
+                    }
+                    continue;
+                }
                 let from = if e.pre_fader {
                     &self.pre[e.from]
                 } else {
@@ -1901,11 +1976,17 @@ impl Graph {
                     out(port, e);
                 }
             }
+            let aux = &mut self.aux[ti];
+            for [l, r] in aux.iter_mut() {
+                l[..n].fill(0.0);
+                r[..n].fill(0.0);
+            }
             if let Some(InstrumentNode {
                 inst: Some(inst), ..
             }) = &mut t.instrument
             {
-                inst.process(&t.events, sl, sr);
+                let mut outs = Outputs::new(aux, &self.aux_routed[ti], n);
+                inst.process_outputs(&t.events, sl, sr, &mut outs);
             }
 
             if t.widen {

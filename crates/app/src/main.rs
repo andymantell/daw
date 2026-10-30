@@ -113,6 +113,9 @@ struct Track {
     /// A MIDI output port the track's notes go to as well (this
     /// computer's; not saved with the project).
     midi_out: Option<usize>,
+    /// Note-repeat (roadmap 3.3): held live notes play again at this
+    /// rate, while on. Kept for this run only, like monitoring.
+    note_repeat: Option<daw_project::StepRate>,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
     /// The track rendered through its effects, as the document has it.
@@ -164,6 +167,7 @@ impl Track {
             instrument_outputs: Vec::new(),
             layers: Vec::new(),
             midi_out: None,
+            note_repeat: None,
             fx: Vec::new(),
             frozen: None,
             frozen_audio: None,
@@ -841,6 +845,7 @@ impl App {
             spec.instrument = t.instrument.as_ref().map(instrument::Slot::spec);
             spec.layers = t.layers.iter().map(layers::Layer::spec).collect();
             spec.notes_live = t.kind.plays_notes() && (t.arm || t.monitor);
+            spec.note_repeat = t.note_repeat.map(|r| daw_engine::time::Ticks(r.ticks()));
             spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
             self.route(t, &mut spec);
             spec.automation = self.lane_specs(t);

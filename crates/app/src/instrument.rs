@@ -660,6 +660,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                         shown.layer = edit.or(shown.layer);
                     });
                 ui.separator();
+                note_repeat_picker(ui, t, &mut shown.changed);
                 midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
                 return;
             }
@@ -673,6 +674,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                     slot_controls(ui, slot, &mut t.instrument_outputs, &mut cx, &mut shown);
                 });
             ui.separator();
+            note_repeat_picker(ui, t, &mut shown.changed);
             midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
         });
     shown.open = open;
@@ -703,6 +705,32 @@ pub(crate) fn slot_controls(
         slot.renew(cx.rate, cx.pending);
         shown.changed = true;
     }
+}
+
+/// Note-repeat: off, or how often held keys and pads play again.
+fn note_repeat_picker(ui: &mut egui::Ui, t: &mut crate::Track, changed: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.label("Note repeat");
+        let text = |r: Option<daw_project::StepRate>| r.map_or("Off", |r| r.label());
+        let mut now = t.note_repeat;
+        egui::ComboBox::from_id_salt(("note-repeat", &t.key))
+            .selected_text(text(now))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut now, None, "Off");
+                for r in daw_project::StepRate::ALL {
+                    ui.selectable_value(&mut now, Some(r), r.label());
+                }
+            })
+            .response
+            .accessible_name("Note repeat")
+            .on_hover_text(
+                "Keys and pads held down play again at this rate, for rolls and hi-hat runs",
+            );
+        if now != t.note_repeat {
+            t.note_repeat = now;
+            *changed = true;
+        }
+    });
 }
 
 fn midi_out_picker(

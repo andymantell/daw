@@ -479,6 +479,9 @@ pub struct TrackSpec {
     /// Live notes from MIDI devices play through the instrument (and go
     /// to the MIDI output) as they arrive.
     pub notes_live: bool,
+    /// Note-repeat (roadmap 3.3): live notes held down play again every
+    /// this many ticks, from when the first was pressed, until let go.
+    pub note_repeat: Option<Ticks>,
     /// A MIDI output port (as the app numbers them) the track's notes
     /// go to, as well as its instrument.
     pub midi_out: Option<usize>,
@@ -513,6 +516,7 @@ impl TrackSpec {
             instrument_outputs: Vec::new(),
             layers: Vec::new(),
             notes_live: false,
+            note_repeat: None,
             midi_out: None,
             mix: Mix::default(),
             inserts: Vec::new(),
@@ -760,6 +764,60 @@ pub(crate) struct InstrumentNode {
     pub inst: Option<Box<dyn Instrument>>,
 }
 
+/// The most live notes note-repeat holds at once.
+const MAX_HELD: usize = 16;
+
+/// Adds this block's live notes to the track's events, and, with
+/// note-repeat on, plays the notes held down again each time round.
+fn live_notes(t: &mut TrackNode, live: &[Event], n: usize) {
+    let push = |events: &mut Vec<Event>, e: Event| {
+        if events.len() < MAX_EVENTS {
+            events.push(e);
+        }
+    };
+    for e in live {
+        push(&mut t.events, *e);
+        let Some(every) = t.repeat else { continue };
+        match e.kind {
+            Kind::NoteOn {
+                pitch,
+                velocity,
+                id,
+            } if velocity > 0 => {
+                if t.held.is_empty() {
+                    t.repeat_in = e.frame as f64 + every;
+                }
+                if t.held.len() < t.held.capacity() {
+                    t.held.push((e.channel, pitch, velocity, id));
+                }
+            }
+            Kind::NoteOn { pitch, .. } | Kind::NoteOff { pitch, .. } => {
+                t.held.retain(|h| (h.0, h.1) != (e.channel, pitch));
+            }
+            _ => {}
+        }
+    }
+    let Some(every) = t.repeat else {
+        t.held.clear();
+        return;
+    };
+    if t.held.is_empty() {
+        return;
+    }
+    while t.repeat_in < n as f64 {
+        let frame = t.repeat_in.max(0.0) as u32;
+        for &(channel, pitch, velocity, id) in &t.held {
+            push(&mut t.events, Event::note_off(frame, channel, pitch, id));
+            push(
+                &mut t.events,
+                Event::note_on(frame, channel, pitch, velocity, id),
+            );
+        }
+        t.repeat_in += every;
+    }
+    t.repeat_in -= n as f64;
+}
+
 /// The most notes one track can have sounding at once from its clips;
 /// past it, extra notes start but are not stopped until the next
 /// all-notes-off.
@@ -775,6 +833,12 @@ pub(crate) struct TrackNode {
     pub instrument: Option<InstrumentNode>,
     pub layers: Vec<LayerNode>,
     pub notes_live: bool,
+    /// Note-repeat: frames between repeats, the live notes held (channel,
+    /// pitch, velocity, id; capacity [`MAX_HELD`]), and frames until the
+    /// next repeat.
+    pub repeat: Option<f64>,
+    pub held: Vec<(u8, u8, u8, u32)>,
+    pub repeat_in: f64,
     pub midi_out: Option<usize>,
     /// This block's events, in frame order; capacity [`MAX_EVENTS`].
     pub events: Vec<Event>,
@@ -1601,6 +1665,11 @@ impl Session {
                 instrument,
                 layers,
                 notes_live: t.notes_live,
+                repeat: t.note_repeat.filter(|r| r.0 > 0).map(|r| {
+                    (self.tempo.frames_at(r).0 - self.tempo.frames_at(Ticks(0)).0).max(1) as f64
+                }),
+                held: Vec::with_capacity(MAX_HELD),
+                repeat_in: 0.0,
                 midi_out: t.midi_out,
                 events: Vec::with_capacity(MAX_EVENTS),
                 sounding: Vec::with_capacity(MAX_SOUNDING),
@@ -1974,11 +2043,7 @@ impl Graph {
             }
             t.was_playing = play;
             if t.notes_live {
-                for e in live {
-                    if t.events.len() < MAX_EVENTS {
-                        t.events.push(*e);
-                    }
-                }
+                live_notes(t, live, n);
             }
             let shift = rate.as_ref().map_or(0, |r| r.semitones.round() as i32);
             if shift != 0 {
@@ -2172,11 +2237,15 @@ impl Graph {
                 }
             }
             let Some(k) = from else { continue };
-            let o = &old.tracks[k];
+            let o = &mut old.tracks[k];
             // The notes sounding carry on where this graph has the same
             // note; one that is gone is stopped now.
             t.notes_at = o.notes_at;
             t.pass = o.pass;
+            if t.repeat.is_some() {
+                t.held = std::mem::take(&mut o.held);
+                t.repeat_in = o.repeat_in;
+            }
             t.was_playing = o.was_playing;
             for &k in &o.sounding {
                 let on = &o.notes[k];

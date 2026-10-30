@@ -765,8 +765,9 @@ own length, rate and direction; swing, per-step velocity, pitch, chance,
 repeats, offset, gate and velocity variance; Euclidean fills; patterns as
 linked clips that can be made unique or turned into notes; and chance on
 any note, rolled each time round, with groups that play together or pick
-one at random. Not yet: note-repeat and recording from pads, which wait
-on the drum machine (3.4). Checks in `docs/review-queue/3.3-patterns.md`.*
+one at random. Patterns drive the drum machine (3.4) by its pads, and
+held keys and pads can repeat (note-repeat). Not yet: recording into a
+pattern from the pads. Checks in `docs/review-queue/3.3-patterns.md`.*
 
 ### 3.4 Built-in instruments & content (L)
 - Multi-zone sampler, drum sampler, and a synth of our own design.

@@ -5,6 +5,11 @@
 //!
 //! Punching in by hand needs nothing here: pressing Record while playing
 //! starts takes on the armed tracks, and pressing it again ends them.
+//!
+//! Recording at a slower speed (Phase 4 D5) needs nothing here either:
+//! with the practice speed (or transpose) changed, armed tracks record as
+//! played and the engine's recorder speeds each take back up to the
+//! song's speed before it arrives. The speed commands are here.
 
 use daw_engine::engine::Command;
 use daw_engine::graph::Input;
@@ -258,6 +263,36 @@ impl App {
     }
 }
 
+impl App {
+    /// Practice speed `by` percent faster (negative: slower), to the
+    /// nearest 5%, within the stretcher's range.
+    pub(crate) fn nudge_speed(&mut self, by: f64) {
+        self.speed_pct = (((self.speed_pct + by) / 5.0).round() * 5.0).clamp(50.0, 150.0);
+        self.send(self.practice());
+    }
+
+    pub(crate) fn normal_speed(&mut self) {
+        (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
+        self.send(self.practice());
+    }
+
+    /// Said beside the practice controls while recording with them
+    /// changed.
+    pub(crate) fn slowed_note(&self) -> String {
+        let speed = self.speed_pct != 100.0;
+        let pitch = (self.semitones, self.cents) != (0, 0);
+        let what = match (speed, pitch) {
+            (true, true) => "speed and pitch",
+            (true, false) => "speed",
+            _ => "pitch",
+        };
+        format!(
+            "Recording at {:.0}%: takes return to the song's {what} when you stop",
+            self.speed_pct
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -267,6 +302,7 @@ mod tests {
     use egui_kittest::kittest::Queryable as _;
 
     use super::*;
+    use crate::commands::Cmd;
 
     /// The app on the silent stand-in with two channels of test tone in,
     /// a bar a second (240 bpm), and one armed track on input 1.
@@ -362,5 +398,36 @@ mod tests {
         );
         // Now every input has a track.
         assert!(h.query_by_label("+ A track for each input (0)").is_some());
+    }
+
+    #[test]
+    fn a_bar_recorded_at_70_percent_lands_as_one_bar() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        for _ in 0..6 {
+            h.state_mut().run(&ctx, Cmd::SlowerSpeed);
+        }
+        assert_eq!(h.state().speed_pct, 70.0);
+        let app = h.state_mut();
+        app.record.punch = true;
+        app.record.punch_bars = (2, 3);
+        app.record.pre_roll = 1;
+        app.record.post_roll = 1;
+        app.recording = true;
+        app.send(Command::SetRecording(true));
+        h.run();
+        assert!(h.query_by_label_contains("Recording at 70%").is_some());
+        h.state_mut().toggle_play();
+        assert!(until(&mut h, 2, |a| a.ctl.status().playing()));
+        // Three bars at 70% take about 4.3 seconds.
+        assert!(until(&mut h, 15, |a| !a.ctl.status().playing()));
+        assert!(until(&mut h, 5, |a| !a.tracks[0].clips.is_empty()));
+        let c = &h.state().tracks[0].clips[0];
+        // Bar 2, at the song's speed.
+        assert_eq!(c.start, 48_000);
+        assert!((c.end() - 2 * 48_000).abs() <= 1, "{}", c.end());
+        // And back to normal.
+        h.state_mut().run(&ctx, Cmd::NormalSpeed);
+        assert_eq!(h.state().practice_value().speed_pct, 100.0);
     }
 }

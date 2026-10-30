@@ -232,6 +232,20 @@ session, with music-quality audio.
 - An original visual language, not imitating any existing product (see
   [CLEAN_ROOM.md](CLEAN_ROOM.md)).
 
+## 7a. Command layer and agent interface
+
+- Every user-visible action is a **command**: a named, serialisable
+  request with typed arguments, run through one dispatcher. The UI, key
+  commands, the phone remote, scripts and the agent interface are all
+  callers of the same commands. Queries (project state, selection, meters,
+  analysis) are the read side of the same layer.
+- The **agent interface** is a Model Context Protocol server inside the
+  app (roadmap 2.11): commands become tools, state and analysis become
+  resources and read tools. Local only, off by default, token-paired, with
+  per-session consent. Each request becomes one labelled undo step.
+- **Headless mode** runs the engine and command layer without a window,
+  for end-to-end tests and for assistants exercising a build.
+
 ## 8. Other libraries (candidates)
 
 | Need | Candidates |

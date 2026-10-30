@@ -660,6 +660,42 @@ recorded in [research/THEMES.md](research/THEMES.md).
 - **User themes:** a theme file can be copied, edited and loaded from the
   settings folder. Sharing them is a Phase 4 nicety.
 
+### 2.11 Agent interface: an MCP server inside the app (L)
+**Goal:** everything a person can do in the app, an AI assistant can do
+too, and it can see what the person sees. The assistant helps; it does not
+replace the app's own UI. See
+[research/AGENT_INTERFACE.md](research/AGENT_INTERFACE.md).
+- **One command layer.** Menus, key commands, the phone remote and the
+  agent interface all call the same commands (2.1). A feature is not done
+  until its commands are callable from outside the UI. This rule starts
+  now, in Phase 1 code.
+- **Server in the app**, speaking the open Model Context Protocol (MIT
+  licensed specification) so any compatible assistant can connect: a
+  desktop chat app, a coding agent, or our own future helper. Off by
+  default; turned on in settings, local only, paired with a token.
+- **Perception (resources and read tools):** the project document
+  (tracks, clips, notes, markers, tempo, routing, plugins and their
+  parameters), transport state, selection, meters, and **analysis on
+  demand**: spectrum and loudness of a track or bus over a time range,
+  peak and RMS, the mix's spectrum with one track removed, crest factor,
+  detected key and tempo. Rendered audio of any region as a file the
+  assistant can listen to, and a picture of any pane.
+- **Action (tools):** every command, plus setting any parameter (built-in
+  or plugin) by value, editing clips and notes, adding and removing
+  effects, and running exports. Changes are grouped so one assistant
+  request is one undo step, marked as made by the assistant.
+- **Consent and safety:** the person approves what the assistant may do
+  per session (read only; edit; edit and export), sees every change in
+  the undo history, and can stop it with one key. Nothing leaves the
+  machine unless the person's own assistant sends it. The server never
+  runs code it receives.
+- **Testing:** the same interface drives end-to-end tests. A test is a
+  script of commands and queries against the real app, headless, with
+  deterministic rendering; an assistant can also exercise a build on the
+  owner's machine and report what it saw.
+- Scripting (Phase 7) is the same command layer with a sandboxed language
+  instead of a protocol.
+
 **Exit criteria**
 - A 24+-track song with 10+ plugins can be recorded, comped, mixed with
   automation and exported with no dropouts at a 128-sample buffer on the
@@ -667,6 +703,11 @@ recorded in [research/THEMES.md](research/THEMES.md).
 - Delay compensation is verified by automated null tests.
 - A sloppy multi-mic drum take is tightened to the grid at 70% strength,
   and the drum mics stay in phase.
+- An assistant connected over the agent interface reads a mix, reports
+  that two tracks clash below 200 Hz, and applies an EQ cut on one of them
+  as a single, labelled, undoable step, with the person's approval.
+- An end-to-end test records a take, edits it and exports it using only
+  the agent interface, headless, and the export matches a golden render.
 - Switching between the four shipped themes while playing causes no
   dropout and no change to the project file, and every theme passes the
   contrast checks in both variants.
@@ -1119,7 +1160,8 @@ project, especially for guitarists and singers.
   other monophonic sources: key/scale, speed, harmonies.
 - **Chord progression tool** (M): write progressions on the chord track
   quickly, and generate a matching bassline.
-- **Scripting** (M): sandboxed scripts for editor actions and MIDI.
+- **Scripting** (M): sandboxed scripts for editor actions and MIDI, over
+  the same command layer as the agent interface (2.11).
 - **Controller scripting** (M) for control surfaces.
 - **MIDI 2.0 / MPE** (M).
 

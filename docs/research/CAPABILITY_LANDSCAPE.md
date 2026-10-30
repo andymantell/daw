@@ -170,7 +170,8 @@ end for what could not be verified.
 | Audio Units hosting (macOS) | 3 | M | |
 | ARA 2 hosting | 7 | H | |
 | Intel-only plugins on Apple Silicon (bridge) | 0.7 decision | H | |
-| User scripting (editor actions, MIDI) | 7 | M | Sandboxed. |
+| Agent interface: MCP server in the app exposing every command, project state, meters, analysis and rendered audio; consent per session; drives end-to-end tests | 2 | M | Command layer from Phase 1. See [AGENT_INTERFACE.md](AGENT_INTERFACE.md). |
+| User scripting (editor actions, MIDI) | 7 | M | Sandboxed; same command layer. |
 | Controller scripting / control surfaces | 7 | M | |
 | Customisable key commands, command palette | 2 | L | |
 | Themes as data: several shipped looks, light/dark variants, instant switching, contrast checks in CI | 2 | M | Foundations from Phase 1. See [THEMES.md](THEMES.md). |

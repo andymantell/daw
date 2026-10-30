@@ -201,6 +201,18 @@ impl App {
             };
             match result.and_then(|_| folder.add_asset(&job.path, true)) {
                 Ok(asset) => {
+                    if self.tracks[t].freeze {
+                        // Frozen here: it plays this from now on.
+                        match self.source_for(&asset) {
+                            Ok(s) => self.tracks[t].frozen_audio = Some(s),
+                            Err(e) => {
+                                self.message = Some(format!(
+                                    "Couldn't open the frozen audio for {}: {e}",
+                                    self.tracks[t].name
+                                ));
+                            }
+                        }
+                    }
                     let mut f = job.frozen.clone();
                     f.asset = asset;
                     if let Some(old) = self.tracks[t].frozen.replace(f)
@@ -268,10 +280,10 @@ impl App {
     }
 
     /// The frozen audio `t` plays here instead of its clips and effects,
-    /// if it does: when one of its plugins is missing and the audio still
-    /// fits its clips.
+    /// if it does: when it is frozen, or one of its plugins is missing,
+    /// and the audio still fits its clips.
     pub(crate) fn frozen_playing(&self, t: &Track) -> Option<ClipSpec> {
-        if !self.proj.missing_fx.contains_key(&t.key) {
+        if !t.freeze && !self.proj.missing_fx.contains_key(&t.key) {
             return None;
         }
         let f = t.frozen.as_ref()?;
@@ -313,6 +325,20 @@ impl App {
                 )
             };
             return (Some(line), missing);
+        }
+        if t.freeze {
+            let line = if self.frozen_playing(t).is_some() {
+                "Frozen: it plays its frozen audio, with these effects switched off. Unfreeze \
+                 it from its menu on the timeline to change them."
+            } else if self.freezer.making(&t.key) {
+                "Freezing…"
+            } else if self.proj.folder.is_none() {
+                "Frozen once the project is saved. Until then it plays through these effects."
+            } else {
+                "Frozen, but its clips or effects have changed since, so it plays through these \
+                 effects until it is frozen again when the project is saved."
+            };
+            return (Some(line.into()), missing);
         }
         if !t.fx.iter().any(|s| s.is_plugin() && !s.bypass) {
             return (None, missing);

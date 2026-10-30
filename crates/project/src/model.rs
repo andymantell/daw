@@ -125,6 +125,9 @@ pub struct Track {
     /// The track rendered through its effects, for computers that lack
     /// one of its plugins.
     pub frozen: Option<Frozen>,
+    /// Frozen by its owner: it plays its frozen audio, with its effects
+    /// switched off, wherever it is opened.
+    pub freeze: bool,
     /// Comps made from the track's takes, in the order made.
     pub comps: Vec<Comp>,
     /// The comp that plays, by id, or `None` for the takes as recorded.
@@ -153,6 +156,7 @@ impl Track {
             clips: Vec::new(),
             effects: Vec::new(),
             frozen: None,
+            freeze: false,
             comps: Vec::new(),
             comp: None,
             kind: TrackKind::Audio,
@@ -170,9 +174,10 @@ impl Track {
     }
 
     /// Whether the track needs frozen audio: it has a plugin switched
-    /// on. Every computer has the built-in effects.
+    /// on (every computer has the built-in effects), or it is frozen and
+    /// has any effect switched on.
     pub fn wants_frozen(&self) -> bool {
-        self.effects.iter().any(|e| !e.bypass && e.is_plugin())
+        (self.effects.iter()).any(|e| !e.bypass && (e.is_plugin() || self.freeze))
     }
 
     /// A fingerprint of everything the track's frozen audio depends on:

@@ -1051,6 +1051,10 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         }
         None => {}
     }
+    // Only tracks ever frozen gain an entry.
+    if t.freeze || m.get("freeze").is_some() {
+        w.put(m, "freeze", t.freeze);
+    }
     let Ok(order_list) = m.ensure_mergeable_movable_list("fx_order") else {
         return;
     };
@@ -1235,6 +1239,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         clips: Vec::new(),
         effects: Vec::new(),
         frozen: t.get("frozen").and_then(read_frozen),
+        freeze: boolean(t, "freeze").unwrap_or(false),
         comps: Vec::new(),
         comp: None,
         kind: TrackKind::from_name(&string(t, "kind").unwrap_or_default()),

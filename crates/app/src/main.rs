@@ -39,6 +39,7 @@ mod process;
 mod project;
 mod recording;
 mod remote;
+mod render;
 mod share;
 mod snapshots;
 mod start;
@@ -95,6 +96,8 @@ struct Track {
     frozen: Option<daw_project::Frozen>,
     /// Its audio, opened when one of the track's plugins is missing here.
     frozen_audio: Option<Arc<StreamSource>>,
+    /// Frozen by the user: plays its frozen audio, effects off.
+    freeze: bool,
     /// Peak levels shown on the meter, decaying.
     meter: (f32, f32),
     /// Comps made from the track's takes, and the one that plays.
@@ -134,6 +137,7 @@ impl Track {
             fx: Vec::new(),
             frozen: None,
             frozen_audio: None,
+            freeze: false,
             meter: (0.0, 0.0),
             comps: Vec::new(),
             comp: None,
@@ -162,6 +166,19 @@ struct Import {
     /// The file the clip plays (a video's sound is taken out into one of
     /// its own), opened.
     done: mpsc::Receiver<Result<(PathBuf, Arc<StreamSource>), String>>,
+}
+
+/// How the engine plays a clip.
+fn clip_spec(c: &Clip) -> ClipSpec {
+    ClipSpec {
+        offset: c.offset,
+        len: Some(c.len),
+        gain_db: c.gain_db,
+        fade_in: c.fade_in,
+        fade_out: c.fade_out,
+        envelope: c.envelope.as_slice().into(),
+        ..ClipSpec::new(Frames(c.start), c.source.clone())
+    }
 }
 
 /// Where converted copies of files go until projects have folders of
@@ -248,6 +265,9 @@ struct App {
     export: export::Export,
     freezer: freeze::Freezer,
     processing: process::Processing,
+    /// Renders in place, bounces and pastes as rendered audio, and the
+    /// copied clips.
+    renders: render::Renders,
     /// Practice speed, percent, and transpose.
     speed_pct: f64,
     semitones: i32,
@@ -363,6 +383,7 @@ impl App {
             export: export::Export::default(),
             freezer: freeze::Freezer::default(),
             processing: process::Processing::default(),
+            renders: render::Renders::default(),
             speed_pct: 100.0,
             semitones: 0,
             cents: 0,
@@ -680,15 +701,7 @@ impl App {
             // until it is ready, but keeps its place.
             let clips = (t.clips.iter())
                 .filter(|c| !c.muted && c.source.rate == self.rate)
-                .map(|c| ClipSpec {
-                    offset: c.offset,
-                    len: Some(c.len),
-                    gain_db: c.gain_db,
-                    fade_in: c.fade_in,
-                    fade_out: c.fade_out,
-                    envelope: c.envelope.as_slice().into(),
-                    ..ClipSpec::new(Frames(c.start), c.source.clone())
-                })
+                .map(clip_spec)
                 .collect();
             let mut spec = TrackSpec::new(clips);
             spec.mix = t.heard();
@@ -2110,6 +2123,22 @@ impl eframe::App for App {
                         n => format!("Opening {n} files…"),
                     });
                 }
+                if self.renders.busy() > 0 {
+                    ui.spinner();
+                    let n = self.renders.busy();
+                    ui.label(format!(
+                        "Rendering{}… {:.0}%",
+                        if n > 1 {
+                            format!(" {n}")
+                        } else {
+                            String::new()
+                        },
+                        100.0 * self.renders.progress()
+                    ));
+                    if ui.small_button("Cancel").clicked() {
+                        self.renders.cancel();
+                    }
+                }
                 if self.processing.busy() > 0 {
                     ui.spinner();
                     ui.label(match self.processing.busy() {
@@ -2158,6 +2187,7 @@ impl eframe::App for App {
         self.effects.manager_window(&ctx);
         self.effects.credits_window(&ctx);
         self.poll_freezing(&ctx);
+        self.poll_renders(&ctx);
         self.export.poll();
         if self.export.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));

@@ -735,6 +735,13 @@ replace the app's own UI. See
 - Groove templates: extract a groove from audio or MIDI and apply it.
 - Standard MIDI file import/export. MIDI learn.
 
+*Status: built at risk on 2026-10-30, in two parts: notes, instrument
+tracks, MIDI devices, the note editor and MIDI files (owner checks in
+`docs/review-queue/3.1-notes-and-instruments.md`), then keys and scale
+mode, humanise, legato, selecting notes, controller lanes, per-note
+expression, grooves and MIDI learn (owner checks in
+`docs/review-queue/3.1-note-editing-depth.md`).*
+
 ### 3.2 Instrument plugins & more formats (L)
 - **VST 3 instruments**, including multi-output instruments.
 - **CLAP** hosting (open SDK, MIT).

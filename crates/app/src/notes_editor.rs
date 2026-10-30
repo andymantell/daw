@@ -213,6 +213,8 @@ pub struct Editor {
     /// dragged.
     pub lane: LaneView,
     line_drag: Option<usize>,
+    /// The note pitch line's range, kept while a point is dragged.
+    pitch_range: f64,
     /// The key the clip is in, and whether notes are kept on it; set by
     /// the pane before each draw.
     pub scale: Option<Scale>,
@@ -239,6 +241,7 @@ impl Default for Editor {
             show_clip: false,
             lane: LaneView::Velocity,
             line_drag: None,
+            pitch_range: 2.0,
             scale: None,
             scale_mode: false,
         }
@@ -431,9 +434,7 @@ impl Editor {
                         daw_project::noteops::wobble(n.len, 2.0, centre, depth);
                     changed = true;
                 }
-                if ui
-                    .button("Clear line")
-                    .clicked()
+                if ui.button("Clear line").clicked()
                     && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
                 {
                     n.expression.retain(|l| l.param != kind);
@@ -553,7 +554,11 @@ impl Editor {
             match self.scale {
                 // Off the key's scale: shaded; its root: marked.
                 Some(sc) if !sc.contains(pitch as u8) => {
-                    painter.rect_filled(r.intersect(grid_rect), 0.0, tc.shadow.gamma_multiply(0.5));
+                    painter.rect_filled(
+                        r.intersect(grid_rect),
+                        0.0,
+                        tc.shadow.gamma_multiply(0.75),
+                    );
                 }
                 Some(sc) if pitch as u8 % 12 == sc.root => {
                     painter.rect_filled(
@@ -1049,6 +1054,20 @@ impl Editor {
                                 1.0
                             };
                             let base = origin + n.start;
+                            // Pitch: two semitones either way, more when
+                            // the line goes further, so vibrato shows.
+                            let range = if kind == Note::PITCH && self.line_drag.is_none() {
+                                let most =
+                                    lane.points.iter().fold(2.0f64, |m, p| m.max(p.value.abs()));
+                                let r = if most <= 2.0 { 2.0 } else { 12.0 };
+                                self.pitch_range = r;
+                                (-r, r)
+                            } else if kind == Note::PITCH {
+                                (-self.pitch_range, self.pitch_range)
+                            } else {
+                                view.range()
+                            };
+                            let geo = LineGeo { range, ..geo };
                             let moved = edit_line(
                                 ui,
                                 &resp,

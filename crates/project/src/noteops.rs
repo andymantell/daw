@@ -463,6 +463,9 @@ mod tests {
         assert_eq!(w.len(), 32, "eight points a cycle, four cycles");
         assert_eq!(w[0].value, 0.0);
         assert!((w[2].value - 0.5).abs() < 1e-9, "the top a quarter in");
-        assert!(w.iter().all(|p| p.value.abs() <= 0.5 + 1e-9 && p.at < PPQ * 2));
+        assert!(
+            w.iter()
+                .all(|p| p.value.abs() <= 0.5 + 1e-9 && p.at < PPQ * 2)
+        );
     }
 }

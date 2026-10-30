@@ -12,7 +12,8 @@
 //! or a bus) and its sends. A bus is a track with no clips of its own
 //! (roadmap 2.3). Sends take the audio after the effects and pan, with
 //! or without the fader. An effect can listen to another track's audio
-//! as a sidechain.
+//! as a sidechain. Effects can sit in containers that split the audio
+//! into several chains and join them again (see [`chain`](crate::chain)).
 //!
 //! Insert effects ([`Insert`]) are made off the audio thread and live
 //! across graphs: a new graph takes them over from the one it replaces
@@ -28,6 +29,7 @@
 
 use std::sync::Arc;
 
+use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
@@ -183,6 +185,86 @@ pub trait Insert: Send {
         let _ = key;
         self.process(left, right);
     }
+
+    /// For an effect container: how it splits the audio among its
+    /// chains and joins them again. `None` for an ordinary effect.
+    fn as_split(&mut self) -> Option<&mut dyn Split> {
+        None
+    }
+}
+
+/// Most chains an effect container has.
+pub const MAX_BRANCHES: usize = 4;
+
+/// How an effect container splits a track's audio into its chains and
+/// joins them again. The engine runs each chain's effects on its lane
+/// between the two, and lines the chains up in time first. Must not
+/// allocate, lock or block, and must add no latency of its own.
+pub trait Split: Send {
+    /// Fills every lane from the block coming in.
+    fn split(&mut self, left: &[f32], right: &[f32], lanes: &mut Lanes);
+    /// Writes the block going out from the lanes, after their effects,
+    /// and the block that came in (`dry`), delayed to match them.
+    fn join(&mut self, dry: (&[f32], &[f32]), lanes: &Lanes, left: &mut [f32], right: &mut [f32]);
+}
+
+/// The audio of each of a container's chains for one block: stereo,
+/// allocated up front.
+pub struct Lanes {
+    bufs: Vec<[Vec<f32>; 2]>,
+    frames: usize,
+}
+
+impl Lanes {
+    /// `count` lanes of `frames` frames each, silent.
+    pub fn new(count: usize, frames: usize) -> Lanes {
+        Lanes {
+            bufs: (0..count)
+                .map(|_| [vec![0.0; frames], vec![0.0; frames]])
+                .collect(),
+            frames,
+        }
+    }
+
+    pub fn count(&self) -> usize {
+        self.bufs.len()
+    }
+
+    /// Frames in this block.
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    pub fn get(&self, i: usize) -> (&[f32], &[f32]) {
+        let [l, r] = &self.bufs[i];
+        (&l[..self.frames], &r[..self.frames])
+    }
+
+    pub fn get_mut(&mut self, i: usize) -> (&mut [f32], &mut [f32]) {
+        let [l, r] = &mut self.bufs[i];
+        (&mut l[..self.frames], &mut r[..self.frames])
+    }
+
+    /// Makes the block `frames` long, at most as long as made.
+    pub(crate) fn set_frames(&mut self, frames: usize) {
+        self.frames = frames.min(self.bufs.first().map_or(frames, |b| b[0].len()));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for b in &mut self.bufs {
+            b[0].fill(0.0);
+            b[1].fill(0.0);
+        }
+    }
+}
+
+/// Where an effect sits when it is inside a container.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Place {
+    /// The container's insert id, on the same track.
+    pub container: u64,
+    /// Which of its chains, from 0.
+    pub branch: u8,
 }
 
 /// A slot in a track's insert chain. The effect itself is handed to
@@ -197,6 +279,13 @@ pub struct InsertSpec {
     /// The track whose audio (after its effects and fader) the effect
     /// listens to, lined up in time with this track's.
     pub sidechain: Option<usize>,
+    /// For an effect container, how many chains it has (its effect
+    /// splits and joins, see [`Split`]); 0 for an ordinary effect. A
+    /// container's own `latency` is not counted: its chains' is.
+    pub branches: u8,
+    /// The container and chain it sits in; `None` for the track's own
+    /// chain. The effects in one chain run in the order they are listed.
+    pub place: Option<Place>,
 }
 
 /// Where a track's audio goes after its fader.
@@ -463,6 +552,8 @@ pub(crate) struct TrackNode {
     pub arm: bool,
     pub monitor: bool,
     pub inserts: Vec<InsertNode>,
+    /// The order they run in, with containers' chains.
+    pub chain: Vec<Step>,
     /// Practice speed and transpose; used only when either is set.
     pub stretch: Box<Stretcher>,
     /// How far ahead of the play position the clips are read: the
@@ -531,7 +622,7 @@ impl Edge {
 
     /// Runs `src` through the delay line, scaled by the gain ramping
     /// from `last` to `gain`, adding the result into `dst`.
-    fn feed(&mut self, src: (&[f32], &[f32]), dst: (&mut [f32], &mut [f32])) {
+    pub(crate) fn feed(&mut self, src: (&[f32], &[f32]), dst: (&mut [f32], &mut [f32])) {
         let n = src.0.len();
         let d = self.delay();
         let step = 1.0 / n.max(1) as f32;
@@ -854,6 +945,8 @@ impl Session {
         let mut tracks = Vec::with_capacity(self.tracks.len());
         let mut streams: Vec<StreamNode> = Vec::new();
         let mut placements = Vec::new();
+        // For each track, how long after its input each effect runs.
+        let mut befores: Vec<Vec<i64>> = Vec::with_capacity(self.tracks.len());
         for (ti, t) in self.tracks.iter().enumerate() {
             let mut clips = Vec::with_capacity(t.clips.len());
             let mut stereo = false;
@@ -926,12 +1019,9 @@ impl Session {
                     key: None,
                 })
                 .collect();
-            let latency = t
-                .inserts
-                .iter()
-                .filter(|i| !i.bypass)
-                .map(|i| i.latency as i64)
-                .sum();
+            let built = chain::build(&t.inserts, max_block);
+            let latency = built.latency;
+            befores.push(built.before);
             // A bus sums stereo audio.
             let fed = self
                 .tracks
@@ -950,6 +1040,7 @@ impl Session {
                 arm: t.arm && t.input.is_some(),
                 monitor,
                 inserts,
+                chain: built.steps,
                 latency,
                 widen,
                 stretch: Box::new(Stretcher::new(max_block)),
@@ -977,13 +1068,7 @@ impl Session {
         let mut to_master = Vec::new();
         // How long after the target's input its effect `k` runs: the
         // latency of the effects before it.
-        let before = |j: usize, k: usize| -> i64 {
-            self.tracks[j].inserts[..k]
-                .iter()
-                .filter(|i| !i.bypass)
-                .map(|i| i.latency as i64)
-                .sum()
-        };
+        let before = |j: usize, k: usize| -> i64 { befores[j][k] };
         for &i in order.iter().rev() {
             let t = &self.tracks[i];
             // (to, carry, pre_fader, gain, the wait on that route)
@@ -1225,23 +1310,12 @@ impl Graph {
             if t.widen {
                 sr.copy_from_slice(sl);
             }
-            for i in &mut t.inserts {
-                if let (false, Some(fx)) = (i.bypass, &mut i.effect) {
-                    match i.key {
-                        Some(e) => {
-                            let e = &mut self.edges[e];
-                            let [kl, kr] = &mut self.key;
-                            let (kl, kr) = (&mut kl[..n], &mut kr[..n]);
-                            kl.fill(0.0);
-                            kr.fill(0.0);
-                            let from = &self.post[e.from];
-                            e.feed((&from[0][..n], &from[1][..n]), (&mut *kl, &mut *kr));
-                            fx.process_keyed(sl, sr, (kl, kr));
-                        }
-                        None => fx.process(sl, sr),
-                    }
-                }
-            }
+            let mut keys = chain::Keys {
+                edges: &mut self.edges,
+                post: &self.post,
+                key: &mut self.key,
+            };
+            chain::run(&mut t.chain, &mut t.inserts, &mut keys, sl, sr);
 
             let target = t.target(any_solo, groups, true);
             let dry = t.target(any_solo, groups, false);

@@ -58,6 +58,14 @@ impl Coefs {
         )
     }
 
+    /// Passes every frequency at the same level, turning the phase by a
+    /// half turn at `hz`. With a Q of a half root two it equals the sum
+    /// of the two halves of a fourth-order crossover there.
+    pub fn all_pass(hz: f64, q: f64, rate: f64) -> Coefs {
+        let (c, _, a) = Coefs::w(hz, q, rate);
+        Coefs::new([1.0 - a, -2.0 * c, 1.0 + a], [1.0 + a, -2.0 * c, 1.0 - a])
+    }
+
     pub fn peak(hz: f64, q: f64, db: f64, rate: f64) -> Coefs {
         let g = 10f64.powf(db / 40.0);
         let (c, _, a) = Coefs::w(hz, q, rate);

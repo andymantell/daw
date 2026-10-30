@@ -158,6 +158,10 @@ pub struct Track {
     /// instrument track made before one was chosen, or notes sent only
     /// to a MIDI output).
     pub instrument: Option<Effect>,
+    /// Where the instrument's extra outputs go (a drum machine's pads
+    /// on buses of their own), by output number from 1. An output with
+    /// no bus here plays through the track, or not at all for a send.
+    pub instrument_outputs: Vec<InstrumentOutput>,
     /// Insert effects, in order.
     pub effects: Vec<Effect>,
     /// The track rendered through its effects, for computers that lack
@@ -197,6 +201,7 @@ impl Track {
             clips: Vec::new(),
             note_clips: Vec::new(),
             instrument: None,
+            instrument_outputs: Vec::new(),
             effects: Vec::new(),
             frozen: None,
             freeze: false,
@@ -484,6 +489,14 @@ pub struct AutoPoint {
 
 /// A copy of a track's audio sent to a bus (an effect return, say),
 /// with its own level.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InstrumentOutput {
+    /// The output, from 1 (the track itself is 0).
+    pub output: u32,
+    /// The bus it goes to.
+    pub to: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Send {
     /// The bus it goes to.
@@ -843,8 +856,16 @@ pub struct Effect {
     /// same track; `None` for the track's own chain. Effects in one of a
     /// container's chains play in the order of the track's list.
     pub container: Option<String>,
-    /// Which of the container's chains, from 0.
+    /// Which of the container's chains, from 0; for an effect inside
+    /// an instrument ([`Effect::inner`]), the drum pad it is on.
     pub branch: u32,
+    /// The sounds a built-in instrument plays, by its own name for each
+    /// slot ("pad3.layer0", say): an asset name, a full path until the
+    /// project is saved, or a sound the app makes (`made:` and a name).
+    pub samples: Vec<(String, String)>,
+    /// Effects inside a built-in instrument (a drum machine's pads'),
+    /// in order, each with `branch` saying where.
+    pub inner: Vec<Effect>,
 }
 
 impl Effect {
@@ -857,6 +878,21 @@ impl Effect {
     pub fn asset(&self) -> Option<&str> {
         (!self.response.is_empty() && !self.response.starts_with("room:"))
             .then_some(self.response.as_str())
+    }
+
+    /// Every sound file it uses: its response or capture, an
+    /// instrument's sounds, and those of the effects inside it.
+    pub fn assets(&self) -> Vec<&str> {
+        let mut v: Vec<&str> = self.asset().into_iter().collect();
+        v.extend(
+            (self.samples.iter())
+                .map(|(_, r)| r.as_str())
+                .filter(|r| !r.is_empty() && !r.starts_with("made:")),
+        );
+        for e in &self.inner {
+            v.extend(e.assets());
+        }
+        v
     }
 }
 

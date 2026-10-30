@@ -4,7 +4,8 @@
 //! Layout: a `song` map of settings, a `tracks` map from id to track,
 //! with the track order in the movable list `order`, a `markers` map,
 //! `tempo_changes` and `meter_changes` maps from id to change, and
-//! the lesson notes as text, a `tabs` map from id to tab block, and a
+//! the lesson notes as text, a `tabs` map from id to tab block, an
+//! `assignments` map from id to assignment, and a
 //! `comments` map from id to comment, and an `edit_groups` map from id
 //! to group, whose tracks are a map from track id to `true` so two
 //! people adding tracks at once keep both. A
@@ -15,7 +16,8 @@
 //! other field is its own map entry,
 //! so two people changing different fields of the same clip both keep
 //! their change. A `practice` map holds each person's practice settings
-//! under their own key, which only they write.
+//! under their own key, which only they write; the practice log and the
+//! list of lessons are in `lessons.rs`.
 //!
 //! Deleting a comment, or changing its text, has to take the old words
 //! out of the file too, not just out of the project as it stands: the
@@ -39,9 +41,9 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve, EditGroup, Effect,
-    EffectState, Fade, Frozen, FrozenClip, GainPoint, Marker, MeterChange, Practice, Project, Send,
-    TabBlock, TempoChange, Track, TrackKind, TrainerSettings, is_asset_name,
+    Assignment, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve, EditGroup,
+    Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Marker, MeterChange, Practice,
+    Project, Send, TabBlock, TempoChange, Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -439,6 +441,28 @@ impl ProjectDoc {
             w.put(&m, "created", t.created);
         }
 
+        // Assignments: an entry only once a project has one.
+        if !p.assignments.is_empty() || self.doc.get_by_str_path("assignments").is_some() {
+            let all = self.doc.get_map("assignments");
+            let keep: HashSet<&str> = p.assignments.iter().map(|a| a.id.as_str()).collect();
+            for id in keys(&all) {
+                if !keep.contains(id.as_str()) {
+                    w.delete(&all, &id);
+                }
+            }
+            for a in &p.assignments {
+                let m = w.child(&all, &a.id);
+                w.put(&m, "from", a.bars.0);
+                w.put(&m, "to", a.bars.1);
+                w.put(&m, "bpm", a.bpm);
+                w.put(&m, "due", a.due);
+                w.put(&m, "note", a.note.as_str());
+                w.put(&m, "lesson", opt_str(&a.lesson));
+                w.put(&m, "author", a.author.as_str());
+                w.put(&m, "created", a.created);
+            }
+        }
+
         let comments = self.comments();
         let keep: HashSet<&str> = p.comments.iter().map(|c| c.id.as_str()).collect();
         for id in keys(&comments) {
@@ -653,6 +677,24 @@ impl ProjectDoc {
         }
         p.tabs
             .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
+        if let Some(LoroValue::Map(all)) = root.get("assignments") {
+            for (id, a) in all.iter() {
+                let LoroValue::Map(a) = a else { continue };
+                let from = int(a, "from").unwrap_or(1).max(1);
+                p.assignments.push(Assignment {
+                    id: id.to_string(),
+                    bars: (from, int(a, "to").unwrap_or(from + 1).max(from + 1)),
+                    bpm: float(a, "bpm").unwrap_or(p.tempo_bpm),
+                    due: int(a, "due").unwrap_or(0),
+                    note: string(a, "note").unwrap_or_default(),
+                    lesson: string(a, "lesson"),
+                    author: string(a, "author").unwrap_or_default(),
+                    created: int(a, "created").unwrap_or(0),
+                });
+            }
+        }
+        p.assignments
+            .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
         if let Some(LoroValue::Map(cs)) = root.get("comments") {
             for (id, c) in cs.iter() {
                 let LoroValue::Map(c) = c else { continue };
@@ -793,7 +835,7 @@ fn shown(doc: &LoroDoc) -> Vec<(String, LoroValue)> {
     all
 }
 
-fn opt_str(s: &Option<String>) -> LoroValue {
+pub(crate) fn opt_str(s: &Option<String>) -> LoroValue {
     s.as_deref().map_or(LoroValue::Null, LoroValue::from)
 }
 
@@ -1368,13 +1410,13 @@ fn read_frozen(v: &LoroValue) -> Option<Frozen> {
 
 /// Writes values only where they differ, noting whether any did.
 #[derive(Default)]
-struct Writer {
-    changed: bool,
+pub(crate) struct Writer {
+    pub(crate) changed: bool,
 }
 
 impl Writer {
     /// True if it wrote.
-    fn put(&mut self, m: &LoroMap, key: &str, v: impl Into<LoroValue>) -> bool {
+    pub(crate) fn put(&mut self, m: &LoroMap, key: &str, v: impl Into<LoroValue>) -> bool {
         let v = v.into();
         let now = m.get(key).and_then(|x| x.into_value().ok());
         if now.as_ref() != Some(&v) {
@@ -1385,13 +1427,13 @@ impl Writer {
         false
     }
 
-    fn delete(&mut self, m: &LoroMap, key: &str) {
+    pub(crate) fn delete(&mut self, m: &LoroMap, key: &str) {
         let _ = m.delete(key);
         self.changed = true;
     }
 
     /// The map at `key`, made if missing.
-    fn child(&mut self, m: &LoroMap, key: &str) -> LoroMap {
+    pub(crate) fn child(&mut self, m: &LoroMap, key: &str) -> LoroMap {
         match m
             .get(key)
             .and_then(|v| v.into_container().ok()?.into_map().ok())
@@ -1407,7 +1449,7 @@ impl Writer {
 
     /// The map at a fixed `key` in every track, made if missing. Two
     /// people making it at once get one map, not one each.
-    fn fixed(&mut self, m: &LoroMap, key: &str) -> LoroMap {
+    pub(crate) fn fixed(&mut self, m: &LoroMap, key: &str) -> LoroMap {
         if m.get(key).is_none() {
             self.changed = true;
         }
@@ -1448,7 +1490,7 @@ impl Writer {
     }
 }
 
-fn keys(m: &LoroMap) -> Vec<String> {
+pub(crate) fn keys(m: &LoroMap) -> Vec<String> {
     m.keys().map(|k| k.to_string()).collect()
 }
 
@@ -1459,7 +1501,7 @@ fn str_at(list: &LoroMovableList, i: usize) -> Option<String> {
     }
 }
 
-fn int(m: &LoroMapValue, k: &str) -> Option<i64> {
+pub(crate) fn int(m: &LoroMapValue, k: &str) -> Option<i64> {
     match m.get(k) {
         Some(LoroValue::I64(v)) => Some(*v),
         Some(LoroValue::Double(v)) => Some(*v as i64),
@@ -1467,7 +1509,7 @@ fn int(m: &LoroMapValue, k: &str) -> Option<i64> {
     }
 }
 
-fn float(m: &LoroMapValue, k: &str) -> Option<f64> {
+pub(crate) fn float(m: &LoroMapValue, k: &str) -> Option<f64> {
     match m.get(k) {
         Some(LoroValue::Double(v)) => Some(*v),
         Some(LoroValue::I64(v)) => Some(*v as f64),
@@ -1475,14 +1517,14 @@ fn float(m: &LoroMapValue, k: &str) -> Option<f64> {
     }
 }
 
-fn boolean(m: &LoroMapValue, k: &str) -> Option<bool> {
+pub(crate) fn boolean(m: &LoroMapValue, k: &str) -> Option<bool> {
     match m.get(k) {
         Some(LoroValue::Bool(v)) => Some(*v),
         _ => None,
     }
 }
 
-fn string(m: &LoroMapValue, k: &str) -> Option<String> {
+pub(crate) fn string(m: &LoroMapValue, k: &str) -> Option<String> {
     match m.get(k) {
         Some(LoroValue::String(s)) => Some(s.to_string()),
         _ => None,

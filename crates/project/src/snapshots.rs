@@ -13,10 +13,12 @@
 //! it merges with other people's changes like any edit, and they can
 //! still see and restore what came after.
 //!
-//! Two things are left as they are now: comments, so restoring never
+//! Some things are left as they are now: comments, so restoring never
 //! brings back the words of one deleted since (saved files keep only
-//! blanks for those, see `doc.rs`) nor drops ones written after; and
-//! each person's practice settings, which aren't the song's.
+//! blanks for those, see `doc.rs`) nor drops ones written after;
+//! assignments, so going back to how the song was at a lesson doesn't
+//! drop what was set since; and each person's practice settings and
+//! practice log, which aren't the song's.
 
 use loro::{Frontiers, LoroMap, LoroValue};
 
@@ -112,13 +114,15 @@ impl ProjectDoc {
         true
     }
 
-    /// The project as it was when the snapshot was taken, comments
-    /// aside: those are the ones there are now.
+    /// The project as it was when the snapshot was taken, comments and
+    /// assignments aside: those are the ones there are now.
     pub fn snapshot_project(&self, id: &str) -> Option<Project> {
         let version = self.version_of(id)?;
         let then = self.doc.fork_at(&version).ok()?;
         let mut p = ProjectDoc::wrap(then).get();
-        p.comments = self.get().comments;
+        let now = self.get();
+        p.comments = now.comments;
+        p.assignments = now.assignments;
         Some(p)
     }
 

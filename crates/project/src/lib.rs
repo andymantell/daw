@@ -12,6 +12,7 @@ mod diff;
 mod doc;
 mod folder;
 mod identity;
+mod lessons;
 mod model;
 mod snapshots;
 mod templates;
@@ -20,10 +21,14 @@ pub use diff::{Difference, differences};
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
 pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
+pub use lessons::{
+    AssignmentProgress, DoneMark, Lesson, MAX_LESSON_TITLE, PracticeSession, progress,
+};
 pub use model::{
-    CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve, EditGroup,
-    Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip, GainPoint, Marker,
-    MeterChange, Practice, Project, Send, TabBlock, TempoChange, Track, TrackKind, TrainerSettings,
+    Assignment, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve,
+    EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip, GainPoint,
+    Marker, MeterChange, Practice, Project, Send, TabBlock, TempoChange, Track, TrackKind,
+    TrainerSettings,
 };
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{

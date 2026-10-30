@@ -1112,7 +1112,7 @@ mod app_tests {
         }
         t.note_clips.push(c);
         if let Some(i) = &t.instrument {
-            app.pending_instruments.push((i.id, i.make(app.rate)));
+            i.make_into(app.rate, &mut app.pending_instruments);
         }
         app.tracks.push(t);
         app.notes_editor.edit("clip1");

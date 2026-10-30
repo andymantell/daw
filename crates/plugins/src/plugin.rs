@@ -23,6 +23,13 @@
 //! asked for in stereo (mono where the plugin has it mono); a plugin
 //! that wants otherwise keeps its own arrangement and the host adapts.
 //!
+//! **Notes.** An instrument is given the track's notes with each block
+//! (see [`Instrument`]): note-ons and -offs as VST 3 note events, and
+//! controllers, the pitch wheel and pressure as the parameters the
+//! plugin maps them to, if it does. Its main output adds to the track;
+//! its extra outputs go to tracks of their own or, when none takes
+//! them, add to the track too.
+//!
 //! **Restarts.** A plugin whose delay changes while it plays asks the
 //! host to restart it. [`LocalPlugin::poll`] does so on the UI thread
 //! while the audio side plays silence for the moment it takes (a lock
@@ -45,11 +52,13 @@ use vst3::Steinberg::*;
 use vst3::{ComPtr, ComWrapper};
 
 use daw_engine::graph::Insert;
+use daw_engine::midi::{self, Instrument, Outputs};
 
 use crate::clap::{ClapModule, ClapPlugin, ClapProcessor};
-use crate::com::{ComponentHandler, MemStream, ParamChanges, host_app, read_wstr};
+use crate::com::{ComponentHandler, EventList, MemStream, ParamChanges, host_app, read_wstr};
 use crate::host::{RemotePlugin, RemoteProcessor};
 use crate::module::{ClassInfo, Module, Result};
+use crate::notes::{Sounding, play_out};
 use crate::proto::{ProgramList, Status};
 
 fn check(r: tresult, what: &str) -> Result<()> {
@@ -169,6 +178,12 @@ pub struct LocalPlugin {
 /// Edits queued between the UI and the audio thread.
 const EDITS: usize = 1024;
 
+/// The controllers a VST 3 plugin can map to parameters: the 128 MIDI
+/// ones, then pressure, the pitch wheel and program change.
+const CONTROLLERS: usize = ControllerNumbers_::kCtrlProgramChange as usize + 1;
+/// No parameter for this controller.
+const NO_PARAM: ParamID = ParamID::MAX;
+
 /// Creates and starts the plugin class `cid` from `module`, ready to
 /// process blocks of up to `max_block` frames at `rate`, with its main
 /// buses only.
@@ -275,6 +290,33 @@ pub fn instantiate_with(
         return Err("the plugin has no audio output".into());
     }
 
+    let event_ins = unsafe {
+        component.getBusCount(
+            MediaTypes_::kEvent as MediaType,
+            BusDirections_::kInput as BusDirection,
+        )
+    };
+    // Which parameter each controller sets, where the plugin says.
+    let midi_map = controller
+        .as_ref()
+        .and_then(|c| c.cast::<IMidiMapping>())
+        .filter(|_| event_ins > 0)
+        .map(|m| {
+            let mut map = vec![NO_PARAM; 16 * CONTROLLERS];
+            for ch in 0..16 {
+                for cc in 0..CONTROLLERS {
+                    let mut id: ParamID = 0;
+                    let r = unsafe {
+                        m.getMidiControllerAssignment(0, ch as i16, cc as CtrlNumber, &mut id)
+                    };
+                    if r == kResultOk {
+                        map[ch * CONTROLLERS + cc] = id;
+                    }
+                }
+            }
+            map
+        })
+        .filter(|m| m.iter().any(|&id| id != NO_PARAM));
     let core = Arc::new(Core {
         component,
         processor,
@@ -358,6 +400,14 @@ pub fn instantiate_with(
                 );
             }
         }
+        if event_ins > 0 {
+            core.component.activateBus(
+                MediaTypes_::kEvent as MediaType,
+                BusDirections_::kInput as BusDirection,
+                0,
+                1,
+            );
+        }
         check(core.component.setActive(1), "setActive")?;
         // Some plugins return kNotImplemented here, which is allowed.
         core.processor.setProcessing(1);
@@ -373,6 +423,8 @@ pub fn instantiate_with(
     );
     processor.key = sidechain;
     processor.mix = active_out[1..].to_vec();
+    processor.notes = event_ins > 0;
+    processor.midi_map = midi_map;
     Ok((plugin, processor))
 }
 
@@ -716,6 +768,14 @@ pub struct LocalProcessor {
     key: Option<usize>,
     /// Extra output buses mixed into the track.
     mix: Vec<usize>,
+    /// It has a note input.
+    notes: bool,
+    events: ComWrapper<EventList>,
+    events_ptr: ComPtr<IEventList>,
+    /// The parameter each controller sets, by channel and then
+    /// controller number (see [`CONTROLLERS`]), if the plugin maps any.
+    midi_map: Option<Vec<ParamID>>,
+    sounding: Sounding,
 }
 
 // The raw pointers point into buffers this struct owns and never resizes.
@@ -747,6 +807,8 @@ impl LocalProcessor {
         };
         let in_buses = inputs.iter_mut().map(bus).collect();
         let out_buses = outputs.iter_mut().map(bus).collect();
+        let events = ComWrapper::new(EventList::new());
+        let events_ptr = events.to_com_ptr::<IEventList>().unwrap();
         LocalProcessor {
             core,
             edits,
@@ -762,13 +824,158 @@ impl LocalProcessor {
             max_block,
             key: None,
             mix: Vec::new(),
+            notes: false,
+            events,
+            events_ptr,
+            midi_map: None,
+            sounding: Sounding::default(),
         }
     }
 
-    fn run(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
+    /// The block's notes from `at` for `n` frames, as the plugin takes
+    /// them: note events, and controllers as parameter changes.
+    fn queue_notes(&mut self, notes: &[midi::Event], at: usize, n: usize) {
+        use Event_::EventTypes_::*;
+        use midi::Kind;
+        let event = |offset: i32, kind: u32, body: Event__type0| Event {
+            busIndex: 0,
+            sampleOffset: offset,
+            ppqPosition: 0.0,
+            flags: Event_::EventFlags_::kIsLive as u16,
+            r#type: kind as u16,
+            __field0: body,
+        };
+        let note_off = |offset: i32, channel: u8, pitch: u8, velocity: u8| {
+            event(
+                offset,
+                kNoteOffEvent as u32,
+                Event__type0 {
+                    noteOff: NoteOffEvent {
+                        channel: channel as i16,
+                        pitch: pitch as i16,
+                        velocity: velocity as f32 / 127.0,
+                        noteId: -1,
+                        tuning: 0.0,
+                    },
+                },
+            )
+        };
+        let poly_pressure = |offset: i32, channel: u8, pitch: u8, pressure: f32| {
+            event(
+                offset,
+                kPolyPressureEvent as u32,
+                Event__type0 {
+                    polyPressure: PolyPressureEvent {
+                        channel: channel as i16,
+                        pitch: pitch as i16,
+                        pressure,
+                        noteId: -1,
+                    },
+                },
+            )
+        };
+        for e in notes {
+            let f = e.frame as usize;
+            if f < at || f >= at + n {
+                continue;
+            }
+            let offset = (f - at) as i32;
+            let ch = e.channel & 15;
+            let controller = |number: usize, value: f64| (number, value);
+            let cc = match e.kind {
+                Kind::NoteOn {
+                    pitch, velocity, ..
+                } => {
+                    self.sounding.on(ch, pitch);
+                    self.events.push(event(
+                        offset,
+                        kNoteOnEvent as u32,
+                        Event__type0 {
+                            noteOn: NoteOnEvent {
+                                channel: ch as i16,
+                                pitch: pitch as i16,
+                                tuning: 0.0,
+                                velocity: velocity as f32 / 127.0,
+                                length: 0,
+                                noteId: -1,
+                            },
+                        },
+                    ));
+                    continue;
+                }
+                Kind::NoteOff {
+                    pitch, velocity, ..
+                } => {
+                    self.sounding.off(ch, pitch);
+                    self.events.push(note_off(offset, ch, pitch, velocity));
+                    continue;
+                }
+                Kind::KeyPressure { pitch, value } => {
+                    self.events
+                        .push(poly_pressure(offset, ch, pitch, value as f32 / 127.0));
+                    continue;
+                }
+                // Notes go in without ids, so a note's own pressure goes
+                // as key pressure and its tuning and brightness, which
+                // need one, are left out.
+                Kind::NoteExpression {
+                    pitch,
+                    kind: midi::Expression::Pressure,
+                    value,
+                    ..
+                } => {
+                    self.events
+                        .push(poly_pressure(offset, ch, pitch, value.clamp(0.0, 1.0)));
+                    continue;
+                }
+                Kind::NoteExpression { .. } => continue,
+                Kind::AllNotesOff => {
+                    for (c, p) in self.sounding.drain() {
+                        self.events.push(note_off(offset, c, p, 0));
+                    }
+                    continue;
+                }
+                Kind::Control { number, value } => {
+                    controller(number as usize, value as f64 / 127.0)
+                }
+                Kind::Pressure(v) => {
+                    controller(ControllerNumbers_::kAfterTouch as usize, v as f64 / 127.0)
+                }
+                Kind::PitchBend(v) => controller(
+                    ControllerNumbers_::kPitchBend as usize,
+                    (v.clamp(-8192, 8191) as f64 + 8192.0) / 16383.0,
+                ),
+                Kind::Program(p) => controller(
+                    ControllerNumbers_::kCtrlProgramChange as usize,
+                    p as f64 / 127.0,
+                ),
+            };
+            if let Some(map) = &self.midi_map {
+                let id = map[ch as usize * CONTROLLERS + cc.0];
+                if id != NO_PARAM {
+                    self.changes.add(id, offset, cc.1);
+                }
+            }
+        }
+    }
+
+    /// Runs `n` frames. With `notes`, it plays as an instrument: the
+    /// notes from frame `at` of the block go in, its inputs are silent,
+    /// and its outputs add to the track or go to `outs`.
+    fn run(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<(&[f32], &[f32])>,
+        mut notes: Option<(&[midi::Event], &mut Outputs<'_>, usize)>,
+    ) {
         let n = left.len().min(right.len()).min(self.max_block);
         if let Some(main) = self.inputs.first_mut() {
-            main.fill(left, right, n);
+            if notes.is_some() {
+                main.silence(n);
+            } else {
+                main.fill(left, right, n);
+            }
         }
         for (i, bus) in self.inputs.iter_mut().enumerate().skip(1) {
             match key {
@@ -792,6 +999,12 @@ impl LocalProcessor {
             }
         }
         self.auto.clear();
+        self.events.clear();
+        if let Some((events, _, at)) = &notes
+            && self.notes
+        {
+            self.queue_notes(events, *at, n);
+        }
 
         let mut data = ProcessData {
             processMode: ProcessModes_::kRealtime as i32,
@@ -811,12 +1024,20 @@ impl LocalProcessor {
                 self.changes_ptr.as_ptr()
             },
             outputParameterChanges: self.out_changes_ptr.as_ptr(),
-            inputEvents: ptr::null_mut(),
+            inputEvents: if self.events.is_empty() {
+                ptr::null_mut()
+            } else {
+                self.events_ptr.as_ptr()
+            },
             outputEvents: ptr::null_mut(),
             processContext: ptr::null_mut(),
         };
         if unsafe { self.core.processor.process(&mut data) } != kResultOk {
             // Leave the audio as it was: a failing effect is skipped.
+            return;
+        }
+        if let Some((_, outs, at)) = &mut notes {
+            play_out(&self.outputs, &self.mix, left, right, outs, *at, n);
             return;
         }
         self.outputs[0].out(left, right, n, false);
@@ -827,15 +1048,24 @@ impl LocalProcessor {
         }
     }
 
-    fn blocks(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
-        // While the UI side restarts the plugin, the block is silent.
+    fn blocks(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<(&[f32], &[f32])>,
+        mut notes: Option<(&[midi::Event], &mut Outputs<'_>)>,
+    ) {
+        // While the UI side restarts the plugin, the block is silent
+        // (an instrument adds nothing to the track).
         let core = self.core.clone();
         let _running = match core.gate.try_lock() {
             Ok(g) => g,
             Err(TryLockError::Poisoned(e)) => e.into_inner(),
             Err(TryLockError::WouldBlock) => {
-                left.fill(0.0);
-                right.fill(0.0);
+                if notes.is_none() {
+                    left.fill(0.0);
+                    right.fill(0.0);
+                }
                 return;
             }
         };
@@ -851,19 +1081,36 @@ impl LocalProcessor {
                     b.get(done..end).unwrap_or(&[]),
                 )
             });
-            self.run(l, r, k);
+            let p = notes.as_mut().map(|(e, o)| (*e, &mut **o, done));
+            self.run(l, r, k, p);
             done = end;
         }
     }
 }
 
+impl Instrument for LocalProcessor {
+    fn process(&mut self, events: &[midi::Event], left: &mut [f32], right: &mut [f32]) {
+        self.blocks(left, right, None, Some((events, &mut Outputs::none())));
+    }
+
+    fn process_outputs(
+        &mut self,
+        events: &[midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outs: &mut Outputs<'_>,
+    ) {
+        self.blocks(left, right, None, Some((events, outs)));
+    }
+}
+
 impl Insert for LocalProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.blocks(left, right, None);
+        self.blocks(left, right, None, None);
     }
 
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
-        self.blocks(left, right, Some(key));
+        self.blocks(left, right, Some(key), None);
     }
 
     fn set_param(&mut self, param: u32, value: f64) {
@@ -1065,9 +1312,9 @@ pub enum Processor {
 impl Insert for Processor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         match self {
-            Processor::Local(p) => p.process(left, right),
-            Processor::Remote(p) => p.process(left, right),
-            Processor::Clap(p) => p.process(left, right),
+            Processor::Local(p) => Insert::process(p, left, right),
+            Processor::Remote(p) => Insert::process(p, left, right),
+            Processor::Clap(p) => Insert::process(p, left, right),
         }
     }
 
@@ -1084,6 +1331,71 @@ impl Insert for Processor {
             Processor::Local(p) => p.set_param(param, value),
             Processor::Remote(p) => p.set_param(param, value),
             Processor::Clap(p) => p.set_param(param, value),
+        }
+    }
+}
+
+impl Processor {
+    /// The extra outputs switched on, by bus index (for a plugin in a
+    /// helper, the helper's side knows).
+    pub fn extra_outputs(&self) -> Vec<usize> {
+        match self {
+            Processor::Local(p) => p.mix.clone(),
+            Processor::Clap(p) => p.extra_outputs(),
+            Processor::Remote(_) => Vec::new(),
+        }
+    }
+
+    /// Plays `frames` frames as an instrument, each output switched on
+    /// kept apart: the main one (bus 0) first, then the extra ones.
+    /// Allocates; for the helper process, which hands them back.
+    pub fn play_apart(
+        &mut self,
+        events: &[midi::Event],
+        frames: usize,
+    ) -> Vec<(u32, Vec<f32>, Vec<f32>)> {
+        let extra = self.extra_outputs();
+        let top = extra.iter().copied().max().unwrap_or(0);
+        let mut pairs: Vec<[Vec<f32>; 2]> = (1..=top)
+            .map(|_| [vec![0.0; frames], vec![0.0; frames]])
+            .collect();
+        let routed: Vec<bool> = (1..=top).map(|k| extra.contains(&k)).collect();
+        let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+        self.process_outputs(
+            events,
+            &mut l,
+            &mut r,
+            &mut Outputs::new(&mut pairs, &routed, frames),
+        );
+        let mut out = vec![(0, l, r)];
+        for k in extra {
+            let [l, r] = std::mem::take(&mut pairs[k - 1]);
+            out.push((k as u32, l, r));
+        }
+        out
+    }
+}
+
+/// A plugin instrument: the track's notes go in with each block. Its
+/// main output adds to the track, and each extra output switched on
+/// (see [`Layout::outputs`]) goes to the bus that takes it, or adds
+/// to the track too.
+impl Instrument for Processor {
+    fn process(&mut self, events: &[midi::Event], left: &mut [f32], right: &mut [f32]) {
+        self.process_outputs(events, left, right, &mut Outputs::none());
+    }
+
+    fn process_outputs(
+        &mut self,
+        events: &[midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outs: &mut Outputs<'_>,
+    ) {
+        match self {
+            Processor::Local(p) => p.process_outputs(events, left, right, outs),
+            Processor::Remote(p) => p.process_outputs(events, left, right, outs),
+            Processor::Clap(p) => p.process_outputs(events, left, right, outs),
         }
     }
 }

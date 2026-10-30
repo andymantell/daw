@@ -10,6 +10,8 @@
 
 use std::io::{self, Read, Write};
 
+use daw_engine::midi::{Event, Expression, Kind};
+
 use crate::plugin::{Bus, Buses, Layout, Param, PluginState};
 
 /// Largest message either side accepts, so a damaged length cannot
@@ -41,6 +43,13 @@ pub enum Request {
         left: Vec<f32>,
         right: Vec<f32>,
         key: Option<(Vec<f32>, Vec<f32>)>,
+    },
+    /// One block of an instrument: `frames` long, playing `events`
+    /// (in frame order).
+    Play {
+        id: u32,
+        frames: u32,
+        events: Vec<Event>,
     },
     SetParam {
         id: u32,
@@ -106,6 +115,9 @@ pub enum Reply {
         left: Vec<f32>,
         right: Vec<f32>,
     },
+    /// An instrument's block: each output switched on, by bus index
+    /// (the main one, 0, first), left then right.
+    Played(Vec<(u32, Vec<f32>, Vec<f32>)>),
     Value(Option<f64>),
     Text(Option<String>),
     Params(Vec<Param>),
@@ -192,6 +204,49 @@ impl W {
     fn state(&mut self, s: &PluginState) {
         self.bytes(&s.component);
         self.opt_bytes(s.controller.as_deref());
+    }
+    fn events(&mut self, events: &[Event]) {
+        self.u32(events.len() as u32);
+        for e in events {
+            self.u32(e.frame);
+            self.u8(e.channel);
+            let (tag, a, b, id) = match e.kind {
+                Kind::NoteOn {
+                    pitch,
+                    velocity,
+                    id,
+                } => (0, pitch, velocity, id),
+                Kind::NoteOff {
+                    pitch,
+                    velocity,
+                    id,
+                } => (1, pitch, velocity, id),
+                Kind::Control { number, value } => (2, number, value, 0),
+                Kind::PitchBend(v) => {
+                    let [a, b] = v.to_le_bytes();
+                    (3, a, b, 0)
+                }
+                Kind::Pressure(v) => (4, v, 0, 0),
+                Kind::KeyPressure { pitch, value } => (5, pitch, value, 0),
+                Kind::Program(p) => (6, p, 0, 0),
+                Kind::AllNotesOff => (7, 0, 0, 0),
+                Kind::NoteExpression {
+                    id,
+                    pitch,
+                    kind,
+                    value: _,
+                } => (8, pitch, expression_tag(kind), id),
+            };
+            let value = match e.kind {
+                Kind::NoteExpression { value, .. } => value,
+                _ => 0.0,
+            };
+            self.u8(tag);
+            self.u8(a);
+            self.u8(b);
+            self.u32(id);
+            self.u32(value.to_bits());
+        }
     }
     fn opt_samples(&mut self, k: &Option<(Vec<f32>, Vec<f32>)>) {
         match k {
@@ -300,6 +355,59 @@ impl R<'_> {
             component: self.bytes()?,
             controller: self.opt_bytes()?,
         })
+    }
+    fn events(&mut self) -> Res<Vec<Event>> {
+        let n = self.u32()? as usize;
+        // Each event is 16 bytes: refuse a count the message can't hold.
+        if n > self.0.len() / 16 {
+            return Err("too many events".into());
+        }
+        let mut events = Vec::with_capacity(n);
+        for _ in 0..n {
+            let frame = self.u32()?;
+            let channel = self.u8()? & 15;
+            let (tag, a, b, id) = (self.u8()?, self.u8()?, self.u8()?, self.u32()?);
+            let value = f32::from_bits(self.u32()?);
+            let kind = match tag {
+                0 => Kind::NoteOn {
+                    pitch: a,
+                    velocity: b,
+                    id,
+                },
+                1 => Kind::NoteOff {
+                    pitch: a,
+                    velocity: b,
+                    id,
+                },
+                2 => Kind::Control {
+                    number: a,
+                    value: b,
+                },
+                3 => Kind::PitchBend(i16::from_le_bytes([a, b])),
+                4 => Kind::Pressure(a),
+                5 => Kind::KeyPressure { pitch: a, value: b },
+                6 => Kind::Program(a),
+                7 => Kind::AllNotesOff,
+                8 => Kind::NoteExpression {
+                    id,
+                    pitch: a,
+                    kind: match b {
+                        0 => Expression::Tuning,
+                        1 => Expression::Pressure,
+                        2 => Expression::Timbre,
+                        k => return Err(format!("unknown expression {k}")),
+                    },
+                    value,
+                },
+                t => return Err(format!("unknown event {t}")),
+            };
+            events.push(Event {
+                frame,
+                channel,
+                kind,
+            });
+        }
+        Ok(events)
     }
     fn opt_samples(&mut self) -> Res<Option<(Vec<f32>, Vec<f32>)>> {
         Ok(if self.bool()? {
@@ -453,6 +561,12 @@ impl Request {
                 w.0.extend_from_slice(old);
                 w.u32(*param);
             }
+            Request::Play { id, frames, events } => {
+                w.u8(17);
+                w.u32(*id);
+                w.u32(*frames);
+                w.events(events);
+            }
         }
         w.0
     }
@@ -513,6 +627,11 @@ impl Request {
                 id: r.u32()?,
                 old: r.take(16)?.try_into().unwrap(),
                 param: r.u32()?,
+            },
+            17 => Request::Play {
+                id: r.u32()?,
+                frames: r.u32()?,
+                events: r.events()?,
             },
             t => return Err(format!("unknown request {t}")),
         };
@@ -592,6 +711,15 @@ impl Reply {
                 w.bool(p.is_some());
                 w.u32(p.unwrap_or(0));
             }
+            Reply::Played(buses) => {
+                w.u8(11);
+                w.u32(buses.len() as u32);
+                for (i, l, r) in buses {
+                    w.u32(*i);
+                    w.samples(l);
+                    w.samples(r);
+                }
+            }
         }
         w.0
     }
@@ -638,6 +766,16 @@ impl Reply {
                 let id = r.u32()?;
                 Reply::ParamId(some.then_some(id))
             }
+            11 => {
+                let n = r.u32()?;
+                if n as usize > r.0.len() / 12 {
+                    return Err("too many outputs".into());
+                }
+                let buses = (0..n)
+                    .map(|_| Ok((r.u32()?, r.samples()?, r.samples()?)))
+                    .collect::<Res<_>>()?;
+                Reply::Played(buses)
+            }
             t => return Err(format!("unknown reply {t}")),
         };
         r.done()?;
@@ -646,6 +784,14 @@ impl Reply {
 }
 
 /// Writes one length-prefixed message.
+fn expression_tag(kind: Expression) -> u8 {
+    match kind {
+        Expression::Tuning => 0,
+        Expression::Pressure => 1,
+        Expression::Timbre => 2,
+    }
+}
+
 pub fn write_frame(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
     w.write_all(&(payload.len() as u32).to_le_bytes())?;
     w.write_all(payload)?;
@@ -702,6 +848,38 @@ mod tests {
                 },
             },
             Request::Unload { id: 1 },
+            Request::Play {
+                id: 1,
+                frames: 64,
+                events: vec![
+                    Event::note_on(3, 9, 36, 127, 4),
+                    Event::note_off(9, 9, 36, 4),
+                    Event {
+                        frame: 10,
+                        channel: 1,
+                        kind: Kind::PitchBend(-8000),
+                    },
+                    Event {
+                        frame: 11,
+                        channel: 1,
+                        kind: Kind::Control {
+                            number: 64,
+                            value: 127,
+                        },
+                    },
+                    Event {
+                        frame: 12,
+                        channel: 2,
+                        kind: Kind::NoteExpression {
+                            id: 4,
+                            pitch: 36,
+                            kind: Expression::Tuning,
+                            value: -1.5,
+                        },
+                    },
+                    Event::all_notes_off(63),
+                ],
+            },
             Request::Process {
                 id: 1,
                 left: vec![0.5, -0.5],
@@ -768,6 +946,7 @@ mod tests {
                 left: vec![0.1],
                 right: vec![0.2],
             },
+            Reply::Played(vec![(0, vec![0.1], vec![0.2]), (2, vec![0.3], vec![-0.3])]),
             Reply::Value(Some(0.5)),
             Reply::Value(None),
             Reply::Text(Some("3 dB".into())),

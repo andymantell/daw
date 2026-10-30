@@ -346,3 +346,75 @@ impl IParameterChangesTrait for ParamChanges {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+
+/// Most note events one process() call carries: a full block of the
+/// engine's, and a note-off for every key on every channel.
+pub const EVENTS: usize = daw_engine::midi::MAX_EVENTS + 16 * 128;
+
+/// The notes for one process() call, in time order. Room for
+/// [`EVENTS`] is made up front, so filling it never allocates.
+pub struct EventList {
+    events: Mutex<Vec<Event>>,
+}
+
+impl EventList {
+    pub fn new() -> EventList {
+        let events = Mutex::new(Vec::with_capacity(EVENTS));
+        // As for [`ParamChanges`]: the first lock is not on the audio
+        // thread.
+        drop(events.lock());
+        EventList { events }
+    }
+
+    pub fn clear(&self) {
+        self.events.lock().unwrap().clear();
+    }
+
+    /// Adds an event; false if full.
+    pub fn push(&self, e: Event) -> bool {
+        let mut events = self.events.lock().unwrap();
+        if events.len() == events.capacity() {
+            return false;
+        }
+        events.push(e);
+        true
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.lock().unwrap().is_empty()
+    }
+}
+
+impl Default for EventList {
+    fn default() -> EventList {
+        EventList::new()
+    }
+}
+
+impl Class for EventList {
+    type Interfaces = (IEventList,);
+}
+
+impl IEventListTrait for EventList {
+    unsafe fn getEventCount(&self) -> int32 {
+        self.events.lock().unwrap().len() as int32
+    }
+    unsafe fn getEvent(&self, index: int32, e: *mut Event) -> tresult {
+        let events = self.events.lock().unwrap();
+        match (usize::try_from(index).ok()).and_then(|i| events.get(i)) {
+            Some(ev) if !e.is_null() => {
+                unsafe { *e = *ev };
+                kResultOk
+            }
+            _ => kInvalidArgument,
+        }
+    }
+    unsafe fn addEvent(&self, e: *mut Event) -> tresult {
+        match unsafe { e.as_ref() } {
+            Some(ev) if self.push(*ev) => kResultOk,
+            _ => kResultFalse,
+        }
+    }
+}

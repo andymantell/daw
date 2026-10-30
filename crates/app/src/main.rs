@@ -639,9 +639,12 @@ impl App {
         // the new rate, with the same settings.
         let rate = self.profile.as_ref().map_or(self.rate, |p| p.rate);
         self.effects.pending.clear();
+        self.effects.pending_instruments.clear();
         self.pending_instruments.clear();
-        for i in self.tracks.iter().flat_map(|t| t.instruments()) {
-            self.pending_instruments.push((i.id, i.make(rate)));
+        for i in self.tracks.iter_mut().flat_map(|t| t.instruments_mut()) {
+            if let Err(e) = i.remake(&mut self.effects, rate, &mut self.pending_instruments) {
+                self.message = Some(format!("{}: {e}", i.name));
+            }
         }
         self.midi.start(&mut self.ctl);
         for t in &mut self.tracks {
@@ -802,6 +805,8 @@ impl App {
     fn rebuild(&mut self) {
         self.fill_patterns();
         let s = self.session();
+        self.pending_instruments
+            .append(&mut self.effects.pending_instruments);
         match s.compile_all(
             audio::MAX_BLOCK,
             &mut self.effects.pending,
@@ -943,16 +948,43 @@ impl App {
         let mut plugins = Vec::new();
         let rate = self.rate;
         let mut graph = |s: &Session, tracks: &[&Track], plugins: &mut Vec<_>| {
+            // The copies made for rendering add no helper process's
+            // block of delay: what they report is what is made up for.
+            let mut s = s.clone();
+            let mut delays = std::collections::HashMap::new();
             let mut fx = Vec::new();
             for slot in tracks.iter().flat_map(|t| &t.fx) {
                 let (p, proc) = self.effects.fresh(slot, rate)?;
+                if let Some(p) = &p {
+                    delays.insert(slot.id, p.latency());
+                }
                 plugins.extend(p);
                 fx.push((slot.id, proc));
             }
-            let mut instruments: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> =
-                (tracks.iter().flat_map(|t| t.instruments()))
-                    .map(|i| (i.id, i.make(rate)))
-                    .collect();
+            let mut instruments: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> = Vec::new();
+            let mut inst_delays = std::collections::HashMap::new();
+            for i in tracks.iter().flat_map(|t| t.instruments()) {
+                if let Some((p, inst)) = i.fresh(&mut self.effects, rate)? {
+                    if let Some(p) = &p {
+                        inst_delays.insert(i.id, p.latency());
+                    }
+                    plugins.extend(p);
+                    instruments.push((i.id, inst));
+                }
+            }
+            for t in &mut s.tracks {
+                for f in &mut t.inserts {
+                    if let Some(&d) = delays.get(&f.id) {
+                        f.latency = d;
+                    }
+                }
+                let layers = t.layers.iter_mut().filter_map(|l| l.instrument.as_mut());
+                for i in t.instrument.iter_mut().chain(layers) {
+                    if let Some(&d) = inst_delays.get(&i.id) {
+                        i.latency = d;
+                    }
+                }
+            }
             s.compile_all(audio::MAX_BLOCK, &mut fx, &mut instruments)
                 .map_err(|e| e.to_string())
         };
@@ -2219,15 +2251,25 @@ impl eframe::App for App {
         }
         rebuild |= self.processing.finish(&mut self.tracks, &mut self.message);
         for t in &mut self.tracks {
-            for slot in &mut t.fx {
+            let layers = t.layers.iter_mut().map(|l| &mut l.slot);
+            let inst = (t.instrument.iter_mut()).chain(layers);
+            for slot in t.fx.iter_mut().chain(inst.filter_map(|i| i.plugin_mut())) {
                 let was_fine = slot.crashed.is_none();
                 rebuild |= slot.poll();
                 if was_fine && let Some(why) = &slot.crashed {
-                    self.message = Some(format!(
-                        "{}: {why}. Its audio passes through; open the track's effects to \
-                         start it again.",
-                        slot.name
-                    ));
+                    self.message = Some(if slot.instrument {
+                        format!(
+                            "{}: {why}. It plays nothing; open the track's instrument to \
+                             start it again.",
+                            slot.name
+                        )
+                    } else {
+                        format!(
+                            "{}: {why}. Its audio passes through; open the track's effects \
+                             to start it again.",
+                            slot.name
+                        )
+                    });
                 }
                 // Its buses changed: made again, with its settings.
                 if slot.needs_reload {
@@ -2239,7 +2281,11 @@ impl eframe::App for App {
                 }
             }
         }
-        let slots = self.tracks.iter_mut().flat_map(|t| t.fx.iter_mut());
+        let slots = (self.tracks.iter_mut()).flat_map(|t| {
+            let layers = t.layers.iter_mut().map(|l| &mut l.slot);
+            let inst = (t.instrument.iter_mut()).chain(layers);
+            t.fx.iter_mut().chain(inst.filter_map(|i| i.plugin_mut()))
+        });
         if let Some(m) = self.effects.cap_editors(slots) {
             self.message = Some(m);
         }

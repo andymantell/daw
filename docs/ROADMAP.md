@@ -743,6 +743,16 @@ expression, grooves and MIDI learn (owner checks in
 `docs/review-queue/3.1-note-editing-depth.md`).*
 
 ### 3.2 Instrument plugins & more formats (L)
+*Instruments built 2026-10-30, at risk, tried only with the project's
+test plugins. Plugin instruments in both formats (VST 3 and CLAP) play
+an instrument track's notes, alone or as a layer, in the app or in a
+helper process, with controllers going to whatever parameter the
+plugin maps them to. An instrument's extra outputs can each go to a bus
+of its own, as the drum machine's do; outputs that go nowhere play
+through the track. Checks are in
+`docs/review-queue/3.2-plugin-instruments.md`. Still to do: Audio Units,
+telling plugins the tempo and position, and automating an instrument
+plugin's own settings.*
 - **VST 3 instruments**, including multi-output instruments.
 - **CLAP** hosting (open SDK, MIT).
 - **Audio Units** hosting on macOS.

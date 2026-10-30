@@ -10,13 +10,18 @@
 //! one note input. Each note-on writes a single sample of +velocity×gain
 //! at the event's exact sample offset and each note-off writes
 //! −velocity×gain, so the host's note timing can be checked to the sample.
+//! It has a second, extra stereo output, "Drums": notes on channel 10
+//! (9 counting from 0) go there when the host switches it on, and to
+//! the main output otherwise. Its controller maps controller 7 (volume)
+//! to "Gain", so a host's controller handling can be heard too.
 //!
 //! A third, [`ROUTER_NAME`] (see [`router`]), has a sidechain input, an
 //! extra output, a delay that changes while it plays, and declares that
 //! it replaces an older version of itself.
 //!
-//! The same library is also a CLAP plugin ([`clap`]), a gain effect
-//! with a sidechain and an extra output, for the CLAP host's tests.
+//! The same library is also a CLAP plugin file ([`clap`]): a gain
+//! effect with a sidechain and an extra output, and a test instrument
+//! ([`clap_synth`]), for the CLAP host's tests.
 //!
 //! Cargo features build broken variants (crash or hang on load or while
 //! processing, refuse processing setup) for testing how the host copes.
@@ -39,8 +44,10 @@ use vst3::Steinberg::*;
 use vst3::{Class, ComRef, ComWrapper, uid};
 
 pub mod clap;
+pub mod clap_synth;
 pub mod router;
 pub use clap::{CLAP_ID, CLAP_NAME, GAIN_PARAM, LEVEL_PARAM, LOOKAHEAD_PARAM};
+pub use clap_synth::{CLAP_SYNTH_ID, CLAP_SYNTH_NAME};
 pub use router::{
     OLD_LOOKAHEAD_PARAM, OLD_ROUTER_CID, ROUTER_CID, ROUTER_LOOKAHEAD, ROUTER_NAME, sdk_string,
 };
@@ -303,7 +310,27 @@ struct Controller {
 }
 
 impl Class for Controller {
-    type Interfaces = (IEditController,);
+    type Interfaces = (IEditController, IMidiMapping);
+}
+
+/// The controller [`SYNTH_NAME`] maps to "Gain".
+pub const GAIN_CONTROLLER: u8 = 7;
+
+impl IMidiMappingTrait for Controller {
+    unsafe fn getMidiControllerAssignment(
+        &self,
+        bus: i32,
+        _channel: i16,
+        number: CtrlNumber,
+        id: *mut ParamID,
+    ) -> tresult {
+        if bus == 0 && number == GAIN_CONTROLLER as CtrlNumber {
+            unsafe { *id = 0 };
+            kResultTrue
+        } else {
+            kResultFalse
+        }
+    }
 }
 
 impl IPluginBaseTrait for Controller {
@@ -391,6 +418,8 @@ impl IEditControllerTrait for Controller {
 
 struct Synth {
     gain: AtomicU64,
+    /// The "Drums" output is switched on.
+    drums: std::sync::atomic::AtomicBool,
 }
 
 impl Class for Synth {
@@ -418,8 +447,10 @@ impl IComponentTrait for Synth {
         let input = dir == BusDirections_::kInput as BusDirection;
         if media == MediaTypes_::kEvent as MediaType {
             input as i32
+        } else if input {
+            0
         } else {
-            !input as i32
+            2
         }
     }
     unsafe fn getBusInfo(
@@ -431,6 +462,12 @@ impl IComponentTrait for Synth {
     ) -> tresult {
         let input = dir == BusDirections_::kInput as BusDirection;
         let bus = unsafe { &mut *bus };
+        if index == 1 && media == MediaTypes_::kAudio as MediaType && !input {
+            fill_bus(bus, dir, "Drums");
+            bus.busType = BusTypes_::kAux as BusType;
+            bus.flags = 0;
+            return kResultOk;
+        }
         if index != 0 {
             return kInvalidArgument;
         }
@@ -452,7 +489,13 @@ impl IComponentTrait for Synth {
     unsafe fn getRoutingInfo(&self, _i: *mut RoutingInfo, _o: *mut RoutingInfo) -> tresult {
         kNotImplemented
     }
-    unsafe fn activateBus(&self, _m: MediaType, _d: BusDirection, _i: i32, _s: TBool) -> tresult {
+    unsafe fn activateBus(&self, m: MediaType, d: BusDirection, i: i32, state: TBool) -> tresult {
+        if m == MediaTypes_::kAudio as MediaType
+            && d == BusDirections_::kOutput as BusDirection
+            && i == 1
+        {
+            self.drums.store(state != 0, Ordering::Relaxed);
+        }
         kResultOk
     }
     unsafe fn setActive(&self, _state: TBool) -> tresult {
@@ -485,7 +528,8 @@ impl IAudioProcessorTrait for Synth {
         outputs: *mut SpeakerArrangement,
         num_outs: i32,
     ) -> tresult {
-        let ok = num_ins == 0 && num_outs == 1 && unsafe { *outputs == SpeakerArr::kStereo };
+        let outs = unsafe { slice::from_raw_parts(outputs, num_outs.max(0) as usize) };
+        let ok = num_ins == 0 && num_outs == 2 && outs.iter().all(|&a| a == SpeakerArr::kStereo);
         if ok { kResultTrue } else { kResultFalse }
     }
     unsafe fn getBusArrangement(
@@ -494,7 +538,7 @@ impl IAudioProcessorTrait for Synth {
         index: i32,
         arr: *mut SpeakerArrangement,
     ) -> tresult {
-        if index != 0 || dir != BusDirections_::kOutput as BusDirection {
+        if !(0..2).contains(&index) || dir != BusDirections_::kOutput as BusDirection {
             return kInvalidArgument;
         }
         unsafe { *arr = SpeakerArr::kStereo };
@@ -522,13 +566,40 @@ impl IAudioProcessorTrait for Synth {
             return kResultOk;
         }
         let n = data.numSamples as usize;
-        let outb = unsafe { &*data.outputs };
-        if outb.numChannels < 2 {
-            return kResultOk;
+        // "Gain", as a controller sets it, from the next block on.
+        let mut next_gain = None;
+        if let Some(changes) = unsafe { ComRef::from_raw(data.inputParameterChanges) } {
+            for i in 0..unsafe { changes.getParameterCount() } {
+                let Some(q) = (unsafe { ComRef::from_raw(changes.getParameterData(i)) }) else {
+                    continue;
+                };
+                let points = unsafe { q.getPointCount() };
+                let (mut offset, mut value) = (0, 0.0);
+                if unsafe { q.getParameterId() } == 0
+                    && points > 0
+                    && unsafe { q.getPoint(points - 1, &mut offset, &mut value) } == kResultOk
+                {
+                    next_gain = Some(value);
+                }
+            }
         }
-        let outs = unsafe { slice::from_raw_parts(outb.__field0.channelBuffers32, 2) };
+        let buses = unsafe { slice::from_raw_parts(data.outputs, data.numOutputs as usize) };
+        let pair = |b: &AudioBusBuffers| {
+            (b.numChannels >= 2)
+                .then(|| unsafe { slice::from_raw_parts(b.__field0.channelBuffers32, 2) })
+        };
+        let Some(outs) = pair(&buses[0]) else {
+            return kResultOk;
+        };
+        let drums = buses
+            .get(1)
+            .and_then(pair)
+            .filter(|_| self.drums.load(Ordering::Relaxed));
         let gain = f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
-        for &o in outs {
+        if let Some(g) = next_gain {
+            self.gain.store(g.to_bits(), Ordering::Relaxed);
+        }
+        for &o in outs.iter().chain(drums.into_iter().flatten()) {
             unsafe { slice::from_raw_parts_mut(o, n) }.fill(0.0);
         }
         let Some(events) = (unsafe { ComRef::from_raw(data.inputEvents) }) else {
@@ -543,16 +614,20 @@ impl IAudioProcessorTrait for Synth {
             if at < 0 || at as usize >= n {
                 continue;
             }
-            let v = match e.r#type as u32 {
+            let (v, channel) = match e.r#type as u32 {
                 t if t == Event_::EventTypes_::kNoteOnEvent as u32 => unsafe {
-                    e.__field0.noteOn.velocity
+                    (e.__field0.noteOn.velocity, e.__field0.noteOn.channel)
                 },
-                t if t == Event_::EventTypes_::kNoteOffEvent as u32 => {
-                    -unsafe { e.__field0.noteOff.velocity }
-                }
+                t if t == Event_::EventTypes_::kNoteOffEvent as u32 => unsafe {
+                    (-e.__field0.noteOff.velocity, e.__field0.noteOff.channel)
+                },
                 _ => continue,
             };
-            for &o in outs {
+            let to = match drums {
+                Some(d) if channel == 9 => d,
+                _ => outs,
+            };
+            for &o in to {
                 unsafe { *o.add(at as usize) += v * gain };
             }
         }
@@ -612,6 +687,7 @@ impl IPluginFactoryTrait for Factory {
         } else if cid == SYNTH_CID {
             ComWrapper::new(Synth {
                 gain: AtomicU64::new(1.0f64.to_bits()),
+                drums: Default::default(),
             })
             .to_com_ptr::<FUnknown>()
         } else if cid == ROUTER_CID {

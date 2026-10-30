@@ -29,6 +29,7 @@ pub mod compat;
 pub mod editor_win;
 pub mod host;
 pub mod module;
+mod notes;
 pub mod plugin;
 pub mod presets;
 pub mod proto;

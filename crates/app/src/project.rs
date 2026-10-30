@@ -511,9 +511,14 @@ impl App {
             match (&mut t.instrument, &pt.instrument) {
                 (Some(slot), Some(e)) if slot.same_shape(e) => slot.load(e),
                 (slot, Some(e)) => {
-                    let (new, missing) = crate::instrument::Slot::restore(e, &read);
+                    let (new, missing) = crate::instrument::Slot::restore_any(
+                        e,
+                        &read,
+                        &mut self.effects,
+                        self.rate,
+                    );
                     problems.extend(missing);
-                    self.pending_instruments.push((new.id, new.make(self.rate)));
+                    new.make_into(self.rate, &mut self.pending_instruments);
                     *slot = Some(new);
                 }
                 (slot, None) => *slot = None,
@@ -528,10 +533,10 @@ impl App {
                         l
                     }
                     _ => {
-                        let (l, missing) = crate::layers::Layer::restore(pl, &read);
+                        let (l, missing) =
+                            crate::layers::Layer::restore(pl, &read, &mut self.effects, self.rate);
                         problems.extend(missing);
-                        self.pending_instruments
-                            .push((l.slot.id, l.slot.make(self.rate)));
+                        l.slot.make_into(self.rate, &mut self.pending_instruments);
                         l
                     }
                 };
@@ -804,6 +809,16 @@ impl App {
             for pe in &mut pt.effects {
                 if let Some(s) = t.fx.iter_mut().find(|s| s.key == pe.id) {
                     pe.state = s.state();
+                }
+            }
+            if let (Some(pi), Some(i)) = (&mut pt.instrument, &mut t.instrument)
+                && i.is_plugin()
+            {
+                pi.state = i.state();
+            }
+            for (pl, l) in pt.layers.iter_mut().zip(&mut t.layers) {
+                if l.slot.is_plugin() {
+                    pl.instrument.state = l.slot.state();
                 }
             }
         }

@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
 use daw_engine::graph::{Insert, InsertSpec, Place};
+use daw_engine::midi::Instrument;
 use daw_plugins::presets::{self, Preset};
 use daw_plugins::proto::ProgramList;
 use daw_plugins::scan::{self, Available, PluginList};
@@ -64,6 +65,10 @@ pub struct FxSlot {
     preset_name: String,
     /// The presets and program lists found, until something changes.
     presets: Option<(Vec<Preset>, Vec<ProgramList>)>,
+    /// A plugin instrument on an instrument track (see
+    /// [`crate::instrument`]) rather than an effect: its audio side is
+    /// an engine instrument, under an instrument id.
+    pub instrument: bool,
     kind: SlotKind,
 }
 
@@ -159,6 +164,9 @@ impl FxSlot {
 
     /// The buses a plugin is started with, besides its main ones.
     pub fn layout(&self) -> Layout {
+        if self.instrument {
+            return every_output();
+        }
         Layout {
             sidechain: self.sidechain.is_some(),
             outputs: self.outputs.clone(),
@@ -354,6 +362,8 @@ pub struct Effects {
     modules: HashMap<PathBuf, Library>,
     /// Effects made but not yet in a graph, by insert id.
     pub pending: Vec<(u64, Box<dyn Insert>)>,
+    /// Plugin instruments made but not yet in a graph, by instrument id.
+    pub pending_instruments: Vec<(u64, Box<dyn Instrument>)>,
     next_id: u64,
     scan: Option<mpsc::Receiver<ScanMsg>>,
     /// The bundle being scanned now.
@@ -403,6 +413,7 @@ impl Effects {
             block: 256,
             modules: HashMap::new(),
             pending: Vec::new(),
+            pending_instruments: Vec::new(),
             next_id: 1,
             scan: None,
             scanning: None,
@@ -615,6 +626,7 @@ impl Effects {
 
     /// Makes the two sides of a plugin where `sandbox` says, live (one
     /// block behind in a helper) or for rendering (waiting on it).
+    #[allow(clippy::too_many_arguments)]
     fn sides(
         &mut self,
         bundle: &Path,
@@ -623,6 +635,7 @@ impl Effects {
         sandbox: Sandbox,
         live: bool,
         layout: &Layout,
+        instrument: bool,
     ) -> Result<(Plugin, Processor), String> {
         let sandbox = if self.helper.is_none() {
             Sandbox::InApp
@@ -640,7 +653,13 @@ impl Effects {
                     Sandbox::Shared => self.shared_host()?,
                     _ => Host::spawn(self.helper.as_ref().ok_or("no plugin helper here")?)?,
                 };
-                let (p, x) = host.instantiate_with(
+                let load = if instrument {
+                    Host::instantiate_instrument
+                } else {
+                    Host::instantiate_with
+                };
+                let (p, x) = load(
+                    &host,
                     bundle,
                     cid,
                     rate as f64,
@@ -662,7 +681,30 @@ impl Effects {
             &a.class.name,
             rate,
             &Layout::default(),
+            false,
         )
+    }
+
+    /// Makes a new plugin instrument, with each of its outputs switched
+    /// on; its audio side waits in `pending_instruments`.
+    pub fn create_instrument(&mut self, a: &Available, rate: u32) -> Result<FxSlot, String> {
+        self.make(
+            &a.bundle,
+            a.class.cid,
+            &a.class.name,
+            rate,
+            &every_output(),
+            true,
+        )
+    }
+
+    /// Hands a newly made audio side to the next graph.
+    fn hand_over(&mut self, id: u64, instrument: bool, processor: Processor) {
+        if instrument {
+            self.pending_instruments.push((id, Box::new(processor)));
+        } else {
+            self.pending.push((id, Box::new(processor)));
+        }
     }
 
     /// Makes a new built-in effect with its default settings.
@@ -694,6 +736,7 @@ impl Effects {
             show_params: true,
             preset_name: String::new(),
             presets: None,
+            instrument: false,
             kind: SlotKind::Builtin(effect),
         }
     }
@@ -705,19 +748,35 @@ impl Effects {
         name: &str,
         rate: u32,
         layout: &Layout,
+        instrument: bool,
     ) -> Result<FxSlot, String> {
         let sandbox = self.list.sandbox_of(&cid);
-        let (plugin, processor) = self.sides(bundle, &cid, rate, sandbox, true, layout)?;
-        let id = self.next_id;
-        self.next_id += 1;
-        self.pending.push((id, Box::new(processor)));
+        let (plugin, processor) =
+            self.sides(bundle, &cid, rate, sandbox, true, layout, instrument)?;
+        // An instrument's id is among the instruments'.
+        let id = if instrument {
+            crate::instrument::next_id()
+        } else {
+            self.next_id += 1;
+            self.next_id - 1
+        };
+        // An instrument's outputs are all switched on: those that are
+        // there are kept.
+        let outputs = if instrument {
+            (plugin.buses().extra_outputs())
+                .map(|(i, _)| i as u32)
+                .collect()
+        } else {
+            layout.outputs.clone()
+        };
+        self.hand_over(id, instrument, processor);
         Ok(FxSlot {
             id,
             key: daw_project::new_id(),
             name: name.to_string(),
             bypass: false,
             sidechain: None,
-            outputs: layout.outputs.clone(),
+            outputs,
             place: None,
             note: None,
             needs_reload: false,
@@ -733,6 +792,7 @@ impl Effects {
             show_params: false,
             preset_name: String::new(),
             presets: None,
+            instrument,
             kind: SlotKind::Plugin {
                 bundle: bundle.to_path_buf(),
                 cid,
@@ -774,6 +834,25 @@ impl Effects {
             }
             return Ok(slot);
         }
+        self.restore_plugin(e, rate, false)
+    }
+
+    /// Makes a plugin instrument saved in a project, with its settings,
+    /// found as a plugin effect is (see [`restore`](Self::restore)).
+    pub fn restore_instrument(
+        &mut self,
+        e: &daw_project::Effect,
+        rate: u32,
+    ) -> Result<FxSlot, String> {
+        self.restore_plugin(e, rate, true)
+    }
+
+    fn restore_plugin(
+        &mut self,
+        e: &daw_project::Effect,
+        rate: u32,
+        instrument: bool,
+    ) -> Result<FxSlot, String> {
         let mut cid: vst3::Steinberg::TUID = Default::default();
         if e.class.len() != cid.len() {
             return Err("its plugin id is damaged".into());
@@ -801,11 +880,15 @@ impl Effects {
         if !bundle.exists() {
             return Err("its plugin isn't installed on this computer".into());
         }
-        let layout = Layout {
-            sidechain: e.sidechain.is_some(),
-            outputs: e.outputs.clone(),
+        let layout = if instrument {
+            every_output()
+        } else {
+            Layout {
+                sidechain: e.sidechain.is_some(),
+                outputs: e.outputs.clone(),
+            }
         };
-        let mut slot = self.make(&bundle, cid, &name, rate, &layout)?;
+        let mut slot = self.make(&bundle, cid, &name, rate, &layout, instrument)?;
         slot.key = e.id.clone();
         slot.bypass = e.bypass;
         slot.sidechain = e.sidechain.clone();
@@ -933,7 +1016,8 @@ impl Effects {
         }
         let sandbox = self.list.sandbox_of(&cid);
         let layout = slot.layout();
-        let (fresh, processor) = self.sides(&bundle, &cid, rate, sandbox, true, &layout)?;
+        let (fresh, processor) =
+            self.sides(&bundle, &cid, rate, sandbox, true, &layout, slot.instrument)?;
         slot.sandbox = if fresh.is_remote() {
             sandbox
         } else {
@@ -949,7 +1033,7 @@ impl Effects {
         if let Some(s) = &state {
             slot.load(s)?;
         }
-        self.pending.push((slot.id, Box::new(processor)));
+        self.hand_over(slot.id, slot.instrument, processor);
         if had_editor {
             let _ = slot.open_editor();
         }
@@ -967,13 +1051,51 @@ impl Effects {
                 plugin,
             } => (bundle, cid, plugin),
         };
+        let (plugin, processor) = self.fresh_sides(bundle, cid, plugin, slot, rate)?;
+        Ok((Some(plugin), Box::new(processor)))
+    }
+
+    /// As [`fresh`](Self::fresh), for a plugin instrument.
+    pub fn fresh_instrument(
+        &mut self,
+        slot: &FxSlot,
+        rate: u32,
+    ) -> Result<(Keep, Box<dyn Instrument>), String> {
+        let SlotKind::Plugin {
+            bundle,
+            cid,
+            plugin,
+        } = &slot.kind
+        else {
+            return Err("this is not a plugin instrument".into());
+        };
+        let (plugin, processor) = self.fresh_sides(bundle, cid, plugin, slot, rate)?;
+        Ok((Some(plugin), Box::new(processor)))
+    }
+
+    fn fresh_sides(
+        &mut self,
+        bundle: &Path,
+        cid: &vst3::Steinberg::TUID,
+        plugin: &Plugin,
+        slot: &FxSlot,
+        rate: u32,
+    ) -> Result<(Plugin, Processor), String> {
         let state = plugin.save_state().ok().or_else(|| slot.last_state.clone());
         let sandbox = self.list.sandbox_of(cid);
-        let (plugin, processor) = self.sides(bundle, cid, rate, sandbox, false, &slot.layout())?;
+        let (plugin, processor) = self.sides(
+            bundle,
+            cid,
+            rate,
+            sandbox,
+            false,
+            &slot.layout(),
+            slot.instrument,
+        )?;
         if let Some(s) = &state {
             plugin.load_state(s)?;
         }
-        Ok((Some(plugin), Box::new(processor)))
+        Ok((plugin, processor))
     }
 
     /// The credits of the recorded rooms that come with the app.
@@ -1587,6 +1709,14 @@ impl Effects {
 }
 
 /// Where a saved effect sits.
+/// Every extra output a plugin instrument might have switched on.
+fn every_output() -> Layout {
+    Layout {
+        sidechain: false,
+        outputs: (1..=daw_engine::graph::MAX_AUX).collect(),
+    }
+}
+
 fn place_of(e: &daw_project::Effect) -> Option<(String, u32)> {
     e.container.clone().map(|c| (c, e.branch))
 }
@@ -1876,6 +2006,88 @@ fn sidechain_picker(ui: &mut egui::Ui, s: &mut FxSlot, others: &[(String, String
 
 /// The settings of an effect: a built-in effect's own, or the host's
 /// controls for a plugin's parameters.
+/// What the user did in [`plugin_instrument_controls`].
+#[derive(Default)]
+pub(crate) struct InstrumentUi {
+    /// Start it again after a crash.
+    pub restart: bool,
+    pub message: Option<String>,
+}
+
+/// A plugin instrument's controls in its track's instrument window:
+/// where it runs, its own window, presets, a crash, its parameters.
+pub(crate) fn plugin_instrument_controls(
+    ui: &mut egui::Ui,
+    s: &mut FxSlot,
+    presets_dir: &Path,
+) -> InstrumentUi {
+    let mut out = InstrumentUi::default();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("Runs {}", s.runs())).weak());
+        if s.latency > 0 {
+            ui.label(RichText::new(format!("{} smp", s.latency)).weak())
+                .on_hover_text(
+                    "Delay the instrument adds (counting its helper process, if any); \
+                     it is made up for, so it plays in time with the rest",
+                );
+        }
+        let late = s.late();
+        if late > 0 {
+            ui.label(RichText::new(format!("late ×{late}")).weak())
+                .on_hover_text(
+                    "Blocks its helper process was late with, played as silence. A \
+                     bigger audio buffer gives it more time.",
+                );
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui
+            .button("Edit")
+            .on_hover_text("Open the plugin's own window")
+            .clicked()
+            && let Err(e) = s.open_editor()
+        {
+            out.message = Some(format!("{}: {e}", s.name));
+        }
+        ui.menu_button("Presets", |ui| {
+            if let Some(e) = presets_menu(ui, s, presets_dir) {
+                out.message = Some(format!("{}: {e}", s.name));
+            }
+        })
+        .response
+        .accessible_name(format!("Presets for {}", s.name));
+        ui.toggle_value(&mut s.show_params, "Controls")
+            .on_hover_text("Show the instrument's settings here");
+    });
+    if let Some(note) = &s.note {
+        ui.label(RichText::new(note).small().weak());
+    }
+    if let Some(why) = &s.crashed {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Stopped: {why}. It plays nothing."))
+                    .color(ui.visuals().error_fg_color),
+            );
+            if ui
+                .button("Restart")
+                .on_hover_text("Start the plugin again with its last saved settings")
+                .clicked()
+            {
+                out.restart = true;
+            }
+        });
+    }
+    if s.show_params
+        && s.crashed.is_none()
+        && let Some(p) = s.plugin()
+    {
+        egui::ScrollArea::vertical()
+            .max_height(280.0)
+            .show(ui, |ui| plugin_params(ui, s.id, p));
+    }
+    out
+}
+
 fn params(ui: &mut egui::Ui, s: &mut FxSlot) -> Option<RoomPick> {
     match &s.kind {
         SlotKind::Builtin(b) => builtin_params(ui, s.id, b),
@@ -3013,8 +3225,9 @@ mod tests {
                 modified: 0,
                 result: Ok(classes),
             }];
-            let a = fx.list.plugins().remove(0);
-            assert_eq!(a.class.name, CLAP_NAME);
+            let a = (fx.list.plugins().into_iter())
+                .find(|a| a.class.name == CLAP_NAME)
+                .unwrap();
             let cid = daw_plugins::clap::cid_of(CLAP_ID);
             fx.list.set_sandbox(&cid, sandbox);
             let mut s = fx.create(&a, 48_000).unwrap();

@@ -92,6 +92,7 @@ pub(crate) enum Cmd {
     InstrumentWindow,
     SliceNotes,
     PadBuses,
+    InstrumentOutputBuses,
     KeepNotes,
     QuantiseNotes,
     HumaniseNotes,
@@ -379,6 +380,18 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("On the drum machine's track: each pad with a sound gets an output and a bus in the mixer")
     .words("drum machine outputs multi out mixer"),
+    info(
+        Cmd::InstrumentOutputBuses,
+        "instrument-output-buses",
+        "Edit",
+        "Put each plugin instrument output on a bus",
+        &[],
+    )
+    .hint(
+        "On a plugin instrument's track: each of its extra outputs (a drum plugin's kick, \
+         snare…) gets a bus in the mixer, with its own fader and effects",
+    )
+    .words("plugin vst clap multi-output multiple outputs drums mixer stems"),
     info(
         Cmd::NotesEditor,
         "notes-editor",
@@ -1902,7 +1915,7 @@ impl App {
         self.commands.editor_window(ctx);
     }
 
-    fn can_run(&self, cmd: Cmd) -> bool {
+    pub(crate) fn can_run(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::Layout(n) => (n as usize) < self.workspace.saved.len(),
             Cmd::Undo => self.can_undo(),
@@ -1910,6 +1923,7 @@ impl App {
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
+            Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
         }
@@ -2050,7 +2064,7 @@ impl App {
                 let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
                 let t = crate::Track::instrument(format!("Instrument {n}"));
                 if let Some(i) = &t.instrument {
-                    self.pending_instruments.push((i.id, i.make(self.rate)));
+                    i.make_into(self.rate, &mut self.pending_instruments);
                 }
                 self.tracks.push(t);
                 self.rebuild();
@@ -2071,6 +2085,11 @@ impl App {
             }
             Cmd::PadBuses => {
                 if let Err(e) = self.pad_buses() {
+                    self.message = Some(e);
+                }
+            }
+            Cmd::InstrumentOutputBuses => {
+                if let Err(e) = self.plugin_output_buses() {
                     self.message = Some(e);
                 }
             }

@@ -3,7 +3,11 @@
 //! that holds a track's instrument, its window, and how it is saved.
 //! The simple synth from 3.1 is still there; the instruments from
 //! `daw_instruments` (a synth, a sampler, a drum sampler, a drum machine
-//! and a loop slicer) join it. Plugin instruments follow (roadmap 3.2).
+//! and a loop slicer) join it, and so do plugin instruments in either
+//! plugin format (roadmap 3.2), made and run where the user chose, as
+//! plugin effects are. A plugin's extra outputs (a drum plugin with an
+//! output per drum, say) go to buses as the drum machine's do; those
+//! that go nowhere play through the track.
 //!
 //! Moving a control is heard at once: the settings are shared with the
 //! audio thread. Changing what an instrument is made of (a sound, a
@@ -20,9 +24,11 @@ use daw_engine::synth::{PARAMS, SimpleSynth, SynthParams, Wave};
 use daw_instruments::{
     Builtin, Kind, Loaded, PadFx, Params, Sample, Unit, drum_machine as dm, made, sampler, slicer,
 };
+use daw_plugins::scan::Available;
 use eframe::egui;
 
 use crate::commands::Cmd;
+use crate::fx::{Effects, FxSlot};
 
 /// The simple synth, as a project names it.
 pub const SYNTH: &str = "synth";
@@ -30,7 +36,7 @@ pub const SYNTH: &str = "synth";
 /// Instrument ids, unique for the life of the process.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-fn next_id() -> u64 {
+pub(crate) fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -49,9 +55,19 @@ pub fn reader(assets: Option<PathBuf>) -> impl Fn(&str) -> Result<Sample, String
     }
 }
 
+/// An instrument made for rendering offline, and the plugin to keep
+/// until done.
+pub type Fresh = (crate::fx::Keep, Box<dyn Instrument>);
+
 enum Inner {
     Simple(Arc<SynthParams>),
     Builtin(Builtin),
+    /// A plugin, made and run as plugin effects are; its slot's id is
+    /// the instrument's.
+    Plugin(Box<FxSlot>),
+    /// A plugin that couldn't be made here (not installed, say): kept as
+    /// saved, and silent.
+    Missing(Box<daw_project::Effect>),
 }
 
 /// A track's instrument.
@@ -110,21 +126,106 @@ impl Slot {
     pub fn kind(&self) -> Option<Kind> {
         match &self.inner {
             Inner::Builtin(b) => Some(b.kind()),
-            Inner::Simple(_) => None,
+            _ => None,
         }
     }
 
     pub fn builtin_ref(&self) -> Option<&Builtin> {
         match &self.inner {
             Inner::Builtin(b) => Some(b),
-            Inner::Simple(_) => None,
+            _ => None,
         }
     }
 
     pub fn builtin_mut(&mut self) -> Option<&mut Builtin> {
         match &mut self.inner {
             Inner::Builtin(b) => Some(b),
-            Inner::Simple(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The slot for a plugin instrument just made.
+    pub fn from_plugin(fx: FxSlot) -> Slot {
+        let mut s = Slot::with(&fx.name, "", Inner::Simple(Arc::default()));
+        s.id = fx.id;
+        s.key = fx.key.clone();
+        s.inner = Inner::Plugin(Box::new(fx));
+        s
+    }
+
+    /// A new plugin instrument: its audio side waits in the effects'
+    /// `pending_instruments`.
+    pub fn new_plugin(effects: &mut Effects, a: &Available, rate: u32) -> Result<Slot, String> {
+        effects.create_instrument(a, rate).map(Slot::from_plugin)
+    }
+
+    /// As [`restore`](Self::restore), for any instrument: a plugin is
+    /// made with its settings, its audio side waiting in the effects'
+    /// `pending_instruments`, and one that can't be made here is kept as
+    /// saved, with why among the problems. The audio side of any other
+    /// is made with [`make`](Self::make).
+    pub fn restore_any(
+        e: &daw_project::Effect,
+        read: Reader,
+        effects: &mut Effects,
+        rate: u32,
+    ) -> (Slot, Vec<String>) {
+        if !e.is_plugin() {
+            return Slot::restore(e, read);
+        }
+        match effects.restore_instrument(e, rate) {
+            Ok(mut fx) => {
+                fx.key = e.id.clone();
+                (Slot::from_plugin(fx), Vec::new())
+            }
+            Err(why) => {
+                let mut s = Slot::with(&e.name, "", Inner::Missing(Box::new(e.clone())));
+                s.key = e.id.clone();
+                (s, vec![format!("{}: {why}", e.name)])
+            }
+        }
+    }
+
+    /// Whether it is a plugin (made here or not).
+    pub fn is_plugin(&self) -> bool {
+        matches!(self.inner, Inner::Plugin(_) | Inner::Missing(_))
+    }
+
+    /// The plugin, if it is one made here.
+    pub fn plugin(&self) -> Option<&FxSlot> {
+        match &self.inner {
+            Inner::Plugin(fx) => Some(fx),
+            _ => None,
+        }
+    }
+
+    pub fn plugin_mut(&mut self) -> Option<&mut FxSlot> {
+        match &mut self.inner {
+            Inner::Plugin(fx) => Some(fx),
+            _ => None,
+        }
+    }
+
+    /// The plugin's extra outputs, by bus index, with their names.
+    pub fn plugin_outputs(&self) -> Vec<(u32, String)> {
+        let Some(fx) = self.plugin() else {
+            return Vec::new();
+        };
+        let Some(p) = fx.plugin() else {
+            return Vec::new();
+        };
+        (p.buses().extra_outputs())
+            .filter(|(i, _)| fx.outputs.contains(&(*i as u32)))
+            .map(|(i, b)| (i as u32, b.name.clone()))
+            .collect()
+    }
+
+    /// A plugin's own settings, for saving.
+    pub fn state(&mut self) -> Option<daw_project::EffectState> {
+        match &mut self.inner {
+            Inner::Plugin(fx) => fx.state(),
+            Inner::Missing(e) => e.state.clone(),
+            _ => None,
         }
     }
 
@@ -176,6 +277,10 @@ impl Slot {
     /// [`Slot::load`] can take without a new instrument.
     pub fn same_shape(&self, e: &daw_project::Effect) -> bool {
         let v = self.value();
+        if self.is_plugin() || e.is_plugin() {
+            // The same plugin: its own settings stay as they are.
+            return self.key == e.id && v.is_plugin() && e.is_plugin() && v.class == e.class;
+        }
         fn keys(p: &[(String, f64)]) -> Vec<&str> {
             let mut k: Vec<&str> = p.iter().map(|x| x.0.as_str()).collect();
             k.sort_unstable();
@@ -202,6 +307,7 @@ impl Slot {
         self.name = e.name.clone();
         match &mut self.inner {
             Inner::Simple(p) => p.set_all(&e.params),
+            Inner::Plugin(_) | Inner::Missing(_) => {}
             Inner::Builtin(b) => {
                 b.params().load(&e.params);
                 for x in &e.inner {
@@ -213,9 +319,17 @@ impl Slot {
         }
     }
 
-    /// As the project stores it.
+    /// As the project stores it, without a plugin's own settings (read
+    /// only when saving, with [`state`](Self::state)).
     pub fn value(&self) -> daw_project::Effect {
         let (params, samples, inner) = match &self.inner {
+            Inner::Missing(e) => return (**e).clone(),
+            Inner::Plugin(fx) => {
+                return daw_project::Effect {
+                    id: self.key.clone(),
+                    ..fx.value()
+                };
+            }
             Inner::Simple(p) => (p.all(), Vec::new(), Vec::new()),
             Inner::Builtin(b) => (
                 b.params().values(),
@@ -247,23 +361,59 @@ impl Slot {
     pub fn spec(&self) -> InstrumentSpec {
         InstrumentSpec {
             id: self.id,
-            latency: 0,
+            latency: self.plugin().map_or(0, |p| p.latency),
         }
     }
 
     /// A fresh instrument for the engine, sharing this slot's settings.
-    pub fn make(&self, rate: u32) -> Box<dyn Instrument> {
+    /// None for a plugin, whose audio side the effects make (see
+    /// [`remake`](Self::remake)), and nothing plays a missing one.
+    pub fn make(&self, rate: u32) -> Option<Box<dyn Instrument>> {
         match &self.inner {
-            Inner::Simple(p) => Box::new(SimpleSynth::new(rate, p.clone())),
-            Inner::Builtin(b) => b.make(rate),
+            Inner::Simple(p) => Some(Box::new(SimpleSynth::new(rate, p.clone()))),
+            Inner::Builtin(b) => Some(b.make(rate)),
+            Inner::Plugin(_) | Inner::Missing(_) => None,
         }
+    }
+
+    /// Its instrument for the next graph, if [`make`](Self::make) makes
+    /// one, into `pending`.
+    pub fn make_into(&self, rate: u32, pending: &mut Vec<(u64, Box<dyn Instrument>)>) {
+        pending.extend(self.make(rate).map(|m| (self.id, m)));
     }
 
     /// After a change to what it is made of: a new id, and a new
     /// instrument for the next graph.
     pub fn renew(&mut self, rate: u32, pending: &mut Vec<(u64, Box<dyn Instrument>)>) {
         self.id = next_id();
-        pending.push((self.id, self.make(rate)));
+        self.make_into(rate, pending);
+    }
+
+    /// Makes its audio side again for a new engine or rate, or after a
+    /// crash, keeping its settings: into `pending`, or the effects'
+    /// `pending_instruments` for a plugin.
+    pub fn remake(
+        &mut self,
+        effects: &mut Effects,
+        rate: u32,
+        pending: &mut Vec<(u64, Box<dyn Instrument>)>,
+    ) -> Result<(), String> {
+        match &mut self.inner {
+            Inner::Plugin(fx) => effects.reload(fx, rate),
+            _ => {
+                self.make_into(rate, pending);
+                Ok(())
+            }
+        }
+    }
+
+    /// A second instrument with the same settings, for rendering
+    /// offline, with the plugin to keep until done.
+    pub fn fresh(&self, effects: &mut Effects, rate: u32) -> Result<Option<Fresh>, String> {
+        match &self.inner {
+            Inner::Plugin(fx) => effects.fresh_instrument(fx, rate).map(Some),
+            _ => Ok(self.make(rate).map(|m| (None, m))),
+        }
     }
 
     /// The sound files it uses that aren't in the project yet (full
@@ -325,6 +475,9 @@ impl Slot {
     /// The drum machine's outputs its pads use, with what each is
     /// called: a pad's own output, or a send.
     pub fn outputs_in_use(&self) -> Vec<(u32, String)> {
+        if self.plugin().is_some() {
+            return self.plugin_outputs();
+        }
         let Some(b) = self.builtin_ref().filter(|b| b.kind() == Kind::DrumMachine) else {
             return Vec::new();
         };
@@ -558,6 +711,8 @@ pub struct Ctx<'a> {
     pub rate: u32,
     pub pending: &'a mut Vec<(u64, Box<dyn Instrument>)>,
     pub read: Reader<'a>,
+    /// Makes and runs plugin instruments.
+    pub effects: &'a mut Effects,
 }
 
 /// What came of showing the window this frame.
@@ -581,6 +736,48 @@ pub(crate) fn choices() -> Vec<(Option<Kind>, &'static str)> {
     v
 }
 
+/// The plugin instruments to choose from, in an instrument menu, after
+/// the built-in ones; `slot` is the one chosen now. A new slot for the
+/// plugin picked, if one was, its audio side waiting in the effects'
+/// `pending_instruments`.
+pub(crate) fn plugin_choices(
+    ui: &mut egui::Ui,
+    slot: Option<&Slot>,
+    cx: &mut Ctx,
+    shown: &mut Shown,
+) -> Option<Slot> {
+    let plugins: Vec<Available> = (cx.effects.list.plugins().into_iter())
+        .filter(|p| p.enabled && p.class.is_instrument())
+        .collect();
+    ui.separator();
+    if plugins.is_empty() {
+        ui.label(egui::RichText::new("No plugin instruments found").weak())
+            .on_hover_text("Plugins are found in Settings → Plugins");
+    }
+    let now = slot.map(Slot::value).filter(|v| v.is_plugin());
+    let mut chosen = None;
+    for p in &plugins {
+        let cid: Vec<u8> = p.class.cid.iter().map(|&b| b as u8).collect();
+        let on = now.as_ref().is_some_and(|v| v.class == cid);
+        if ui
+            .selectable_label(on, &p.class.name)
+            .on_hover_text(format!("{} plugin", p.format()))
+            .clicked()
+            && !on
+        {
+            chosen = Some(p.clone());
+        }
+    }
+    let a = chosen?;
+    match Slot::new_plugin(cx.effects, &a, cx.rate) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            shown.message = Some(format!("{}: {e}", a.class.name));
+            None
+        }
+    }
+}
+
 /// The instrument window for a track: which instrument (or layered
 /// instruments, roadmap 3.5), its controls, and the MIDI output its
 /// notes also go to.
@@ -602,7 +799,9 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                     Some(i) => i.name.as_str(),
                     None => "None",
                 };
-                let now = t.instrument.as_ref().filter(|_| !layered).map(|i| i.kind());
+                let now = (t.instrument.as_ref())
+                    .filter(|i| !layered && !i.is_plugin())
+                    .map(|i| i.kind());
                 egui::ComboBox::from_id_salt("instrument-choice")
                     .selected_text(current)
                     .show_ui(ui, |ui| {
@@ -629,12 +828,22 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                                 && now != Some(kind)
                             {
                                 let s = kind.map_or_else(Slot::synth, Slot::new);
-                                cx.pending.push((s.id, s.make(cx.rate)));
+                                s.make_into(cx.rate, cx.pending);
                                 crate::layers::drop_layers(t);
                                 t.instrument = Some(s);
                                 shown.changed = true;
                             }
                         }
+                        let slot = t.instrument.as_ref().filter(|_| !layered);
+                        if let Some(s) = plugin_choices(ui, slot, &mut cx, &mut shown) {
+                            crate::layers::drop_layers(t);
+                            // Where another instrument's outputs went
+                            // means nothing to this one.
+                            t.instrument_outputs.clear();
+                            t.instrument = Some(s);
+                            shown.changed = true;
+                        }
+                        ui.separator();
                         if ui
                             .selectable_label(layered, "Layered instruments")
                             .on_hover_text(
@@ -690,6 +899,10 @@ pub(crate) fn slot_controls(
     cx: &mut Ctx,
     shown: &mut Shown,
 ) {
+    if slot.is_plugin() {
+        plugin_controls(ui, slot, outputs, cx, shown);
+        return;
+    }
     let renew = match slot.kind() {
         None => {
             slot.simple_controls(ui);
@@ -1137,51 +1350,119 @@ fn drum_machine_controls(
                 .weak(),
             );
         }
-        egui::Grid::new(("routes", id))
-            .num_columns(2)
-            .show(ui, |ui| {
-                for (o, name) in &in_use {
-                    ui.label(name);
-                    let now = routes.iter().find(|r| r.output == *o).map(|r| r.to.clone());
-                    let shown_name = now
-                        .as_ref()
-                        .and_then(|k| cx.buses.iter().find(|b| &b.0 == k))
-                        .map_or("Nowhere: plays through the track", |b| b.1.as_str());
-                    let mut pick: Option<Option<String>> = None;
-                    egui::ComboBox::from_id_salt(("route", id, *o))
-                        .selected_text(shown_name)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(now.is_none(), "Nowhere").clicked() {
-                                pick = Some(None);
-                            }
-                            for (k, n) in cx.buses {
-                                if ui.selectable_label(now.as_ref() == Some(k), n).clicked() {
-                                    pick = Some(Some(k.clone()));
-                                }
-                            }
-                        })
-                        .response
-                        .accessible_name(name.as_str());
-                    if let Some(to) = pick
-                        && to != now
-                    {
-                        routes.retain(|r| r.output != *o);
-                        if let Some(to) = to {
-                            routes.push(daw_project::InstrumentOutput { output: *o, to });
-                            routes.sort_by_key(|r| r.output);
-                        }
-                        shown.changed = true;
-                    }
-                    ui.end_row();
-                }
-            });
-        if cx.buses.is_empty() && !in_use.is_empty() {
-            ui.label(egui::RichText::new("Add a bus in the mixer to route outputs to.").weak());
-        }
+        route_rows(ui, id, &in_use, routes, cx, shown);
     }
     slot.tab = tab;
     slot.pad = pad;
     renew
+}
+
+/// Where each of an instrument's outputs in use goes: a bus, or
+/// nowhere, so it plays through the track.
+fn route_rows(
+    ui: &mut egui::Ui,
+    id: u64,
+    in_use: &[(u32, String)],
+    routes: &mut Vec<daw_project::InstrumentOutput>,
+    cx: &Ctx,
+    shown: &mut Shown,
+) {
+    egui::Grid::new(("routes", id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            for (o, name) in in_use {
+                ui.label(name);
+                let now = routes.iter().find(|r| r.output == *o).map(|r| r.to.clone());
+                let shown_name = now
+                    .as_ref()
+                    .and_then(|k| cx.buses.iter().find(|b| &b.0 == k))
+                    .map_or("Nowhere: plays through the track", |b| b.1.as_str());
+                let mut pick: Option<Option<String>> = None;
+                egui::ComboBox::from_id_salt(("route", id, *o))
+                    .selected_text(shown_name)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(now.is_none(), "Nowhere").clicked() {
+                            pick = Some(None);
+                        }
+                        for (k, n) in cx.buses {
+                            if ui.selectable_label(now.as_ref() == Some(k), n).clicked() {
+                                pick = Some(Some(k.clone()));
+                            }
+                        }
+                    })
+                    .response
+                    .accessible_name(name.as_str());
+                if let Some(to) = pick
+                    && to != now
+                {
+                    routes.retain(|r| r.output != *o);
+                    if let Some(to) = to {
+                        routes.push(daw_project::InstrumentOutput { output: *o, to });
+                        routes.sort_by_key(|r| r.output);
+                    }
+                    shown.changed = true;
+                }
+                ui.end_row();
+            }
+        });
+    if cx.buses.is_empty() && !in_use.is_empty() {
+        ui.label(egui::RichText::new("Add a bus in the mixer to route outputs to.").weak());
+    }
+}
+
+/// A plugin instrument's controls: where it runs, its own window,
+/// presets, a crash, its settings, and where its extra outputs go.
+fn plugin_controls(
+    ui: &mut egui::Ui,
+    slot: &mut Slot,
+    routes: &mut Vec<daw_project::InstrumentOutput>,
+    cx: &mut Ctx,
+    shown: &mut Shown,
+) {
+    let id = slot.id;
+    let in_use = slot.plugin_outputs();
+    if let Inner::Missing(e) = &slot.inner {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} isn't available on this computer. It is kept as saved, and plays \
+                 nothing here.",
+                e.name
+            ))
+            .color(ui.visuals().warn_fg_color),
+        );
+        return;
+    }
+    let Some(fx) = slot.plugin_mut() else {
+        return;
+    };
+    let did = crate::fx::plugin_instrument_controls(ui, fx, &cx.effects.presets_dir);
+    if did.restart {
+        match cx.effects.reload(fx, cx.rate) {
+            Ok(()) => shown.changed = true,
+            Err(e) => shown.message = Some(format!("{}: {e}", fx.name)),
+        }
+    }
+    if did.message.is_some() {
+        shown.message = did.message;
+    }
+    if in_use.is_empty() {
+        return;
+    }
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.strong("Outputs").on_hover_text(
+            "Each of the plugin's extra outputs can go to a bus in the mixer, with its own \
+             fader and effects. One that goes nowhere plays through the track",
+        );
+        if ui
+            .button("Put each output on a bus")
+            .on_hover_text("Gives every extra output a bus in the mixer of its own")
+            .clicked()
+        {
+            shown.cmd = Some(Cmd::InstrumentOutputBuses);
+        }
+    });
+    route_rows(ui, id, &in_use, routes, cx, shown);
 }
 
 fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Shown) -> bool {
@@ -1358,8 +1639,7 @@ impl crate::App {
             + 1;
         let mut t = crate::Track::instrument(format!("{} {n}", kind.name()));
         let slot = Slot::new(kind);
-        self.pending_instruments
-            .push((slot.id, slot.make(self.rate)));
+        slot.make_into(self.rate, &mut self.pending_instruments);
         t.instrument = Some(slot);
         self.tracks.push(t);
         self.instrument_open = Some(self.tracks.len() - 1);
@@ -1448,6 +1728,61 @@ impl crate::App {
         Ok(())
     }
 
+    /// The track with a plugin instrument with extra outputs that
+    /// commands act on: the one whose instrument window is open, else
+    /// the first.
+    pub(crate) fn plugin_instrument_track(&self) -> Option<usize> {
+        let fits = |t: &crate::Track| {
+            t.kind.plays_notes()
+                && (t.instrument.as_ref()).is_some_and(|i| !i.plugin_outputs().is_empty())
+        };
+        self.instrument_open
+            .filter(|&i| self.tracks.get(i).is_some_and(fits))
+            .or_else(|| self.tracks.iter().position(fits))
+    }
+
+    /// Gives each extra output of a plugin instrument a bus of its own,
+    /// after its track, keeping the buses outputs already go to.
+    pub(crate) fn plugin_output_buses(&mut self) -> Result<(), String> {
+        let i = self
+            .plugin_instrument_track()
+            .ok_or("Choose a plugin instrument with several outputs first.")?;
+        let outputs = (self.tracks[i].instrument.as_ref())
+            .map(Slot::plugin_outputs)
+            .unwrap_or_default();
+        let name = self.tracks[i].name.clone();
+        let mut at = i + 1;
+        while at < self.tracks.len()
+            && (self.tracks[i].instrument_outputs.iter()).any(|o| o.to == self.tracks[at].key)
+        {
+            at += 1;
+        }
+        let mut routes = Vec::new();
+        for (output, out_name) in outputs {
+            let routed = (self.tracks[i].instrument_outputs.iter())
+                .any(|o| o.output == output && self.bus_index(&o.to).is_some());
+            if routed {
+                continue;
+            }
+            let mut bus = crate::Track::new(format!("{name}: {out_name}"));
+            bus.kind = daw_project::TrackKind::Bus;
+            bus.parent = self.tracks[i].parent.clone();
+            routes.push(daw_project::InstrumentOutput {
+                output,
+                to: bus.key.clone(),
+            });
+            self.tracks.insert(at, bus);
+            at += 1;
+        }
+        let t = &mut self.tracks[i];
+        let taken: Vec<u32> = routes.iter().map(|r| r.output).collect();
+        t.instrument_outputs.retain(|o| !taken.contains(&o.output));
+        t.instrument_outputs.extend(routes);
+        t.instrument_outputs.sort_by_key(|o| o.output);
+        self.rebuild();
+        Ok(())
+    }
+
     /// The instrument window for track `i`.
     pub(crate) fn instrument_window(&mut self, ctx: &egui::Context, i: usize) {
         let outputs = self.midi.ports.outputs.clone();
@@ -1475,6 +1810,7 @@ impl crate::App {
                 rate,
                 pending: &mut pending,
                 read: &read,
+                effects: &mut self.effects,
             },
         );
         self.pending_instruments.extend(pending);
@@ -1542,7 +1878,7 @@ mod tests {
         let s = app.session();
         let mut inst: Vec<(u64, Box<dyn Instrument>)> = (app.tracks.iter())
             .filter_map(|t| t.instrument.as_ref())
-            .map(|i| (i.id, i.make(app.rate)))
+            .filter_map(|i| Some((i.id, i.make(app.rate)?)))
             .collect();
         let g = s
             .compile_all(daw_audio_io::MAX_BLOCK, &mut Vec::new(), &mut inst)
@@ -1756,5 +2092,212 @@ mod tests {
             .map(|t| t.instrument.as_ref().unwrap().value())
             .collect();
         assert_eq!(after, before);
+    }
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use std::path::Path;
+
+    use daw_engine::engine::render_with;
+    use daw_engine::time::Frames;
+    use daw_plugins::Sandbox;
+    use daw_plugins::scan::{Available, BundleEntry, scan_here};
+    use daw_project::{Note, NoteClip, PPQ};
+    use daw_test_plugin::{CLAP_SYNTH_NAME, SYNTH_NAME};
+    use egui_kittest::Harness;
+
+    use super::Slot;
+    use crate::commands::Cmd;
+    use crate::freeze::test_plugin;
+    use crate::{App, Track};
+
+    fn harness() -> Harness<'static, App> {
+        let mut h = Harness::builder()
+            .with_size([1400.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| App::new(Vec::new()));
+        h.run();
+        h
+    }
+
+    /// Lists the plugins in `file` as installed, and returns the one
+    /// called `name`.
+    fn install(app: &mut App, file: &Path, name: &str) -> Available {
+        app.effects.helper = Some(test_plugin::helper());
+        let classes = scan_here(file).unwrap();
+        app.effects.list.bundles = vec![BundleEntry {
+            path: file.to_owned(),
+            modified: 0,
+            result: Ok(classes),
+        }];
+        (app.effects.list.plugins().into_iter())
+            .find(|a| a.class.name == name)
+            .unwrap()
+    }
+
+    /// A second of the mix, rendered as an export would: the frames of
+    /// the left channel that sound.
+    fn sounding(app: &mut App) -> Vec<usize> {
+        let mut s = app.session();
+        let mut keep = Vec::new();
+        let mut instruments = Vec::new();
+        for (k, t) in app.tracks.iter().enumerate() {
+            let Some(i) = &t.instrument else { continue };
+            if let Some((p, inst)) = i.fresh(&mut app.effects, app.rate).unwrap() {
+                // Made for rendering: no helper's block of delay.
+                if let (Some(p), Some(spec)) = (&p, &mut s.tracks[k].instrument) {
+                    spec.latency = p.latency();
+                }
+                keep.extend(p);
+                instruments.push((i.id, inst));
+            }
+        }
+        let g = s
+            .compile_all(daw_audio_io::MAX_BLOCK, &mut Vec::new(), &mut instruments)
+            .unwrap();
+        let mut left = Vec::new();
+        render_with(g, Frames(0), app.rate as usize, 256, |l, _| {
+            left.extend_from_slice(l);
+            true
+        });
+        (left.iter().enumerate())
+            .filter(|(_, x)| x.abs() > 1e-4)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// A drum track: a note on channel 1 at the start, and one on
+    /// channel 10 (the test instruments' "Drums" output) on beat 2.
+    fn drum_track(app: &mut App, a: &Available) -> Track {
+        let mut t = Track::instrument("Drums".into());
+        t.instrument = Some(Slot::new_plugin(&mut app.effects, a, app.rate).unwrap());
+        let mut clip = NoteClip::new("nc".into(), "Beat".into(), 0, 4 * PPQ);
+        let mut drum = Note::new(PPQ, PPQ / 4, 36, 127);
+        drum.channel = 9;
+        clip.notes = vec![Note::new(0, PPQ / 4, 60, 127), drum];
+        t.note_clips.push(clip);
+        t
+    }
+
+    #[test]
+    fn a_plugin_instrument_plays_and_its_extra_output_goes_to_a_bus() {
+        for (file, name) in [
+            (test_plugin::bundle(), SYNTH_NAME),
+            (test_plugin::clap(), CLAP_SYNTH_NAME),
+        ] {
+            for sandbox in [Sandbox::InApp, Sandbox::Shared] {
+                let what = format!("{name}, {sandbox:?}");
+                let mut h = harness();
+                let ctx = h.ctx.clone();
+                let app = h.state_mut();
+                let a = install(app, &file, name);
+                app.effects.list.set_sandbox(&a.class.cid, sandbox);
+                let t = drum_track(app, &a);
+                assert!(t.instrument.as_ref().unwrap().is_plugin());
+                app.tracks.push(t);
+                app.rebuild();
+                let both = sounding(app);
+                assert_eq!(both.len(), 2, "{what}: {both:?}");
+
+                // The drums go to a bus of their own: muting it leaves
+                // the other note, and muting the instrument's track
+                // leaves the drums.
+                assert!(app.can_run(Cmd::InstrumentOutputBuses), "{what}");
+                app.run(&ctx, Cmd::InstrumentOutputBuses);
+                assert_eq!(app.tracks.len(), 2, "{what}: {:?}", app.message);
+                assert!(app.tracks[1].kind.is_bus());
+                assert_eq!(app.tracks[1].name, "Drums: Drums");
+                assert_eq!(app.tracks[0].instrument_outputs.len(), 1);
+                assert_eq!(sounding(app), both, "{what}");
+                app.tracks[1].mix.mute = true;
+                assert_eq!(sounding(app), vec![both[0]], "{what}");
+                app.tracks[1].mix.mute = false;
+                app.tracks[0].mix.mute = true;
+                assert_eq!(sounding(app), vec![both[1]], "{what}");
+                app.tracks[0].mix.mute = false;
+                // Run again, it makes no second bus.
+                app.run(&ctx, Cmd::InstrumentOutputBuses);
+                assert_eq!(app.tracks.len(), 2, "{what}");
+
+                // Saved and opened again, it is all there.
+                app.write_plugin_states();
+                let p = app.proj.doc.get();
+                let saved = p.tracks[0].instrument.clone().unwrap();
+                assert!(saved.is_plugin(), "{what}");
+                assert!(saved.state.is_some(), "{what}");
+                let mut h2 = harness();
+                let app2 = h2.state_mut();
+                install(app2, &file, name);
+                app2.effects.list.set_sandbox(&a.class.cid, sandbox);
+                app2.apply(p);
+                assert_eq!(app2.tracks.len(), 2, "{what}");
+                assert!(
+                    (app2.tracks[0].instrument.as_ref()).is_some_and(|i| i.plugin().is_some()),
+                    "{what}: {:?}",
+                    app2.message
+                );
+                assert_eq!(app2.tracks[0].instrument_outputs.len(), 1);
+                assert_eq!(sounding(app2), both, "{what}");
+
+                // Sent nowhere, the drums play through the track again.
+                let app = h.state_mut();
+                app.tracks[0].instrument_outputs.clear();
+                app.tracks[0].mix.mute = false;
+                app.tracks[1].mix.mute = true;
+                assert_eq!(sounding(app), both, "{what}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_plugin_that_is_not_here_is_kept_as_saved_with_its_outputs() {
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        let a = install(app, &test_plugin::bundle(), SYNTH_NAME);
+        let t = drum_track(app, &a);
+        app.tracks.push(t);
+        app.run(&ctx, Cmd::InstrumentOutputBuses);
+        app.write_plugin_states();
+        let mut p = app.proj.doc.get();
+        let inst = p.tracks[0].instrument.as_mut().unwrap();
+        inst.class = vec![0xee; 16];
+        inst.bundle = "/nowhere/gone.vst3".into();
+        let saved = p.clone();
+
+        let mut h2 = harness();
+        let app2 = h2.state_mut();
+        app2.apply(p);
+        let slot = app2.tracks[0].instrument.as_ref().unwrap();
+        assert!(slot.is_plugin() && slot.plugin().is_none());
+        assert!(sounding(app2).is_empty());
+        // Saved again unchanged, settings and outputs and all.
+        app2.write_plugin_states();
+        let back = app2.proj.doc.get();
+        assert_eq!(back.tracks[0].instrument, saved.tracks[0].instrument);
+        assert_eq!(
+            back.tracks[0].instrument_outputs,
+            saved.tracks[0].instrument_outputs
+        );
+    }
+
+    #[test]
+    fn a_layer_can_be_a_plugin_instrument() {
+        let mut h = harness();
+        let app = h.state_mut();
+        let a = install(app, &test_plugin::clap(), CLAP_SYNTH_NAME);
+        let t = drum_track(app, &a);
+        app.tracks.push(t);
+        app.rebuild();
+        let alone = sounding(app);
+        // The plugin becomes the first layer, and plays on.
+        app.add_layer(0);
+        assert_eq!(app.tracks[0].layers.len(), 2);
+        assert!(app.tracks[0].layers[0].slot.plugin().is_some());
+        app.write_plugin_states();
+        let p = app.proj.doc.get();
+        assert!(p.tracks[0].layers[0].instrument.state.is_some());
+        assert!(!alone.is_empty());
     }
 }

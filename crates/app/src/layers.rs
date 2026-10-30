@@ -55,10 +55,15 @@ impl Layer {
     }
 
     /// The layer as the project has it, with a fresh instrument whose
-    /// sounds are read with `read`. Also returns the sounds that couldn't
-    /// be read.
-    pub fn restore(l: &daw_project::Layer, read: Reader) -> (Layer, Vec<String>) {
-        let (slot, missing) = Slot::restore(&l.instrument, read);
+    /// sounds are read with `read` (a plugin's made by `effects`). Also
+    /// returns the sounds and plugins that couldn't be had.
+    pub fn restore(
+        l: &daw_project::Layer,
+        read: Reader,
+        effects: &mut crate::fx::Effects,
+        rate: u32,
+    ) -> (Layer, Vec<String>) {
+        let (slot, missing) = Slot::restore_any(&l.instrument, read, effects, rate);
         let mut layer = Layer::new(slot);
         layer.key = l.id.clone();
         layer.set(l);
@@ -198,8 +203,9 @@ impl App {
             t.layers.push(Layer::new(slot));
         }
         let layer = Layer::new(Slot::synth());
-        self.pending_instruments
-            .push((layer.slot.id, layer.slot.make(self.rate)));
+        layer
+            .slot
+            .make_into(self.rate, &mut self.pending_instruments);
         t.layers.push(layer);
         let n = t.layers.len() - 1;
         self.rebuild();
@@ -340,17 +346,24 @@ pub fn controls(
             .num_columns(2)
             .show(ui, |ui| {
                 ui.label("Instrument");
-                let now = l.slot.kind();
+                let now = (!l.slot.is_plugin()).then_some(l.slot.kind());
                 egui::ComboBox::from_id_salt(("layer-instrument", l.id))
                     .selected_text(l.slot.name.clone())
                     .show_ui(ui, |ui| {
                         for (kind, name) in crate::instrument::choices() {
-                            if ui.selectable_label(now == kind, name).clicked() && now != kind {
+                            if ui.selectable_label(now == Some(kind), name).clicked()
+                                && now != Some(kind)
+                            {
                                 let s = kind.map_or_else(Slot::synth, Slot::new);
-                                cx.pending.push((s.id, s.make(cx.rate)));
+                                s.make_into(cx.rate, cx.pending);
                                 l.slot = s;
                                 shown.changed = true;
                             }
+                        }
+                        let slot = Some(&l.slot);
+                        if let Some(s) = crate::instrument::plugin_choices(ui, slot, cx, shown) {
+                            l.slot = s;
+                            shown.changed = true;
                         }
                     })
                     .response
@@ -515,7 +528,7 @@ mod tests {
             fx.push((slot.id, proc));
         }
         let mut instruments: Vec<_> = (app.tracks.iter().flat_map(|t| t.instruments()))
-            .map(|i| (i.id, i.make(app.rate)))
+            .filter_map(|i| Some((i.id, i.make(app.rate)?)))
             .collect();
         let g = s
             .compile_all(daw_audio_io::MAX_BLOCK, &mut fx, &mut instruments)

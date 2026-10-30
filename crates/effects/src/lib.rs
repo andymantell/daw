@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Effects that come with the app (roadmap 2.5): EQ, compressor, gate,
-//! limiter, delay, an algorithmic reverb and a convolution reverb. Each
-//! runs as a track insert, like a hosted plugin.
+//! limiter, delay, an algorithmic reverb, a convolution reverb, a guitar
+//! amp, speaker cabinets and a player for amp captures. Each runs as a
+//! track insert, like a hosted plugin.
 //!
 //! An [`Effect`] holds the settings, shared without locks with the
 //! [`Processor`] made from it, which runs on the audio thread. Every
@@ -13,15 +14,20 @@ use std::sync::{Arc, Mutex};
 
 use daw_engine::graph::Insert;
 
+mod amp;
 mod biquad;
+mod cabinet;
+pub mod capture;
 mod convolution;
 mod delay;
 mod dynamics;
 mod eq;
 pub mod library;
+mod resample;
 pub mod response;
 mod reverb;
 
+pub use capture::Capture;
 pub use response::Response;
 
 /// The most settings any effect has.
@@ -41,10 +47,13 @@ pub enum Kind {
     Delay,
     Reverb,
     Convolution,
+    Amp,
+    Cabinet,
+    Capture,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Eq,
         Kind::Compressor,
         Kind::Gate,
@@ -52,6 +61,9 @@ impl Kind {
         Kind::Delay,
         Kind::Reverb,
         Kind::Convolution,
+        Kind::Amp,
+        Kind::Cabinet,
+        Kind::Capture,
     ];
 
     /// How projects name it. Never change one.
@@ -64,6 +76,9 @@ impl Kind {
             Kind::Delay => "delay",
             Kind::Reverb => "reverb",
             Kind::Convolution => "convolution",
+            Kind::Amp => "amp",
+            Kind::Cabinet => "cabinet",
+            Kind::Capture => "amp-capture",
         }
     }
 
@@ -81,6 +96,9 @@ impl Kind {
             Kind::Delay => "Delay",
             Kind::Reverb => "Reverb",
             Kind::Convolution => "Room reverb",
+            Kind::Amp => "Guitar amp",
+            Kind::Cabinet => "Speaker cabinet",
+            Kind::Capture => "Amp capture",
         }
     }
 
@@ -94,6 +112,9 @@ impl Kind {
             Kind::Delay => "Echoes",
             Kind::Reverb => "A smooth, adjustable reverb",
             Kind::Convolution => "The sound of a room, made from its echo pattern",
+            Kind::Amp => "A guitar amp, from clean to high gain, with a speaker cabinet",
+            Kind::Cabinet => "A speaker cabinet, for after an amp or a capture made without one",
+            Kind::Capture => "Plays a capture file of a real amp or pedal (.nam) that you supply",
         }
     }
 
@@ -106,6 +127,9 @@ impl Kind {
             Kind::Delay => delay::PARAMS,
             Kind::Reverb => reverb::PARAMS,
             Kind::Convolution => convolution::PARAMS,
+            Kind::Amp => amp::PARAMS,
+            Kind::Cabinet => cabinet::PARAMS,
+            Kind::Capture => capture::PARAMS,
         }
     }
 
@@ -113,6 +137,26 @@ impl Kind {
     pub fn has_meter(self) -> bool {
         matches!(self, Kind::Compressor | Kind::Gate | Kind::Limiter)
     }
+
+    /// What kind of file it can use, as [`Effect::set_response`] or
+    /// [`Effect::set_capture`] take: none, a response, or a capture.
+    pub fn uses(self) -> Uses {
+        match self {
+            Kind::Convolution | Kind::Cabinet => Uses::Response,
+            Kind::Capture => Uses::Capture,
+            _ => Uses::Nothing,
+        }
+    }
+}
+
+/// What kind of file an effect can use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Uses {
+    Nothing,
+    /// An impulse response (a sound file).
+    Response,
+    /// An amp capture file.
+    Capture,
 }
 
 /// What a setting's number means, for showing it.
@@ -242,15 +286,18 @@ pub struct Effect {
     source: Mutex<Source>,
 }
 
-/// Where a convolution reverb's response comes from.
+/// The file a convolution reverb, cabinet or capture player uses.
 #[derive(Clone, Debug, Default)]
 struct Source {
-    /// As the project saves it: empty for the rooms made here, a
-    /// recorded room's [`library::reference`], or a sound file (an asset
-    /// name, or a full path until the project is saved).
+    /// As the project saves it: empty for the rooms or cabinets made
+    /// here (or no capture), a recorded room's [`library::reference`],
+    /// or a file (an asset name, or a full path until the project is
+    /// saved).
     reference: String,
     /// The response, if it could be read.
     response: Option<Arc<Response>>,
+    /// The capture, if it could be read.
+    capture: Option<Arc<Capture>>,
 }
 
 impl Effect {
@@ -288,7 +335,7 @@ impl Effect {
     pub fn response_missing(&self) -> bool {
         self.source
             .lock()
-            .is_ok_and(|s| !s.reference.is_empty() && s.response.is_none())
+            .is_ok_and(|s| !s.reference.is_empty() && s.response.is_none() && s.capture.is_none())
     }
 
     /// Gives the response's file a new name (once it has come into the
@@ -308,8 +355,28 @@ impl Effect {
             *s = Source {
                 reference,
                 response,
+                capture: None,
             };
         }
+    }
+
+    /// Plays `capture` (read from what `reference` names) in a capture
+    /// player; an empty `reference` takes it away. As with
+    /// [`Effect::set_response`], a `reference` that couldn't be read is
+    /// kept, and it takes effect in the next [`Processor`] made.
+    pub fn set_capture(&self, reference: String, capture: Option<Arc<Capture>>) {
+        if let Ok(mut s) = self.source.lock() {
+            *s = Source {
+                reference,
+                response: None,
+                capture,
+            };
+        }
+    }
+
+    /// The capture it plays, if one is read.
+    pub fn capture(&self) -> Option<Arc<Capture>> {
+        self.source.lock().ok().and_then(|s| s.capture.clone())
     }
 
     pub fn kind(&self) -> Kind {
@@ -364,12 +431,18 @@ impl Effect {
             Kind::Limiter => Box::new(dynamics::Limiter::new(rate)),
             Kind::Delay => Box::new(delay::Delay::new(rate)),
             Kind::Reverb => Box::new(reverb::Reverb::new(rate)),
-            Kind::Convolution => {
+            Kind::Convolution | Kind::Cabinet => {
                 let loaded = (self.source.lock().ok())
                     .and_then(|s| s.response.clone())
                     .map(|r| r.at_rate(rate as u32));
-                Box::new(convolution::Convolution::new(rate, loaded))
+                if self.kind == Kind::Cabinet {
+                    Box::new(cabinet::Cabinet::new(rate, loaded))
+                } else {
+                    Box::new(convolution::Convolution::new(rate, loaded))
+                }
             }
+            Kind::Amp => Box::new(amp::Amp::new(rate)),
+            Kind::Capture => Box::new(capture::Player::new(rate, self.capture().as_deref())),
         };
         let mut p = Processor {
             params: self.kind.params(),

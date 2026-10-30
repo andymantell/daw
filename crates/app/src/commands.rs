@@ -67,6 +67,7 @@ pub(crate) enum Cmd {
     Mono,
     TakeLanes,
     AutomationLanes,
+    Browser,
     FullSize,
     /// Recalls saved layout n, counted from 0.
     Layout(u8),
@@ -555,6 +556,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Show or hide a track's automation lanes: settings that follow a line as the song plays")
     .words("lanes volume pan fader read touch latch write envelope"),
     info(
+        Cmd::Browser,
+        "browser",
+        "View",
+        "Content browser",
+        &[key(CTRL, Key::B)],
+    )
+    .hint("Show or hide your sound folders and the project's audio, to hear and add")
+    .words("samples loops sounds library files search tags preview audition"),
+    info(
         Cmd::FullSize,
         "full-size",
         "View",
@@ -768,6 +778,7 @@ impl Cmd {
                 | Cmd::Lessons
                 | Cmd::NotesEditor
                 | Cmd::AutomationLanes
+                | Cmd::Browser
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -1607,6 +1618,7 @@ impl App {
             Cmd::ImportMidi => self.pick_midi_file(ctx),
             Cmd::ExportMidi => self.export_midi_file(),
             Cmd::AutomationLanes => self.workspace.toggle(Pane::Automation),
+            Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),

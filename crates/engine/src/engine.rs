@@ -32,6 +32,7 @@ use crate::meter::Tap;
 use crate::metronome::{self, Metronome, Voice};
 use crate::midi::{Captured, Event, LiveEvent, MAX_EVENTS, OutEvent};
 use crate::monitor::{self, ControlRoom, CueBus, CueSend, Monitor, OutPair};
+use crate::preview::{self, PreviewSound};
 use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
 use crate::stretch;
@@ -115,6 +116,9 @@ pub enum Command {
     },
     /// The speakers' controls and talkback.
     SetControlRoom(ControlRoom),
+    /// Plays this sound from its start on the preview voice, replacing
+    /// any playing; `None` stops it (see [`crate::preview`]).
+    Preview(Option<Box<PreviewSound>>),
 }
 
 /// Shared with the UI: where playback is, and peak levels since the UI
@@ -151,6 +155,10 @@ pub struct Status {
     loops: AtomicU64,
     /// The headphone mixes' peaks.
     pub monitor: monitor::Meters,
+    /// The preview voice's frame, or -1 when silent; and its sound's
+    /// length.
+    preview_pos: AtomicI64,
+    preview_len: AtomicI64,
 }
 
 impl Status {
@@ -179,6 +187,8 @@ impl Status {
             meter_dropped: AtomicU64::new(0),
             loops: AtomicU64::new(0),
             monitor: monitor::Meters::new(),
+            preview_pos: AtomicI64::new(-1),
+            preview_len: AtomicI64::new(0),
         }
     }
 
@@ -207,6 +217,18 @@ impl Status {
     /// inputs report the same value twice.
     pub fn take_input_peak(&self, track: usize) -> (f32, f32) {
         self.input_peaks.get(track).map_or((0.0, 0.0), take_pair)
+    }
+
+    /// Where the preview voice is in its sound and how long that is, in
+    /// device frames, while one plays.
+    pub fn preview(&self) -> Option<(usize, usize)> {
+        let pos = self.preview_pos.load(Ordering::Relaxed);
+        (pos >= 0).then(|| {
+            (
+                pos as usize,
+                self.preview_len.load(Ordering::Relaxed) as usize,
+            )
+        })
     }
 
     pub fn position(&self) -> Frames {
@@ -301,6 +323,7 @@ fn raise(slot: &AtomicU32, v: f32) {
 pub struct Controller {
     commands: Producer<Command>,
     retired: Consumer<Box<Graph>>,
+    retired_previews: Consumer<Box<PreviewSound>>,
     placements: Arc<Mutex<Vec<Placement>>>,
     streamer: Option<Streamer>,
     recorder: Option<Recorder>,
@@ -443,6 +466,10 @@ impl Controller {
             drop(old);
             n += 1;
         }
+        while let Ok(old) = self.retired_previews.pop() {
+            drop(old);
+            n += 1;
+        }
         n
     }
 }
@@ -451,6 +478,7 @@ impl Controller {
 pub struct Engine {
     commands: Consumer<Command>,
     retired: Producer<Box<Graph>>,
+    retired_previews: Producer<Box<PreviewSound>>,
     from_disk: Consumer<ToAudio>,
     to_disk: Producer<Box<Chunk>>,
     status: Arc<Status>,
@@ -502,6 +530,7 @@ pub struct Engine {
     /// Notes for MIDI outputs, and live notes for the UI to record.
     to_midi: Producer<OutEvent>,
     to_capture: Producer<Captured>,
+    preview: preview::Voice,
 }
 
 /// Live note events in flight each way: plenty for a performance
@@ -531,6 +560,8 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let (cmd_tx, cmd_rx) = RingBuffer::new(QUEUE);
     // Room for every graph that could be in flight at once.
     let (ret_tx, ret_rx) = RingBuffer::new(QUEUE + 1);
+    // And for every preview: each comes with a command, and one plays.
+    let (prev_tx, prev_rx) = RingBuffer::new(QUEUE + 1);
     let status = Arc::new(Status::new());
     let max_block = max_block.max(1);
     let (disk_tx, disk_rx) = RingBuffer::new(DISK_QUEUE);
@@ -559,6 +590,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
         Controller {
             commands: cmd_tx,
             retired: ret_rx,
+            retired_previews: prev_rx,
             placements,
             streamer: Some(streamer),
             recorder: Some(recorder),
@@ -577,6 +609,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
         Engine {
             commands: cmd_rx,
             retired: ret_tx,
+            retired_previews: prev_tx,
             from_disk: disk_rx,
             to_disk: back_tx,
             status,
@@ -613,6 +646,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             live_buf: Vec::with_capacity(MAX_EVENTS),
             to_midi: midi_tx,
             to_capture: cap_tx,
+            preview: preview::Voice::default(),
         },
     )
 }
@@ -759,6 +793,10 @@ impl Engine {
                     }
                 }
                 Command::SetControlRoom(room) => self.monitor.room = room,
+                Command::Preview(sound) => {
+                    self.retire_preview();
+                    self.preview = preview::Voice { sound, pos: 0 };
+                }
             }
         }
     }
@@ -831,6 +869,7 @@ impl Engine {
         }
         if self.playing && self.stretching() {
             self.play_stretched(input, channels, left, right, click);
+            self.mix_preview(left, right);
             self.monitor
                 .finish(input, channels, left, right, &self.status.monitor);
             self.publish();
@@ -904,9 +943,32 @@ impl Engine {
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
         }
+        self.mix_preview(left, right);
         self.monitor
             .finish(input, channels, left, right, &self.status.monitor);
         self.publish();
+    }
+
+    /// Adds the preview voice to the main output, and shares where it is.
+    fn mix_preview(&mut self, left: &mut [f32], right: &mut [f32]) {
+        if self.preview.mix(left, right) {
+            self.retire_preview();
+        }
+        let (pos, len) = match &self.preview.sound {
+            Some(s) => (self.preview.pos as i64, s.len() as i64),
+            None => (-1, 0),
+        };
+        self.status.preview_len.store(len, Ordering::Relaxed);
+        self.status.preview_pos.store(pos, Ordering::Relaxed);
+    }
+
+    /// Sends the preview's sound back to be freed off this thread.
+    fn retire_preview(&mut self) {
+        if let Some(old) = self.preview.sound.take()
+            && let Err(rtrb::PushError::Full(old)) = self.retired_previews.push(old)
+        {
+            std::mem::forget(old);
+        }
     }
 
     /// The device outputs the main pair should play on for the block

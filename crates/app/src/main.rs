@@ -18,6 +18,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod automation;
+mod browser;
 mod commands;
 mod comments;
 mod comping;
@@ -211,6 +212,8 @@ struct Import {
     /// Opened again at a new rate for the clips already using it, rather
     /// than added as a track.
     reopen: bool,
+    /// Where a new track's clip starts.
+    at: i64,
     rate: u32,
     /// The file the clip plays (a video's sound is taken out into one of
     /// its own), opened.
@@ -386,6 +389,10 @@ struct App {
     /// open.
     notes_editor: notes_editor::Editor,
     instrument_open: Option<usize>,
+    /// The content browser, and whether a preview was just sent to the
+    /// engine (so its silence a moment ago doesn't mean it finished).
+    browser: browser::Browser,
+    browser_sent: bool,
 }
 
 /// How often to look for a lost device.
@@ -493,6 +500,8 @@ impl App {
             drawing_panes: false,
             workspace_cmds: Vec::new(),
             themes: theme::Themes::new((!cfg!(test)).then(config_dir).as_deref()),
+            browser: browser::Browser::new((!cfg!(test)).then(|| config_dir().join("browser.txt"))),
+            browser_sent: false,
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -560,7 +569,7 @@ impl App {
         stale.sort();
         stale.dedup();
         for path in stale {
-            self.start_import(path, true);
+            self.start_import(path, true, 0);
         }
         let eng = self.replace_engine();
         self.audio = self.open_device(eng);
@@ -648,12 +657,17 @@ impl App {
     }
 
     fn add_file(&mut self, path: &Path) {
-        // In full, so the project can find it from anywhere.
-        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        self.start_import(path, false);
+        self.add_file_at(path, 0);
     }
 
-    fn start_import(&mut self, path: PathBuf, reopen: bool) {
+    /// Adds the file as a new track, its clip starting at frame `at`.
+    fn add_file_at(&mut self, path: &Path, at: i64) {
+        // In full, so the project can find it from anywhere.
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        self.start_import(path, false, at);
+    }
+
+    fn start_import(&mut self, path: PathBuf, reopen: bool, at: i64) {
         let (tx, rx) = mpsc::channel();
         let (p, rate) = (path.clone(), self.rate);
         std::thread::spawn(move || {
@@ -671,6 +685,7 @@ impl App {
         self.imports.push(Import {
             path,
             reopen,
+            at,
             rate,
             done: rx,
         });
@@ -702,7 +717,7 @@ impl App {
             match result {
                 // The device changed rate while this was converting: start
                 // again at the new one.
-                Ok((path, _)) if im.rate != self.rate => self.start_import(path, im.reopen),
+                Ok((path, _)) if im.rate != self.rate => self.start_import(path, im.reopen, im.at),
                 Ok((path, source)) => {
                     changed = true;
                     if im.reopen {
@@ -718,7 +733,7 @@ impl App {
                             path.file_stem()
                                 .map_or("Track".into(), |s| s.to_string_lossy().into_owned()),
                         );
-                        t.clips.push(Clip::new(source, path, 0, None));
+                        t.clips.push(Clip::new(source, path, im.at.max(0), None));
                         self.tracks.push(t);
                     }
                 }
@@ -2159,23 +2174,6 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("View", |ui| {
-                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
-                        self.menu_item(ui, c);
-                    }
-                    ui.separator();
-                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
-                        self.menu_item(ui, c);
-                    }
-                    let mut on = self.timecode.shown;
-                    if ui
-                        .checkbox(&mut on, self.commands.name(Cmd::Timecode).to_string())
-                        .on_hover_text(self.commands.hover(Cmd::Timecode))
-                        .changed()
-                    {
-                        self.timecode.shown = on;
-                    }
-                });
                 ui.menu_button("Transport", |ui| {
                     for c in [
                         Cmd::PlayStop,
@@ -2194,6 +2192,22 @@ impl eframe::App for App {
                     }
                 });
                 ui.menu_button("View", |ui| {
+                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
+                        self.menu_item(ui, c);
+                    }
+                    let mut on = self.timecode.shown;
+                    if ui
+                        .checkbox(&mut on, self.commands.name(Cmd::Timecode).to_string())
+                        .on_hover_text(self.commands.hover(Cmd::Timecode))
+                        .changed()
+                    {
+                        self.timecode.shown = on;
+                    }
+                    ui.separator();
                     self.view_menu(ui);
                 });
                 ui.menu_button("Settings", |ui| {
@@ -2359,6 +2373,7 @@ impl eframe::App for App {
         {
             self.message = Some(e);
         }
+        self.browser_update(&ctx);
         self.tuner.update(&mut self.ctl, self.rate);
         if self.tuner.open {
             ctx.request_repaint_after(Duration::from_millis(30));

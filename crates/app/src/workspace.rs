@@ -31,9 +31,10 @@ pub(crate) enum Pane {
     Monitor,
     NotesEditor,
     Automation,
+    Browser,
 }
 
-pub(crate) const PANES: [Pane; 10] = [
+pub(crate) const PANES: [Pane; 11] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -44,6 +45,7 @@ pub(crate) const PANES: [Pane; 10] = [
     Pane::Monitor,
     Pane::NotesEditor,
     Pane::Automation,
+    Pane::Browser,
 ];
 
 impl Pane {
@@ -60,6 +62,7 @@ impl Pane {
             Pane::Monitor => "monitor",
             Pane::NotesEditor => "notes-editor",
             Pane::Automation => "automation",
+            Pane::Browser => "browser",
         }
     }
 
@@ -79,6 +82,7 @@ impl Pane {
             Pane::Monitor => "Monitor section",
             Pane::NotesEditor => "Note editor",
             Pane::Automation => "Automation",
+            Pane::Browser => "Content browser",
         }
     }
 
@@ -381,6 +385,8 @@ impl Layout {
         let side_panes = [Pane::Notes, Pane::Lessons, Pane::Comments, Pane::Tuner];
         let (target, side) = match p {
             Pane::Timeline => return,
+            // Left of the timeline, where sounds are dragged from.
+            Pane::Browser => (Pane::Timeline, Side::Left),
             Pane::Mixer | Pane::Takes | Pane::Monitor | Pane::NotesEditor | Pane::Automation => {
                 (Pane::Timeline, Side::Below)
             }
@@ -1541,6 +1547,7 @@ impl crate::App {
             Cmd::TakeLanes,
             Cmd::NotesEditor,
             Cmd::AutomationLanes,
+            Cmd::Browser,
             Cmd::Comments,
             Cmd::LessonNotes,
             Cmd::Lessons,
@@ -1551,6 +1558,7 @@ impl crate::App {
                 Cmd::MonitorSection => self.workspace.layout.is_open(Pane::Monitor),
                 Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
                 Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
+                Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
                 Cmd::Comments => self.comment_ui.open,
                 Cmd::LessonNotes => self.notes_ui.open,
                 Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
@@ -1572,7 +1580,8 @@ impl crate::App {
                             | Cmd::MonitorSection
                             | Cmd::TakeLanes
                             | Cmd::Lessons
-                            | Cmd::NotesEditor,
+                            | Cmd::NotesEditor
+                            | Cmd::Browser,
                             _,
                         ) => self.run(&ctx, c),
                         (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
@@ -1708,6 +1717,7 @@ impl Host for crate::App {
             Pane::Comments => self.comments_panel(ui),
             Pane::Takes => self.takes_pane(ui),
             Pane::Automation => self.automation_pane(ui),
+            Pane::Browser => self.browser_pane(ui),
             Pane::Notes => self.notes_pane(ui),
             Pane::Lessons => self.lessons_pane(ui),
             Pane::NotesEditor => self.notes_editor_pane(ui),

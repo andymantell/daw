@@ -481,8 +481,19 @@ own level and mute, control groups with one fader and mute over several
 tracks, a sidechain on the built-in compressor and gate, and delay
 compensation across every route, proved by null tests
 (`crates/engine/tests/routing.rs`). The mixer is its own module and pane
-(`app/mixer.rs`). Not yet: the monitor section, sidechains into plugins.
+(`app/mixer.rs`). Not yet: sidechains into plugins.
 Owner checks in `docs/review-queue/2.3-mixer-routing.md`.*
+*Monitor section built 2026-10-30, at risk: up to six headphone mixes,
+each with its own level, pan and mute per track (taken before the fader,
+so the main mix never changes them, and lined up with the speakers by the
+same delay compensation), its own click level and talkback, or the same
+as the main mix, each on its own pair of outputs; the speakers play the
+main mix or any headphone mix, with level, dim, mono, cut and up to three
+sets of speakers with a trim each; talkback from a chosen input reaches
+the headphones only and dims the speakers. Engine in
+`crates/engine/src/monitor.rs`, proved by `crates/engine/tests/monitor.rs`;
+pane in `app/monitor.rs`. Owner checks on the interface's outputs in
+`docs/review-queue/2.3-monitor-section.md`.*
 - Inserts, sends (pre/post fader), effect return buses, group buses,
   folder tracks.
 - Control-group (VCA-style) faders. Sidechain inputs.

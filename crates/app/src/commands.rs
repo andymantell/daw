@@ -53,6 +53,10 @@ pub(crate) enum Cmd {
     Metronome,
     CountIn,
     Mixer,
+    MonitorSection,
+    Talkback,
+    Dim,
+    Mono,
     TakeLanes,
     FullSize,
     /// Recalls saved layout n, counted from 0.
@@ -397,6 +401,30 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Mixer, "mixer", "View", "Mixer", &[])
         .hint("Show or hide the mixer")
         .words("pane faders tracks"),
+    info(
+        Cmd::MonitorSection,
+        "monitor-section",
+        "View",
+        "Monitor section",
+        &[],
+    )
+    .hint("Show or hide the headphone mixes and the speakers' controls")
+    .words("cue headphones talkback dim mono speakers control room"),
+    info(
+        Cmd::Talkback,
+        "talkback",
+        "Transport",
+        "Talkback on or off",
+        &[],
+    )
+    .hint("Talk to the headphones through the talkback microphone")
+    .words("talk microphone headphones cue"),
+    info(Cmd::Dim, "dim", "Transport", "Dim the speakers", &[])
+        .hint("Turn the speakers down, or back up")
+        .words("quiet control room monitor"),
+    info(Cmd::Mono, "mono", "Transport", "Mono on or off", &[])
+        .hint("Hear the speakers in mono, to check the mix")
+        .words("sum mono check control room"),
     info(Cmd::TakeLanes, "take-lanes", "View", "Take lanes", &[])
         .hint("Show or hide each take of a track, to comp from")
         .words("comp comping takes loop recording swipe best"),
@@ -606,6 +634,7 @@ impl Cmd {
         matches!(
             self,
             Cmd::Mixer
+                | Cmd::MonitorSection
                 | Cmd::TakeLanes
                 | Cmd::FullSize
                 | Cmd::Layout(_)
@@ -1416,6 +1445,10 @@ impl App {
             }
             Cmd::CountIn => self.count_in = !self.count_in,
             Cmd::Mixer => self.workspace.toggle(Pane::Mixer),
+            Cmd::MonitorSection => self.workspace.toggle(Pane::Monitor),
+            Cmd::Talkback => self.toggle_talkback(),
+            Cmd::Dim => self.toggle_room(|c| c.dim = !c.dim),
+            Cmd::Mono => self.toggle_room(|c| c.mono = !c.mono),
             Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),

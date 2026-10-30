@@ -309,6 +309,25 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     for g in (before.edit_groups.iter()).filter(|g| !now.contains(g.id.as_str())) {
         say("Groups", format!("Removed “{}”", g.name));
     }
+    // Headphone mixes.
+    let was: HashMap<&str, _> = (before.cue_mixes.iter())
+        .map(|c| (c.id.as_str(), c))
+        .collect();
+    let now: HashSet<&str> = after.cue_mixes.iter().map(|c| c.id.as_str()).collect();
+    for c in &after.cue_mixes {
+        match was.get(c.id.as_str()) {
+            None => say("Headphones", format!("Added the mix “{}”", c.name)),
+            Some(o) if o.name != c.name => say(
+                "Headphones",
+                format!("Renamed “{}” to “{}”", o.name, c.name),
+            ),
+            Some(o) if *o != c => say("Headphones", format!("Changed the mix “{}”", c.name)),
+            Some(_) => {}
+        }
+    }
+    for c in (before.cue_mixes.iter()).filter(|c| !now.contains(c.id.as_str())) {
+        say("Headphones", format!("Removed the mix “{}”", c.name));
+    }
     out
 }
 
@@ -778,6 +797,27 @@ mod tests {
             ]
         );
         assert_eq!(texts(&differences(&r, &song()))[2], "Lesson notes: Written");
+    }
+
+    #[test]
+    fn headphone_mixes_are_listed_by_name() {
+        let mut q = song();
+        q.cue_mixes
+            .push(crate::CueMix::new("c".into(), "Student".into()));
+        assert_eq!(
+            texts(&differences(&song(), &q)),
+            ["Headphones: Added the mix “Student”"]
+        );
+        let mut r = q.clone();
+        r.cue_mixes[0].gain_db = -6.0;
+        assert_eq!(
+            texts(&differences(&q, &r)),
+            ["Headphones: Changed the mix “Student”"]
+        );
+        assert_eq!(
+            texts(&differences(&r, &song())),
+            ["Headphones: Removed the mix “Student”"]
+        );
     }
 
     #[test]

@@ -39,9 +39,9 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Comp, CompPart, ControlGroup, Curve, EditGroup, Effect, EffectState, Fade,
-    Frozen, FrozenClip, GainPoint, Marker, MeterChange, Practice, Project, Send, TabBlock,
-    TempoChange, Track, TrackKind, TrainerSettings, is_asset_name,
+    Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve, EditGroup, Effect,
+    EffectState, Fade, Frozen, FrozenClip, GainPoint, Marker, MeterChange, Practice, Project, Send,
+    TabBlock, TempoChange, Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -370,6 +370,11 @@ impl ProjectDoc {
             w.order(&self.doc.get_movable_list("group_order"), &ids);
         }
 
+        // Headphone mixes, likewise only once a project has one.
+        if !p.cue_mixes.is_empty() || self.doc.get_by_str_path("cue_mixes").is_some() {
+            write_cue_mixes(&mut w, &self.doc, &p.cue_mixes);
+        }
+
         let markers = self.markers();
         let keep: HashSet<&str> = p.markers.iter().map(|m| m.id.as_str()).collect();
         for id in keys(&markers) {
@@ -590,6 +595,7 @@ impl ProjectDoc {
                 t.group = None;
             }
         }
+        p.cue_mixes = read_cue_mixes(&root, &p.tracks);
         if let Some(LoroValue::Map(ms)) = root.get("markers") {
             for (id, m) in ms.iter() {
                 let LoroValue::Map(m) = m else { continue };
@@ -961,6 +967,97 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
 /// A track's comps: a `comps` map from id to its name and parts, each
 /// part a list of take, start and end, and `comp`, the one that plays.
 /// Tracks never comped gain no entries.
+fn write_cue_mixes(w: &mut Writer, doc: &LoroDoc, mixes: &[CueMix]) {
+    let all = doc.get_map("cue_mixes");
+    let keep: HashSet<&str> = mixes.iter().map(|c| c.id.as_str()).collect();
+    for id in keys(&all) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&all, &id);
+        }
+    }
+    for c in mixes {
+        let m = w.child(&all, &c.id);
+        w.put(&m, "name", c.name.as_str());
+        w.put(&m, "gain_db", c.gain_db);
+        w.put(&m, "mute", c.mute);
+        w.put(&m, "follow_main", c.follow_main);
+        w.put(&m, "click", c.click_db.is_some());
+        if let Some(db) = c.click_db {
+            w.put(&m, "click_db", db);
+        }
+        w.put(&m, "talkback", c.talkback);
+        let levels = w.fixed(&m, "levels");
+        let keep: HashSet<&str> = c.levels.iter().map(|l| l.track.as_str()).collect();
+        for id in keys(&levels) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&levels, &id);
+            }
+        }
+        for l in &c.levels {
+            let lm = w.child(&levels, &l.track);
+            w.put(&lm, "gain_db", l.gain_db);
+            w.put(&lm, "pan", l.pan);
+            w.put(&lm, "mute", l.mute);
+        }
+    }
+    let ids: Vec<String> = mixes.iter().map(|c| c.id.clone()).collect();
+    w.order(&doc.get_movable_list("cue_order"), &ids);
+}
+
+/// The headphone mixes, in order, without levels for tracks that are
+/// gone.
+fn read_cue_mixes(root: &LoroMapValue, tracks: &[Track]) -> Vec<CueMix> {
+    let Some(LoroValue::Map(all)) = root.get("cue_mixes") else {
+        return Vec::new();
+    };
+    let mut order: Vec<String> = Vec::new();
+    if let Some(LoroValue::List(ids)) = root.get("cue_order") {
+        for v in ids.iter() {
+            if let LoroValue::String(s) = v
+                && all.contains_key(s.as_str())
+                && !order.iter().any(|o| o == s.as_str())
+            {
+                order.push(s.to_string());
+            }
+        }
+    }
+    let mut rest: Vec<&String> = all.keys().filter(|k| !order.contains(k)).collect();
+    rest.sort();
+    order.extend(rest.into_iter().cloned());
+    let finite =
+        |m: &LoroMapValue, k: &str, d: f64| float(m, k).filter(|v| v.is_finite()).unwrap_or(d);
+    let mut out = Vec::new();
+    for id in order {
+        let Some(LoroValue::Map(m)) = all.get(&id) else {
+            continue;
+        };
+        let mut c = CueMix::new(id, string(m, "name").unwrap_or_default());
+        c.gain_db = finite(m, "gain_db", 0.0);
+        c.mute = boolean(m, "mute").unwrap_or(false);
+        c.follow_main = boolean(m, "follow_main").unwrap_or(false);
+        c.click_db = boolean(m, "click")
+            .unwrap_or(true)
+            .then(|| finite(m, "click_db", 0.0));
+        c.talkback = boolean(m, "talkback").unwrap_or(true);
+        if let Some(LoroValue::Map(levels)) = m.get("levels") {
+            // In track order, so they read back the same every time.
+            for t in tracks {
+                let Some(LoroValue::Map(l)) = levels.get(&t.id) else {
+                    continue;
+                };
+                c.levels.push(CueLevel {
+                    track: t.id.clone(),
+                    gain_db: finite(l, "gain_db", 0.0),
+                    pan: finite(l, "pan", 0.0).clamp(-1.0, 1.0),
+                    mute: boolean(l, "mute").unwrap_or(false),
+                });
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn write_comps(w: &mut Writer, m: &LoroMap, t: &Track) {
     if t.comps.is_empty() && m.get("comps").is_none() {
         return;
@@ -1448,6 +1545,42 @@ mod tests {
     }
 
     #[test]
+    fn headphone_mixes_are_kept_without_tracks_that_are_gone() {
+        let mut p = Project::default();
+        p.tracks = vec![
+            Track::new("g".into(), "Guitar".into()),
+            Track::new("v".into(), "Voice".into()),
+        ];
+        let mut student = CueMix::new("c1".into(), "Student".into());
+        student.gain_db = -3.0;
+        student.click_db = None;
+        student.talkback = false;
+        student.set_level(CueLevel {
+            pan: -0.5,
+            mute: true,
+            ..CueLevel::new("v".into(), -6.0)
+        });
+        student.set_level(CueLevel::new("gone".into(), 0.0));
+        let mut teacher = CueMix::new("c2".into(), "Teacher".into());
+        teacher.follow_main = true;
+        p.cue_mixes = vec![student.clone(), teacher.clone()];
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let back = doc.get();
+        student.levels.retain(|l| l.track != "gone");
+        assert_eq!(back.cue_mixes, [student.clone(), teacher.clone()]);
+        // Not listed: an audio track is in at 0 dB.
+        assert_eq!(back.cue_mixes[0].level(&p.tracks[0]).gain_db, 0.0);
+
+        p.cue_mixes = vec![teacher.clone(), student];
+        doc.set(&p);
+        assert_eq!(doc.get().cue_mixes[0].name, "Teacher", "reordered");
+        p.cue_mixes.clear();
+        doc.set(&p);
+        assert!(doc.get().cue_mixes.is_empty());
+    }
+
+    #[test]
     fn plain_tracks_add_no_routing_entries() {
         let p = Project {
             tracks: vec![Track::new("t1".into(), "Guitar".into())],
@@ -1468,6 +1601,7 @@ mod tests {
             panic!()
         };
         assert!(root.get("groups").is_none());
+        assert!(root.get("cue_mixes").is_none());
     }
 
     #[test]

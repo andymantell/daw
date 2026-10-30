@@ -21,6 +21,15 @@
 //! With a punch range, only input inside it is recorded, and the take
 //! ends at the punch-out frame rather than when playback stops.
 //!
+//! Recording at a practice speed (Phase 4 D5): while the song plays
+//! slowed down (or transposed), input is captured as it is played, into a
+//! file of its own, and when the take ends the recorder speeds it back up
+//! (and transposes it back) to the song's speed with the practice
+//! stretcher, so the take lands in time with the song. Blocks then carry
+//! the speed they were played at, and their `at` counts captured frames
+//! from the timeline frame where the take began, so a take follows on
+//! block by block as usual. A take played at another speed is a new take.
+//!
 //! Retrospective capture (roadmap 2.2): while it is on, armed tracks'
 //! input played but *not* recorded is kept in memory here, for the last
 //! so many seconds of playing, in stretches of continuous audio: one per
@@ -66,8 +75,12 @@ pub struct RecBlock {
     pub(crate) channels: u8,
     pub(crate) len: u16,
     pub(crate) kind: Kind,
-    /// Timeline frame of the first sample.
+    /// Timeline frame of the first sample. At a practice speed: the
+    /// take's first timeline frame plus the frames captured since.
     pub(crate) at: i64,
+    /// The practice speed and transpose the input was played at.
+    pub(crate) speed: f32,
+    pub(crate) semitones: f32,
     /// Interleaved, `len * channels` used.
     pub(crate) samples: [f32; BLOCK_SAMPLES],
 }
@@ -79,8 +92,14 @@ impl RecBlock {
         len: 0,
         kind: Kind::Record,
         at: 0,
+        speed: 1.0,
+        semitones: 0.0,
         samples: [0.0; BLOCK_SAMPLES],
     };
+
+    fn slowed(&self) -> bool {
+        self.speed != 1.0 || self.semitones != 0.0
+    }
 }
 
 /// A finished take.
@@ -94,13 +113,28 @@ pub struct Take {
     pub channels: usize,
     /// Set if a write failed; the file holds what was written before.
     pub error: Option<String>,
+    /// Set if the take was played at a practice speed or transpose; then
+    /// `path` and `frames` are the take sped back up to the song's speed.
+    pub slowed: Option<Slowed>,
+}
+
+/// How a take recorded at a practice speed was played.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slowed {
+    pub speed: f64,
+    pub semitones: f64,
+    /// The input as it was captured, at the practice speed.
+    pub as_played: PathBuf,
 }
 
 impl Take {
     /// Where the take belongs in the timeline: `offset` frames before it
     /// was captured, `offset` being the interface's measured round trip.
+    /// The round trip passes at the practice speed, so a slowed take
+    /// moves back by less of the song.
     pub fn clip_start(&self, offset: Frames) -> Frames {
-        Frames(self.start.0 - offset.0)
+        let speed = self.slowed.as_ref().map_or(1.0, |s| s.speed);
+        Frames(self.start.0 - (offset.0 as f64 * speed).round() as i64)
     }
 }
 
@@ -109,6 +143,8 @@ struct Open {
     take: Take,
     /// The frame the next block should start at to continue this take.
     next: i64,
+    /// The practice speed and transpose its blocks were played at.
+    played: (f32, f32),
 }
 
 /// How often open takes have their headers brought up to date.
@@ -224,13 +260,12 @@ impl Recorder {
     fn write(&mut self, b: &RecBlock) {
         let track = b.track as usize;
         let channels = b.channels as usize;
-        let follows = self
-            .open
-            .get(&track)
-            .is_some_and(|o| o.next == b.at && o.take.channels == channels);
+        let follows = self.open.get(&track).is_some_and(|o| {
+            o.next == b.at && o.take.channels == channels && o.played == (b.speed, b.semitones)
+        });
         if !follows {
             self.finish(track);
-            if let Err(e) = self.start(track, channels, b.at) {
+            if let Err(e) = self.start(track, channels, b) {
                 self.report_failed(track, channels, b.at, e);
                 return;
             }
@@ -325,6 +360,7 @@ impl Recorder {
             frames: s.frames(),
             channels: s.channels,
             error: None,
+            slowed: None,
         };
         let result = self
             .create(track, s.channels, s.start, "kept")
@@ -367,8 +403,15 @@ impl Recorder {
         Ok((path, writer))
     }
 
-    fn start(&mut self, track: usize, channels: usize, at: i64) -> Result<(), String> {
-        let (path, writer) = self.create(track, channels, at, "at")?;
+    fn start(&mut self, track: usize, channels: usize, b: &RecBlock) -> Result<(), String> {
+        let at = b.at;
+        let what = if b.slowed() { "slow" } else { "at" };
+        let (path, writer) = self.create(track, channels, at, what)?;
+        let slowed = b.slowed().then(|| Slowed {
+            speed: b.speed as f64,
+            semitones: b.semitones as f64,
+            as_played: path.clone(),
+        });
         self.open.insert(
             track,
             Open {
@@ -380,8 +423,10 @@ impl Recorder {
                     frames: 0,
                     channels,
                     error: None,
+                    slowed,
                 },
                 next: at,
+                played: (b.speed, b.semitones),
             },
         );
         Ok(())
@@ -395,6 +440,7 @@ impl Recorder {
             frames: 0,
             channels,
             error: Some(e),
+            slowed: None,
         });
     }
 
@@ -406,6 +452,24 @@ impl Recorder {
             && o.take.error.is_none()
         {
             o.take.error = Some(e.to_string());
+        }
+        if let Some(sl) = o.take.slowed.clone()
+            && o.take.frames > 0
+        {
+            let t = &o.take;
+            let sped = self
+                .create(track, t.channels, t.start.0, "at")
+                .and_then(|(path, w)| {
+                    speed_up(&sl.as_played, w, sl.speed, sl.semitones).map(|n| (path, n))
+                });
+            match sped {
+                Ok((path, frames)) => {
+                    o.take.path = path;
+                    o.take.frames = frames;
+                }
+                // The take stays as played, so nothing is lost.
+                Err(e) => o.take.error = Some(format!("could not speed the take up: {e}")),
+            }
         }
         self.finished.lock().unwrap().push(o.take);
     }
@@ -435,6 +499,33 @@ impl Recorder {
             handle: Some(handle),
         }
     }
+}
+
+/// Writes the take in `slow`, played at `speed` and `semitones`, to
+/// `out` at the song's speed and pitch: `speed` times as long. Returns
+/// the frames written.
+pub fn speed_up(
+    slow: &Path,
+    mut out: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    speed: f64,
+    semitones: f64,
+) -> Result<usize, String> {
+    let mut r = hound::WavReader::open(slow).map_err(|e| format!("{}: {e}", slow.display()))?;
+    let ch = r.spec().channels.max(1) as usize;
+    let samples: Vec<f32> = r
+        .samples::<f32>()
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("{}: {e}", slow.display()))?;
+    let (l, rt): (Vec<f32>, Vec<f32>) = samples.chunks_exact(ch).map(|f| (f[0], f[ch - 1])).unzip();
+    let (ol, or) = crate::stretch::whole(&l, &rt, 1.0 / speed, -semitones);
+    for (a, b) in ol.iter().zip(&or) {
+        out.write_sample(*a).map_err(|e| e.to_string())?;
+        if ch > 1 {
+            out.write_sample(*b).map_err(|e| e.to_string())?;
+        }
+    }
+    out.finalize().map_err(|e| e.to_string())?;
+    Ok(ol.len())
 }
 
 /// A punch range on the timeline, with pre-roll and post-roll in bars:
@@ -486,7 +577,8 @@ impl Punch {
 
 /// `track03-at000123456-…-0007.wav`: track (from 1), start frame, the
 /// time, and a sequence number so names never collide. Input kept by
-/// retrospective capture says `kept` in place of `at`.
+/// retrospective capture says `kept` in place of `at`, and input as
+/// played at a practice speed says `slow`.
 fn take_path(dir: &Path, track: usize, what: &str, at: i64, seq: u64) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

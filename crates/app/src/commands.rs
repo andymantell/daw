@@ -86,6 +86,9 @@ pub(crate) enum Cmd {
     LessonNotes,
     Lessons,
     Comments,
+    SlowerSpeed,
+    FasterSpeed,
+    NormalSpeed,
     NotesEditor,
     PatternEditor,
     AddPattern,
@@ -981,6 +984,20 @@ pub(crate) const COMMANDS: &[Info] = &[
         .hint("Show or hide assignments, the practice log and the lessons so far")
         .words("assignment homework practice log history progress teacher student"),
     info(Cmd::Comments, "comments", "Practice", "Comments…", &[]).words("pins feedback"),
+    info(Cmd::SlowerSpeed, "slower-speed", "Practice", "Slower", &[])
+        .hint("Play 5% slower, pitch kept. Takes recorded slowed are sped back up to the song's speed")
+        .words("speed slow down tempo practise record learn"),
+    info(Cmd::FasterSpeed, "faster-speed", "Practice", "Faster", &[])
+        .hint("Play 5% faster, pitch kept")
+        .words("speed up tempo practise"),
+    info(
+        Cmd::NormalSpeed,
+        "normal-speed",
+        "Practice",
+        "Normal speed and pitch",
+        &[],
+    )
+    .words("reset speed transpose 100%"),
     info(
         Cmd::AudioDevice,
         "audio-device",
@@ -2223,6 +2240,9 @@ impl App {
             Cmd::Meters => self.meters.show(None),
             Cmd::LessonNotes => self.notes_ui.open = true,
             Cmd::Comments => self.comment_ui.open = true,
+            Cmd::SlowerSpeed => self.nudge_speed(-5.0),
+            Cmd::FasterSpeed => self.nudge_speed(5.0),
+            Cmd::NormalSpeed => self.normal_speed(),
             Cmd::AudioDevice => self.show_devices = true,
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,

@@ -48,8 +48,12 @@ const HOP: usize = 512;
 const TAPS: usize = 32;
 const PHASES: usize = 256;
 
-/// Slowest and fastest speeds, and the widest transpose, supported.
+/// Slowest and fastest practice speeds, and the widest transpose.
 pub const SPEED_RANGE: (f64, f64) = (0.5, 1.5);
+/// The fastest the stretcher itself goes: fast enough to speed a take
+/// recorded at the slowest practice speed back up (see
+/// [`crate::record::speed_up`]).
+pub const FASTEST: f64 = 1.0 / SPEED_RANGE.0;
 pub const SEMITONES: f64 = 12.0;
 
 fn princarg(x: f32) -> f32 {
@@ -159,11 +163,12 @@ impl Stretcher {
         s
     }
 
-    /// Sets speed (1 is normal; [`SPEED_RANGE`]) and transpose in
+    /// Sets speed (1 is normal; from the slowest of [`SPEED_RANGE`] to
+    /// [`FASTEST`]) and transpose in
     /// semitones (±[`SEMITONES`], fractions for cents). Takes effect from
     /// the next frame; doesn't allocate.
     pub fn set(&mut self, speed: f64, semitones: f64) {
-        self.speed = speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+        self.speed = speed.clamp(SPEED_RANGE.0, FASTEST);
         let ratio = 2f64.powf(semitones.clamp(-SEMITONES, SEMITONES) / 12.0);
         if ratio != self.ratio {
             self.ratio = ratio;
@@ -374,6 +379,39 @@ impl Stretcher {
             }
             self.st_len -= drop;
             self.rpos -= drop as f64;
+        }
+    }
+}
+
+/// Plays all of `l` and `r` (the same length) at `speed` and transpose,
+/// off the audio thread: `len / speed` frames.
+pub fn whole(l: &[f32], r: &[f32], speed: f64, semitones: f64) -> (Vec<f32>, Vec<f32>) {
+    let out = (l.len() as f64 / speed).round() as usize;
+    let mut s = Stretcher::new(FRAME);
+    s.set(speed, semitones);
+    s.reset(0.0);
+    let mut feed = Buffer { l, r };
+    let (mut ol, mut or) = (vec![0.0; out], vec![0.0; out]);
+    for (a, b) in ol.chunks_mut(FRAME).zip(or.chunks_mut(FRAME)) {
+        s.process(&mut feed, a, b);
+    }
+    (ol, or)
+}
+
+/// Input held in memory; silence outside it.
+struct Buffer<'a> {
+    l: &'a [f32],
+    r: &'a [f32],
+}
+
+impl Feed for Buffer<'_> {
+    fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let at = start + i as i64;
+            (*a, *b) = match usize::try_from(at) {
+                Ok(k) if k < self.l.len().min(self.r.len()) => (self.l[k], self.r[k]),
+                _ => (0.0, 0.0),
+            };
         }
     }
 }

@@ -32,6 +32,7 @@ use std::sync::Arc;
 use crate::automation::{LaneSpec, Target};
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
+use crate::layers::{self, Held, LayerNode, LayerSpec};
 use crate::metronome::Clicks;
 use crate::midi::{Event, Expression, Instrument, Kind, MAX_EVENTS, Outputs};
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
@@ -472,6 +473,9 @@ pub struct TrackSpec {
     /// an output without one is the instrument's to play through the
     /// track or leave out.
     pub instrument_outputs: Vec<AuxSpec>,
+    /// A layered instrument (roadmap 3.5): when there are layers, they
+    /// play the notes in place of `instrument`.
+    pub layers: Vec<LayerSpec>,
     /// Live notes from MIDI devices play through the instrument (and go
     /// to the MIDI output) as they arrive.
     pub notes_live: bool,
@@ -507,6 +511,7 @@ impl TrackSpec {
             controls: Vec::new(),
             instrument: None,
             instrument_outputs: Vec::new(),
+            layers: Vec::new(),
             notes_live: false,
             midi_out: None,
             mix: Mix::default(),
@@ -768,6 +773,7 @@ pub(crate) struct TrackNode {
     pub exprs: Vec<ExprNode>,
     pub controls: Vec<ControlNode>,
     pub instrument: Option<InstrumentNode>,
+    pub layers: Vec<LayerNode>,
     pub notes_live: bool,
     pub midi_out: Option<usize>,
     /// This block's events, in frame order; capacity [`MAX_EVENTS`].
@@ -1515,7 +1521,8 @@ impl Session {
                     }
                 })
                 .collect();
-            let instrument = t.instrument.map(|i| InstrumentNode {
+            let layered = !t.layers.is_empty();
+            let instrument = t.instrument.filter(|_| !layered).map(|i| InstrumentNode {
                 id: i.id,
                 inst: new_instruments
                     .iter()
@@ -1539,13 +1546,22 @@ impl Session {
                     key: None,
                 })
                 .collect();
-            let built = chain::build(&t.inserts, max_block);
-            let latency = built.latency;
+            let lay: Vec<(u64, i64)> = (t.layers.iter())
+                .map(|l| (l.id, l.instrument.map_or(0, |i| i.latency as i64)))
+                .collect();
+            let built = chain::build(&t.inserts, &lay, max_block);
+            // A layered instrument's latency is in the chain's.
+            let latency = built.latency
+                + instrument
+                    .as_ref()
+                    .and(t.instrument)
+                    .map_or(0, |i| i.latency as i64);
             befores.push(built.before);
-            chain_latency.push(latency);
+            // The extra outputs skip the track's chain.
+            chain_latency.push(built.latency);
             // Buffers for the instrument's routed extra outputs, up to
             // the highest.
-            let routes = if t.instrument.is_some() {
+            let routes = if instrument.is_some() {
                 &t.instrument_outputs[..]
             } else {
                 &[]
@@ -1561,7 +1577,10 @@ impl Session {
                     .map(|k| routes.iter().any(|a| a.output as usize == k))
                     .collect(),
             );
-            let latency = latency + t.instrument.map_or(0, |i| i.latency as i64);
+            let layers: Vec<LayerNode> = (t.layers.iter())
+                .zip(built.layers)
+                .map(|(l, c)| LayerNode::new(l, c, new_instruments, max_block))
+                .collect();
             // A bus sums stereo audio.
             let fed = self.tracks.iter().any(|o| {
                 o.output == Output::Track(ti)
@@ -1571,14 +1590,16 @@ impl Session {
             stereo |= fed;
             // Effects and instruments work in stereo, so a mono track
             // becomes stereo.
-            let widen = !stereo && !inserts.is_empty() && instrument.is_none();
-            stereo |= !inserts.is_empty() || instrument.is_some();
+            let plays = instrument.is_some() || !layers.is_empty();
+            let widen = !stereo && !inserts.is_empty() && !plays;
+            stereo |= !inserts.is_empty() || plays;
             tracks.push(TrackNode {
                 clips,
                 notes,
                 exprs,
                 controls,
                 instrument,
+                layers,
                 notes_live: t.notes_live,
                 midi_out: t.midi_out,
                 events: Vec::with_capacity(MAX_EVENTS),
@@ -1959,13 +1980,10 @@ impl Graph {
                     }
                 }
             }
-            if let Some(by) = rate
-                .as_ref()
-                .map(|r| r.semitones.round() as i32)
-                .filter(|&b| b != 0)
-            {
+            let shift = rate.as_ref().map_or(0, |r| r.semitones.round() as i32);
+            if shift != 0 {
                 for e in &mut t.events {
-                    *e = e.transposed(by);
+                    *e = e.transposed(shift);
                 }
             }
             t.events.sort_by_key(|e| e.frame);
@@ -1981,7 +1999,22 @@ impl Graph {
                 l[..n].fill(0.0);
                 r[..n].fill(0.0);
             }
-            if let Some(InstrumentNode {
+            if !t.layers.is_empty() {
+                let mut keys = chain::Keys {
+                    edges: &mut self.edges,
+                    post: &self.post,
+                    key: &mut self.key,
+                };
+                layers::run(
+                    &mut t.layers,
+                    &t.events,
+                    shift,
+                    &mut t.inserts,
+                    &mut keys,
+                    sl,
+                    sr,
+                );
+            } else if let Some(InstrumentNode {
                 inst: Some(inst), ..
             }) = &mut t.instrument
             {
@@ -2121,40 +2154,52 @@ impl Graph {
     /// playing cuts nothing off.
     pub(crate) fn adopt_instruments(&mut self, old: &mut Graph) {
         for t in &mut self.tracks {
-            let Some(i) = t.instrument.as_mut().filter(|i| i.inst.is_none()) else {
-                continue;
-            };
-            let found = old.tracks.iter_mut().find(|o| {
-                o.instrument
-                    .as_ref()
-                    .is_some_and(|x| x.id == i.id && x.inst.is_some())
-            });
-            if let Some(o) = found {
-                i.inst = o.instrument.as_mut().and_then(|x| x.inst.take());
-                // The notes sounding carry on where this graph has the
-                // same note; one that is gone is stopped now.
-                t.notes_at = o.notes_at;
-                t.pass = o.pass;
-                t.was_playing = o.was_playing;
-                for &k in &o.sounding {
-                    let on = &o.notes[k];
-                    let same = t.notes.iter().position(|nn| {
-                        (nn.start, nn.end, nn.pitch, nn.channel)
-                            == (on.start, on.end, on.pitch, on.channel)
-                    });
-                    match same {
-                        Some(j) if t.sounding.len() < t.sounding.capacity() => t.sounding.push(j),
-                        _ => t
-                            .events
-                            .push(Event::note_off(0, on.channel, on.pitch, k as u32)),
-                    }
+            // The old track the first instrument taken over came from.
+            let mut from = None;
+            if let Some(i) = t.instrument.as_mut().filter(|i| i.inst.is_none())
+                && let Some((k, inst)) = take_instrument(old, i.id, None)
+            {
+                i.inst = Some(inst);
+                from = Some(k);
+            }
+            for l in &mut t.layers {
+                let Some(i) = l.instrument.as_mut().filter(|i| i.inst.is_none()) else {
+                    continue;
+                };
+                if let Some((k, inst)) = take_instrument(old, i.id, Some(&mut l.held)) {
+                    i.inst = Some(inst);
+                    from.get_or_insert(k);
                 }
-                if !t.events.is_empty() {
-                    if let Some(inst) = &mut i.inst {
-                        inst.process(&t.events, &mut [], &mut []);
-                    }
-                    t.events.clear();
+            }
+            let Some(k) = from else { continue };
+            let o = &old.tracks[k];
+            // The notes sounding carry on where this graph has the same
+            // note; one that is gone is stopped now.
+            t.notes_at = o.notes_at;
+            t.pass = o.pass;
+            t.was_playing = o.was_playing;
+            for &k in &o.sounding {
+                let on = &o.notes[k];
+                let same = t.notes.iter().position(|nn| {
+                    (nn.start, nn.end, nn.pitch, nn.channel)
+                        == (on.start, on.end, on.pitch, on.channel)
+                });
+                match same {
+                    Some(j) if t.sounding.len() < t.sounding.capacity() => t.sounding.push(j),
+                    _ => t
+                        .events
+                        .push(Event::note_off(0, on.channel, on.pitch, k as u32)),
                 }
+            }
+            if !t.events.is_empty() {
+                if let Some(InstrumentNode {
+                    inst: Some(inst), ..
+                }) = &mut t.instrument
+                {
+                    inst.process(&t.events, &mut [], &mut []);
+                }
+                layers::stop(&mut t.layers, &t.events);
+                t.events.clear();
             }
         }
     }
@@ -2185,4 +2230,40 @@ impl Graph {
             }
         }
     }
+}
+
+/// Takes the instrument with this id out of `old`, from a track or a
+/// layer, with the old track's index. Going to a layer (`held`), it
+/// takes over what the old layer held; one that changes from a track's
+/// instrument to a layer's, or back, has its notes stopped, as which
+/// layer started which can't be told.
+fn take_instrument(
+    old: &mut Graph,
+    id: u64,
+    held: Option<&mut Box<Held>>,
+) -> Option<(usize, Box<dyn Instrument>)> {
+    for (k, o) in old.tracks.iter_mut().enumerate() {
+        if let Some(mut inst) = (o.instrument.as_mut())
+            .filter(|x| x.id == id)
+            .and_then(|x| x.inst.take())
+        {
+            if held.is_some() {
+                inst.process(&[Event::all_notes_off(0)], &mut [], &mut []);
+            }
+            return Some((k, inst));
+        }
+        for l in &mut o.layers {
+            if let Some(mut inst) = (l.instrument.as_mut())
+                .filter(|x| x.id == id)
+                .and_then(|x| x.inst.take())
+            {
+                match held {
+                    Some(h) => std::mem::swap(h, &mut l.held),
+                    None => inst.process(&[Event::all_notes_off(0)], &mut [], &mut []),
+                }
+                return Some((k, inst));
+            }
+        }
+    }
+    None
 }

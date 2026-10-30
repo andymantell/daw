@@ -58,24 +58,60 @@ pub(crate) struct Built {
     /// For each insert, how long after the track's input it runs: the
     /// latency of what comes before it. Lines up its sidechain.
     pub before: Vec<i64>,
+    /// Each layer's chain, for a layered instrument (see
+    /// [`crate::layers`]), in the order the layers were given.
+    pub layers: Vec<LayerChain>,
+}
+
+/// The effects of one layer of a layered instrument.
+pub(crate) struct LayerChain {
+    pub steps: Vec<Step>,
+    /// Lines the layer up with the slowest one.
+    pub line: CueLine,
 }
 
 /// Builds the tree from a track's inserts. An effect naming a container
 /// that isn't on the track sits at the top of the chain; one in a chain
 /// past the container's last, or in a container that is itself never
 /// reached, doesn't run.
-pub(crate) fn build(specs: &[InsertSpec], max_block: usize) -> Built {
+///
+/// `layers` are a layered instrument's layers, by id with their
+/// instrument's latency: the effects naming a layer as their container
+/// make its chain. The layers run before the track's chain, so it waits
+/// for the slowest of them.
+pub(crate) fn build(specs: &[InsertSpec], layers: &[(u64, i64)], max_block: usize) -> Built {
     let mut before = vec![0; specs.len()];
     let top = |s: &InsertSpec| match s.place {
         None => true,
-        Some(p) => !specs.iter().any(|c| c.id == p.container && c.branches > 0),
+        Some(p) => {
+            !layers.iter().any(|l| l.0 == p.container)
+                && !specs.iter().any(|c| c.id == p.container && c.branches > 0)
+        }
     };
+    let mut own: Vec<(Vec<Step>, i64)> = (layers.iter())
+        .map(|&(id, latency)| {
+            let inside: Vec<usize> = (0..specs.len())
+                .filter(|&j| specs[j].place.is_some_and(|p| p.container == id))
+                .collect();
+            let (steps, l) = chain(specs, &inside, latency, max_block, &mut before);
+            (steps, latency + l)
+        })
+        .collect();
+    let slowest = own.iter().map(|c| c.1).max().unwrap_or(0);
+    let layers = own
+        .drain(..)
+        .map(|(steps, l)| LayerChain {
+            steps,
+            line: CueLine::new((slowest - l) as usize),
+        })
+        .collect();
     let roots: Vec<usize> = (0..specs.len()).filter(|&k| top(&specs[k])).collect();
-    let (steps, latency) = chain(specs, &roots, 0, max_block, &mut before);
+    let (steps, latency) = chain(specs, &roots, slowest, max_block, &mut before);
     Built {
         steps,
-        latency,
+        latency: slowest + latency,
         before,
+        layers,
     }
 }
 

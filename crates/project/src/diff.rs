@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{Clip, Effect, Fade, NoteClip, Project, Track};
+use crate::{Clip, Effect, Fade, Layer, NoteClip, Project, Track};
 
 /// One thing that changed, and where: "Song", a track's name,
 /// "Tracks", "Markers", "Hit points", "Patterns", "Lesson notes", "Tab"
@@ -608,6 +608,33 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             }
         }
         (None, None) => {}
+    }
+    let was_layers: HashMap<&str, &Layer> =
+        before.layers.iter().map(|l| (l.id.as_str(), l)).collect();
+    let now_layers: HashSet<&str> = after.layers.iter().map(|l| l.id.as_str()).collect();
+    for l in &after.layers {
+        let name = &l.instrument.name;
+        match was_layers.get(l.id.as_str()) {
+            None => out.push(format!("Added layer “{name}”")),
+            Some(b) => {
+                let i = (&b.instrument, &l.instrument);
+                if i.0.name != i.1.name || i.0.builtin != i.1.builtin || i.0.class != i.1.class {
+                    out.push(format!("Layer changed to “{name}”"));
+                } else if matches!((&i.0.state, &i.1.state), (Some(x), Some(y)) if x != y)
+                    || i.0.params != i.1.params
+                {
+                    out.push(format!("Changed the settings of “{name}”"));
+                }
+                if (b.gain_db, b.pan, b.mute, b.keys, b.velocities, b.transpose)
+                    != (l.gain_db, l.pan, l.mute, l.keys, l.velocities, l.transpose)
+                {
+                    out.push(format!("Changed how layer “{name}” plays"));
+                }
+            }
+        }
+    }
+    for l in (before.layers.iter()).filter(|l| !now_layers.contains(l.id.as_str())) {
+        out.push(format!("Removed layer “{}”", l.instrument.name));
     }
 
     // Effects.

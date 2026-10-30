@@ -17,6 +17,7 @@
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
+mod agent;
 mod automation;
 mod browser;
 mod commands;
@@ -431,6 +432,8 @@ struct App {
     browser_sent: bool,
     /// Video clips' pictures, and the Video pane.
     video: video::Videos,
+    /// Tool calls from AI assistants (roadmap 2.11).
+    agent: agent::Agent,
 }
 
 /// How often to look for a lost device.
@@ -549,6 +552,7 @@ impl App {
             browser: browser::Browser::new((!cfg!(test)).then(|| config_dir().join("browser.txt"))),
             browser_sent: false,
             video: video::Videos::default(),
+            agent: agent::Agent::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -2735,6 +2739,7 @@ impl eframe::App for App {
         self.groups_window(&ctx);
         self.timing_window(&ctx);
         self.remote_tick(&ctx);
+        self.agent_tick(&ctx);
         self.template_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);

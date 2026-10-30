@@ -144,8 +144,8 @@ pub(crate) struct Choice {
 /// in ratio (frequencies, times).
 #[derive(Clone, Copy)]
 pub(crate) struct Range {
-    min: f64,
-    max: f64,
+    pub(crate) min: f64,
+    pub(crate) max: f64,
     log: bool,
 }
 
@@ -217,7 +217,7 @@ fn fx_index(s: &FxSlot, key: &str) -> Option<usize> {
 }
 
 /// The value a track's control holds now, if the setting is there.
-fn control(t: &Track, param: &str) -> Option<f64> {
+pub(crate) fn control(t: &Track, param: &str) -> Option<f64> {
     match Lane::new(param).target() {
         LaneTarget::Gain => Some(t.mix.gain_db as f64),
         LaneTarget::Pan => Some(t.mix.pan as f64),
@@ -339,7 +339,7 @@ pub(crate) fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> Str
 }
 
 /// The setting's value for showing.
-fn text_of(t: &Track, param: &str, v: f64) -> String {
+pub(crate) fn text_of(t: &Track, param: &str, v: f64) -> String {
     match Lane::new(param).target() {
         LaneTarget::Gain | LaneTarget::Send(_) => format!("{v:+.1} dB"),
         LaneTarget::Pan if v.abs() < 0.005 => "Centre".into(),

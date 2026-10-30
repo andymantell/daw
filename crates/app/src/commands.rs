@@ -208,6 +208,15 @@ const fn info(
 }
 
 impl Info {
+    /// The command's id, kept in `keys.txt` and named by assistants.
+    pub(crate) fn id(&self) -> &'static str {
+        self.id
+    }
+
+    pub(crate) fn hint_text(&self) -> &'static str {
+        self.hint
+    }
+
     const fn hint(self, hint: &'static str) -> Info {
         Info { hint, ..self }
     }
@@ -1240,7 +1249,7 @@ impl Cmd {
             .expect("every command is in the table")
     }
 
-    fn from_id(id: &str) -> Option<Cmd> {
+    pub(crate) fn from_id(id: &str) -> Option<Cmd> {
         COMMANDS.iter().find(|i| i.id == id).map(|i| i.cmd)
     }
 

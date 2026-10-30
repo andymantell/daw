@@ -1210,6 +1210,7 @@ dependencies = [
  "minisign-verify",
  "rfd",
  "rustls",
+ "serde_json",
  "ureq",
  "vst3",
  "windows-sys 0.61.2",

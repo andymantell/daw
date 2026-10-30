@@ -46,9 +46,9 @@ use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
-    GrooveStep, HitPoint, Lane, Marker, MeterChange, MidiMap, Note, NoteClip, Practice, Project,
-    Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
-    TrainerSettings, is_asset_name,
+    GrooveStep, HitPoint, InstrumentOutput, Lane, Marker, MeterChange, MidiMap, Note, NoteClip,
+    Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
+    TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -703,6 +703,7 @@ impl ProjectDoc {
                 t.output = None;
             }
             t.sends.retain(|s| s.to != own && place(&s.to).is_some());
+            (t.instrument_outputs).retain(|o| o.to != own && place(&o.to).is_some());
             t.sends.sort_by_key(|s| place(&s.to));
             for e in &mut t.effects {
                 if gone(&e.sidechain) {
@@ -1024,6 +1025,20 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
             w.put(m, k, v.clone().map_or(LoroValue::Null, LoroValue::from));
         }
     }
+    if !plain("instrument_outputs", t.instrument_outputs.is_empty()) {
+        let outs = w.fixed(m, "instrument_outputs");
+        let keep: HashSet<String> = (t.instrument_outputs.iter())
+            .map(|o| o.output.to_string())
+            .collect();
+        for k in keys(&outs) {
+            if !keep.contains(&k) {
+                w.delete(&outs, &k);
+            }
+        }
+        for o in &t.instrument_outputs {
+            w.put(&outs, &o.output.to_string(), o.to.as_str());
+        }
+    }
     if !plain("sends", t.sends.is_empty()) {
         let sends = w.fixed(m, "sends");
         let keep: HashSet<&str> = t.sends.iter().map(|s| s.to.as_str()).collect();
@@ -1171,6 +1186,35 @@ fn write_effect(w: &mut Writer, em: &LoroMap, e: &Effect) {
         }
         if !e.response.is_empty() || em.get("response").is_some() {
             w.put(em, "response", e.response.as_str());
+        }
+        // An instrument's sounds by slot, one entry each.
+        if !e.samples.is_empty() || em.get("samples").is_some() {
+            let sm = w.child(em, "samples");
+            let keep: HashSet<&str> = e.samples.iter().map(|(k, _)| k.as_str()).collect();
+            for k in keys(&sm) {
+                if !keep.contains(k.as_str()) {
+                    w.delete(&sm, &k);
+                }
+            }
+            for (k, r) in &e.samples {
+                w.put(&sm, k, r.as_str());
+            }
+        }
+        // Effects inside it, by id, each with its place.
+        if !e.inner.is_empty() || em.get("inner").is_some() {
+            let im = w.child(em, "inner");
+            let keep: HashSet<&str> = e.inner.iter().map(|x| x.id.as_str()).collect();
+            for k in keys(&im) {
+                if !keep.contains(k.as_str()) {
+                    w.delete(&im, &k);
+                }
+            }
+            for (i, x) in e.inner.iter().enumerate() {
+                let xm = w.child(&im, &x.id);
+                w.put(&xm, "at", i as i64);
+                w.put(&xm, "branch", x.branch as i64);
+                write_effect(w, &xm, x);
+            }
         }
     }
     if e.sidechain.is_some() || em.get("sidechain").is_some() {
@@ -1609,6 +1653,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         parent: string(t, "parent").filter(|s| !s.is_empty()),
         output: string(t, "output").filter(|s| !s.is_empty()),
         sends: Vec::new(),
+        instrument_outputs: Vec::new(),
         group: string(t, "group").filter(|s| !s.is_empty()),
         automation: Vec::new(),
     };
@@ -1625,6 +1670,20 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 points: read_points(lm),
             });
         }
+    }
+    if let Some(LoroValue::Map(outs)) = t.get("instrument_outputs") {
+        for (k, v) in outs.iter() {
+            if let (Ok(output), LoroValue::String(to)) = (k.parse::<u32>(), v)
+                && output > 0
+                && !to.is_empty()
+            {
+                track.instrument_outputs.push(InstrumentOutput {
+                    output,
+                    to: to.to_string(),
+                });
+            }
+        }
+        track.instrument_outputs.sort_by_key(|o| o.output);
     }
     if let Some(LoroValue::Map(sends)) = t.get("sends") {
         for (to, sm) in sends.iter() {
@@ -1730,6 +1789,34 @@ fn read_effect(id: String, e: &LoroMapValue) -> Effect {
                     .collect();
                 v.sort_by(|a, b| a.0.cmp(&b.0));
                 v
+            }
+            _ => Vec::new(),
+        },
+        samples: match e.get("samples") {
+            Some(LoroValue::Map(sm)) => {
+                let mut v: Vec<(String, String)> = (sm.iter())
+                    .filter_map(|(k, r)| match r {
+                        LoroValue::String(r) => Some((k.to_string(), r.to_string())),
+                        _ => None,
+                    })
+                    .collect();
+                v.sort();
+                v
+            }
+            _ => Vec::new(),
+        },
+        inner: match e.get("inner") {
+            Some(LoroValue::Map(im)) => {
+                let mut v: Vec<(i64, Effect)> = (im.iter())
+                    .filter_map(|(k, x)| match x {
+                        LoroValue::Map(x) => {
+                            Some((int(x, "at").unwrap_or(0), read_effect(k.to_string(), x)))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+                v.into_iter().map(|(_, x)| x).collect()
             }
             _ => Vec::new(),
         },
@@ -2539,6 +2626,73 @@ mod tests {
         assert_eq!(back.tracks[0].note_clips[0].notes.len(), 1);
         assert_eq!(back.tracks[0].note_clips[0].notes[0].id, "n1");
         assert_eq!(back.tracks[0].instrument, None);
+    }
+
+    #[test]
+    fn a_drum_machine_keeps_its_sounds_pad_effects_and_outputs() {
+        let mut p = Project::default();
+        let mut drums = Track::new("d".into(), "Drums".into());
+        drums.kind = TrackKind::Instrument;
+        let fx = |id: &str, pad: u32, kind: &str| Effect {
+            id: id.into(),
+            name: kind.into(),
+            builtin: kind.into(),
+            params: vec![("mix".into(), 0.5)],
+            branch: pad,
+            ..Effect::default()
+        };
+        drums.instrument = Some(Effect {
+            id: "dm".into(),
+            name: "Drum machine".into(),
+            builtin: "drum-machine".into(),
+            params: vec![("pad0.level".into(), -3.0)],
+            samples: vec![
+                ("pad0.layer0".into(), "kick.wav".into()),
+                ("pad1.layer0".into(), "made:snare".into()),
+            ],
+            inner: vec![
+                fx("z", 2, "reverb"),
+                fx("a", 2, "eq"),
+                fx("m", 0, "saturation"),
+            ],
+            ..Effect::default()
+        });
+        drums.instrument_outputs = vec![
+            InstrumentOutput {
+                output: 1,
+                to: "kick-bus".into(),
+            },
+            InstrumentOutput {
+                output: 17,
+                to: "gone".into(),
+            },
+        ];
+        p.tracks.push(drums);
+        let mut bus = Track::new("kick-bus".into(), "Kick".into());
+        bus.kind = TrackKind::Bus;
+        p.tracks.push(bus);
+        let mut doc = ProjectDoc::new(1);
+        assert!(doc.set(&p));
+        let back = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap().get();
+        let d = &back.tracks[0];
+        assert_eq!(d.instrument, p.tracks[0].instrument, "order and pads kept");
+        // An output to a track that isn't there is dropped.
+        assert_eq!(d.instrument_outputs, p.tracks[0].instrument_outputs[..1]);
+        assert_eq!(
+            d.instrument.as_ref().unwrap().assets(),
+            ["kick.wav"],
+            "sounds made here aren't files"
+        );
+        assert_eq!(doc.assets_in_use(), ["kick.wav"]);
+        // Taking a pad's effect and a sound away removes them.
+        let mut q = back.clone();
+        let inst = q.tracks[0].instrument.as_mut().unwrap();
+        inst.inner.remove(0);
+        inst.samples.remove(0);
+        q.tracks[0].instrument_outputs.clear();
+        assert!(doc.set(&q));
+        assert_eq!(doc.get().tracks[0].instrument, q.tracks[0].instrument);
+        assert!(doc.get().tracks[0].instrument_outputs.is_empty());
     }
 
     #[test]

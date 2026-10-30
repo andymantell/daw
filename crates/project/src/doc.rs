@@ -39,9 +39,9 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Comp, CompPart, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip,
-    GainPoint, Marker, MeterChange, Practice, Project, TabBlock, TempoChange, Track,
-    TrainerSettings, is_asset_name,
+    Clip, Comment, Comp, CompPart, ControlGroup, Curve, EditGroup, Effect, EffectState, Fade,
+    Frozen, FrozenClip, GainPoint, Marker, MeterChange, Practice, Project, Send, TabBlock,
+    TempoChange, Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -350,6 +350,26 @@ impl ProjectDoc {
         let ids: Vec<String> = p.tracks.iter().map(|t| t.id.clone()).collect();
         w.order(&self.order(), &ids);
 
+        // Control groups: an entry only once a project has one, so older
+        // projects gain nothing.
+        if !p.control_groups.is_empty() || self.doc.get_by_str_path("groups").is_some() {
+            let groups = self.doc.get_map("groups");
+            let keep: HashSet<&str> = p.control_groups.iter().map(|g| g.id.as_str()).collect();
+            for id in keys(&groups) {
+                if !keep.contains(id.as_str()) {
+                    w.delete(&groups, &id);
+                }
+            }
+            for g in &p.control_groups {
+                let m = w.child(&groups, &g.id);
+                w.put(&m, "name", g.name.as_str());
+                w.put(&m, "gain_db", g.gain_db);
+                w.put(&m, "mute", g.mute);
+            }
+            let ids: Vec<String> = p.control_groups.iter().map(|g| g.id.clone()).collect();
+            w.order(&self.doc.get_movable_list("group_order"), &ids);
+        }
+
         let markers = self.markers();
         let keep: HashSet<&str> = p.markers.iter().map(|m| m.id.as_str()).collect();
         for id in keys(&markers) {
@@ -506,6 +526,68 @@ impl ProjectDoc {
         for id in order {
             if let Some(LoroValue::Map(t)) = tracks.get(&id) {
                 p.tracks.push(read_track(&id, t));
+            }
+        }
+        // Routes to tracks that are gone go to the master; sends come in
+        // the order of the buses they go to.
+        let ids: Vec<String> = p.tracks.iter().map(|t| t.id.clone()).collect();
+        let place = |id: &str| ids.iter().position(|i| i == id);
+        for t in &mut p.tracks {
+            let own = t.id.clone();
+            let gone =
+                |id: &Option<String>| id.as_ref().is_some_and(|i| *i == own || place(i).is_none());
+            if gone(&t.parent) {
+                t.parent = None;
+            }
+            if gone(&t.output) {
+                t.output = None;
+            }
+            t.sends.retain(|s| s.to != own && place(&s.to).is_some());
+            t.sends.sort_by_key(|s| place(&s.to));
+            for e in &mut t.effects {
+                if gone(&e.sidechain) {
+                    e.sidechain = None;
+                }
+            }
+        }
+        if let Some(LoroValue::Map(gs)) = root.get("groups") {
+            let mut order: Vec<String> = Vec::new();
+            if let Some(LoroValue::List(ids)) = root.get("group_order") {
+                for v in ids.iter() {
+                    if let LoroValue::String(s) = v
+                        && gs.contains_key(s.as_str())
+                        && !order.iter().any(|o| o == s.as_str())
+                    {
+                        order.push(s.to_string());
+                    }
+                }
+            }
+            let mut rest: Vec<&String> = gs.keys().filter(|k| !order.contains(k)).collect();
+            rest.sort();
+            order.extend(rest.into_iter().cloned());
+            for id in order {
+                let Some(LoroValue::Map(g)) = gs.get(&id) else {
+                    continue;
+                };
+                p.control_groups.push(ControlGroup {
+                    id,
+                    name: string(g, "name").unwrap_or_default(),
+                    gain_db: float(g, "gain_db").filter(|v| v.is_finite()).unwrap_or(0.0),
+                    mute: boolean(g, "mute").unwrap_or(false),
+                });
+            }
+            let known: HashSet<&str> = p.control_groups.iter().map(|g| g.id.as_str()).collect();
+            for t in &mut p.tracks {
+                if t.group
+                    .as_ref()
+                    .is_some_and(|g| !known.contains(g.as_str()))
+                {
+                    t.group = None;
+                }
+            }
+        } else {
+            for t in &mut p.tracks {
+                t.group = None;
             }
         }
         if let Some(LoroValue::Map(ms)) = root.get("markers") {
@@ -734,6 +816,36 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     w.put(m, "pan", t.pan);
     w.put(m, "mute", t.mute);
     w.put(m, "solo", t.solo);
+    // Routing: plain audio tracks to the master, as every track was
+    // before buses, gain no new entries.
+    let plain = |k: &str, unset: bool| unset && m.get(k).is_none();
+    if !plain("kind", t.kind == TrackKind::Audio) {
+        w.put(m, "kind", t.kind.name());
+    }
+    for (k, v) in [
+        ("parent", &t.parent),
+        ("output", &t.output),
+        ("group", &t.group),
+    ] {
+        if !plain(k, v.is_none()) {
+            w.put(m, k, v.clone().map_or(LoroValue::Null, LoroValue::from));
+        }
+    }
+    if !plain("sends", t.sends.is_empty()) {
+        let sends = w.fixed(m, "sends");
+        let keep: HashSet<&str> = t.sends.iter().map(|s| s.to.as_str()).collect();
+        for id in keys(&sends) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&sends, &id);
+            }
+        }
+        for s in &t.sends {
+            let sm = w.child(&sends, &s.to);
+            w.put(&sm, "gain_db", s.gain_db);
+            w.put(&sm, "pre_fader", s.pre_fader);
+            w.put(&sm, "mute", s.mute);
+        }
+    }
 
     let clips = w.fixed(m, "clips");
     let keep: HashSet<&str> = t.clips.iter().map(|c| c.id.as_str()).collect();
@@ -809,6 +921,13 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
             if !e.response.is_empty() || em.get("response").is_some() {
                 w.put(&em, "response", e.response.as_str());
             }
+        }
+        if e.sidechain.is_some() || em.get("sidechain").is_some() {
+            w.put(
+                &em,
+                "sidechain",
+                e.sidechain.clone().map_or(LoroValue::Null, LoroValue::from),
+            );
         }
         if let Some(s) = &e.state {
             w.put(&em, "component", s.component.clone());
@@ -927,8 +1046,26 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         frozen: t.get("frozen").and_then(read_frozen),
         comps: Vec::new(),
         comp: None,
+        kind: TrackKind::from_name(&string(t, "kind").unwrap_or_default()),
+        parent: string(t, "parent").filter(|s| !s.is_empty()),
+        output: string(t, "output").filter(|s| !s.is_empty()),
+        sends: Vec::new(),
+        group: string(t, "group").filter(|s| !s.is_empty()),
     };
     (track.comps, track.comp) = read_comps(t);
+    if let Some(LoroValue::Map(sends)) = t.get("sends") {
+        for (to, sm) in sends.iter() {
+            let LoroValue::Map(sm) = sm else { continue };
+            track.sends.push(Send {
+                to: to.to_string(),
+                gain_db: float(sm, "gain_db")
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.0),
+                pre_fader: boolean(sm, "pre_fader").unwrap_or(false),
+                mute: boolean(sm, "mute").unwrap_or(false),
+            });
+        }
+    }
     if let Some(LoroValue::Map(clips)) = t.get("clips") {
         for (cid, c) in clips.iter() {
             let LoroValue::Map(c) = c else { continue };
@@ -985,6 +1122,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 state,
                 builtin: string(e, "builtin").unwrap_or_default(),
                 response: string(e, "response").unwrap_or_default(),
+                sidechain: string(e, "sidechain").filter(|s| !s.is_empty()),
                 params: match e.get("params") {
                     Some(LoroValue::Map(pm)) => {
                         let mut v: Vec<(String, f64)> = (pm.keys())
@@ -1251,7 +1389,86 @@ fn binary(m: &LoroMapValue, k: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Track;
+    use crate::{ControlGroup, Send, Track, TrackKind};
+
+    #[test]
+    fn routing_is_kept_and_routes_to_missing_tracks_go_to_the_master() {
+        let mut p = Project::default();
+        let mut guitar = Track::new("g".into(), "Guitar".into());
+        guitar.parent = Some("f".into());
+        guitar.group = Some("vca".into());
+        guitar.sends = vec![
+            Send {
+                to: "r".into(),
+                gain_db: -6.0,
+                pre_fader: true,
+                mute: false,
+            },
+            Send::to("gone".into()),
+        ];
+        guitar.effects.push(Effect {
+            id: "e1".into(),
+            builtin: "compressor".into(),
+            sidechain: Some("b".into()),
+            ..Effect::default()
+        });
+        let mut bass = Track::new("b".into(), "Bass".into());
+        bass.output = Some("nowhere".into());
+        let mut folder = Track::new("f".into(), "Band".into());
+        folder.kind = TrackKind::Folder;
+        let mut ret = Track::new("r".into(), "Reverb".into());
+        ret.kind = TrackKind::Bus;
+        p.tracks = vec![folder, guitar, bass, ret];
+        p.control_groups = vec![ControlGroup::new("vca".into(), "Rhythm".into())];
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let back = doc.get();
+        assert_eq!(back.control_groups, p.control_groups);
+        assert_eq!(back.tracks[0].kind, TrackKind::Folder);
+        assert_eq!(back.tracks[3].kind, TrackKind::Bus);
+        let g = &back.tracks[1];
+        assert_eq!(g.parent.as_deref(), Some("f"));
+        assert_eq!(g.group.as_deref(), Some("vca"));
+        // The send to a track that isn't there is left out.
+        assert_eq!(g.sends, p.tracks[1].sends[..1]);
+        assert_eq!(g.effects[0].sidechain.as_deref(), Some("b"));
+        assert_eq!(back.tracks[2].output, None, "to the master");
+
+        // Taking things off writes them as gone, and reads back plain.
+        p.tracks[1].sends.clear();
+        p.tracks[1].group = None;
+        p.tracks[1].effects[0].sidechain = None;
+        p.control_groups.clear();
+        doc.set(&p);
+        let back = doc.get();
+        assert!(back.tracks[1].sends.is_empty());
+        assert_eq!(back.tracks[1].group, None);
+        assert_eq!(back.tracks[1].effects[0].sidechain, None);
+        assert!(back.control_groups.is_empty());
+    }
+
+    #[test]
+    fn plain_tracks_add_no_routing_entries() {
+        let p = Project {
+            tracks: vec![Track::new("t1".into(), "Guitar".into())],
+            ..Project::default()
+        };
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let LoroValue::Map(t) = doc.tracks().get_deep_value() else {
+            panic!()
+        };
+        let Some(LoroValue::Map(t)) = t.get("t1") else {
+            panic!()
+        };
+        for k in ["kind", "parent", "output", "group", "sends"] {
+            assert!(t.get(k).is_none(), "{k}");
+        }
+        let LoroValue::Map(root) = doc.doc.get_deep_value() else {
+            panic!()
+        };
+        assert!(root.get("groups").is_none());
+    }
 
     #[test]
     fn comps_keep_their_order_parts_and_which_plays() {

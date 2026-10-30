@@ -201,6 +201,7 @@ impl App {
             tracks: self.tracks.iter().map(|t| self.track_value(t)).collect(),
             comments: self.comments.clone(),
             edit_groups: self.edit_groups_value(),
+            control_groups: self.groups.clone(),
         }
     }
 
@@ -258,6 +259,11 @@ impl App {
             frozen: t.frozen.clone(),
             comps: self.comps_value(t),
             comp: t.comp.clone(),
+            kind: t.kind,
+            parent: t.parent.clone(),
+            output: t.output.clone(),
+            sends: t.sends.clone(),
+            group: t.group.clone(),
         }
     }
 
@@ -377,6 +383,7 @@ impl App {
         self.tabs = p.tabs.clone();
         self.comments = p.comments.clone();
         self.edit_groups = p.edit_groups.clone();
+        self.groups = p.control_groups.clone();
         self.markers = (p.markers.iter())
             .map(|m| Marker {
                 id: m.id.clone(),
@@ -405,6 +412,11 @@ impl App {
                 t
             });
             t.name = pt.name.clone();
+            t.kind = pt.kind;
+            t.parent = pt.parent.clone();
+            t.output = pt.output.clone();
+            t.sends = pt.sends.clone();
+            t.group = pt.group.clone();
             t.mix = Mix {
                 gain_db: pt.gain_db as f32,
                 pan: pt.pan as f32,
@@ -468,6 +480,7 @@ impl App {
                 match had.remove(&pe.id) {
                     Some(mut s) => {
                         s.bypass = pe.bypass;
+                        s.sidechain = pe.sidechain.clone();
                         s.set_params(&pe.params);
                         if s.response_ref() != pe.response
                             && let Err(e) =

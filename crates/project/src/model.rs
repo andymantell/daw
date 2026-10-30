@@ -35,6 +35,8 @@ pub struct Project {
     pub comments: Vec<Comment>,
     /// Tracks edited together, in the order made.
     pub edit_groups: Vec<EditGroup>,
+    /// Control groups: one fader and mute over several tracks.
+    pub control_groups: Vec<ControlGroup>,
 }
 
 impl Default for Project {
@@ -54,7 +56,45 @@ impl Default for Project {
             tabs: Vec::new(),
             comments: Vec::new(),
             edit_groups: Vec::new(),
+            control_groups: Vec::new(),
         }
+    }
+}
+
+/// What a track is for. Buses and folders have no clips: they sum the
+/// tracks routed to them, through their own effects and fader.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrackKind {
+    #[default]
+    Audio,
+    /// A bus other tracks output or send to: a group, or an effect
+    /// return.
+    Bus,
+    /// A folder: a bus whose tracks sit under it in the lists, and go
+    /// to it unless routed elsewhere.
+    Folder,
+}
+
+impl TrackKind {
+    /// As the document stores it. Never change one.
+    pub fn name(self) -> &'static str {
+        match self {
+            TrackKind::Audio => "audio",
+            TrackKind::Bus => "bus",
+            TrackKind::Folder => "folder",
+        }
+    }
+
+    pub fn from_name(s: &str) -> TrackKind {
+        [TrackKind::Audio, TrackKind::Bus, TrackKind::Folder]
+            .into_iter()
+            .find(|k| k.name() == s)
+            .unwrap_or_default()
+    }
+
+    /// Whether other tracks can be routed into it.
+    pub fn is_bus(self) -> bool {
+        self != TrackKind::Audio
     }
 }
 
@@ -77,6 +117,16 @@ pub struct Track {
     pub comps: Vec<Comp>,
     /// The comp that plays, by id, or `None` for the takes as recorded.
     pub comp: Option<String>,
+    pub kind: TrackKind,
+    /// The folder it sits in, if any.
+    pub parent: Option<String>,
+    /// The bus its audio goes to after the fader: `None` for its folder,
+    /// or the master when it has none.
+    pub output: Option<String>,
+    /// Copies of its audio sent to buses, in order.
+    pub sends: Vec<Send>,
+    /// The control group whose fader and mute act on it.
+    pub group: Option<String>,
 }
 
 impl Track {
@@ -93,7 +143,18 @@ impl Track {
             frozen: None,
             comps: Vec::new(),
             comp: None,
+            kind: TrackKind::Audio,
+            parent: None,
+            output: None,
+            sends: Vec::new(),
+            group: None,
         }
+    }
+
+    /// Where its audio goes: the bus it is routed to, else its folder,
+    /// else (`None`) the master.
+    pub fn goes_to(&self) -> Option<&str> {
+        self.output.as_deref().or(self.parent.as_deref())
     }
 
     /// Whether the track needs frozen audio: it has a plugin switched
@@ -143,6 +204,9 @@ impl Track {
                 field(&v.to_le_bytes());
             }
             field(e.response.as_bytes());
+            if let Some(k) = &e.sidechain {
+                field(k.as_bytes());
+            }
         }
         h.finalize()[..16]
             .iter()
@@ -180,6 +244,52 @@ impl Track {
             chain: (self.effects.iter())
                 .map(|e| (e.id.clone(), e.bypass))
                 .collect(),
+        }
+    }
+}
+
+/// A copy of a track's audio sent to a bus (an effect return, say),
+/// with its own level.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Send {
+    /// The bus it goes to.
+    pub to: String,
+    pub gain_db: f64,
+    /// Taken before the track's volume fader, so the fader leaves the
+    /// send alone (after its effects, pan and mute either way).
+    pub pre_fader: bool,
+    pub mute: bool,
+}
+
+impl Send {
+    pub fn to(to: String) -> Send {
+        Send {
+            to,
+            gain_db: 0.0,
+            pre_fader: false,
+            mute: false,
+        }
+    }
+}
+
+/// One fader and mute over several tracks: its volume adds to each
+/// member's, in dB, and its mute silences them all. Their audio is
+/// never summed, so each still goes where it is routed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlGroup {
+    pub id: String,
+    pub name: String,
+    pub gain_db: f64,
+    pub mute: bool,
+}
+
+impl ControlGroup {
+    pub fn new(id: String, name: String) -> ControlGroup {
+        ControlGroup {
+            id,
+            name,
+            gain_db: 0.0,
+            mute: false,
         }
     }
 }
@@ -408,6 +518,9 @@ pub struct Effect {
     /// capture file (empty for none). A file is an asset name, or a full
     /// path until the project is saved.
     pub response: String,
+    /// The track whose audio the effect listens to (a compressor's
+    /// sidechain), by id, if it has one.
+    pub sidechain: Option<String>,
 }
 
 impl Effect {

@@ -565,6 +565,9 @@ pub fn section(markers: &[Marker], i: usize, end_bar: i64) -> (i64, i64) {
 pub struct Lane<'a> {
     pub name: &'a str,
     pub clips: &'a mut Vec<Clip>,
+    pub kind: daw_project::TrackKind,
+    /// Sits in a folder: shown indented under it.
+    pub in_folder: bool,
 }
 
 /// What the timeline edits: borrowed from the app for one frame.
@@ -2705,8 +2708,9 @@ impl Timeline {
                 2.0,
                 colour,
             );
-            lanes.text(
-                name_rect.left_center() + vec2(16.0, 0.0),
+            let indent = if lane.in_folder { 14.0 } else { 0.0 };
+            let name_end = lanes.text(
+                name_rect.left_center() + vec2(16.0 + indent, 0.0),
                 Align2::LEFT_CENTER,
                 lane.name,
                 look.font(look.body),
@@ -2721,6 +2725,21 @@ impl Timeline {
                     &g.name,
                     look.font(look.small),
                     c,
+                );
+            }
+            // Buses and folders have no clips: say what they are.
+            let tag = match lane.kind {
+                daw_project::TrackKind::Audio => None,
+                daw_project::TrackKind::Bus => Some("bus"),
+                daw_project::TrackKind::Folder => Some("folder"),
+            };
+            if let Some(tag) = tag {
+                lanes.text(
+                    pos2(name_end.right() + 6.0, name_rect.center().y),
+                    Align2::LEFT_CENTER,
+                    tag,
+                    look.font(look.small),
+                    tc.text_dim,
                 );
             }
             lanes.line_segment(
@@ -3368,6 +3387,8 @@ pub(crate) mod tests {
             lanes: vec![Lane {
                 name: "Guitar",
                 clips: &mut clips,
+                kind: daw_project::TrackKind::Audio,
+                in_folder: false,
             }],
             markers: &mut markers,
         };
@@ -3383,6 +3404,8 @@ pub(crate) mod tests {
             lanes: vec![Lane {
                 name: "Guitar",
                 clips: &mut clips,
+                kind: daw_project::TrackKind::Audio,
+                in_folder: false,
             }],
             markers: &mut markers,
         };
@@ -3412,14 +3435,20 @@ pub(crate) mod tests {
                 Lane {
                     name: "Kick",
                     clips: &mut kick,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
                 Lane {
                     name: "Snare",
                     clips: &mut snare,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
                 Lane {
                     name: "Bass",
                     clips: &mut bass,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
             ],
             markers: &mut markers,
@@ -3474,6 +3503,8 @@ pub(crate) mod tests {
             lanes: vec![Lane {
                 name: "Guitar",
                 clips: &mut clips,
+                kind: daw_project::TrackKind::Audio,
+                in_folder: false,
             }],
             markers: &mut markers,
         };
@@ -3513,6 +3544,8 @@ pub(crate) mod tests {
             lanes: vec![Lane {
                 name: "Guitar",
                 clips: &mut clips,
+                kind: daw_project::TrackKind::Audio,
+                in_folder: false,
             }],
             markers: &mut markers,
         };

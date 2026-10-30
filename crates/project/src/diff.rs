@@ -342,6 +342,30 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             .into(),
         );
     }
+    if before.kind != after.kind {
+        out.push(format!("Now a {}", after.kind.name()));
+    }
+    if before.parent != after.parent {
+        out.push(match &after.parent {
+            Some(_) => "Put in a folder".into(),
+            None => "Taken out of its folder".into(),
+        });
+    }
+    if before.output != after.output {
+        out.push(match &after.output {
+            Some(_) => "Routed to a bus".into(),
+            None => "Routed to the master".into(),
+        });
+    }
+    if before.group != after.group {
+        out.push(match &after.group {
+            Some(_) => "Put in a control group".into(),
+            None => "Taken out of its control group".into(),
+        });
+    }
+    if before.sends != after.sends {
+        out.push(format!("Sends changed ({})", after.sends.len()));
+    }
 
     // Clips.
     let was: HashMap<&str, &Clip> = before.clips.iter().map(|c| (c.id.as_str(), c)).collect();

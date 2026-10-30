@@ -6,7 +6,7 @@
 //! it becomes an ordinary audio clip (`daw_engine::import::soundtrack`).
 //!
 //! - Windows: the media framework's source reader, which also converts
-//!   and scales the picture.
+//!   and scales the picture; its sink writer makes the copies.
 //! - Linux: the system's media framework, with whichever decoders the
 //!   distribution installed.
 //! - macOS: not yet; opening a video says so.
@@ -30,7 +30,6 @@ mod system;
 #[path = "none.rs"]
 mod system;
 
-#[cfg(test)]
 mod boxes;
 mod cache;
 mod filmstrip;
@@ -280,9 +279,8 @@ pub fn probe(path: &Path) -> Result<Info, Error> {
 }
 
 /// Whether this system can make a copy of a video with new sound
-/// ([`wrap`]). Not yet on Windows, whose copies come out a few frames
-/// off, nor on macOS.
-pub const CAN_WRAP: bool = cfg!(target_os = "linux");
+/// ([`wrap`]). Not yet on macOS.
+pub const CAN_WRAP: bool = cfg!(any(target_os = "linux", windows));
 
 /// The file name ending a copy of `video` with new sound gets: the
 /// same kind of file where the system can write one, so the picture

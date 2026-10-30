@@ -763,6 +763,30 @@ replace the app's own UI. See
   instrument, with per-slice pitch, filter, pan and reverse.
 - Our own sound content: recorded or designed in-house, or licensed for
   redistribution.
+- **Electronic drum kit instrument** (L, *late in Phase 3, no hurry*):
+  play an electronic kit's pads through sampled drums. See
+  [research/DRUM_KIT_SAMPLER.md](research/DRUM_KIT_SAMPLER.md).
+  - **Kit profiles:** the General MIDI percussion map as the default, plus
+    a library of profiles for common kits (note per pad and zone, hi-hat
+    pedal controller, positional sensing). Each profile is a data file;
+    users can add and share them. Kit modules often let every pad's note
+    be changed and some ship no published default table, so profiles are
+    a convenience, not a requirement.
+  - **Learn wizard:** "hit the snare head… now the rim… now the ride
+    bell", building a profile from what the kit actually sends, including
+    the hi-hat pedal's range. This is the route for any kit we don't know.
+  - **Playing feel:** zones (head/rim, cross-stick, bow/edge/bell),
+    continuous hi-hat openness from the pedal controller with foot splash
+    and chick, chokes (grab a cymbal), exclusive groups, positional
+    sensing where the kit sends it, velocity layers with round-robin
+    samples, and the lowest possible latency path (monitoring through the
+    engine, 1.2).
+  - **Kits:** at least one bundled acoustic kit from open-licensed sample
+    sets, with credits shown like the reverb rooms; our own recorded kit
+    later. Import of SFZ instruments, an open text format many free kits
+    use, so users can load others.
+  - Shares its drum map with the drum staff (3.8), so what you play
+    appears as notation.
 
 ### 3.5 Effects, set 2 (M)
 - Modulation effects, multi-stage saturation, transient shaper,
@@ -900,6 +924,9 @@ See [research/VIDEO_SCORING.md](research/VIDEO_SCORING.md).
 - A student drops in a video file of a song, plays along at 75% speed after
   shifting it +1 semitone to standard tuning, and an online video link
   stays in sync with the transport as a reference.
+- An electronic drum kit, after the learn wizard, plays a bundled kit with
+  open and closed hi-hat following the pedal, rim and bell zones, and
+  chokes, and the take appears on a drum staff.
 - A student imports a MusicXML or MIDI file of a song, sees guitar tab, bass
   tab and a drum staff lined up under the original recording, and loops and
   slows a section while the notation follows.

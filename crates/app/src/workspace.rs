@@ -27,15 +27,17 @@ pub(crate) enum Pane {
     Notes,
     Tuner,
     Takes,
+    Monitor,
 }
 
-pub(crate) const PANES: [Pane; 6] = [
+pub(crate) const PANES: [Pane; 7] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
     Pane::Notes,
     Pane::Tuner,
     Pane::Takes,
+    Pane::Monitor,
 ];
 
 impl Pane {
@@ -48,6 +50,7 @@ impl Pane {
             Pane::Notes => "notes",
             Pane::Tuner => "tuner",
             Pane::Takes => "takes",
+            Pane::Monitor => "monitor",
         }
     }
 
@@ -63,6 +66,7 @@ impl Pane {
             Pane::Notes => "Lesson notes",
             Pane::Tuner => "Tuner",
             Pane::Takes => "Take lanes",
+            Pane::Monitor => "Monitor section",
         }
     }
 
@@ -365,7 +369,7 @@ impl Layout {
         let side_panes = [Pane::Notes, Pane::Comments, Pane::Tuner];
         let (target, side) = match p {
             Pane::Timeline => return,
-            Pane::Mixer | Pane::Takes => (Pane::Timeline, Side::Below),
+            Pane::Mixer | Pane::Takes | Pane::Monitor => (Pane::Timeline, Side::Below),
             // Below the side panes open now, so all can be seen.
             _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
                 Some(q) => (q, Side::Below),
@@ -1519,6 +1523,7 @@ impl crate::App {
     pub(crate) fn view_menu(&mut self, ui: &mut egui::Ui) {
         for c in [
             Cmd::Mixer,
+            Cmd::MonitorSection,
             Cmd::TakeLanes,
             Cmd::Comments,
             Cmd::LessonNotes,
@@ -1526,6 +1531,7 @@ impl crate::App {
         ] {
             let open = match c {
                 Cmd::Mixer => self.workspace.layout.is_open(Pane::Mixer),
+                Cmd::MonitorSection => self.workspace.layout.is_open(Pane::Monitor),
                 Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
                 Cmd::Comments => self.comment_ui.open,
                 Cmd::LessonNotes => self.notes_ui.open,
@@ -1541,7 +1547,7 @@ impl crate::App {
                     ui.close();
                     let ctx = ui.ctx().clone();
                     match (c, open) {
-                        (Cmd::Mixer | Cmd::TakeLanes, _) => self.run(&ctx, c),
+                        (Cmd::Mixer | Cmd::MonitorSection | Cmd::TakeLanes, _) => self.run(&ctx, c),
                         (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
                         (Cmd::LessonNotes, true) => self.workspace.close(Pane::Notes),
                         (Cmd::Tuner, true) => self.workspace.close(Pane::Tuner),
@@ -1666,6 +1672,11 @@ impl Host for crate::App {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .show(ui, |ui| self.mixer(ui));
+            }
+            Pane::Monitor => {
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.monitor_pane(ui));
             }
             Pane::Comments => self.comments_panel(ui),
             Pane::Takes => self.takes_pane(ui),

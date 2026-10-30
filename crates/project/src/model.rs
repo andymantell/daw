@@ -37,6 +37,8 @@ pub struct Project {
     pub edit_groups: Vec<EditGroup>,
     /// Control groups: one fader and mute over several tracks.
     pub control_groups: Vec<ControlGroup>,
+    /// Headphone mixes, one per performer, in the order made.
+    pub cue_mixes: Vec<CueMix>,
 }
 
 impl Default for Project {
@@ -57,6 +59,7 @@ impl Default for Project {
             comments: Vec::new(),
             edit_groups: Vec::new(),
             control_groups: Vec::new(),
+            cue_mixes: Vec::new(),
         }
     }
 }
@@ -290,6 +293,87 @@ impl ControlGroup {
             name,
             gain_db: 0.0,
             mute: false,
+        }
+    }
+}
+
+/// A headphone mix for one performer (roadmap 2.3): its own level and
+/// pan for each track, apart from the main mix, plus the click and
+/// talkback. Which outputs it plays on belongs to the computer, not the
+/// project.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CueMix {
+    pub id: String,
+    pub name: String,
+    pub gain_db: f64,
+    pub mute: bool,
+    /// The same as the main mix, rather than its own levels.
+    pub follow_main: bool,
+    /// The click's level in it; `None` for no click.
+    pub click_db: Option<f64>,
+    /// Talkback reaches it.
+    pub talkback: bool,
+    /// Tracks' places in it, by track id. A track not listed is at its
+    /// [`CueMix::level`] default.
+    pub levels: Vec<CueLevel>,
+}
+
+/// One track's place in a headphone mix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CueLevel {
+    pub track: String,
+    pub gain_db: f64,
+    pub pan: f64,
+    pub mute: bool,
+}
+
+impl CueLevel {
+    pub fn new(track: String, gain_db: f64) -> CueLevel {
+        CueLevel {
+            track,
+            gain_db,
+            pan: 0.0,
+            mute: false,
+        }
+    }
+}
+
+/// A level that is off, in a headphone mix.
+pub const CUE_OFF_DB: f64 = -144.0;
+
+impl CueMix {
+    pub fn new(id: String, name: String) -> CueMix {
+        CueMix {
+            id,
+            name,
+            gain_db: 0.0,
+            mute: false,
+            follow_main: false,
+            click_db: Some(0.0),
+            talkback: true,
+            levels: Vec::new(),
+        }
+    }
+
+    /// The track's place in the mix: as set, or else at 0 dB for an
+    /// audio track and off for a bus or folder, whose tracks are heard
+    /// on their own already.
+    pub fn level(&self, track: &Track) -> CueLevel {
+        self.levels
+            .iter()
+            .find(|l| l.track == track.id)
+            .cloned()
+            .unwrap_or_else(|| {
+                let db = if track.kind.is_bus() { CUE_OFF_DB } else { 0.0 };
+                CueLevel::new(track.id.clone(), db)
+            })
+    }
+
+    /// Sets the track's place in the mix.
+    pub fn set_level(&mut self, level: CueLevel) {
+        match self.levels.iter_mut().find(|l| l.track == level.track) {
+            Some(l) => *l = level,
+            None => self.levels.push(level),
         }
     }
 }

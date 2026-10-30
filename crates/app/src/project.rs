@@ -202,6 +202,7 @@ impl App {
             comments: self.comments.clone(),
             edit_groups: self.edit_groups_value(),
             control_groups: self.groups.clone(),
+            cue_mixes: self.cues.mixes.clone(),
         }
     }
 
@@ -384,6 +385,7 @@ impl App {
         self.comments = p.comments.clone();
         self.edit_groups = p.edit_groups.clone();
         self.groups = p.control_groups.clone();
+        self.cues.mixes = p.cue_mixes.clone();
         self.markers = (p.markers.iter())
             .map(|m| Marker {
                 id: m.id.clone(),

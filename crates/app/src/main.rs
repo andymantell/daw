@@ -28,6 +28,7 @@ mod groups;
 mod latency;
 mod meters;
 mod mixer;
+mod monitor;
 mod notes;
 mod people;
 mod perf;
@@ -202,6 +203,8 @@ struct App {
     tracks: Vec<Track>,
     /// Control groups: one fader and mute over several tracks.
     groups: Vec<daw_project::ControlGroup>,
+    /// Headphone mixes and the speakers' controls.
+    cues: monitor::Cues,
     imports: Vec<Import>,
     tempo_bpm: f64,
     beats_per_bar: u32,
@@ -310,6 +313,7 @@ impl App {
         let mut app = App {
             tracks: Vec::new(),
             groups: Vec::new(),
+            cues: monitor::Cues::default(),
             imports: Vec::new(),
             tempo_bpm: 120.0,
             beats_per_bar: 4,
@@ -609,6 +613,7 @@ impl App {
             }
             Err(e) => self.message = Some(e.to_string()),
         }
+        self.send_monitor();
     }
 
     /// The session as the engine should play it now.
@@ -702,6 +707,7 @@ impl App {
                 .and_then(|k| self.track_index(k))
                 .filter(|&i| self.tracks[i].key != t.key);
         }
+        spec.cues = self.cue_sends(&t.key);
     }
 
     /// The track's sends that go somewhere, with the bus's index: the
@@ -1944,6 +1950,10 @@ impl eframe::App for App {
                         Cmd::Metronome,
                         Cmd::CountIn,
                     ] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::Talkback, Cmd::Dim, Cmd::Mono] {
                         self.menu_item(ui, c);
                     }
                 });

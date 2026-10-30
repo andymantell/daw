@@ -10,7 +10,7 @@
 //! the controller to be freed (see [`crate::engine::Controller::collect_garbage`]).
 
 use crate::import::{self, Sound};
-use crate::stretch::{FRAME, Feed, SPEED_RANGE, Stretcher};
+use crate::stretch::{self, SPEED_RANGE};
 
 /// A sound ready to play: stereo, at the device's rate.
 pub struct PreviewSound {
@@ -56,7 +56,7 @@ pub fn prepare(sound: &Sound, rate: u32, speed: f64) -> Result<PreviewSound, Str
         .map(|i| (at_rate[i * ch], at_rate[i * ch + ch - 1]))
         .unzip();
     if (speed - 1.0).abs() > 1e-6 {
-        (l, r) = stretch(&l, &r, speed);
+        (l, r) = stretch::whole(&l, &r, speed, 0.0);
     }
     let keep = (MAX_SECONDS * rate as f64) as usize;
     l.truncate(keep);
@@ -67,37 +67,6 @@ pub fn prepare(sound: &Sound, rate: u32, speed: f64) -> Result<PreviewSound, Str
         gain: 1.0,
         looped: false,
     })
-}
-
-struct Buffer<'a> {
-    l: &'a [f32],
-    r: &'a [f32],
-}
-
-impl Feed for Buffer<'_> {
-    fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
-        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
-            let at = start + i as i64;
-            (*a, *b) = match usize::try_from(at) {
-                Ok(k) if k < self.l.len() => (self.l[k], self.r[k]),
-                _ => (0.0, 0.0),
-            };
-        }
-    }
-}
-
-/// Plays `l` and `r` at `speed`, pitch kept: `len / speed` frames.
-fn stretch(l: &[f32], r: &[f32], speed: f64) -> (Vec<f32>, Vec<f32>) {
-    let out = (l.len() as f64 / speed).round() as usize;
-    let mut s = Stretcher::new(FRAME);
-    s.set(speed, 0.0);
-    s.reset(0.0);
-    let mut feed = Buffer { l, r };
-    let (mut ol, mut or) = (vec![0.0; out], vec![0.0; out]);
-    for (a, b) in ol.chunks_mut(FRAME).zip(or.chunks_mut(FRAME)) {
-        s.process(&mut feed, a, b);
-    }
-    (ol, or)
 }
 
 /// The engine's side: the sound playing, and where.

@@ -1761,7 +1761,10 @@ impl App {
             }
         }
         if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
-            && ui.button("Reset").clicked()
+            && ui
+                .button("Reset")
+                .on_hover_text(self.commands.hover(Cmd::NormalSpeed))
+                .clicked()
         {
             (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
         }
@@ -1774,10 +1777,7 @@ impl App {
             self.send(c);
         }
         if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                "Recording waits for normal speed and pitch",
-            );
+            ui.label(self.slowed_note());
         }
     }
 
@@ -2395,7 +2395,7 @@ impl eframe::App for App {
                         Cmd::SaveChainPreset,
                         Cmd::ImportPreset,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                     ui.separator();
                     for c in [
@@ -2579,6 +2579,10 @@ impl eframe::App for App {
                         Cmd::Lessons,
                         Cmd::Comments,
                     ] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
+                    for c in [Cmd::SlowerSpeed, Cmd::FasterSpeed, Cmd::NormalSpeed] {
                         app.menu_item(ui, c);
                     }
                 });

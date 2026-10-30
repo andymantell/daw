@@ -16,7 +16,10 @@ use daw_plugins::clap::cid_of;
 use daw_plugins::host::Host;
 use daw_plugins::scan::{self, PluginList};
 use daw_plugins::{Layout, Library, Plugin, Processor};
-use daw_test_plugin::{CLAP_ID, CLAP_NAME, GAIN_PARAM, LATENCY, LEVEL_PARAM, LOOKAHEAD_PARAM};
+use daw_test_plugin::{
+    CLAP_ID, CLAP_NAME, CLAP_SYNTH_ID, CLAP_SYNTH_NAME, GAIN_PARAM, LATENCY, LEVEL_PARAM,
+    LOOKAHEAD_PARAM,
+};
 
 const RATE: f64 = 48_000.0;
 const BLOCK: usize = 256;
@@ -71,11 +74,18 @@ fn scanning_finds_the_plugin_in_a_child_process() {
     let plugins = list.plugins();
     assert_eq!(
         plugins.len(),
-        1,
+        2,
         "{:?}",
         list.failures().collect::<Vec<_>>()
     );
-    let p = &plugins[0];
+    let p = (plugins.iter())
+        .find(|p| p.class.name == CLAP_NAME)
+        .unwrap();
+    let synth = (plugins.iter())
+        .find(|p| p.class.name == CLAP_SYNTH_NAME)
+        .unwrap();
+    assert!(synth.class.is_instrument());
+    assert_eq!(synth.class.cid, cid_of(CLAP_SYNTH_ID));
     assert_eq!(p.class.name, CLAP_NAME);
     assert_eq!(p.class.cid, cid_of(CLAP_ID));
     assert_eq!(p.class.vendor, "DAW project");

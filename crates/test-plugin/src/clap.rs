@@ -2,7 +2,8 @@
 //! The test effect in the CLAP format, for the CLAP host's tests.
 //!
 //! The same library is copied to a `.clap` file, which exports
-//! `clap_entry` beside the VST 3 entry point. One plugin, [`CLAP_ID`]:
+//! `clap_entry` beside the VST 3 entry point. Two plugins: the test
+//! instrument ([`crate::clap_synth`]), and the test effect, [`CLAP_ID`]:
 //!
 //! - Inputs: the main stereo input and a stereo sidechain. Outputs: the
 //!   main stereo output and a stereo extra output.
@@ -47,7 +48,7 @@ pub const LOOKAHEAD_PARAM: u32 = 2;
 
 const ID: &CStr = c"org.daw.test-gain";
 
-struct Features([*const c_char; 4]);
+pub(crate) struct Features(pub(crate) [*const c_char; 4]);
 // Pointers to static strings.
 unsafe impl Sync for Features {}
 
@@ -154,7 +155,11 @@ unsafe extern "C" fn stop_processing(_p: *const clap_plugin) {}
 unsafe extern "C" fn reset(_p: *const clap_plugin) {}
 
 /// Channel `c` of `buf`, if it has one.
-unsafe fn channel<'a>(buf: &clap_audio_buffer, c: usize, n: usize) -> Option<&'a mut [f32]> {
+pub(crate) unsafe fn channel<'a>(
+    buf: &clap_audio_buffer,
+    c: usize,
+    n: usize,
+) -> Option<&'a mut [f32]> {
     if buf.data32.is_null() || c >= buf.channel_count as usize {
         return None;
     }
@@ -268,7 +273,7 @@ unsafe extern "C" fn ports_count(_p: *const clap_plugin, _input: bool) -> u32 {
     2
 }
 
-fn write_name(dst: &mut [c_char], s: &str) {
+pub(crate) fn write_name(dst: &mut [c_char], s: &str) {
     for (d, b) in dst.iter_mut().zip(s.bytes().chain(Some(0))) {
         *d = b as c_char;
     }
@@ -474,14 +479,18 @@ static FACTORY: clap_plugin_factory = clap_plugin_factory {
 };
 
 unsafe extern "C" fn factory_count(_f: *const clap_plugin_factory) -> u32 {
-    1
+    2
 }
 
 unsafe extern "C" fn factory_descriptor(
     _f: *const clap_plugin_factory,
     i: u32,
 ) -> *const clap_plugin_descriptor {
-    if i == 0 { &DESCRIPTOR } else { ptr::null() }
+    match i {
+        0 => &DESCRIPTOR,
+        1 => &crate::clap_synth::DESCRIPTOR,
+        _ => ptr::null(),
+    }
 }
 
 unsafe extern "C" fn factory_create(
@@ -489,7 +498,13 @@ unsafe extern "C" fn factory_create(
     host: *const clap_host,
     id: *const c_char,
 ) -> *const clap_plugin {
-    if id.is_null() || unsafe { CStr::from_ptr(id) } != ID {
+    if id.is_null() {
+        return ptr::null();
+    }
+    if unsafe { CStr::from_ptr(id) } == crate::clap_synth::ID {
+        return crate::clap_synth::create(host);
+    }
+    if unsafe { CStr::from_ptr(id) } != ID {
         return ptr::null();
     }
     let g = Box::new(Gain {

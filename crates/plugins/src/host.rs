@@ -19,6 +19,11 @@
 //! processor, for rendering, calls the helper directly and adds no
 //! delay.
 //!
+//! **Instruments.** A plugin instrument in a helper is handed its notes
+//! beside its block, each with the frame it plays at, and hands back
+//! each of its outputs apart, so that the app can send its extra ones
+//! to tracks of their own.
+//!
 //! **Hangs.** A watchdog stops a helper that has not answered a request
 //! for [`HANG_TIMEOUT`]; that counts as a crash.
 
@@ -35,6 +40,7 @@ use std::time::{Duration, Instant};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use daw_engine::graph::Insert;
+use daw_engine::midi::{self, Instrument, Outputs};
 
 use crate::module::Result;
 use crate::plugin::{Buses, Layout, Library, Param, Plugin, PluginState, Processor};
@@ -155,10 +161,14 @@ impl Helper {
                         Some((kl, kr)) => {
                             h.processor.process_keyed(&mut left, &mut right, (kl, kr))
                         }
-                        None => h.processor.process(&mut left, &mut right),
+                        None => Insert::process(&mut h.processor, &mut left, &mut right),
                     }
                     Reply::Audio { left, right }
                 }
+                Err(e) => e,
+            },
+            Request::Play { id, frames, events } => match self.held(id) {
+                Ok(h) => Reply::Played(h.processor.play_apart(&events, frames as usize)),
                 Err(e) => e,
             },
             Request::SetParam { id, param, value } => match self.held(id) {
@@ -489,6 +499,35 @@ impl Host {
         live_block: Option<usize>,
         layout: &Layout,
     ) -> Result<(RemotePlugin, RemoteProcessor)> {
+        self.load(bundle, cid, rate, max_block, live_block, layout, false)
+    }
+
+    /// As [`instantiate_with`](Self::instantiate_with), for an
+    /// instrument: its processor is an [`Instrument`] rather than an
+    /// [`Insert`], and hands each of its outputs back apart.
+    pub fn instantiate_instrument(
+        &self,
+        bundle: &Path,
+        cid: &vst3::Steinberg::TUID,
+        rate: f64,
+        max_block: usize,
+        live_block: Option<usize>,
+        layout: &Layout,
+    ) -> Result<(RemotePlugin, RemoteProcessor)> {
+        self.load(bundle, cid, rate, max_block, live_block, layout, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn load(
+        &self,
+        bundle: &Path,
+        cid: &vst3::Steinberg::TUID,
+        rate: f64,
+        max_block: usize,
+        live_block: Option<usize>,
+        layout: &Layout,
+        instrument: bool,
+    ) -> Result<(RemotePlugin, RemoteProcessor)> {
         let id = self.0.next_id.fetch_add(1, Ordering::Relaxed);
         let reply = self.0.call(&Request::Load {
             id,
@@ -507,11 +546,26 @@ impl Host {
             return Err("unexpected answer to loading a plugin".into());
         };
         // A sidechain goes down the pipe beside the track's audio.
-        let width = if layout.sidechain && buses.sidechain().is_some() {
+        let width = if layout.sidechain && buses.sidechain().is_some() && !instrument {
             4
         } else {
             2
         };
+        // An instrument's outputs come back apart: the main one, then
+        // each extra one switched on.
+        let extras: Vec<usize> = if instrument {
+            let mut e: Vec<usize> = (layout.outputs.iter())
+                .map(|&i| i as usize)
+                .filter(|&i| buses.extra_outputs().any(|(j, _)| j == i))
+                .collect();
+            e.sort_unstable();
+            e.dedup();
+            e.truncate(MAX_OUTPUTS);
+            e
+        } else {
+            Vec::new()
+        };
+        let out_width = 2 * (1 + extras.len());
         let instance = Arc::new(Instance {
             id,
             host: self.0.clone(),
@@ -522,11 +576,17 @@ impl Host {
                 let block = block.max(1);
                 let frames = max_block.max(block) + 2 * block;
                 let (in_tx, in_rx) = RingBuffer::<f32>::new(width * frames);
-                let (mut out_tx, out_rx) = RingBuffer::<f32>::new(2 * frames);
+                let (mut out_tx, out_rx) = RingBuffer::<f32>::new(out_width * frames);
                 // One block of silence puts the output a block behind.
-                for _ in 0..2 * block {
+                for _ in 0..out_width * block {
                     let _ = out_tx.push(0.0);
                 }
+                let (notes_tx, notes_rx) = if instrument {
+                    let (tx, rx) = RingBuffer::new(NOTES);
+                    (Some(tx), Some(rx))
+                } else {
+                    (None, None)
+                };
                 let state = Arc::new(ProcState {
                     gone: AtomicBool::new(false),
                     late: AtomicU64::new(0),
@@ -542,6 +602,10 @@ impl Host {
                     params: params_rx,
                     max_block,
                     width,
+                    out_width,
+                    notes: notes_rx,
+                    taken: 0,
+                    extras: extras.clone(),
                 };
                 let _ = self.0.register.lock().unwrap().send(side);
                 RemoteProcessor::Live(LiveProcessor {
@@ -551,6 +615,10 @@ impl Host {
                     output: out_rx,
                     params: params_tx,
                     width,
+                    out_width,
+                    notes: notes_tx,
+                    pushed: 0,
+                    extras,
                     skip: 0,
                     pad: 0,
                 })
@@ -560,6 +628,7 @@ impl Host {
                 max_block,
                 keyed: width == 4,
                 params: Vec::new(),
+                extras: instrument.then_some(extras),
             }),
         };
         let plugin = RemotePlugin {
@@ -783,6 +852,12 @@ struct ProcState {
 /// Settings the engine can set on a live processor between two blocks.
 const PARAM_SETS: usize = 256;
 
+/// The most extra outputs an instrument plays apart.
+const MAX_OUTPUTS: usize = daw_engine::graph::MAX_AUX as usize;
+
+/// Notes queued for a live instrument in a helper.
+const NOTES: usize = 4 * midi::MAX_EVENTS;
+
 /// The I/O thread's end of a live processor's queues.
 struct IoSide {
     instance: Arc<Instance>,
@@ -795,6 +870,69 @@ struct IoSide {
     /// Samples per frame in `input`: left and right, then the
     /// sidechain's left and right if it listens to one.
     width: usize,
+    /// Samples per frame in `output`: left and right of each output.
+    out_width: usize,
+    /// An instrument's notes, each at its frame counted from the start.
+    notes: Option<Consumer<(u64, midi::Event)>>,
+    /// Frames sent to the helper so far.
+    taken: u64,
+    /// An instrument's extra outputs, by bus index, in the order they
+    /// come back.
+    extras: Vec<usize>,
+}
+
+/// Plays one block of a live instrument in the helper: its notes up to
+/// the block's end go with it, and its outputs come back side by side
+/// in the output queue (silence if the helper fails it).
+fn play_side(s: &Shared, side: &mut IoSide, frames: usize) {
+    for _ in 0..frames * side.width {
+        let _ = side.input.pop();
+    }
+    let end = side.taken + frames as u64;
+    let mut events = Vec::new();
+    if let Some(q) = &mut side.notes {
+        while let Ok(&(at, e)) = q.peek() {
+            if at >= end {
+                break;
+            }
+            let _ = q.pop();
+            let frame = at.saturating_sub(side.taken) as u32;
+            events.push(midi::Event { frame, ..e });
+        }
+    }
+    side.taken = end;
+    // Settings the engine set go first, so the block hears them.
+    while let Ok((param, value)) = side.params.pop() {
+        let _ = s.call(&Request::SetParam {
+            id: side.instance.id,
+            param,
+            value,
+        });
+    }
+    let reply = s.call(&Request::Play {
+        id: side.instance.id,
+        frames: frames as u32,
+        events,
+    });
+    let buses = match reply {
+        Ok(Reply::Played(b)) => b,
+        _ => Vec::new(),
+    };
+    let bus = |k: usize| {
+        (buses.iter())
+            .find(|(i, l, r)| *i as usize == k && l.len() == frames && r.len() == frames)
+            .map(|(_, l, r)| (l, r))
+    };
+    let order: Vec<_> = std::iter::once(bus(0))
+        .chain(side.extras.iter().map(|&k| bus(k)))
+        .collect();
+    for i in 0..frames {
+        for b in &order {
+            let (l, r) = b.map_or((0.0, 0.0), |(l, r)| (l[i], r[i]));
+            let _ = side.output.push(l);
+            let _ = side.output.push(r);
+        }
+    }
 }
 
 /// Runs queued blocks through the helper, one request per block.
@@ -821,9 +959,13 @@ fn io_main(shared: Weak<Shared>, register: mpsc::Receiver<IoSide>) {
             // Never more than the output queue has room for, so nothing
             // is lost between the two.
             let frames = (side.input.slots() / side.width)
-                .min(side.output.slots() / 2)
+                .min(side.output.slots() / side.out_width)
                 .min(side.max_block);
             if frames == 0 {
+                continue;
+            }
+            if side.notes.is_some() {
+                play_side(&s, side, frames);
                 continue;
             }
             let mut take = || side.input.pop().unwrap_or(0.0);
@@ -881,6 +1023,14 @@ pub struct LiveProcessor {
     params: Producer<(u32, f64)>,
     /// Samples per frame going in (see [`IoSide::width`]).
     width: usize,
+    /// Samples per frame coming back (see [`IoSide::out_width`]).
+    out_width: usize,
+    /// An instrument's notes, on their way to the I/O thread.
+    notes: Option<Producer<(u64, midi::Event)>>,
+    /// Frames queued so far, to time the notes by.
+    pushed: u64,
+    /// An instrument's extra outputs, by bus index.
+    extras: Vec<usize>,
     /// Frames of late output to throw away, so the delay stays fixed.
     skip: usize,
     /// Frames of silence to play before the next output, making up for
@@ -896,7 +1046,7 @@ impl LiveProcessor {
 
     /// Frames the helper has answered that have not been played yet.
     pub fn available(&self) -> usize {
-        self.output.slots() / 2
+        self.output.slots() / self.out_width
     }
 }
 
@@ -909,8 +1059,9 @@ impl Drop for LiveProcessor {
 impl LiveProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len());
-        if self._instance.host.dead_flag.load(Ordering::Relaxed) {
-            // Pass the audio through unchanged.
+        if self._instance.host.dead_flag.load(Ordering::Relaxed) || self.notes.is_some() {
+            // Pass the audio through unchanged (an instrument is not
+            // an effect).
             return;
         }
         // A block bigger than the queues were set up for would never be
@@ -968,6 +1119,86 @@ impl LiveProcessor {
     }
 }
 
+impl LiveProcessor {
+    /// Plays a block as an instrument: its notes go to the helper with
+    /// it, and what comes back is the helper's answer to the block
+    /// before, added to the track or to the tracks taking its outputs.
+    fn play(
+        &mut self,
+        events: &[midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outs: &mut Outputs<'_>,
+    ) {
+        let n = left.len().min(right.len());
+        if self._instance.host.dead_flag.load(Ordering::Relaxed) || self.notes.is_none() {
+            return;
+        }
+        let extra = self.state.extra.load(Ordering::Relaxed) as usize;
+        if n > extra {
+            self.pad += n - extra;
+            self.state.extra.store(n as u32, Ordering::Relaxed);
+        }
+        let fit = (self.input.slots() / self.width).min(n);
+        let dropped = n - fit;
+        for _ in 0..fit * self.width {
+            let _ = self.input.push(0.0);
+        }
+        // A note in frames that did not fit plays at the start of the
+        // next frames that do.
+        if let Some(q) = &mut self.notes {
+            for e in events {
+                let f = (e.frame as usize).min(fit) as u64;
+                let _ = q.push((self.pushed + f, *e));
+            }
+        }
+        self.pushed += fit as u64;
+        self._instance.host.wake_io();
+        let w = self.out_width;
+        while self.skip > 0 && self.output.slots() >= w {
+            for _ in 0..w {
+                let _ = self.output.pop();
+            }
+            self.skip -= 1;
+        }
+        let mut frame = [0f32; 2 * (1 + MAX_OUTPUTS)];
+        let mut missing = 0;
+        for i in 0..n {
+            if self.pad > 0 {
+                self.pad -= 1;
+                continue;
+            }
+            if self.output.slots() < w {
+                missing += 1;
+                continue;
+            }
+            for x in &mut frame[..w] {
+                *x = self.output.pop().unwrap_or(0.0);
+            }
+            left[i] += frame[0];
+            right[i] += frame[1];
+            for (j, &b) in self.extras.iter().enumerate() {
+                let (a, c) = (frame[2 + 2 * j], frame[3 + 2 * j]);
+                match outs.get(b) {
+                    Some((l, r)) if i < l.len() && i < r.len() => {
+                        l[i] = a;
+                        r[i] = c;
+                    }
+                    _ => {
+                        left[i] += a;
+                        right[i] += c;
+                    }
+                }
+            }
+        }
+        self.skip += missing;
+        self.pad += dropped;
+        if missing > 0 || dropped > 0 {
+            self.state.late.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 /// An [`Insert`] that waits for the helper, for rendering off the
 /// audio thread.
 pub struct OfflineProcessor {
@@ -977,10 +1208,76 @@ pub struct OfflineProcessor {
     keyed: bool,
     /// Settings the engine set for the next block (automation lanes).
     params: Vec<(u32, f64)>,
+    /// For an instrument, its extra outputs, by bus index.
+    extras: Option<Vec<usize>>,
+}
+
+impl OfflineProcessor {
+    fn play(
+        &mut self,
+        events: &[midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outs: &mut Outputs<'_>,
+    ) {
+        if self.extras.is_none() {
+            return;
+        }
+        let n = left.len().min(right.len());
+        for (param, value) in self.params.drain(..) {
+            let _ = self.instance.host.call(&Request::SetParam {
+                id: self.instance.id,
+                param,
+                value,
+            });
+        }
+        let mut done = 0;
+        while done < n {
+            let end = (done + self.max_block).min(n);
+            let events = (events.iter())
+                .filter(|e| (done..end).contains(&(e.frame as usize)))
+                .map(|e| midi::Event {
+                    frame: e.frame - done as u32,
+                    ..*e
+                })
+                .collect();
+            let reply = self.instance.host.call(&Request::Play {
+                id: self.instance.id,
+                frames: (end - done) as u32,
+                events,
+            });
+            if let Ok(Reply::Played(buses)) = reply {
+                for (k, l, r) in buses {
+                    let k = k as usize;
+                    if l.len() != end - done || r.len() != end - done {
+                        continue;
+                    }
+                    match outs.get(k).filter(|_| k > 0) {
+                        Some((ol, or)) if ol.len() >= end && or.len() >= end => {
+                            ol[done..end].copy_from_slice(&l);
+                            or[done..end].copy_from_slice(&r);
+                        }
+                        _ => {
+                            for (o, x) in left[done..end].iter_mut().zip(&l) {
+                                *o += x;
+                            }
+                            for (o, x) in right[done..end].iter_mut().zip(&r) {
+                                *o += x;
+                            }
+                        }
+                    }
+                }
+            }
+            done = end;
+        }
+    }
 }
 
 impl OfflineProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
+        if self.extras.is_some() {
+            return;
+        }
         let n = left.len().min(right.len());
         for (param, value) in self.params.drain(..) {
             let _ = self.instance.host.call(&Request::SetParam {
@@ -1041,6 +1338,25 @@ impl RemoteProcessor {
         match self {
             RemoteProcessor::Live(p) => p.available(),
             RemoteProcessor::Offline(_) => 0,
+        }
+    }
+}
+
+impl Instrument for RemoteProcessor {
+    fn process(&mut self, events: &[midi::Event], left: &mut [f32], right: &mut [f32]) {
+        self.process_outputs(events, left, right, &mut Outputs::none());
+    }
+
+    fn process_outputs(
+        &mut self,
+        events: &[midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outs: &mut Outputs<'_>,
+    ) {
+        match self {
+            RemoteProcessor::Live(p) => p.play(events, left, right, outs),
+            RemoteProcessor::Offline(p) => p.play(events, left, right, outs),
         }
     }
 }

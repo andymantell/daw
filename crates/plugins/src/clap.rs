@@ -48,6 +48,7 @@ use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
 use clap_sys::ext::gui::*;
 use clap_sys::ext::latency::*;
+use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
 use clap_sys::ext::state::*;
 use clap_sys::ext::thread_check::*;
@@ -61,8 +62,10 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use vst3::Steinberg::TUID;
 
 use daw_engine::graph::Insert;
+use daw_engine::midi::{self, Instrument, Outputs};
 
 use crate::module::{ClassInfo, Result};
+use crate::notes::{Sounding, play_out};
 use crate::plugin::{Bus, BusBufs, Buses, Layout, Param, PluginState};
 use crate::proto::Status;
 
@@ -365,10 +368,24 @@ unsafe extern "C" fn host_get_extension(
         &HOST_AUDIO_PORTS as *const _ as *const c_void
     } else if id == CLAP_EXT_GUI {
         &HOST_GUI as *const _ as *const c_void
+    } else if id == CLAP_EXT_NOTE_PORTS {
+        &HOST_NOTE_PORTS as *const _ as *const c_void
     } else {
         ptr::null()
     }
 }
+
+static HOST_NOTE_PORTS: clap_host_note_ports = clap_host_note_ports {
+    supported_dialects: Some(host_note_dialects),
+    rescan: Some(host_note_rescan),
+};
+
+unsafe extern "C" fn host_note_dialects(_host: *const clap_host) -> clap_note_dialect {
+    CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI
+}
+
+// Note ports are read once, when the plugin is made.
+unsafe extern "C" fn host_note_rescan(_host: *const clap_host, _flags: u32) {}
 
 unsafe extern "C" fn host_request_restart(host: *const clap_host) {
     if let Some(f) = flags_of(host) {
@@ -520,9 +537,103 @@ unsafe extern "C" fn stream_read(s: *const clap_istream, buf: *mut c_void, size:
 // ---------------------------------------------------------------------------
 // Events in and out of a block
 
-/// Parameter changes for the plugin, as CLAP input events.
+/// One input event of any kind the host sends: each starts with its
+/// header.
+#[repr(C)]
+#[derive(Clone, Copy)]
+union AnyEvent {
+    header: clap_event_header,
+    param: clap_event_param_value,
+    note: clap_event_note,
+    expression: clap_event_note_expression,
+    midi: clap_event_midi,
+}
+
+/// Parameter changes and notes for the plugin, as CLAP input events,
+/// in time order.
 struct InEvents {
-    events: Vec<clap_event_param_value>,
+    events: Vec<AnyEvent>,
+}
+
+/// Room for input events: parameter changes, and a block of notes with
+/// a note-off for every key on every channel.
+const IN_EVENTS: usize = EDITS + midi::MAX_EVENTS + 16 * 128;
+
+/// How the plugin takes notes, from its first note input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Dialect {
+    /// It has no note input.
+    #[default]
+    None,
+    /// CLAP note events, and MIDI for controllers if it takes MIDI too.
+    Clap { midi: bool },
+    /// MIDI only.
+    Midi,
+}
+
+fn header(time: u32, size: usize, type_: u16) -> clap_event_header {
+    clap_event_header {
+        size: size as u32,
+        time,
+        space_id: CLAP_CORE_EVENT_SPACE_ID,
+        type_,
+        flags: CLAP_EVENT_IS_LIVE,
+    }
+}
+
+fn note_event(time: u32, type_: u16, channel: u8, key: u8, velocity: u8) -> AnyEvent {
+    AnyEvent {
+        note: clap_event_note {
+            header: header(time, size_of::<clap_event_note>(), type_),
+            note_id: -1,
+            port_index: 0,
+            channel: channel as i16,
+            key: key as i16,
+            velocity: velocity as f64 / 127.0,
+        },
+    }
+}
+
+fn expression_event(
+    time: u32,
+    channel: u8,
+    key: u8,
+    kind: midi::Expression,
+    value: f32,
+) -> AnyEvent {
+    let (expression_id, value) = match kind {
+        midi::Expression::Tuning => (CLAP_NOTE_EXPRESSION_TUNING, value as f64),
+        midi::Expression::Pressure => (CLAP_NOTE_EXPRESSION_PRESSURE, value.clamp(0.0, 1.0) as f64),
+        midi::Expression::Timbre => (
+            CLAP_NOTE_EXPRESSION_BRIGHTNESS,
+            value.clamp(0.0, 1.0) as f64,
+        ),
+    };
+    AnyEvent {
+        expression: clap_event_note_expression {
+            header: header(
+                time,
+                size_of::<clap_event_note_expression>(),
+                CLAP_EVENT_NOTE_EXPRESSION,
+            ),
+            expression_id,
+            note_id: -1,
+            port_index: 0,
+            channel: channel as i16,
+            key: key as i16,
+            value,
+        },
+    }
+}
+
+fn midi_event(time: u32, data: [u8; 3]) -> AnyEvent {
+    AnyEvent {
+        midi: clap_event_midi {
+            header: header(time, size_of::<clap_event_midi>(), CLAP_EVENT_MIDI),
+            port_index: 0,
+            data,
+        },
+    }
 }
 
 unsafe extern "C" fn in_size(list: *const clap_input_events) -> u32 {
@@ -536,7 +647,7 @@ unsafe extern "C" fn in_get(
 ) -> *const clap_event_header {
     let e = unsafe { &*((*list).ctx as *const InEvents) };
     match e.events.get(index as usize) {
-        Some(ev) => &ev.header,
+        Some(ev) => unsafe { &ev.header },
         None => ptr::null(),
     }
 }
@@ -603,6 +714,7 @@ struct Core {
     latency: *const clap_plugin_latency,
     gui: *const clap_plugin_gui,
     ports: *const clap_plugin_audio_ports,
+    note_ports: *const clap_plugin_note_ports,
     rate: f64,
     max_block: u32,
     active: AtomicBool,
@@ -663,6 +775,27 @@ impl Core {
             return 0;
         }
         call!(self.latency, get, self.plugin).unwrap_or(0)
+    }
+
+    /// How the plugin's first note input takes notes.
+    fn dialect(&self) -> Dialect {
+        if self.note_ports.is_null()
+            || call!(self.note_ports, count, self.plugin, true).unwrap_or(0) == 0
+        {
+            return Dialect::None;
+        }
+        let mut info: clap_note_port_info = unsafe { std::mem::zeroed() };
+        if call!(self.note_ports, get, self.plugin, 0, true, &mut info) != Some(true) {
+            return Dialect::None;
+        }
+        let midi = info.supported_dialects & CLAP_NOTE_DIALECT_MIDI != 0;
+        if info.supported_dialects & CLAP_NOTE_DIALECT_CLAP != 0 {
+            Dialect::Clap { midi }
+        } else if midi {
+            Dialect::Midi
+        } else {
+            Dialect::None
+        }
     }
 
     fn ports(&self, input: bool) -> Vec<(Bus, bool)> {
@@ -783,6 +916,7 @@ pub fn instantiate_with(
         latency: Core::ext(plugin, CLAP_EXT_LATENCY),
         gui: Core::ext(plugin, CLAP_EXT_GUI),
         ports: Core::ext(plugin, CLAP_EXT_AUDIO_PORTS),
+        note_ports: Core::ext(plugin, CLAP_EXT_NOTE_PORTS),
         rate,
         max_block: max_block as u32,
         active: AtomicBool::new(false),
@@ -810,6 +944,7 @@ pub fn instantiate_with(
         .map(|&i| i as usize)
         .filter(|&i| buses.extra_outputs().any(|(j, _)| j == i))
         .collect();
+    processor.dialect = core.dialect();
     let plugin = ClapPlugin {
         gui: None,
         core,
@@ -1230,6 +1365,8 @@ pub struct ClapProcessor {
     key: Option<usize>,
     /// Extra outputs mixed into the track.
     mix: Vec<usize>,
+    dialect: Dialect,
+    sounding: Sounding,
 }
 
 // The raw pointers point into buffers this struct owns and never resizes.
@@ -1244,7 +1381,7 @@ impl ClapProcessor {
         max_block: usize,
     ) -> ClapProcessor {
         let mut ins = Box::new(InEvents {
-            events: Vec::with_capacity(EDITS),
+            events: Vec::with_capacity(IN_EVENTS),
         });
         let in_list = clap_input_events {
             ctx: &mut *ins as *mut InEvents as *mut c_void,
@@ -1292,12 +1429,80 @@ impl ClapProcessor {
             steady: 0,
             key: None,
             mix: Vec::new(),
+            dialect: Dialect::None,
+            sounding: Sounding::default(),
         }
     }
 
-    fn run(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
+    /// The block's notes from `at` for `n` frames, as the plugin takes
+    /// them, after the parameter changes already queued.
+    fn queue_notes(&mut self, notes: &[midi::Event], at: usize, n: usize) {
+        use midi::Kind;
+        let (clap, midi) = match self.dialect {
+            Dialect::None => return,
+            Dialect::Clap { midi } => (true, midi),
+            Dialect::Midi => (false, true),
+        };
+        let ins = &mut self.ins.events;
+        let mut push = |e: AnyEvent| {
+            if ins.len() < ins.capacity() {
+                ins.push(e);
+            }
+        };
+        for e in notes {
+            let f = e.frame as usize;
+            if f < at || f >= at + n {
+                continue;
+            }
+            let time = (f - at) as u32;
+            let ch = e.channel & 15;
+            match e.kind {
+                Kind::NoteOn { pitch, .. } => self.sounding.on(ch, pitch),
+                Kind::NoteOff { pitch, .. } => self.sounding.off(ch, pitch),
+                _ => {}
+            }
+            match e.kind {
+                Kind::NoteOn {
+                    pitch, velocity, ..
+                } if clap => push(note_event(time, CLAP_EVENT_NOTE_ON, ch, pitch, velocity)),
+                Kind::NoteOff {
+                    pitch, velocity, ..
+                } if clap => push(note_event(time, CLAP_EVENT_NOTE_OFF, ch, pitch, velocity)),
+                // Each note is known by its key and channel.
+                Kind::NoteExpression {
+                    pitch, kind, value, ..
+                } if clap => push(expression_event(time, ch, pitch, kind, value)),
+                Kind::AllNotesOff => {
+                    for (c, p) in self.sounding.drain() {
+                        push(if clap {
+                            note_event(time, CLAP_EVENT_NOTE_OFF, c, p, 0)
+                        } else {
+                            midi_event(time, [0x80 | c, p, 0])
+                        });
+                    }
+                }
+                _ if midi => {
+                    if let Some(bytes) = e.to_midi() {
+                        push(midi_event(time, bytes));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Runs `n` frames. With `notes`, it plays as an instrument: the
+    /// notes from frame `at` of the block go in, its inputs are silent,
+    /// and its outputs add to the track or go to `outs`.
+    fn run(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<(&[f32], &[f32])>,
+        mut notes: Option<(&[midi::Event], &mut Outputs<'_>, usize)>,
+    ) {
         let n = left.len().min(right.len()).min(self.max_block);
-        let core = &self.core;
+        let core = self.core.clone();
         if !core.active.load(Ordering::Relaxed) {
             return;
         }
@@ -1309,7 +1514,11 @@ impl ClapProcessor {
             core.processing.store(true, Ordering::Relaxed);
         }
         if let Some(main) = self.inputs.first_mut() {
-            main.fill(left, right, n);
+            if notes.is_some() {
+                main.silence(n);
+            } else {
+                main.fill(left, right, n);
+            }
         }
         for (i, bus) in self.inputs.iter_mut().enumerate().skip(1) {
             match key {
@@ -1325,9 +1534,11 @@ impl ClapProcessor {
 
         let ins = &mut self.ins.events;
         ins.clear();
-        while ins.len() < ins.capacity() {
+        while ins.len() < EDITS {
             match self.edits.pop() {
-                Ok((id, v)) => ins.push(param_event(id, v)),
+                Ok((id, v)) => ins.push(AnyEvent {
+                    param: param_event(id, v),
+                }),
                 Err(_) => break,
             }
         }
@@ -1336,10 +1547,15 @@ impl ClapProcessor {
                 break;
             }
             if let Some(info) = self.infos.iter().find(|i| i.id == id) {
-                ins.push(param_event(id, info.plain(v)));
+                ins.push(AnyEvent {
+                    param: param_event(id, info.plain(v)),
+                });
             }
         }
         self.auto.clear();
+        if let Some((events, _, at)) = &notes {
+            self.queue_notes(events, *at, n);
+        }
         self.outs.edited = false;
 
         let process = clap_process {
@@ -1361,6 +1577,10 @@ impl ClapProcessor {
         if matches!(status, None | Some(CLAP_PROCESS_ERROR)) {
             return;
         }
+        if let Some((_, outs, at)) = &mut notes {
+            play_out(&self.outputs, &self.mix, left, right, outs, *at, n);
+            return;
+        }
         // A plugin with no audio out (it only listens) leaves the track
         // as it was.
         let Some(main) = self.outputs.first() else {
@@ -1374,15 +1594,24 @@ impl ClapProcessor {
         }
     }
 
-    fn blocks(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
-        // While the UI side restarts the plugin, the block is silent.
+    fn blocks(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<(&[f32], &[f32])>,
+        mut notes: Option<(&[midi::Event], &mut Outputs<'_>)>,
+    ) {
+        // While the UI side restarts the plugin, the block is silent
+        // (an instrument adds nothing to the track).
         let core = self.core.clone();
         let _running = match core.gate.try_lock() {
             Ok(g) => g,
             Err(TryLockError::Poisoned(e)) => e.into_inner(),
             Err(TryLockError::WouldBlock) => {
-                left.fill(0.0);
-                right.fill(0.0);
+                if notes.is_none() {
+                    left.fill(0.0);
+                    right.fill(0.0);
+                }
                 return;
             }
         };
@@ -1399,7 +1628,8 @@ impl ClapProcessor {
                     b.get(done..end).unwrap_or(&[]),
                 )
             });
-            self.run(l, r, k);
+            let p = notes.as_mut().map(|(e, o)| (*e, &mut **o, done));
+            self.run(l, r, k, p);
             done = end;
         }
     }
@@ -1407,17 +1637,40 @@ impl ClapProcessor {
 
 impl Insert for ClapProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.blocks(left, right, None);
+        self.blocks(left, right, None, None);
     }
 
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
-        self.blocks(left, right, Some(key));
+        self.blocks(left, right, Some(key), None);
     }
 
     fn set_param(&mut self, param: u32, value: f64) {
         if self.auto.len() < self.auto.capacity() {
             self.auto.push((param, value));
         }
+    }
+}
+
+impl ClapProcessor {
+    /// The extra outputs switched on, by bus index.
+    pub(crate) fn extra_outputs(&self) -> Vec<usize> {
+        self.mix.clone()
+    }
+}
+
+impl Instrument for ClapProcessor {
+    fn process(&mut self, events: &[midi::Event], left: &mut [f32], right: &mut [f32]) {
+        self.blocks(left, right, None, Some((events, &mut Outputs::none())));
+    }
+
+    fn process_outputs(
+        &mut self,
+        events: &[midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outs: &mut Outputs<'_>,
+    ) {
+        self.blocks(left, right, None, Some((events, outs)));
     }
 }
 

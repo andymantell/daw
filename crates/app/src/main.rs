@@ -25,6 +25,7 @@ mod export;
 mod freeze;
 mod fx;
 mod groups;
+mod hitpoints;
 mod latency;
 mod lessons;
 mod meters;
@@ -256,6 +257,11 @@ struct App {
     detecting: Option<(String, mpsc::Receiver<Option<f32>>)>,
     detected: Option<(String, Option<f32>)>,
     markers: Vec<Marker>,
+    /// How the song lines up with a picture's timecode, and the hit
+    /// points on it (positions at the device's rate), and their window.
+    timecode: daw_project::TimecodeSetup,
+    hit_points: Vec<daw_project::HitPoint>,
+    hits_ui: hitpoints::HitPointsWindow,
     timeline: timeline::Timeline,
     perf: perf::Perf,
     /// Lesson notes and tab blocks, as in the project, and their window.
@@ -364,6 +370,9 @@ impl App {
             detecting: None,
             detected: None,
             markers: Vec::new(),
+            timecode: daw_project::TimecodeSetup::default(),
+            hit_points: Vec::new(),
+            hits_ui: hitpoints::HitPointsWindow::default(),
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
             notes: String::new(),
@@ -1022,6 +1031,7 @@ impl App {
         let ids: Vec<String> = self.tracks.iter().map(|t| t.key.clone()).collect();
         let pins = self.comment_ui.pins(&self.comments, &ids);
         let commands = std::mem::take(&mut self.commands.timeline);
+        let hits = self.hit_points.clone();
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -1032,6 +1042,8 @@ impl App {
             can_redo: self.can_redo(),
             pins: &pins,
             commands: &commands,
+            timecode: self.shown_clock(),
+            hits: &hits,
         };
         self.timeline.groups = self.lane_groups();
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
@@ -1076,6 +1088,9 @@ impl App {
         }
         if let Some(ask) = out.tempo {
             self.ask_tempo(ask);
+        }
+        if let Some(ask) = out.hit {
+            self.ask_hit(ask);
         }
     }
 
@@ -1128,6 +1143,12 @@ impl App {
             let bb = map.bar_beat(map.ticks_at(pos));
             let label = if self.ctl.status().counting_in() {
                 "count-in".to_string()
+            } else if let Some(c) = self.shown_clock() {
+                format!(
+                    "{bb}   {}   {:.2} s",
+                    c.timecode(pos.0, self.rate),
+                    map.seconds(pos)
+                )
             } else {
                 format!("{bb}   {:.2} s", map.seconds(pos))
             };
@@ -1959,6 +1980,10 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
+                    for c in [Cmd::HitPoint, Cmd::HitPoints] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
                     for c in [Cmd::Crossfade, Cmd::ClipFades] {
                         self.menu_item(ui, c);
                     }
@@ -1974,6 +1999,14 @@ impl eframe::App for App {
                     ui.separator();
                     for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
                         self.menu_item(ui, c);
+                    }
+                    let mut on = self.timecode.shown;
+                    if ui
+                        .checkbox(&mut on, self.commands.name(Cmd::Timecode).to_string())
+                        .on_hover_text(self.commands.hover(Cmd::Timecode))
+                        .changed()
+                    {
+                        self.timecode.shown = on;
                     }
                 });
                 ui.menu_button("Transport", |ui| {
@@ -2192,6 +2225,7 @@ impl eframe::App for App {
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
+        self.hit_points_window(&ctx);
         self.groups_window(&ctx);
         self.timing_window(&ctx);
         self.remote_tick(&ctx);

@@ -15,4 +15,5 @@ pub mod record;
 pub mod stream;
 pub mod stretch;
 pub mod time;
+pub mod timecode;
 pub mod tuner;

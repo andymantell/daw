@@ -691,6 +691,9 @@ pub struct View<'a> {
     pub pins: &'a [Pin],
     /// Commands for the timeline, run since it was last drawn.
     pub commands: &'a [Cmd],
+    /// The picture's timecode, if shown.
+    pub timecode: Option<daw_engine::timecode::Clock>,
+    pub hits: &'a [daw_project::HitPoint],
 }
 
 /// What the app should do after the timeline is drawn.
@@ -713,6 +716,8 @@ pub struct Outcome {
     pub tempo: Option<crate::tempo::Ask>,
     /// Process the selected clips into new audio.
     pub process: Option<Process>,
+    /// Add or move a hit point, or open their window.
+    pub hit: Option<crate::hitpoints::HitAsk>,
 }
 
 /// The amounts, in dB, the clip menu's Change gain offers.
@@ -907,6 +912,10 @@ pub struct Timeline {
     focus: Option<(Focus, egui::Id)>,
     /// Give the keyboard to this item on the next frame.
     focus_next: Option<Focus>,
+    /// The hit point being dragged along the timecode strip, and where
+    /// the strip was right-clicked.
+    hit_drag: Option<String>,
+    strip_at: i64,
 }
 
 impl Timeline {
@@ -948,6 +957,8 @@ impl Default for Timeline {
             rename_focused: false,
             focus: None,
             focus_next: None,
+            hit_drag: None,
+            strip_at: 0,
         }
     }
 }
@@ -1499,6 +1510,96 @@ impl Timeline {
         }
     }
 
+    /// The timecode and hit point strip: click to move the playhead
+    /// (to the start of a frame when timecode is shown), drag a hit
+    /// point's diamond to move it, right-click to add one.
+    #[allow(clippy::too_many_arguments)]
+    fn strip(
+        &mut self,
+        ui: &egui::Ui,
+        r: Rect,
+        resp: &egui::Response,
+        view: &View,
+        x_of: &dyn Fn(i64) -> f32,
+        frame_of: &dyn Fn(f32) -> i64,
+        out: &mut Outcome,
+    ) {
+        use crate::hitpoints::{HitAsk, draw_strip, hit_at};
+        let look = crate::theme::look(ui.ctx());
+        let tc = look.c();
+        let painter = ui.painter_at(r);
+        let left = r.left() + HEADER;
+        let snap = |f: i64| match &view.timecode {
+            Some(c) => c.snap(f, view.rate),
+            None => f,
+        };
+        painter.rect_filled(
+            Rect::from_min_max(r.min, pos2(left, r.max.y)),
+            0.0,
+            tc.panel,
+        );
+        painter.text(
+            pos2(r.left() + 6.0, r.center().y),
+            Align2::LEFT_CENTER,
+            if view.timecode.is_some() {
+                "Timecode"
+            } else {
+                "Hit points"
+            },
+            look.font(look.small),
+            tc.text_dim,
+        );
+        let lanes = Rect::from_min_max(pos2(left, r.top()), r.max);
+        draw_strip(
+            &painter,
+            lanes,
+            view.timecode.as_ref(),
+            view.rate,
+            view.hits,
+            x_of,
+            frame_of,
+            &look,
+        );
+        let at_pointer = resp.interact_pointer_pos();
+        if resp.drag_started()
+            && let Some(p) = at_pointer
+        {
+            self.hit_drag = hit_at(view.hits, x_of, p).map(|i| view.hits[i].id.clone());
+        }
+        if resp.dragged()
+            && let (Some(id), Some(p)) = (&self.hit_drag, at_pointer)
+        {
+            out.hit = Some(HitAsk::Move(id.clone(), frame_of(p.x).max(0)));
+        }
+        if resp.drag_stopped() {
+            self.hit_drag = None;
+        }
+        if resp.clicked()
+            && let Some(p) = at_pointer
+            && p.x >= left
+        {
+            out.seek = Some(match hit_at(view.hits, x_of, p) {
+                Some(i) => view.hits[i].at,
+                None => snap(frame_of(p.x).max(0)),
+            });
+        }
+        if resp.secondary_clicked()
+            && let Some(p) = at_pointer
+        {
+            self.strip_at = frame_of(p.x).max(0);
+        }
+        resp.context_menu(|ui| {
+            if ui.button("Add hit point here").clicked() {
+                out.hit = Some(HitAsk::Add(self.strip_at));
+                ui.close();
+            }
+            if ui.button("Timecode and hit points…").clicked() {
+                out.hit = Some(HitAsk::Open);
+                ui.close();
+            }
+        });
+    }
+
     /// The bar the playhead is in.
     fn bar_at(map: &TempoMap, frames: i64) -> i64 {
         map.bar_beat(map.ticks_at(Frames(frames))).bar
@@ -2027,6 +2128,13 @@ impl Timeline {
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.toolbar(ui, song, view, &mut out);
+        // Timecode and hit points, on their own line above the ruler.
+        let strip = (view.timecode.is_some() || !view.hits.is_empty()).then(|| {
+            ui.allocate_exact_size(
+                vec2(ui.available_width(), crate::hitpoints::STRIP),
+                Sense::click_and_drag(),
+            )
+        });
 
         let size = vec2(
             ui.available_width(),
@@ -2073,6 +2181,10 @@ impl Timeline {
             let l = ((y - rect.top() - RULER + vscroll) / lane_h).floor();
             (l.max(0.0) as usize).min(lanes_n - 1)
         };
+
+        if let Some((sr, sresp)) = &strip {
+            self.strip(ui, *sr, sresp, view, &x_of, &frame_of, &mut out);
+        }
 
         // Keep the playhead in view while playing.
         if view.playing && self.drag.is_none() {
@@ -2918,6 +3030,19 @@ impl Timeline {
             }
         }
 
+        // Hit points: dashed lines down through the lanes.
+        for h in view.hits {
+            let x = x_of(h.at);
+            if x >= left && x <= rect.right() {
+                lanes.add(egui::Shape::dashed_line(
+                    &[pos2(x, rect.top() + RULER), pos2(x, rect.bottom())],
+                    Stroke::new(look.line, tc.accent.gamma_multiply(0.7)),
+                    4.0,
+                    3.0,
+                ));
+            }
+        }
+
         // Comment pins: a band over what a range covers, and a bubble at
         // the start.
         let hover = resp.hover_pos();
@@ -3107,6 +3232,10 @@ impl Timeline {
                     }
                     if ui.button("Tempo and time signature…").clicked() {
                         out.tempo = Some(crate::tempo::Ask::Open);
+                        ui.close();
+                    }
+                    if ui.button("Add hit point here").clicked() {
+                        out.hit = Some(crate::hitpoints::HitAsk::Add(at));
                         ui.close();
                     }
                 }

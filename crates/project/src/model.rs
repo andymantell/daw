@@ -41,6 +41,10 @@ pub struct Project {
     pub control_groups: Vec<ControlGroup>,
     /// Headphone mixes, one per performer, in the order made.
     pub cue_mixes: Vec<CueMix>,
+    /// How the song lines up with a picture's timecode.
+    pub timecode: TimecodeSetup,
+    /// Moments in the picture to write music to, in time order.
+    pub hit_points: Vec<HitPoint>,
 }
 
 impl Default for Project {
@@ -63,6 +67,8 @@ impl Default for Project {
             edit_groups: Vec::new(),
             control_groups: Vec::new(),
             cue_mixes: Vec::new(),
+            timecode: TimecodeSetup::default(),
+            hit_points: Vec::new(),
         }
     }
 }
@@ -674,6 +680,42 @@ pub struct TempoChange {
     /// Glide smoothly from the tempo before, arriving at `bpm` here,
     /// instead of jumping to it.
     pub glide: bool,
+}
+
+/// The picture's frame rate and start timecode, and where on the
+/// timeline that start falls.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimecodeSetup {
+    /// The frame rate's id, such as "25" or "29.97df".
+    pub rate: String,
+    /// The start timecode, as written: "01:00:00:00".
+    pub start: String,
+    /// Where the start timecode falls, in frames at the project's rate.
+    pub offset: i64,
+    /// Show the timecode ruler and position.
+    pub shown: bool,
+}
+
+impl Default for TimecodeSetup {
+    fn default() -> TimecodeSetup {
+        TimecodeSetup {
+            rate: "25".into(),
+            start: "00:00:00:00".into(),
+            offset: 0,
+            shown: false,
+        }
+    }
+}
+
+/// A moment in the picture to write music to ("door slams"). Placed in
+/// time, not in bars, so it stays with the picture when the tempo
+/// changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HitPoint {
+    pub id: String,
+    /// In frames at the project's rate: the start of a picture frame.
+    pub at: i64,
+    pub name: String,
 }
 
 /// A change of time signature, from the start of a bar.

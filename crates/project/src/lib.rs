@@ -27,8 +27,8 @@ pub use lessons::{
 pub use model::{
     Assignment, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve,
     EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip, GainPoint,
-    Marker, MeterChange, Practice, Project, Send, TabBlock, TempoChange, Track, TrackKind,
-    TrainerSettings,
+    HitPoint, Marker, MeterChange, Practice, Project, Send, TabBlock, TempoChange, TimecodeSetup,
+    Track, TrackKind, TrainerSettings,
 };
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{

@@ -101,6 +101,9 @@ pub(crate) enum Cmd {
     GrooveFromAudio,
     ApplyGroove,
     MidiLearn,
+    Instrument,
+    AddLayer,
+    SingleInstrument,
     ImportMidi,
     ExportMidi,
     AudioDevice,
@@ -430,6 +433,21 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::MidiLearn, "midi-learn", "Notes", "MIDI learn…", &[])
         .hint("Tie a knob, fader or pedal on a MIDI device to a setting")
         .words("controller map knob fader assign"),
+    info(Cmd::Instrument, "instrument", "Notes", "Instrument…", &[])
+        .hint("The instrument track's instrument, or its layers, and their settings")
+        .words("synth sound layers"),
+    info(Cmd::AddLayer, "add-layer", "Notes", "Add an instrument layer", &[])
+        .hint("Another instrument playing the instrument track's notes: for a keyboard split or a doubled sound")
+        .words("layered instruments stack split zone double rack"),
+    info(
+        Cmd::SingleInstrument,
+        "single-instrument",
+        "Notes",
+        "Back to one instrument",
+        &[],
+    )
+    .hint("Keep only the first layer's instrument on the instrument track")
+    .words("layers unlayer remove"),
     info(
         Cmd::PatternEditor,
         "pattern-editor",
@@ -1864,6 +1882,22 @@ impl App {
             Cmd::PatternToNotes => {
                 if let Some(key) = self.selected_pattern_clip() {
                     self.pattern_to_notes(&key);
+                }
+            }
+            Cmd::Instrument | Cmd::AddLayer | Cmd::SingleInstrument => {
+                let Some(ti) = self.layer_track() else {
+                    self.message = Some("Add an instrument track first.".into());
+                    return;
+                };
+                self.instrument_open = Some(ti);
+                match cmd {
+                    Cmd::AddLayer => {
+                        self.add_layer(ti);
+                    }
+                    Cmd::SingleInstrument => {
+                        self.single_instrument(ti);
+                    }
+                    _ => {}
                 }
             }
             Cmd::AddInstrumentTrack => {

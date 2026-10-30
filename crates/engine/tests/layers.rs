@@ -93,14 +93,13 @@ impl Insert for DelayGain {
 }
 
 fn note(beat: f64, beats: f64, pitch: u8, velocity: u8) -> NoteSpec {
-    NoteSpec {
-        start: Ticks((beat * PPQ as f64) as i64),
-        len: Ticks((beats * PPQ as f64) as i64),
+    NoteSpec::new(
+        Ticks((beat * PPQ as f64) as i64),
+        Ticks((beats * PPQ as f64) as i64),
         pitch,
         velocity,
-        channel: 0,
-        expr: (0, 0),
-    }
+        0,
+    )
 }
 
 /// A layer, by id, whose instrument has the same id plus 100.

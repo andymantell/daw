@@ -46,9 +46,9 @@ use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
-    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Note, NoteClip,
-    Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
-    TrackKind, TrainerSettings, is_asset_name,
+    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Note,
+    NoteClip, Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup,
+    Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left

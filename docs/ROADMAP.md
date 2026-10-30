@@ -38,6 +38,9 @@ How this document works:
 - **No calendar estimates**. Sizes (S/M/L/XL) are relative effort only.
 - Feature coverage is cross-referenced in
   [research/CAPABILITY_LANDSCAPE.md](research/CAPABILITY_LANDSCAPE.md).
+  Features found elsewhere but not yet on this roadmap are listed in
+  [research/FEATURE_GAPS.md](research/FEATURE_GAPS.md), for the owner to
+  choose from.
 
 ---
 

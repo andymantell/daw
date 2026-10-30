@@ -900,6 +900,13 @@ mod tests {
             .find(|t| t.kind == TrackKind::Audio)
             .unwrap();
         assert_eq!(guitar.sends.len(), 1, "the send is back");
+        // Saved on the way out, as the app does when closing. Without
+        // this, on a slow run, this computer's shared copy can hold
+        // the cleared send (written two seconds after the save) while
+        // the undo was never shared, and reopening merges it back in.
+        let ctx = h.ctx.clone();
+        h.state_mut().save(&ctx).unwrap();
+        settle(&mut h);
         drop(h);
 
         // Reopened: still routed, and the engine takes it.

@@ -37,16 +37,14 @@ test that drives its feature through the agent interface.
 | A6 | **Note effects**: real-time effects on notes before they reach an instrument: arpeggiator, chord, note length, velocity, randomise, and scale (using the project's key and scale from 3.1). They sit at the head of an instrument track's chain and can be rendered to notes. | gaps (High) | new `engine/notefx.rs`, `app/fx.rs` (list entries) | Playing a keyboard through them. |
 | A7 | **Audio that follows tempo**: audio clips can be set to musical time, so they follow tempo changes and the project tempo, stretched in real time and offline; stretch markers placed from detected attacks or by hand; dragging an attack onto a beat with no gaps or doubled attacks; audio quantise with strength and a window; and a tempo map made from a free performance. Built on our own stretcher behind its three calls, at risk on the 0.6 library choice. The interface for stretching a clip between markers lands first in a small PR, because B2 uses it. | Phase 6 | `engine/stretch.rs`, `engine/process.rs`, `app/timing.rs` (stretch markers), `app/tempo.rs` | Listening, and the 0.6 library choice. |
 | A8 | **Interchange with other DAWs**: our own reader and writer for the open project-interchange format in the roadmap's Phase 4 (tracks, routing, clips with fades and loops, markers, notes with expression, automation, plugins with their state, the four generic built-in devices), with time conversion tests, an export report and an import report so nothing is dropped silently, and a fixture set of round-trip tests. | Phase 4 | new `interchange` crate, a File menu entry | Exporting a song from another DAW to try on import. |
-| A9 | **Teacher with many students**: a lesson library, a project per student made from a lesson template, and a view of every student's assignments and practice log at a glance. | Phase 4 | `app/lessons.rs`, `app/start.rs`, `project/lessons.rs` | Trying it with the guitar teacher. |
+| A9 | ~~**Teacher with many students**~~: dropped by the owner on 2026-10-30. The app is for one learner and one teacher, so a lesson library, per-student copies and a many-students view would add steps without paying off. | Phase 4 | None | None. |
 | A10 | **Activity history and an undo list**: who changed what and when, read from the project's change history, and a list of undo steps to jump back several at once. | Phase 4, gaps | new `app/history.rs`, `project/doc.rs` (reading history) | None. |
 | A11 | **Track versions**: alternative versions of a track's clips and settings, kept side by side and switched in one click, merging cleanly when shared. | Phase 4 | new `app/versions.rs`, `project/model.rs` (a version list per track) | None. |
 
 A2 and A7 both touch `engine/process.rs`: A2 in how blocks are
 scheduled, A7 in how a clip reads its audio. A3 and A6 both add entries
 to `app/fx.rs` only. A4 and A11 both add to `project/model.rs`; each
-keeps its own types. A5 and A9 both read other projects in the projects
-folder; A9 calls A5's import once it lands and makes copies of templates
-until then.
+keeps its own types.
 
 ## Set B: start as the items they build on merge
 

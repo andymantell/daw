@@ -332,10 +332,11 @@ mod tests {
         h.state_mut().show_start();
         h.run();
         h.get_by_label("Song for Tuesday").click();
-        h.run();
+        // Steps, not runs: the spinner repaints while the project opens.
+        h.step();
         assert!(h.state().start.showing.is_none());
         for _ in 0..200 {
-            h.run();
+            h.step();
             if !h.state().proj.loading() {
                 break;
             }

@@ -79,6 +79,9 @@ impl Default for Project {
 pub enum TrackKind {
     #[default]
     Audio,
+    /// Plays notes (roadmap 3.1): its note clips drive its instrument,
+    /// which makes its audio. Audio clips on it are played too.
+    Instrument,
     /// A bus other tracks output or send to: a group, or an effect
     /// return.
     Bus,
@@ -92,21 +95,32 @@ impl TrackKind {
     pub fn name(self) -> &'static str {
         match self {
             TrackKind::Audio => "audio",
+            TrackKind::Instrument => "instrument",
             TrackKind::Bus => "bus",
             TrackKind::Folder => "folder",
         }
     }
 
     pub fn from_name(s: &str) -> TrackKind {
-        [TrackKind::Audio, TrackKind::Bus, TrackKind::Folder]
-            .into_iter()
-            .find(|k| k.name() == s)
-            .unwrap_or_default()
+        [
+            TrackKind::Audio,
+            TrackKind::Instrument,
+            TrackKind::Bus,
+            TrackKind::Folder,
+        ]
+        .into_iter()
+        .find(|k| k.name() == s)
+        .unwrap_or_default()
     }
 
     /// Whether other tracks can be routed into it.
     pub fn is_bus(self) -> bool {
-        self != TrackKind::Audio
+        matches!(self, TrackKind::Bus | TrackKind::Folder)
+    }
+
+    /// Whether it plays notes.
+    pub fn plays_notes(self) -> bool {
+        self == TrackKind::Instrument
     }
 }
 
@@ -120,6 +134,15 @@ pub struct Track {
     pub solo: bool,
     /// In the order added: later clips draw (and play) on top.
     pub clips: Vec<Clip>,
+    /// Note clips (roadmap 3.1), in time order. Only an instrument
+    /// track plays them; another kind keeps them, silent.
+    pub note_clips: Vec<NoteClip>,
+    /// The instrument that turns an instrument track's notes into audio,
+    /// before its insert effects: one that comes with the app
+    /// ([`Effect::builtin`]) or a plugin. `None` plays no notes (an
+    /// instrument track made before one was chosen, or notes sent only
+    /// to a MIDI output).
+    pub instrument: Option<Effect>,
     /// Insert effects, in order.
     pub effects: Vec<Effect>,
     /// The track rendered through its effects, for computers that lack
@@ -154,6 +177,8 @@ impl Track {
             mute: false,
             solo: false,
             clips: Vec::new(),
+            note_clips: Vec::new(),
+            instrument: None,
             effects: Vec::new(),
             frozen: None,
             freeze: false,
@@ -178,6 +203,21 @@ impl Track {
     /// has any effect switched on.
     pub fn wants_frozen(&self) -> bool {
         (self.effects.iter()).any(|e| !e.bypass && (e.is_plugin() || self.freeze))
+            || self.instrument.as_ref().is_some_and(Effect::is_plugin)
+    }
+
+    /// The track's notes as they play: each note clip's notes that fall
+    /// inside the clip, placed on the timeline, in time order. Ticks at
+    /// [`PPQ`].
+    pub fn placed_notes(&self) -> Vec<Note> {
+        let mut out: Vec<Note> = (self.note_clips.iter())
+            .filter(|c| !c.muted)
+            .flat_map(NoteClip::placed)
+            .collect();
+        out.sort_by(|a, b| {
+            (a.start, a.pitch, a.id.as_str()).cmp(&(b.start, b.pitch, b.id.as_str()))
+        });
+        out
     }
 
     /// A fingerprint of everything the track's frozen audio depends on:
@@ -843,4 +883,379 @@ pub struct Assignment {
     pub author: String,
     /// When it was set, in milliseconds since 1970, for ordering.
     pub created: i64,
+}
+
+/// Ticks per quarter note, as the engine counts musical time (decision
+/// 0005). Note positions and lengths are in these.
+pub const PPQ: i64 = 960;
+
+/// A note (roadmap 3.1), as a note clip holds it: where it starts and
+/// how long it lasts in ticks at [`PPQ`] from the clip's content start,
+/// so it moves with the tempo, plus how it is played. The optional
+/// string, fret, techniques and drum articulation are what notation
+/// shows (decision 0009); the instrument plays the pitch either way.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub id: String,
+    /// From the start of the clip's content, in ticks.
+    pub start: i64,
+    /// In ticks; at least 1.
+    pub len: i64,
+    /// 0 to 127: 60 is middle C.
+    pub pitch: u8,
+    /// 1 to 127.
+    pub velocity: u8,
+    /// 0 to 15, for instruments and MIDI outputs that listen per channel
+    /// (a MIDI guitar's string per channel, say).
+    pub channel: u8,
+    /// Which string plays it, counted from 1 at the highest, for tab.
+    pub string: Option<u8>,
+    /// Which fret, 0 for open, for tab.
+    pub fret: Option<u8>,
+    /// How far it bends up, in semitones; 0 for no bend.
+    pub bend: f64,
+    /// Playing techniques, for tab, in no particular order.
+    pub techniques: Vec<Technique>,
+    /// How a drum hit is played, for a drum staff.
+    pub articulation: Option<Articulation>,
+    /// 0 to 1: the chance the note plays at all, for patterns; 1 always.
+    pub chance: f64,
+}
+
+impl Note {
+    pub fn new(start: i64, len: i64, pitch: u8, velocity: u8) -> Note {
+        Note {
+            id: crate::new_id(),
+            start,
+            len: len.max(1),
+            pitch,
+            velocity: velocity.clamp(1, 127),
+            channel: 0,
+            string: None,
+            fret: None,
+            bend: 0.0,
+            techniques: Vec::new(),
+            articulation: None,
+            chance: 1.0,
+        }
+    }
+
+    pub fn end(&self) -> i64 {
+        self.start + self.len
+    }
+
+    /// The pitch's name, such as `C4` for middle C or `F#2`.
+    pub fn pitch_name(pitch: u8) -> String {
+        const NAMES: [&str; 12] = [
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+        ];
+        let octave = pitch as i32 / 12 - 1;
+        format!("{}{octave}", NAMES[pitch as usize % 12])
+    }
+
+    /// Whether `other` is the same note played the same way, wherever
+    /// and whenever: everything but the id and the times.
+    pub fn same_sound(&self, other: &Note) -> bool {
+        self.pitch == other.pitch
+            && self.velocity == other.velocity
+            && self.channel == other.channel
+            && self.string == other.string
+            && self.fret == other.fret
+            && self.bend == other.bend
+            && self.techniques == other.techniques
+            && self.articulation == other.articulation
+            && self.chance == other.chance
+    }
+}
+
+/// A way of playing a note on a string (roadmap 3.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Technique {
+    HammerOn,
+    PullOff,
+    /// Slides into the next note on the string.
+    Slide,
+    Vibrato,
+    PalmMute,
+    LetRing,
+    /// A muted, pitchless hit.
+    Dead,
+    /// Played very softly.
+    Ghost,
+    NaturalHarmonic,
+    ArtificialHarmonic,
+    Tap,
+    Slap,
+    Pop,
+    TremoloPicking,
+    StrumDown,
+    StrumUp,
+}
+
+impl Technique {
+    pub const ALL: [Technique; 16] = [
+        Technique::HammerOn,
+        Technique::PullOff,
+        Technique::Slide,
+        Technique::Vibrato,
+        Technique::PalmMute,
+        Technique::LetRing,
+        Technique::Dead,
+        Technique::Ghost,
+        Technique::NaturalHarmonic,
+        Technique::ArtificialHarmonic,
+        Technique::Tap,
+        Technique::Slap,
+        Technique::Pop,
+        Technique::TremoloPicking,
+        Technique::StrumDown,
+        Technique::StrumUp,
+    ];
+
+    /// As the document stores it. Never change one.
+    pub fn name(self) -> &'static str {
+        match self {
+            Technique::HammerOn => "hammer-on",
+            Technique::PullOff => "pull-off",
+            Technique::Slide => "slide",
+            Technique::Vibrato => "vibrato",
+            Technique::PalmMute => "palm-mute",
+            Technique::LetRing => "let-ring",
+            Technique::Dead => "dead",
+            Technique::Ghost => "ghost",
+            Technique::NaturalHarmonic => "natural-harmonic",
+            Technique::ArtificialHarmonic => "artificial-harmonic",
+            Technique::Tap => "tap",
+            Technique::Slap => "slap",
+            Technique::Pop => "pop",
+            Technique::TremoloPicking => "tremolo-picking",
+            Technique::StrumDown => "strum-down",
+            Technique::StrumUp => "strum-up",
+        }
+    }
+
+    /// From the document; `None` for one this version doesn't know.
+    pub fn from_name(s: &str) -> Option<Technique> {
+        Technique::ALL.into_iter().find(|t| t.name() == s)
+    }
+
+    /// For showing.
+    pub fn label(self) -> &'static str {
+        match self {
+            Technique::HammerOn => "Hammer-on",
+            Technique::PullOff => "Pull-off",
+            Technique::Slide => "Slide",
+            Technique::Vibrato => "Vibrato",
+            Technique::PalmMute => "Palm mute",
+            Technique::LetRing => "Let ring",
+            Technique::Dead => "Dead note",
+            Technique::Ghost => "Ghost note",
+            Technique::NaturalHarmonic => "Natural harmonic",
+            Technique::ArtificialHarmonic => "Artificial harmonic",
+            Technique::Tap => "Tap",
+            Technique::Slap => "Slap",
+            Technique::Pop => "Pop",
+            Technique::TremoloPicking => "Tremolo picking",
+            Technique::StrumDown => "Strum down",
+            Technique::StrumUp => "Strum up",
+        }
+    }
+}
+
+/// How a drum hit is played (roadmap 3.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Articulation {
+    Accent,
+    Ghost,
+    Flam,
+    Drag,
+    Roll,
+    /// Hi-hat open, closed or played with the pedal.
+    Open,
+    Closed,
+    Pedal,
+    /// A cymbal grabbed after the hit.
+    Choke,
+    Rimshot,
+    CrossStick,
+}
+
+impl Articulation {
+    pub const ALL: [Articulation; 11] = [
+        Articulation::Accent,
+        Articulation::Ghost,
+        Articulation::Flam,
+        Articulation::Drag,
+        Articulation::Roll,
+        Articulation::Open,
+        Articulation::Closed,
+        Articulation::Pedal,
+        Articulation::Choke,
+        Articulation::Rimshot,
+        Articulation::CrossStick,
+    ];
+
+    /// As the document stores it. Never change one.
+    pub fn name(self) -> &'static str {
+        match self {
+            Articulation::Accent => "accent",
+            Articulation::Ghost => "ghost",
+            Articulation::Flam => "flam",
+            Articulation::Drag => "drag",
+            Articulation::Roll => "roll",
+            Articulation::Open => "open",
+            Articulation::Closed => "closed",
+            Articulation::Pedal => "pedal",
+            Articulation::Choke => "choke",
+            Articulation::Rimshot => "rimshot",
+            Articulation::CrossStick => "cross-stick",
+        }
+    }
+
+    /// From the document; `None` for one this version doesn't know.
+    pub fn from_name(s: &str) -> Option<Articulation> {
+        Articulation::ALL.into_iter().find(|a| a.name() == s)
+    }
+
+    /// For showing.
+    pub fn label(self) -> &'static str {
+        match self {
+            Articulation::Accent => "Accent",
+            Articulation::Ghost => "Ghost",
+            Articulation::Flam => "Flam",
+            Articulation::Drag => "Drag",
+            Articulation::Roll => "Roll",
+            Articulation::Open => "Open hi-hat",
+            Articulation::Closed => "Closed hi-hat",
+            Articulation::Pedal => "Pedal hi-hat",
+            Articulation::Choke => "Choke",
+            Articulation::Rimshot => "Rimshot",
+            Articulation::CrossStick => "Cross-stick",
+        }
+    }
+}
+
+/// A clip of notes on a track (roadmap 3.1). It sits in musical time, so
+/// it moves with the tempo: `start` and `len` are ticks at [`PPQ`] on
+/// the timeline. Its notes are counted from the clip's content start,
+/// `offset` ticks before where it begins (so trimming its start keeps
+/// the notes where they were), and only notes that begin inside the
+/// clip play.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NoteClip {
+    pub id: String,
+    pub name: String,
+    /// Where it begins on the timeline, in ticks.
+    pub start: i64,
+    /// How long it is, in ticks.
+    pub len: i64,
+    /// How far into the content the clip begins, in ticks.
+    pub offset: i64,
+    /// In time order.
+    pub notes: Vec<Note>,
+    pub muted: bool,
+    /// Which recorded pass made it (from 0), or `None` for one drawn or
+    /// imported.
+    pub take: Option<u32>,
+}
+
+impl NoteClip {
+    pub fn new(id: String, name: String, start: i64, len: i64) -> NoteClip {
+        NoteClip {
+            id,
+            name,
+            start,
+            len: len.max(1),
+            offset: 0,
+            notes: Vec::new(),
+            muted: false,
+            take: None,
+        }
+    }
+
+    pub fn end(&self) -> i64 {
+        self.start + self.len
+    }
+
+    /// Where a note at `rel` ticks into the content falls on the
+    /// timeline.
+    pub fn place(&self, rel: i64) -> i64 {
+        self.start - self.offset + rel
+    }
+
+    /// The notes that play: those that begin inside the clip, with their
+    /// starts on the timeline, each cut short at the clip's end.
+    pub fn placed(&self) -> impl Iterator<Item = Note> + '_ {
+        self.notes
+            .iter()
+            .filter(|n| n.start >= self.offset && n.start < self.offset + self.len)
+            .map(|n| {
+                let start = self.place(n.start);
+                Note {
+                    start,
+                    len: n.len.min(self.end() - start).max(1),
+                    ..n.clone()
+                }
+            })
+    }
+
+    /// Puts the notes in time order, as the document keeps them.
+    pub fn sort_notes(&mut self) {
+        self.notes.sort_by(|a, b| {
+            (a.start, a.pitch, a.id.as_str()).cmp(&(b.start, b.pitch, b.id.as_str()))
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clip_places_the_notes_that_begin_inside_it() {
+        let mut c = NoteClip::new("c".into(), "Riff".into(), PPQ * 4, PPQ * 2);
+        c.offset = PPQ;
+        c.notes = vec![
+            Note::new(0, PPQ, 60, 100),           // before the clip: trimmed off
+            Note::new(PPQ, PPQ, 62, 100),         // at the clip's start
+            Note::new(PPQ * 2, PPQ * 4, 64, 100), // runs past the end: cut short
+            Note::new(PPQ * 3, PPQ, 65, 100),     // after the end
+        ];
+        let placed: Vec<(i64, i64, u8)> = c.placed().map(|n| (n.start, n.len, n.pitch)).collect();
+        assert_eq!(placed, [(PPQ * 4, PPQ, 62), (PPQ * 5, PPQ, 64)]);
+    }
+
+    #[test]
+    fn a_tracks_notes_come_in_time_order_without_muted_clips() {
+        let mut t = Track::new("t".into(), "Keys".into());
+        let mut a = NoteClip::new("a".into(), "A".into(), PPQ * 8, PPQ * 4);
+        a.notes.push(Note::new(0, PPQ, 60, 100));
+        let mut b = NoteClip::new("b".into(), "B".into(), 0, PPQ * 4);
+        b.notes.push(Note::new(PPQ, PPQ, 62, 100));
+        let mut m = NoteClip::new("m".into(), "M".into(), 0, PPQ * 4);
+        m.notes.push(Note::new(0, PPQ, 70, 100));
+        m.muted = true;
+        t.note_clips = vec![a, b, m];
+        let pitches: Vec<u8> = t.placed_notes().iter().map(|n| n.pitch).collect();
+        assert_eq!(pitches, [62, 60]);
+    }
+
+    #[test]
+    fn pitch_names() {
+        assert_eq!(Note::pitch_name(60), "C4");
+        assert_eq!(Note::pitch_name(42), "F#2");
+        assert_eq!(Note::pitch_name(0), "C-1");
+        assert_eq!(Note::pitch_name(127), "G9");
+    }
+
+    #[test]
+    fn technique_and_articulation_names_round_trip() {
+        for t in Technique::ALL {
+            assert_eq!(Technique::from_name(t.name()), Some(t));
+        }
+        for a in Articulation::ALL {
+            assert_eq!(Articulation::from_name(a.name()), Some(a));
+        }
+        assert_eq!(Technique::from_name("made up"), None);
+    }
 }

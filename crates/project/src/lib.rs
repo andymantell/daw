@@ -25,10 +25,10 @@ pub use lessons::{
     AssignmentProgress, DoneMark, Lesson, MAX_LESSON_TITLE, PracticeSession, progress,
 };
 pub use model::{
-    Assignment, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve,
-    EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip, GainPoint,
-    HitPoint, Marker, MeterChange, Practice, Project, Send, TabBlock, TempoChange, TimecodeSetup,
-    Track, TrackKind, TrainerSettings,
+    Articulation, Assignment, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
+    CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip,
+    GainPoint, HitPoint, Marker, MeterChange, Note, NoteClip, PPQ, Practice, Project, Send,
+    TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings,
 };
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{
@@ -38,7 +38,7 @@ pub use templates::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A new id for a track, clip, effect, marker, tempo change, comment or tab block: 16 hex digits, unique
+/// A new id for a track, clip, note, effect, marker, tempo change, comment or tab block: 16 hex digits, unique
 /// enough that two people adding things at once never pick the same one.
 pub fn new_id() -> String {
     format!("{:016x}", random_u64())

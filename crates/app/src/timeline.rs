@@ -2863,6 +2863,7 @@ impl Timeline {
             // Buses and folders have no clips: say what they are.
             let tag = match lane.kind {
                 daw_project::TrackKind::Audio => None,
+                daw_project::TrackKind::Instrument => Some("instrument"),
                 daw_project::TrackKind::Bus => Some("bus"),
                 daw_project::TrackKind::Folder => Some("folder"),
             };

@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{Clip, Effect, Fade, Project, Track};
+use crate::{Clip, Effect, Fade, NoteClip, Project, Track};
 
 /// One thing that changed, and where: "Song", a track's name,
 /// "Tracks", "Markers", "Hit points", "Lesson notes", "Tab" or "Groups".
@@ -491,6 +491,69 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             [c] => out.push(format!("{one} “{}”", c.name)),
             all => out.push(format!("{} {many}", all.len())),
         }
+    }
+
+    // Note clips.
+    let was: HashMap<&str, &NoteClip> = (before.note_clips.iter())
+        .map(|c| (c.id.as_str(), c))
+        .collect();
+    let now: HashSet<&str> = after.note_clips.iter().map(|c| c.id.as_str()).collect();
+    let (mut added, mut moved, mut edited, mut muted, mut unmuted) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for c in &after.note_clips {
+        match was.get(c.id.as_str()) {
+            None => added.push(c),
+            Some(b) => {
+                if (b.start, b.len, b.offset) != (c.start, c.len, c.offset) {
+                    moved.push(c);
+                }
+                if b.notes != c.notes {
+                    edited.push(c);
+                }
+                if b.muted != c.muted {
+                    if c.muted { &mut muted } else { &mut unmuted }.push(c);
+                }
+            }
+        }
+    }
+    let removed: Vec<&NoteClip> = (before.note_clips.iter())
+        .filter(|c| !now.contains(c.id.as_str()))
+        .collect();
+    for (clips, one, many) in [
+        (&added, "Added note clip", "note clips added"),
+        (&removed, "Removed note clip", "note clips removed"),
+        (
+            &moved,
+            "Moved or trimmed note clip",
+            "note clips moved or trimmed",
+        ),
+        (
+            &edited,
+            "Changed the notes of clip",
+            "note clips' notes changed",
+        ),
+        (&muted, "Muted note clip", "note clips muted"),
+        (&unmuted, "Unmuted note clip", "note clips unmuted"),
+    ] {
+        match clips.as_slice() {
+            [] => {}
+            [c] => out.push(format!("{one} “{}”", c.name)),
+            all => out.push(format!("{} {many}", all.len())),
+        }
+    }
+    match (&before.instrument, &after.instrument) {
+        (None, Some(i)) => out.push(format!("Instrument “{}” chosen", i.name)),
+        (Some(_), None) => out.push("Instrument removed".into()),
+        (Some(b), Some(a)) => {
+            if b.name != a.name || b.builtin != a.builtin || b.class != a.class {
+                out.push(format!("Instrument changed to “{}”", a.name));
+            } else if matches!((&b.state, &a.state), (Some(x), Some(y)) if x != y)
+                || b.params != a.params
+            {
+                out.push(format!("Changed the settings of “{}”", a.name));
+            }
+        }
+        (None, None) => {}
     }
 
     // Effects.

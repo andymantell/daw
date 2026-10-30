@@ -3,7 +3,7 @@
 //! sound of videos, as tracks; play them with a mixer, loop, metronome
 //! and count-in, choose the audio device, and record: per track input, arm and monitor, with takes kept
 //! and switchable; VST 3 effects as track inserts; a tuner and practice
-//! mute; export of the mix and stems to WAV; a timeline to edit clips
+//! mute; export of the mix and stems to WAV, FLAC, MP3 or Opus; a timeline to edit clips
 //! and mark sections; comments pinned to times in the song; level,
 //! loudness and spectrum meters.
 //!
@@ -741,7 +741,7 @@ impl App {
             .collect()
     }
 
-    /// Renders the mix (and stems, if asked) to WAV in the background.
+    /// Renders the mix (and stems, if asked) to a file in the background.
     fn start_export(&mut self, req: export::Request) -> Result<(), String> {
         let map = self.tempo_map();
         let mut s = self.session();
@@ -789,7 +789,14 @@ impl App {
             graph: mix,
         }];
         if req.stems {
-            for (i, t) in self.tracks.iter().enumerate() {
+            // A bus on its own has nothing going into it; buses have
+            // stems of their own below.
+            for (i, t) in self
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.kind.is_bus())
+            {
                 let mut one = Session::new(map.clone());
                 let mut spec = s.tracks[i].clone();
                 spec.mix.mute = false;
@@ -803,7 +810,22 @@ impl App {
                 });
             }
         }
-        self.export.start(&req.folder, parts, plugins, from, frames)
+        if req.bus_stems {
+            for (i, t) in self
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.kind.is_bus())
+            {
+                let one = mixer::through_bus(&s, i);
+                parts.push(export::Part {
+                    name: format!("{:02} {}", i + 1, export::file_name(&t.name)),
+                    graph: graph(&one, &all, &mut plugins)?,
+                });
+            }
+        }
+        self.export
+            .start(&req.folder, parts, plugins, req.format, from, frames)
     }
 
     fn send_graph(&mut self, g: daw_engine::graph::Graph) {
@@ -2137,7 +2159,8 @@ impl eframe::App for App {
         };
         self.export.set_default_dir(exports);
         let loop_text = format!("bars {} to {}", self.loop_bars.0, self.loop_bars.1);
-        if let Some(req) = self.export.window(&ctx, &loop_text)
+        let buses = self.tracks.iter().any(|t| t.kind.is_bus());
+        if let Some(req) = self.export.window(&ctx, &loop_text, buses)
             && let Err(e) = self.start_export(req)
         {
             self.message = Some(e);

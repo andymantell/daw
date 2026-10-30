@@ -9,7 +9,7 @@
 //! anything else (a new bus, a changed output, a send added) rebuilds it.
 
 use daw_engine::engine::Command;
-use daw_engine::graph::{GroupSpec, Output, TrackSpec};
+use daw_engine::graph::{GroupSpec, Output, Session, TrackSpec};
 use daw_project::{ControlGroup, Send, TrackKind};
 use eframe::egui::{self, RichText, vec2};
 
@@ -25,6 +25,28 @@ pub(crate) fn alone(spec: &mut TrackSpec) {
     for i in &mut spec.inserts {
         i.sidechain = None;
     }
+}
+
+/// The session as it sounds coming out of bus `bus` alone, for that
+/// bus's stem: everything routed or sent into it (directly or through
+/// other buses), through its effects and fader, and nothing else. Every
+/// other track that went to the master goes instead to a muted bus
+/// added at the end, so its sends into this bus still sound.
+pub(crate) fn through_bus(s: &Session, bus: usize) -> Session {
+    let mut s = s.clone();
+    let silent = s.tracks.len();
+    for (i, t) in s.tracks.iter_mut().enumerate() {
+        if i == bus {
+            t.output = Output::Master;
+            t.mix.mute = false;
+        } else if t.output == Output::Master {
+            t.output = Output::Track(silent);
+        }
+    }
+    let mut sink = TrackSpec::new(Vec::new());
+    sink.mix.mute = true;
+    s.tracks.push(sink);
+    s
 }
 
 /// What the mixer asks the app to do after drawing, once the borrows
@@ -885,5 +907,60 @@ mod tests {
         app.tracks[2].sends.push(daw_project::Send::to(a.clone()));
         let err = app.session().compile(256).err().unwrap();
         assert!(err.to_string().contains("come back round"), "{err}");
+    }
+
+    /// A bus's stem holds what goes through it and nothing else: the
+    /// mix with the bus muted, plus its stem, is the mix.
+    #[test]
+    fn a_bus_stem_is_its_part_of_the_mix() {
+        use std::sync::Arc;
+
+        use daw_engine::engine::render_offline;
+        use daw_engine::graph::{AudioData, ClipSpec, SendSpec, Session, TrackSpec};
+        use daw_engine::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
+
+        let rate = 48_000;
+        let clip = |level: f32| {
+            ClipSpec::new(
+                Ticks(0),
+                Arc::new(AudioData {
+                    channels: vec![vec![level; 4096]],
+                    rate,
+                }),
+            )
+        };
+        let mut s = Session::new(TempoMap::new(rate, Tempo::bpm(120), TimeSignature::COMMON));
+        // 0 goes into the bus (1); 2 goes to the master and sends to the
+        // bus; 3 goes to the master only.
+        let mut into = TrackSpec::new(vec![clip(0.1)]);
+        into.output = Output::Track(1);
+        let mut bus = TrackSpec::new(Vec::new());
+        bus.mix.gain_db = -6.0;
+        let mut sends = TrackSpec::new(vec![clip(0.2)]);
+        sends.sends.push(SendSpec::to(1));
+        let direct = TrackSpec::new(vec![clip(0.4)]);
+        s.tracks = vec![into, bus, sends, direct];
+
+        let render = |s: &Session| render_offline(s.compile(256).unwrap(), Frames(0), 2048, 256);
+        let mix = render(&s);
+        let stem = render(&super::through_bus(&s, 1));
+        let mut without = s.clone();
+        without.tracks[1].mix.mute = true;
+        let rest = render(&without);
+        for ch in 0..2 {
+            for i in 0..2048 {
+                let sum = stem[ch][i] + rest[ch][i];
+                assert!((sum - mix[ch][i]).abs() < 1e-5, "channel {ch} frame {i}");
+            }
+        }
+        assert!(stem[0][1000] > 0.01, "the bus sounds");
+
+        // With nothing going into the bus, its stem is silent: the track
+        // that only goes to the master is left out.
+        let mut only_direct = s.clone();
+        only_direct.tracks[0].clips.clear();
+        only_direct.tracks[2].clips.clear();
+        let stem = render(&super::through_bus(&only_direct, 1));
+        assert!(stem.iter().flatten().all(|x| x.abs() < 1e-6));
     }
 }

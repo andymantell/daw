@@ -231,8 +231,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         .hint("Who has this project, and what they may change")
         .words("roles join name"),
     info(Cmd::Export, "export", "File", "Export…", &[])
-        .hint("The mix or each track's stem as a WAV file")
-        .words("render bounce stems wav mixdown"),
+        .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
+        .words("render bounce stems wav flac mp3 opus ogg mixdown bus"),
     info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)]).repeat(),
     info(
         Cmd::Redo,

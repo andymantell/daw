@@ -773,7 +773,7 @@ impl Videos {
             (hits.iter().rev()).find(|h| h.at <= playhead && playhead < h.at + held.max(frame_len))
         {
             boxed(
-                format!("◆ {}", h.name),
+                format!("Hit point: {}", h.name),
                 look.font(look.body),
                 on.left_top() + vec2(6.0, 30.0),
                 Align2::LEFT_TOP,
@@ -892,7 +892,10 @@ impl App {
                 film.and_then(|c| Some((c, c.thumbs.info()?)))
                     .is_none_or(|(c, info)| {
                         let clock = hitpoints::clock(&self.timecode);
-                        rate_for(&info, clock.rate) == Some(clock.rate) && clock.offset == c.zero()
+                        // A film at a rate timecode doesn't count in is
+                        // lined up once its start is.
+                        let rate = rate_for(&info, clock.rate);
+                        rate.is_none_or(|r| r == clock.rate) && clock.offset == c.zero()
                     });
             if !lined_up
                 && ui

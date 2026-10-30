@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{Clip, Effect, Fade, Project, Track};
 
 /// One thing that changed, and where: "Song", a track's name,
-/// "Tracks", "Markers", "Lesson notes" or "Tab".
+/// "Tracks", "Markers", "Lesson notes", "Tab" or "Groups".
 #[derive(Clone, Debug, PartialEq)]
 pub struct Difference {
     pub place: String,
@@ -26,7 +26,8 @@ pub struct Difference {
 const SLACK: i64 = 2;
 
 /// What changed going from `before` to `after`, song first, then each
-/// track in `after`'s order, then markers, notes and tab blocks.
+/// track in `after`'s order, then markers, notes, tab blocks and edit
+/// groups.
 pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     let mut out = Vec::new();
     let mut say = |place: &str, text: String| {
@@ -265,6 +266,48 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     }
     for b in before.tabs.iter().filter(|b| !now.contains(b.id.as_str())) {
         say("Tab", format!("Removed “{}”", title(&b.title)));
+    }
+
+    // Edit groups.
+    let names = |p: &Project, ids: &[String]| {
+        let names: Vec<String> = (p.tracks.iter())
+            .filter(|t| ids.contains(&t.id))
+            .map(|t| format!("“{}”", t.name))
+            .collect();
+        match names.len() {
+            0 => "no tracks".to_string(),
+            _ => names.join(", "),
+        }
+    };
+    let was: HashMap<&str, _> = (before.edit_groups.iter())
+        .map(|g| (g.id.as_str(), g))
+        .collect();
+    let now: HashSet<&str> = after.edit_groups.iter().map(|g| g.id.as_str()).collect();
+    for g in &after.edit_groups {
+        match was.get(g.id.as_str()) {
+            None => say(
+                "Groups",
+                format!("Added “{}” of {}", g.name, names(after, &g.tracks)),
+            ),
+            Some(o) => {
+                if o.name != g.name {
+                    say("Groups", format!("Renamed “{}” to “{}”", o.name, g.name));
+                }
+                if o.tracks != g.tracks {
+                    say(
+                        "Groups",
+                        format!("“{}” now groups {}", g.name, names(after, &g.tracks)),
+                    );
+                }
+                if o.active != g.active {
+                    let on = if g.active { "on" } else { "off" };
+                    say("Groups", format!("Turned “{}” {on}", g.name));
+                }
+            }
+        }
+    }
+    for g in (before.edit_groups.iter()).filter(|g| !now.contains(g.id.as_str())) {
+        say("Groups", format!("Removed “{}”", g.name));
     }
     out
 }
@@ -711,6 +754,39 @@ mod tests {
             ]
         );
         assert_eq!(texts(&differences(&r, &song()))[2], "Lesson notes: Written");
+    }
+
+    #[test]
+    fn edit_groups_are_listed_by_name() {
+        let group = crate::EditGroup {
+            id: "eg".into(),
+            name: "Rhythm".into(),
+            tracks: vec!["b".into(), "g".into()],
+            active: true,
+            created: 1,
+        };
+        let mut q = song();
+        q.edit_groups.push(group.clone());
+        assert_eq!(
+            texts(&differences(&song(), &q)),
+            ["Groups: Added “Rhythm” of “Guitar”, “Bass”"]
+        );
+        let mut r = q.clone();
+        r.edit_groups[0].name = "Band".into();
+        r.edit_groups[0].tracks = vec!["g".into()];
+        r.edit_groups[0].active = false;
+        assert_eq!(
+            texts(&differences(&q, &r)),
+            [
+                "Groups: Renamed “Rhythm” to “Band”",
+                "Groups: “Band” now groups “Guitar”",
+                "Groups: Turned “Band” off",
+            ]
+        );
+        assert_eq!(
+            texts(&differences(&q, &song())),
+            ["Groups: Removed “Rhythm”"]
+        );
     }
 
     #[test]

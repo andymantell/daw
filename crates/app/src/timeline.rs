@@ -6,7 +6,8 @@
 //! volume with a line of points. Ripple editing closes the gaps that
 //! deleting and trimming leave. Markers on bar lines name the song's
 //! sections, and a section can be looped. Clips can be normalised,
-//! reversed or have their gain changed. Comments show as pins. Undo
+//! reversed or have their gain changed. Clips on grouped tracks are
+//! edited together (see `groups.rs`). Comments show as pins. Undo
 //! belongs to the project document; the timeline only asks for it.
 
 use std::collections::{HashMap, HashSet};
@@ -26,6 +27,7 @@ use eframe::egui::{
 };
 
 use crate::commands::Cmd;
+use crate::groups::{self, LaneGroup};
 use crate::theme::{Look, LoopFill, Texture, WaveStyle};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -829,6 +831,8 @@ struct Drag {
     after: Vec<(u64, i64)>,
     /// Height under the pointer when pressed.
     from_y: f32,
+    /// Grouped clips are held: they stay on their tracks.
+    grouped: bool,
     moved: bool,
 }
 
@@ -868,6 +872,10 @@ pub struct Timeline {
     pub ripple: bool,
     /// Show each clip's volume line, to drag and add points to.
     pub show_volume: bool,
+    /// The project's active edit groups, set by the app each frame.
+    pub groups: Vec<LaneGroup>,
+    /// Edit grouped tracks together; off, each clip is edited alone.
+    pub group_edit: bool,
     /// The fades and volume window for the selected clips is open.
     pub fades_open: bool,
     /// Width of the lanes last drawn, in points, for zooming.
@@ -904,6 +912,8 @@ impl Default for Timeline {
             magnet: false,
             ripple: false,
             show_volume: false,
+            groups: Vec::new(),
+            group_edit: true,
             fades_open: false,
             width: 600.0,
             fades_unsettled: false,
@@ -1496,21 +1506,49 @@ impl Timeline {
         }
     }
 
+    /// The groups edited together now: none while group editing is off.
+    fn grouped(&self) -> &[LaneGroup] {
+        if self.group_edit { &self.groups } else { &[] }
+    }
+
+    /// Makes clip `id`, and the clips edited with it, the selection.
+    fn select_only(&mut self, song: &Song, id: u64) {
+        self.selected = groups::with_partners(song, self.grouped(), [id]);
+    }
+
+    /// Adds clip `id`, and the clips edited with it, to the selection,
+    /// or takes them out if it is in it.
+    fn toggle_selected(&mut self, song: &Song, id: u64) {
+        let these = groups::with_partners(song, self.grouped(), [id]);
+        if self.selected.contains(&id) {
+            self.selected.retain(|c| !these.contains(c));
+        } else {
+            self.selected.extend(these);
+        }
+    }
+
+    /// Whether any selected clip is on a grouped track. Those stay on
+    /// their tracks when moved, so each mic keeps its own track.
+    fn selection_grouped(&self, song: &Song) -> bool {
+        (self.selected.iter())
+            .filter_map(|&id| song.lane_of(id))
+            .any(|l| groups::group_of(self.grouped(), l).is_some())
+    }
+
     /// Keys act on the selection; a focused clip that isn't selected
     /// becomes the selection first, as a dragged clip does.
-    fn select_focused(&mut self) {
+    fn select_focused(&mut self, song: &Song) {
         if let Some(id) = self.focused_clip()
             && !self.selected.contains(&id)
         {
-            self.selected.clear();
-            self.selected.insert(id);
+            self.select_only(song, id);
         }
     }
 
     /// Moves the selected clips by `n` steps of `grid`; none goes before
     /// the start.
     fn nudge(&mut self, song: &mut Song, map: &TempoMap, n: i64, grid: Grid) -> bool {
-        self.select_focused();
+        self.select_focused(song);
         let ids: Vec<u64> = song
             .ordered()
             .into_iter()
@@ -1543,7 +1581,10 @@ impl Timeline {
     /// Moves the selected clips `by` tracks down (up if negative), as
     /// far as they all fit.
     fn shift_lane(&mut self, song: &mut Song, by: isize) -> bool {
-        self.select_focused();
+        self.select_focused(song);
+        if self.selection_grouped(song) {
+            return false;
+        }
         let n = song.lanes.len() as isize;
         let ids: Vec<(usize, u64)> = (self.selected.iter())
             .filter_map(|&id| song.lane_of(id).map(|l| (l, id)))
@@ -1566,7 +1607,7 @@ impl Timeline {
     }
 
     /// Trims the focused clip's start or end edge by `n` steps of
-    /// `grid`.
+    /// `grid`, and the same edge of the clips edited with it as far.
     fn trim_focused(
         &mut self,
         song: &mut Song,
@@ -1578,7 +1619,26 @@ impl Timeline {
         let Some(id) = self.focused_clip() else {
             return false;
         };
-        let ripple = self.ripple;
+        let Some(c) = song.find(id) else {
+            return false;
+        };
+        let by = if end {
+            step(map, c.end(), n, grid) - c.end()
+        } else {
+            step(map, c.start, n, grid) - c.start
+        };
+        let mut ids = vec![id];
+        ids.extend(groups::partners(song, self.grouped(), id));
+        let mut changed = false;
+        for id in ids {
+            changed |= self.trim_by(song, id, by, end);
+        }
+        changed
+    }
+
+    /// Moves clip `id`'s start or end edge `by` frames, rippling the
+    /// clips after a moved end when ripple is on.
+    fn trim_by(&self, song: &mut Song, id: u64, by: i64, end: bool) -> bool {
         let Some(lane) = song.lane_of(id) else {
             return false;
         };
@@ -1590,13 +1650,13 @@ impl Timeline {
         let was = (c.start, c.offset, c.len);
         let old_end = c.end();
         if end {
-            c.trim_end(step(map, c.end(), n, grid));
+            c.trim_end(old_end + by);
         } else {
-            c.trim_start(step(map, c.start, n, grid));
+            c.trim_start(c.start + by);
         }
         let changed = (c.start, c.offset, c.len) != was;
         let by = c.end() - old_end;
-        if end && ripple && by != 0 {
+        if end && self.ripple && by != 0 {
             for o in clips
                 .iter_mut()
                 .filter(|o| o.id != id && o.start >= old_end)
@@ -1686,7 +1746,7 @@ impl Timeline {
                         song.markers.remove(i);
                     } else {
                         if focused {
-                            self.select_focused();
+                            self.select_focused(song);
                             self.focus_next = self.neighbour(song);
                         }
                         out.changed |= self.delete_selected(song);
@@ -1694,7 +1754,7 @@ impl Timeline {
                 }
                 Cmd::Split => {
                     if focused {
-                        self.select_focused();
+                        self.select_focused(song);
                     }
                     out.changed |= self.split_at(song, view.playhead);
                 }
@@ -1702,13 +1762,13 @@ impl Timeline {
                 Cmd::ClearSelection => self.selected.clear(),
                 Cmd::Crossfade => {
                     if focused {
-                        self.select_focused();
+                        self.select_focused(song);
                     }
                     out.changed |= self.crossfade_selected(song, view.rate);
                 }
                 Cmd::ClipFades => {
                     if focused {
-                        self.select_focused();
+                        self.select_focused(song);
                     }
                     self.fades_open = true;
                 }
@@ -1718,6 +1778,7 @@ impl Timeline {
                 Cmd::Snap => self.snap = !self.snap,
                 Cmd::Ripple => self.ripple = !self.ripple,
                 Cmd::VolumeLines => self.show_volume = !self.show_volume,
+                Cmd::GroupEdit => self.group_edit = !self.group_edit,
                 _ => {}
             }
         }
@@ -1762,12 +1823,9 @@ impl Timeline {
             return;
         };
         if key(Modifiers::COMMAND, Key::Enter) {
-            if !self.selected.remove(&id) {
-                self.selected.insert(id);
-            }
+            self.toggle_selected(song, id);
         } else if key(Modifiers::NONE, Key::Enter) {
-            self.selected.clear();
-            self.selected.insert(id);
+            self.select_only(song, id);
             if let Some(c) = song.find(id) {
                 out.seek = Some(c.start);
             }
@@ -1837,6 +1895,11 @@ impl Timeline {
             ui.checkbox(&mut self.show_volume, "Volume").on_hover_text(
                 "Show each clip's volume line: drag it up or down, double-click to add a point",
             );
+            if !self.groups.is_empty() {
+                ui.checkbox(&mut self.group_edit, "Groups").on_hover_text(
+                    "Edit the clips on grouped tracks together. Untick to edit one track alone",
+                );
+            }
             ui.separator();
             if ui
                 .button("−")
@@ -2112,8 +2175,11 @@ impl Timeline {
                         if !(modifiers.shift || modifiers.command) || slip {
                             self.selected.clear();
                         }
-                        self.selected.insert(id);
+                        self.toggle_selected(song, id);
                     }
+                    // An edge or fade drags the clip's own, and the same
+                    // one on the clips edited with it.
+                    let edged = groups::with_partners(song, self.grouped(), [id]);
                     let held: Vec<(usize, Clip)> = song
                         .lanes
                         .iter()
@@ -2122,21 +2188,25 @@ impl Timeline {
                         .filter(|(_, c)| {
                             if zone == Zone::Body {
                                 self.selected.contains(&c.id)
-                            } else {
+                            } else if matches!(zone, Zone::Volume(_)) {
                                 c.id == id
+                            } else {
+                                edged.contains(&c.id)
                             }
                         })
                         .map(|(l, c)| (l, c.clone()))
                         .collect();
-                    let after = match (zone, song.lane_of(id), song.find(id)) {
-                        (Zone::EndEdge, Some(l), Some(c)) if self.ripple => {
-                            (song.lanes[l].clips.iter())
-                                .filter(|o| o.id != id && o.start >= c.end())
-                                .map(|o| (o.id, o.start))
-                                .collect()
-                        }
+                    let after = match zone {
+                        Zone::EndEdge if self.ripple => (held.iter())
+                            .flat_map(|(l, c)| {
+                                (song.lanes[*l].clips.iter())
+                                    .filter(|o| !edged.contains(&o.id) && o.start >= c.end())
+                                    .map(|o| (o.id, o.start))
+                            })
+                            .collect(),
                         _ => Vec::new(),
                     };
+                    let grouped = self.selection_grouped(song);
                     self.drag = Some(Drag {
                         zone,
                         anchor: id,
@@ -2146,6 +2216,7 @@ impl Timeline {
                         originals: held,
                         slip,
                         after,
+                        grouped,
                         moved: false,
                     });
                     self.focus_next = Some(Focus::Clip(id));
@@ -2206,8 +2277,11 @@ impl Timeline {
                         }
                         let lo = d.originals.iter().map(|(l, _)| *l).min().unwrap_or(0) as isize;
                         let hi = d.originals.iter().map(|(l, _)| *l).max().unwrap_or(0) as isize;
-                        let dl = (lane_at(p.y) as isize - d.from_lane as isize)
-                            .clamp(-lo, lanes_n as isize - 1 - hi);
+                        let dl = match d.grouped {
+                            true => 0,
+                            false => (lane_at(p.y) as isize - d.from_lane as isize)
+                                .clamp(-lo, lanes_n as isize - 1 - hi),
+                        };
                         for (l, o) in &d.originals {
                             let to = (*l as isize + dl) as usize;
                             d.moved |= song.move_to_lane(o.id, to);
@@ -2217,19 +2291,32 @@ impl Timeline {
                             }
                         }
                     }
+                    // The held clip's edge lands on the grid; grouped
+                    // clips' edges move as far.
                     Zone::StartEdge => {
-                        let mut t = anchor.clone();
-                        t.trim_start(snap_to(anchor.start + dx));
-                        set(song, t);
+                        let by = snap_to(anchor.start + dx) - anchor.start;
+                        for (_, o) in &d.originals {
+                            let mut t = o.clone();
+                            t.trim_start(o.start + by);
+                            set(song, t);
+                        }
                     }
                     Zone::EndEdge => {
-                        let mut t = anchor.clone();
-                        t.trim_end(snap_to(anchor.end() + dx));
-                        let by = t.end() - anchor.end();
-                        set(song, t);
+                        let by = snap_to(anchor.end() + dx) - anchor.end();
+                        // Ripple moves what follows by as far as the held
+                        // clip's end actually went.
+                        let mut moved = by;
+                        for (_, o) in &d.originals {
+                            let mut t = o.clone();
+                            t.trim_end(o.end() + by);
+                            if o.id == anchor.id {
+                                moved = t.end() - o.end();
+                            }
+                            set(song, t);
+                        }
                         for &(id, start) in &d.after {
                             if let Some(c) = song.find_mut(id) {
-                                c.start = start + by;
+                                c.start = start + moved;
                             }
                         }
                     }
@@ -2241,9 +2328,11 @@ impl Timeline {
                         } else {
                             at - anchor.start
                         };
-                        let mut t = anchor.clone();
-                        t.set_fade(end, len.max(0) as usize);
-                        set(song, t);
+                        for (_, o) in &d.originals {
+                            let mut t = o.clone();
+                            t.set_fade(end, len.max(0) as usize);
+                            set(song, t);
+                        }
                     }
                     Zone::Volume(None) => {
                         let mut t = anchor.clone();
@@ -2290,12 +2379,9 @@ impl Timeline {
             match hit(p, song) {
                 Some(Hit::Clip { id, .. }) => {
                     if modifiers.shift || modifiers.command {
-                        if !self.selected.remove(&id) {
-                            self.selected.insert(id);
-                        }
+                        self.toggle_selected(song, id);
                     } else {
-                        self.selected.clear();
-                        self.selected.insert(id);
+                        self.select_only(song, id);
                     }
                     self.focus_next = Some(Focus::Clip(id));
                 }
@@ -2354,8 +2440,7 @@ impl Timeline {
             if let Some((Hit::Clip { id, .. }, _)) = self.menu
                 && !self.selected.contains(&id)
             {
-                self.selected.clear();
-                self.selected.insert(id);
+                self.select_only(song, id);
             }
         }
 
@@ -2386,15 +2471,20 @@ impl Timeline {
             let top = lane_top(i);
             let mut order: Vec<&Clip> = lane.clips.iter().collect();
             order.sort_by_key(|c| (c.start, c.id));
+            let group = match groups::group_of(self.grouped(), i) {
+                Some(g) => format!(" (group {})", g.name),
+                None => String::new(),
+            };
             for c in order {
                 let r = Rect::from_x_y_ranges(
                     x_of(c.start)..=x_of(c.end()),
                     top + 2.0..=top + lane_h - 2.0,
                 );
                 let name = format!(
-                    "{} on {}, {} to {}{}{}",
+                    "{} on {}{}, {} to {}{}{}",
                     c.name(),
                     lane.name,
+                    group,
                     spoken(view.map, c.start),
                     spoken(view.map, c.end()),
                     if c.muted { ", muted" } else { "" },
@@ -2598,6 +2688,17 @@ impl Timeline {
                 look.font(look.body),
                 tc.text,
             );
+            // Its edit group's name, faint while group editing is off.
+            if let Some(g) = groups::group_of(&self.groups, i) {
+                let c = if self.group_edit { tc.text } else { tc.line };
+                lanes.text(
+                    name_rect.left_bottom() + vec2(16.0, -6.0),
+                    Align2::LEFT_BOTTOM,
+                    &g.name,
+                    look.font(look.small),
+                    c,
+                );
+            }
             lanes.line_segment(
                 [
                     pos2(rect.left(), top + lane_h),
@@ -3266,6 +3367,78 @@ pub(crate) mod tests {
         assert!(tl.trim_focused(&mut song, &map, -1, Grid::Beat, true));
         assert_eq!(song.lanes[0].clips[0].end(), 72_000);
         assert_eq!(song.lanes[0].clips[1].start, 72_000);
+    }
+
+    #[test]
+    fn grouped_tracks_are_edited_together() {
+        let map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+        let mut kick = vec![clip(0, 96_000)];
+        let mut snare = vec![clip(0, 96_000)];
+        let mut bass = vec![clip(0, 96_000)];
+        let mut markers = Vec::new();
+        let mut tl = Timeline {
+            groups: vec![LaneGroup {
+                name: "Drums".into(),
+                lanes: vec![0, 1],
+            }],
+            ..Timeline::default()
+        };
+        let mut song = Song {
+            lanes: vec![
+                Lane {
+                    name: "Kick",
+                    clips: &mut kick,
+                },
+                Lane {
+                    name: "Snare",
+                    clips: &mut snare,
+                },
+                Lane {
+                    name: "Bass",
+                    clips: &mut bass,
+                },
+            ],
+            markers: &mut markers,
+        };
+        let k = song.lanes[0].clips[0].id;
+        let sn = song.lanes[1].clips[0].id;
+
+        // Selecting one selects its partner, but not the bass.
+        tl.select_only(&song, k);
+        assert_eq!(tl.selected, HashSet::from([k, sn]));
+        tl.toggle_selected(&song, sn);
+        assert!(tl.selected.is_empty());
+
+        // Split at a beat: both drum tracks split, the bass doesn't.
+        tl.select_only(&song, k);
+        assert!(tl.split_at(&mut song, 24_000));
+        let lens: Vec<usize> = song.lanes.iter().map(|l| l.clips.len()).collect();
+        assert_eq!(lens, [2, 2, 1]);
+        assert_eq!(tl.selected.len(), 4);
+
+        // Nudging moves them all; they can't leave their tracks.
+        assert!(tl.nudge(&mut song, &map, 1, Grid::Beat));
+        for l in &song.lanes[..2] {
+            assert_eq!(l.clips[0].start, 24_000);
+        }
+        assert_eq!(song.lanes[2].clips[0].start, 0);
+        assert!(!tl.shift_lane(&mut song, 1));
+
+        // Trimming one end trims its partner's.
+        let second = song.lanes[0].clips[1].id;
+        tl.focus = Some((Focus::Clip(second), egui::Id::NULL));
+        assert!(tl.trim_focused(&mut song, &map, -1, Grid::Beat, true));
+        assert_eq!(song.lanes[0].clips[1].end(), 96_000);
+        assert_eq!(song.lanes[1].clips[1].end(), 96_000);
+
+        // With group editing off, a clip is edited alone.
+        tl.group_edit = false;
+        tl.select_only(&song, second);
+        assert_eq!(tl.selected, HashSet::from([second]));
+        assert!(tl.trim_focused(&mut song, &map, -1, Grid::Beat, true));
+        assert_eq!(song.lanes[0].clips[1].end(), 72_000);
+        assert_eq!(song.lanes[1].clips[1].end(), 96_000);
+        assert!(tl.shift_lane(&mut song, 1));
     }
 
     #[test]

@@ -425,8 +425,11 @@ curve shapes, clip volume and volume points, a grid of bars, beats and
 parts of beats (or one that follows the zoom) along the tempo map,
 snapping to it or to other clips and markers, nudging by the grid,
 slip-edit, ripple delete and trim, and zoom to the selection, all heard in
-playback, export and frozen tracks. Range tools and group editing are
-still to come. Checks are in `docs/review-queue/2.1-fades-grid-snap.md`.*
+playback, export and frozen tracks. Group editing: tracks in an edit
+group have their clips selected, moved, split, trimmed and faded
+together (checks in `docs/review-queue/2.1-group-editing.md`). Range
+tools are still to come. Checks are in
+`docs/review-queue/2.1-fades-grid-snap.md`.*
 - Fades and crossfades with curve shapes. Clip gain and gain envelopes.
 - Nudge, slip-edit, ripple edit, range tools, grid and snap modes, zoom.
 - Group editing across tracks (edit multiple drum mics together).

@@ -33,6 +33,8 @@ pub struct Project {
     pub tabs: Vec<TabBlock>,
     /// Pinned comments and their replies, oldest first.
     pub comments: Vec<Comment>,
+    /// Tracks edited together, in the order made.
+    pub edit_groups: Vec<EditGroup>,
 }
 
 impl Default for Project {
@@ -51,6 +53,7 @@ impl Default for Project {
             notes: String::new(),
             tabs: Vec::new(),
             comments: Vec::new(),
+            edit_groups: Vec::new(),
         }
     }
 }
@@ -393,6 +396,21 @@ impl Effect {
 pub struct EffectState {
     pub component: Vec<u8>,
     pub controller: Option<Vec<u8>>,
+}
+
+/// Tracks edited together (roadmap 2.1), such as a drum kit's mics:
+/// cutting, moving, trimming or fading a clip on one does the same to
+/// the clips at that time on the others.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditGroup {
+    pub id: String,
+    pub name: String,
+    /// Track ids, sorted. A track is in one group at most.
+    pub tracks: Vec<String>,
+    /// Off, the tracks are edited one at a time but stay grouped.
+    pub active: bool,
+    /// Order among the groups: when made, in milliseconds since 1970.
+    pub created: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]

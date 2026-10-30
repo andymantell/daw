@@ -38,12 +38,14 @@ pub(crate) enum Cmd {
     ClearSelection,
     Crossfade,
     ClipFades,
+    EditGroups,
     ZoomIn,
     ZoomOut,
     ZoomSelection,
     Snap,
     Ripple,
     VolumeLines,
+    GroupEdit,
     PlayStop,
     ToStart,
     Record,
@@ -276,6 +278,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Fade in, fade out and volume of the selected clips")
     .words("gain level fade curve envelope"),
+    info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
+        .hint("Group tracks, such as drum mics, so their clips are edited together")
+        .words("link tracks drums multitrack"),
     info(
         Cmd::ZoomIn,
         "zoom-in",
@@ -330,6 +335,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Show each clip's volume line, to drag and add points to")
     .words("gain envelope automation"),
+    info(
+        Cmd::GroupEdit,
+        "group-edit",
+        "View",
+        "Group editing on or off",
+        &[key(NONE, Key::G)],
+    )
+    .hint("Edit the clips on grouped tracks together, or one track alone")
+    .words("link drums suspend"),
     info(
         Cmd::PlayStop,
         "play",
@@ -607,6 +621,7 @@ impl Cmd {
                 | Cmd::Snap
                 | Cmd::Ripple
                 | Cmd::VolumeLines
+                | Cmd::GroupEdit
         )
     }
 }
@@ -1412,6 +1427,7 @@ impl App {
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::KeyCommands => self.commands.editor.open = true,
             Cmd::Theme => self.themes.open = true,
+            Cmd::EditGroups => self.groups_ui.open = true,
             Cmd::NextTheme => self.themes.next(),
             Cmd::LightDark => self.themes.flip(ctx),
             Cmd::FindCommand => {
@@ -1435,7 +1451,8 @@ impl App {
             | Cmd::ZoomSelection
             | Cmd::Snap
             | Cmd::Ripple
-            | Cmd::VolumeLines => {}
+            | Cmd::VolumeLines
+            | Cmd::GroupEdit => {}
         }
     }
 }

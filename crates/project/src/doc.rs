@@ -5,7 +5,9 @@
 //! with the track order in the movable list `order`, a `markers` map,
 //! `tempo_changes` and `meter_changes` maps from id to change, and
 //! the lesson notes as text, a `tabs` map from id to tab block, and a
-//! `comments` map from id to comment. A
+//! `comments` map from id to comment, and an `edit_groups` map from id
+//! to group, whose tracks are a map from track id to `true` so two
+//! people adding tracks at once keep both. A
 //! track is a map of its settings, a `clips`
 //! map from id to clip, an `fx` map from id to effect and the effect
 //! order in the movable list `fx_order`, and its frozen audio, if any, as
@@ -37,8 +39,9 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Curve, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Marker,
-    MeterChange, Practice, Project, TabBlock, TempoChange, Track, TrainerSettings, is_asset_name,
+    Clip, Comment, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint,
+    Marker, MeterChange, Practice, Project, TabBlock, TempoChange, Track, TrainerSettings,
+    is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -435,6 +438,30 @@ impl ProjectDoc {
             w.put(&m, "resolved", c.resolved);
             w.put(&m, "created", c.created);
         }
+
+        let groups = self.doc.get_map("edit_groups");
+        let keep: HashSet<&str> = p.edit_groups.iter().map(|g| g.id.as_str()).collect();
+        for id in keys(&groups) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&groups, &id);
+            }
+        }
+        for g in &p.edit_groups {
+            let m = w.child(&groups, &g.id);
+            w.put(&m, "name", g.name.as_str());
+            w.put(&m, "active", g.active);
+            w.put(&m, "created", g.created);
+            let tm = w.fixed(&m, "tracks");
+            let keep: HashSet<&str> = g.tracks.iter().map(String::as_str).collect();
+            for k in keys(&tm) {
+                if !keep.contains(k.as_str()) {
+                    w.delete(&tm, &k);
+                }
+            }
+            for t in &g.tracks {
+                w.put(&tm, t, true);
+            }
+        }
         w.changed
     }
 
@@ -555,6 +582,28 @@ impl ProjectDoc {
             }
         }
         p.comments
+            .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
+        if let Some(LoroValue::Map(gs)) = root.get("edit_groups") {
+            for (id, g) in gs.iter() {
+                let LoroValue::Map(g) = g else { continue };
+                let mut tracks: Vec<String> = match g.get("tracks") {
+                    Some(LoroValue::Map(ts)) => (ts.iter())
+                        .filter(|(_, v)| matches!(v, LoroValue::Bool(true)))
+                        .map(|(k, _)| k.to_string())
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                tracks.sort();
+                p.edit_groups.push(EditGroup {
+                    id: id.to_string(),
+                    name: string(g, "name").unwrap_or_default(),
+                    tracks,
+                    active: boolean(g, "active").unwrap_or(true),
+                    created: int(g, "created").unwrap_or(0),
+                });
+            }
+        }
+        p.edit_groups
             .sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
         p
     }
@@ -1166,5 +1215,46 @@ mod tests {
         p.tracks[0].clips[0].fade_out.len = 0;
         doc.set(&p);
         assert_eq!(doc.get().tracks[0].clips[0].fade_out.len, 0);
+    }
+
+    #[test]
+    fn edit_groups_round_trip_and_merge_tracks_added_at_once() {
+        let group = EditGroup {
+            id: "g1".into(),
+            name: "Drums".into(),
+            tracks: vec!["kick".into(), "snare".into()],
+            active: true,
+            created: 5,
+        };
+        let p = Project {
+            edit_groups: vec![group],
+            ..Project::default()
+        };
+        let mut a = ProjectDoc::new(1);
+        a.set(&p);
+        assert_eq!(a.get().edit_groups, p.edit_groups);
+
+        let mut b = ProjectDoc::from_bytes(&a.to_bytes(), 2).unwrap();
+        let mut pa = a.get();
+        pa.edit_groups[0].tracks.push("tom".into());
+        a.set(&pa);
+        let mut pb = b.get();
+        pb.edit_groups[0].tracks.retain(|t| t != "snare");
+        pb.edit_groups[0].active = false;
+        b.set(&pb);
+        let (va, vb) = (a.version(), b.version());
+        let to_b = a.updates_since(&vb).unwrap();
+        let to_a = b.updates_since(&va).unwrap();
+        a.merge(&to_a).unwrap();
+        b.merge(&to_b).unwrap();
+        let g = &a.get().edit_groups[0];
+        assert_eq!(g.tracks, ["kick", "tom"]);
+        assert!(!g.active);
+        assert_eq!(a.get(), b.get());
+
+        let mut gone = a.get();
+        gone.edit_groups.clear();
+        a.set(&gone);
+        assert!(a.get().edit_groups.is_empty());
     }
 }

@@ -23,6 +23,7 @@ mod crash;
 mod export;
 mod freeze;
 mod fx;
+mod groups;
 mod latency;
 mod meters;
 mod notes;
@@ -224,6 +225,9 @@ struct App {
     notes: String,
     tabs: Vec<daw_project::TabBlock>,
     notes_ui: notes::Notes,
+    /// Tracks edited together, as in the project, and their window.
+    edit_groups: Vec<daw_project::EditGroup>,
+    groups_ui: groups::Groups,
     /// Pinned comments, as in the project, and their panel.
     comments: Vec<daw_project::Comment>,
     comment_ui: comments::Comments,
@@ -316,6 +320,8 @@ impl App {
             notes: String::new(),
             tabs: Vec::new(),
             notes_ui: notes::Notes::default(),
+            edit_groups: Vec::new(),
+            groups_ui: groups::Groups::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
@@ -911,6 +917,7 @@ impl App {
             pins: &pins,
             commands: &commands,
         };
+        self.timeline.groups = self.lane_groups();
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
         if let Some(id) = out.pin {
             self.comment_ui.show_thread(&id);
@@ -1987,13 +1994,15 @@ impl eframe::App for App {
                     for c in [Cmd::Crossfade, Cmd::ClipFades] {
                         self.menu_item(ui, c);
                     }
+                    ui.separator();
+                    self.menu_item(ui, Cmd::EditGroups);
                 });
                 ui.menu_button("View", |ui| {
                     for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
-                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines] {
+                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
                         self.menu_item(ui, c);
                     }
                 });
@@ -2194,6 +2203,7 @@ impl eframe::App for App {
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
+        self.groups_window(&ctx);
         self.remote_tick(&ctx);
         self.template_windows(&ctx);
         self.poll_loading(&ctx);

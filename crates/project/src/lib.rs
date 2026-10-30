@@ -21,8 +21,8 @@ pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
 pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
 pub use model::{
-    Clip, Comment, Curve, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip,
-    GainPoint, Marker, MeterChange, Practice, Project, TabBlock, TempoChange, Track,
+    Clip, Comment, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen,
+    FrozenClip, GainPoint, Marker, MeterChange, Practice, Project, TabBlock, TempoChange, Track,
     TrainerSettings,
 };
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};

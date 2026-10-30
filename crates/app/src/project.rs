@@ -200,6 +200,7 @@ impl App {
                 .collect(),
             tracks: self.tracks.iter().map(|t| self.track_value(t)).collect(),
             comments: self.comments.clone(),
+            edit_groups: self.edit_groups_value(),
         }
     }
 
@@ -363,6 +364,7 @@ impl App {
         self.notes = p.notes.clone();
         self.tabs = p.tabs.clone();
         self.comments = p.comments.clone();
+        self.edit_groups = p.edit_groups.clone();
         self.markers = (p.markers.iter())
             .map(|m| Marker {
                 id: m.id.clone(),

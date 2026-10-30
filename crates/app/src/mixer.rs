@@ -184,7 +184,15 @@ impl App {
                     } else {
                         if t.kind.plays_notes() {
                             let open = self.instrument_open == Some(i);
-                            let label = t.instrument.as_ref().map_or("Instrument", |_| "Synth");
+                            let label = t.instrument.as_ref().map_or("Instrument", |i| {
+                                match i.kind() {
+                                    None | Some(daw_instruments::Kind::Synth) => "Synth",
+                                    Some(daw_instruments::Kind::Sampler) => "Sampler",
+                                    Some(daw_instruments::Kind::DrumSampler) => "Drum",
+                                    Some(daw_instruments::Kind::DrumMachine) => "Drums",
+                                    Some(daw_instruments::Kind::Slicer) => "Slicer",
+                                }
+                            });
                             if ui
                                 .selectable_label(open, label)
                                 .accessible_name(format!("Instrument on {name}"))
@@ -500,7 +508,7 @@ impl App {
 
     /// Whether audio from the track `from` reaches the track `to`, by
     /// its output, sends or folder, directly or through other buses.
-    fn feeds(&self, from: &str, to: &str) -> bool {
+    pub(crate) fn feeds(&self, from: &str, to: &str) -> bool {
         let mut seen = Vec::new();
         let mut todo = vec![from.to_string()];
         while let Some(k) = todo.pop() {
@@ -514,6 +522,7 @@ impl App {
             if let Some(t) = self.tracks.iter().find(|t| t.key == k) {
                 todo.extend(t.goes_to().map(str::to_string));
                 todo.extend(t.sends.iter().map(|s| s.to.clone()));
+                todo.extend(t.instrument_outputs.iter().map(|o| o.to.clone()));
             }
         }
         false
@@ -554,6 +563,7 @@ impl App {
                 t.output = None;
             }
             t.sends.retain(|s| s.to != key);
+            t.instrument_outputs.retain(|o| o.to != key);
             for f in &mut t.fx {
                 if f.sidechain.as_deref() == Some(&key) {
                     f.sidechain = None;

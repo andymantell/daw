@@ -84,6 +84,12 @@ pub(crate) enum Cmd {
     MakePatternUnique,
     PatternToNotes,
     AddInstrumentTrack,
+    /// Adds a track with one of the built-in instruments, by its place
+    /// in `daw_instruments::Kind::ALL`.
+    AddInstrument(u8),
+    InstrumentWindow,
+    SliceNotes,
+    PadBuses,
     KeepNotes,
     QuantiseNotes,
     HumaniseNotes,
@@ -287,6 +293,66 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("A track that plays notes through an instrument, from a MIDI keyboard or the note editor")
     .words("midi synth notes"),
+    info(Cmd::AddInstrument(0), "add-synth-track", "Edit", "Add synth track", &[])
+        .hint("An instrument track with the synth: two oscillators, a filter with its own envelope, an LFO")
+        .words("instrument poly unison pad lead bass"),
+    info(Cmd::AddInstrument(1), "add-sampler-track", "Edit", "Add sampler track", &[])
+        .hint("An instrument track that plays your sound files over the keys")
+        .words("instrument multisample zones keys"),
+    info(
+        Cmd::AddInstrument(2),
+        "add-drum-sampler-track",
+        "Edit",
+        "Add drum sampler track",
+        &[],
+    )
+    .hint("An instrument track that plays one sound file as a hit")
+    .words("instrument one shot sample"),
+    info(
+        Cmd::AddInstrument(3),
+        "add-drum-machine-track",
+        "Edit",
+        "Add drum machine track",
+        &[],
+    )
+    .hint("Sixteen pads of drums, layered, with choke groups, effects and outputs per pad")
+    .words("instrument drums kit beat pads"),
+    info(
+        Cmd::AddInstrument(4),
+        "add-slicer-track",
+        "Edit",
+        "Add loop slicer track",
+        &[],
+    )
+    .hint("Cuts a loop at each hit and plays the slices from the keys")
+    .words("instrument loop break chop slices"),
+    info(
+        Cmd::InstrumentWindow,
+        "instrument-window",
+        "View",
+        "Instrument…",
+        &[],
+    )
+    .hint("The instrument of the instrument track, and its controls")
+    .words("synth sampler drum machine slicer settings"),
+    info(
+        Cmd::SliceNotes,
+        "slice-notes",
+        "Edit",
+        "Make notes that play the loop",
+        &[],
+    )
+    .hint("On the loop slicer's track: a note clip that plays its slices in order, at the song's tempo")
+    .words("slicer loop tempo chop"),
+    info(
+        Cmd::PadBuses,
+        "pad-buses",
+        "Edit",
+        "Put each drum pad on a bus",
+        &[],
+    )
+    .hint("On the drum machine's track: each pad with a sound gets an output and a bus in the mixer")
+    .words("drum machine outputs multi out mixer"),
     info(
         Cmd::NotesEditor,
         "notes-editor",
@@ -1734,6 +1800,25 @@ impl App {
                 }
                 self.tracks.push(t);
                 self.rebuild();
+            }
+            Cmd::AddInstrument(k) => {
+                if let Some(kind) = crate::instrument::kind_at(k) {
+                    self.add_instrument_track(kind);
+                }
+            }
+            Cmd::InstrumentWindow => match self.instrument_track(None) {
+                Some(i) => self.instrument_open = Some(i),
+                None => self.message = Some("There is no instrument track yet.".into()),
+            },
+            Cmd::SliceNotes => {
+                if let Err(e) = self.slice_notes() {
+                    self.message = Some(e);
+                }
+            }
+            Cmd::PadBuses => {
+                if let Err(e) = self.pad_buses() {
+                    self.message = Some(e);
+                }
             }
             Cmd::KeepNotes => {
                 if self.keep_notes() {

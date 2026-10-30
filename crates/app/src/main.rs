@@ -102,6 +102,9 @@ struct Track {
     /// plays them on an instrument track.
     note_clips: Vec<daw_project::NoteClip>,
     instrument: Option<instrument::Slot>,
+    /// Where the instrument's extra outputs go: a drum machine's pads
+    /// on buses of their own.
+    instrument_outputs: Vec<daw_project::InstrumentOutput>,
     /// A MIDI output port the track's notes go to as well (this
     /// computer's; not saved with the project).
     midi_out: Option<usize>,
@@ -153,6 +156,7 @@ impl Track {
             practice_mute: false,
             note_clips: Vec::new(),
             instrument: None,
+            instrument_outputs: Vec::new(),
             midi_out: None,
             fx: Vec::new(),
             frozen: None,
@@ -861,6 +865,15 @@ impl App {
                 .filter(|&i| self.tracks[i].key != t.key);
         }
         spec.cues = self.cue_sends(&t.key);
+        spec.instrument_outputs = (t.instrument_outputs.iter())
+            .filter_map(|o| {
+                let to = self.bus_index(&o.to)?;
+                (self.tracks[to].key != t.key).then_some(daw_engine::graph::AuxSpec {
+                    output: o.output,
+                    to,
+                })
+            })
+            .collect();
     }
 
     /// The track's sends that go somewhere, with the bus's index: the
@@ -2463,19 +2476,7 @@ impl eframe::App for App {
             }
         }
         if let Some(i) = self.instrument_open {
-            let outputs = self.midi.ports.outputs.clone();
-            match self.tracks.get_mut(i) {
-                Some(t) if t.kind.plays_notes() => {
-                    let (open, changed) = instrument::window(&ctx, t, &outputs);
-                    if changed {
-                        self.rebuild();
-                    }
-                    if !open {
-                        self.instrument_open = None;
-                    }
-                }
-                _ => self.instrument_open = None,
-            }
+            self.instrument_window(&ctx, i);
         }
         self.perf_window(&ctx);
         self.layout_windows(&ctx);

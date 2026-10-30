@@ -39,6 +39,7 @@ pub(crate) enum Cmd {
     Crossfade,
     ClipFades,
     EditGroups,
+    FixTiming,
     ZoomIn,
     ZoomOut,
     ZoomSelection,
@@ -286,6 +287,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
+    info(Cmd::FixTiming, "fix-timing", "Edit", "Fix timing…", &[])
+        .hint("Cut the selected clips at each note and move the notes toward the grid")
+        .words("quantise quantize tighten align beat slice transient attack groove"),
     info(
         Cmd::ZoomIn,
         "zoom-in",
@@ -1471,6 +1475,7 @@ impl App {
             Cmd::KeyCommands => self.commands.editor.open = true,
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
+            Cmd::FixTiming => self.timing.open = true,
             Cmd::NextTheme => self.themes.next(),
             Cmd::LightDark => self.themes.flip(ctx),
             Cmd::FindCommand => {

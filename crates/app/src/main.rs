@@ -43,6 +43,7 @@ mod templates;
 mod tempo;
 mod theme;
 mod timeline;
+mod timing;
 mod trainer;
 mod tuner;
 mod update;
@@ -262,6 +263,8 @@ struct App {
     /// Tracks edited together, as in the project, and their window.
     edit_groups: Vec<daw_project::EditGroup>,
     groups_ui: groups::Groups,
+    /// The Fix timing window.
+    timing: timing::Timing,
     takes_ui: comping::TakesPane,
     /// Pinned comments, as in the project, and their panel.
     comments: Vec<daw_project::Comment>,
@@ -359,6 +362,7 @@ impl App {
             notes_ui: notes::Notes::default(),
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
+            timing: timing::Timing::default(),
             takes_ui: comping::TakesPane::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
@@ -1942,7 +1946,9 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
-                    self.menu_item(ui, Cmd::EditGroups);
+                    for c in [Cmd::EditGroups, Cmd::FixTiming] {
+                        self.menu_item(ui, c);
+                    }
                 });
                 ui.menu_button("View", |ui| {
                     for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
@@ -2160,6 +2166,7 @@ impl eframe::App for App {
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
         self.groups_window(&ctx);
+        self.timing_window(&ctx);
         self.remote_tick(&ctx);
         self.template_windows(&ctx);
         self.poll_loading(&ctx);

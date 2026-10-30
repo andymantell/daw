@@ -1736,10 +1736,7 @@ impl Host for crate::App {
             Pane::Takes => self.takes_pane(ui),
             Pane::Automation => self.automation_pane(ui),
             Pane::Browser => self.browser_pane(ui),
-            Pane::Video => {
-                let at = self.ctl.status().position().0;
-                self.video.pane(ui, at, self.rate);
-            }
+            Pane::Video => self.video_pane(ui),
             Pane::Notes => self.notes_pane(ui),
             Pane::Lessons => self.lessons_pane(ui),
             Pane::NotesEditor => self.notes_editor_pane(ui),

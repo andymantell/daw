@@ -28,3 +28,12 @@ impl Reader {
         Err(not_yet())
     }
 }
+
+pub(crate) fn wrap(
+    _video: &Path,
+    _sound: &Path,
+    _out: &Path,
+    _cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), Error> {
+    Err(not_yet())
+}

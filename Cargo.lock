@@ -1327,6 +1327,8 @@ version = "0.0.0"
 dependencies = [
  "gstreamer",
  "gstreamer-app",
+ "hound",
+ "lz4_flex",
  "windows",
  "windows-core",
 ]

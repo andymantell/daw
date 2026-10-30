@@ -31,6 +31,7 @@ pub(crate) enum Cmd {
     Snapshots,
     People,
     Export,
+    ExportVideo,
     Undo,
     Redo,
     Split,
@@ -39,6 +40,12 @@ pub(crate) enum Cmd {
     HitPoint,
     HitPoints,
     Timecode,
+    TimecodeFromFilm,
+    FrameForward,
+    FrameBack,
+    NextHitPoint,
+    PrevHitPoint,
+    VideoTimecode,
     ClearSelection,
     Crossfade,
     ClipFades,
@@ -293,6 +300,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
         .words("render bounce stems wav flac mp3 opus ogg mixdown bus"),
+    info(
+        Cmd::ExportVideo,
+        "export-video",
+        "File",
+        "Export the video with the mix",
+        &[],
+    )
+    .hint("A copy of the video with the mix as its sound; the picture is copied as it is")
+    .words("film picture movie score scoring render mp4 mov soundtrack"),
     info(
         Cmd::ImportMidi,
         "import-midi",
@@ -575,6 +591,60 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Timecode, "timecode", "View", "Timecode", &[])
         .hint("Show timecode on the ruler and in the transport bar")
         .words("smpte frames hours minutes seconds"),
+    info(
+        Cmd::TimecodeFromFilm,
+        "timecode-from-film",
+        "Edit",
+        "Timecode from the film",
+        &[],
+    )
+    .hint("Count timecode at the film's frame rate, starting on its first frame")
+    .words("smpte frame rate line up sync video picture start offset"),
+    info(
+        Cmd::FrameForward,
+        "frame-forward",
+        "Transport",
+        "On a frame",
+        &[key(NONE, Key::Period)],
+    )
+    .hint("Move the playhead to the next frame of the film")
+    .words("step nudge next frame video picture"),
+    info(
+        Cmd::FrameBack,
+        "frame-back",
+        "Transport",
+        "Back a frame",
+        &[key(NONE, Key::Comma)],
+    )
+    .hint("Move the playhead to the frame of the film before")
+    .words("step nudge previous frame video picture"),
+    info(
+        Cmd::NextHitPoint,
+        "next-hit-point",
+        "Transport",
+        "Next hit point",
+        &[key(NONE, Key::CloseBracket)],
+    )
+    .hint("Go to the next hit point after the playhead")
+    .words("jump cue sync video picture"),
+    info(
+        Cmd::PrevHitPoint,
+        "previous-hit-point",
+        "Transport",
+        "Previous hit point",
+        &[key(NONE, Key::OpenBracket)],
+    )
+    .hint("Go to the hit point before the playhead")
+    .words("jump back cue sync video picture"),
+    info(
+        Cmd::VideoTimecode,
+        "video-timecode",
+        "View",
+        "Timecode on the picture",
+        &[],
+    )
+    .hint("Show or hide the timecode on the Video pane's picture")
+    .words("burn in smpte overlay frames video film"),
     info(
         Cmd::ClearSelection,
         "clear-selection",
@@ -1924,6 +1994,9 @@ impl App {
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
+            Cmd::ExportVideo => !self.video.clips.is_empty() && !self.export.busy(),
+            Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
+            Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
         }
@@ -1985,6 +2058,7 @@ impl App {
             Cmd::Snapshots => self.snapshot_ui.open = true,
             Cmd::People => self.people.open = true,
             Cmd::Export => self.export.open = true,
+            Cmd::ExportVideo => self.export_video(),
             Cmd::Undo => self.undo(ctx),
             Cmd::Redo => self.redo(ctx),
             Cmd::PlayStop => self.toggle_play(),
@@ -2168,6 +2242,12 @@ impl App {
             }
             Cmd::HitPoints => self.hits_ui.open = true,
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
+            Cmd::TimecodeFromFilm => self.timecode_from_film(),
+            Cmd::FrameForward => self.step_frame(1),
+            Cmd::FrameBack => self.step_frame(-1),
+            Cmd::NextHitPoint => self.jump_hit_point(true),
+            Cmd::PrevHitPoint => self.jump_hit_point(false),
+            Cmd::VideoTimecode => self.video.hide_timecode = !self.video.hide_timecode,
             Cmd::Copy => self.copy_clips(),
             Cmd::Paste => {
                 let at = self.ctl.status().position().0;

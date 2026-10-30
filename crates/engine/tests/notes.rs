@@ -525,3 +525,68 @@ fn chance_rolls_afresh_each_time_round_and_groups_roll_together() {
     let offs = (got.iter()).filter(|(_, k)| off(60)(k)).count();
     assert_eq!(offs, lone);
 }
+
+#[test]
+fn note_repeat_plays_held_notes_again_until_let_go() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let logger = Logger {
+        log: log.clone(),
+        at: 0,
+    };
+    let mut s = session();
+    let mut t = track(Vec::new(), 0);
+    t.notes_live = true;
+    // A sixteenth at 120 bpm: a quarter of a beat.
+    t.note_repeat = Some(Ticks(PPQ / 4));
+    s.tracks.push(t);
+    let g = s
+        .compile_all(
+            BLOCK,
+            &mut Vec::new(),
+            &mut vec![(1, Box::new(logger) as _)],
+        )
+        .unwrap();
+    let (mut ctl, mut eng) = engine::new(BLOCK);
+    let mut midi_in = ctl.take_midi_input().unwrap();
+    let _ = ctl.set_graph(g);
+    let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
+    let _ = midi_in.push(LiveEvent {
+        port: 0,
+        event: Event::note_on(0, 9, 36, 100, 5),
+    });
+    // Held for one beat, stopped: on at 0, again every sixteenth.
+    let step = (BEAT / 4) as usize;
+    let mut done = 0;
+    while done < BEAT as usize + BLOCK / 2 {
+        eng.process(&mut l, &mut r);
+        done += BLOCK;
+    }
+    let _ = midi_in.push(LiveEvent {
+        port: 0,
+        event: Event::note_off(0, 9, 36, 5),
+    });
+    for _ in 0..(BEAT as usize / BLOCK) {
+        eng.process(&mut l, &mut r);
+    }
+    let ons: Vec<i64> = (log.lock().unwrap().iter())
+        .filter(|(_, e)| {
+            matches!(
+                e.kind,
+                Kind::NoteOn {
+                    pitch: 36,
+                    id: 5,
+                    ..
+                }
+            )
+        })
+        .map(|(f, _)| *f)
+        .collect();
+    let want: Vec<i64> = (0..=4).map(|k| (k * step) as i64).collect();
+    assert_eq!(ons, want, "the first hit, then a repeat each sixteenth");
+    let log = log.lock().unwrap();
+    let last = log.last().unwrap();
+    assert!(
+        matches!(last.1.kind, Kind::NoteOff { pitch: 36, .. }),
+        "letting go stops it: {last:?}"
+    );
+}

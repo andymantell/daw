@@ -13,6 +13,7 @@
 //! makes those clips' notes from them on every rebuild.
 
 use daw_engine::time::{Frames, Ticks};
+use daw_instruments::{Kind, drum_machine as dm};
 use daw_project::{
     DRUM_LANES, Direction, MAX_GATE, MAX_REPEATS, MAX_STEPS, MIN_GATE, Note, NoteClip, Pattern,
     PatternLane, StepRate,
@@ -30,6 +31,9 @@ pub struct Editor {
     /// The picked lane and step.
     pub lane: usize,
     pub step: Option<usize>,
+    /// The pads of the drum machine playing the pattern, if one is:
+    /// each pad's note and name, for choosing lanes' sounds by name.
+    pub pads: Vec<(u8, String)>,
     /// The Euclidean fill's hits and turn, for the picked lane.
     hits: usize,
     rotate: usize,
@@ -98,21 +102,40 @@ impl Editor {
                 .clicked()
             {
                 let used: Vec<u8> = p.lanes.iter().map(|l| l.pitch).collect();
-                let (name, pitch) = DRUM_LANES
-                    .iter()
-                    .copied()
-                    .chain([("Clap", 39), ("Low tom", 45), ("Ride", 51), ("Crash", 49)])
+                // The drum machine's pads first, then the standard drums.
+                let (name, pitch) = (self.pads.iter())
+                    .map(|(n, name)| (name.clone(), *n))
+                    .chain(
+                        DRUM_LANES
+                            .iter()
+                            .copied()
+                            .chain([("Clap", 39), ("Low tom", 45), ("Ride", 51), ("Crash", 49)])
+                            .map(|(name, n)| (name.to_string(), n)),
+                    )
                     .find(|(_, n)| !used.contains(n))
-                    .unwrap_or(("Lane", 60));
+                    .unwrap_or(("Lane".into(), 60));
                 let steps = p.lanes.first().map_or(16, |l| l.steps.len());
-                p.lanes.push(PatternLane::new(
-                    daw_project::new_id(),
-                    name.into(),
-                    pitch,
-                    steps,
-                ));
+                p.lanes
+                    .push(PatternLane::new(daw_project::new_id(), name, pitch, steps));
                 self.lane = p.lanes.len() - 1;
                 self.step = None;
+                changed = true;
+            }
+            let missing: Vec<(u8, String)> = (self.pads.iter())
+                .filter(|(n, _)| !p.lanes.iter().any(|l| l.pitch == *n))
+                .cloned()
+                .collect();
+            if !missing.is_empty()
+                && ui
+                    .button("A lane for every pad")
+                    .on_hover_text("Add a lane for each of the drum machine's pads that has none")
+                    .clicked()
+            {
+                let steps = p.lanes.first().map_or(16, |l| l.steps.len());
+                for (n, name) in missing {
+                    p.lanes
+                        .push(PatternLane::new(daw_project::new_id(), name, n, steps));
+                }
                 changed = true;
             }
         });
@@ -331,6 +354,37 @@ impl Editor {
                 .add(egui::TextEdit::singleline(&mut lane.name).desired_width(110.0))
                 .accessible_name("Lane name")
                 .changed();
+            if !self.pads.is_empty() {
+                ui.label("Pad");
+                let shown = (self.pads.iter())
+                    .find(|(n, _)| *n == lane.pitch)
+                    .map_or("none".to_string(), |(_, name)| name.clone());
+                let mut pick = None;
+                egui::ComboBox::from_id_salt("pattern-pad")
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for (n, name) in &self.pads {
+                            let text = format!("{name} ({})", Note::pitch_name(*n));
+                            if ui.selectable_label(*n == lane.pitch, text).clicked() {
+                                pick = Some((*n, name.clone()));
+                            }
+                        }
+                    })
+                    .response
+                    .accessible_name("Lane pad")
+                    .on_hover_text("The drum machine's pad it plays");
+                if let Some((n, name)) = pick {
+                    // A lane named after its old pad follows the new one.
+                    let named_for_pad = (self.pads.iter())
+                        .any(|(m, old)| *m == lane.pitch && *old == lane.name)
+                        || DRUM_LANES.iter().any(|(old, _)| *old == lane.name);
+                    if named_for_pad {
+                        lane.name = name;
+                    }
+                    lane.pitch = n;
+                    changed = true;
+                }
+            }
             ui.label("Note");
             changed |= ui
                 .add(
@@ -539,14 +593,32 @@ impl crate::App {
                 .iter()
                 .position(|t| t.note_clips.iter().any(|c| c.id == k))
         });
-        let lane = match picked.or_else(|| self.tracks.iter().position(|t| t.kind.plays_notes())) {
+        // A drum machine's track before any other instrument's; with
+        // none, a new drum machine.
+        let drums = self.tracks.iter().position(|t| {
+            t.instrument
+                .as_ref()
+                .is_some_and(|i| i.kind() == Some(Kind::DrumMachine))
+        });
+        let lane = match picked
+            .or(drums)
+            .or_else(|| self.tracks.iter().position(|t| t.kind.plays_notes()))
+        {
             Some(l) => l,
             None => {
-                let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
-                let t = crate::Track::instrument(format!("Instrument {n}"));
-                if let Some(i) = &t.instrument {
-                    self.pending_instruments.push((i.id, i.make(self.rate)));
-                }
+                let n = (self.tracks.iter())
+                    .filter(|t| {
+                        t.instrument
+                            .as_ref()
+                            .is_some_and(|i| i.kind() == Some(Kind::DrumMachine))
+                    })
+                    .count()
+                    + 1;
+                let mut t = crate::Track::instrument(format!("{} {n}", Kind::DrumMachine.name()));
+                let slot = crate::instrument::Slot::new(Kind::DrumMachine);
+                self.pending_instruments
+                    .push((slot.id, slot.make(self.rate)));
+                t.instrument = Some(slot);
                 self.tracks.push(t);
                 self.tracks.len() - 1
             }
@@ -702,6 +774,24 @@ impl crate::App {
             (t >= c.start && t < c.end()).then(|| t - c.start + c.offset)
         });
         let bar = map.signature_at(Ticks(0)).bar_ticks();
+        // The drum machine playing it, if one does: its pads by name.
+        let drums = (self.tracks.iter())
+            .filter(|t| {
+                t.note_clips.iter().any(|c| {
+                    c.pattern.as_deref() == Some(id.as_str())
+                        && (clip_key.is_none() || clip_key.as_deref() == Some(c.id.as_str()))
+                })
+            })
+            .find_map(|t| {
+                t.instrument
+                    .as_ref()
+                    .filter(|i| i.kind() == Some(daw_instruments::Kind::DrumMachine))
+            });
+        self.pattern_editor.pads = drums.map_or_else(Vec::new, |slot| {
+            (slot.pads_in_use().into_iter())
+                .map(|p| (dm::FIRST_NOTE + p as u8, slot.pad_name(p)))
+                .collect()
+        });
         let Some(p) = self.patterns.iter_mut().find(|p| p.id == id) else {
             self.pattern_editor.pattern = None;
             return;
@@ -823,5 +913,55 @@ mod tests {
         );
         h.state_mut().toggle_play();
         assert_eq!(h.state().tracks[0].note_clips[0].len, PPQ * 4);
+    }
+
+    #[test]
+    fn a_pattern_drives_the_drum_machine_by_its_pads() {
+        use crate::commands::Cmd;
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        // With no tracks, adding a pattern makes a drum machine to play it.
+        h.state_mut().run(&ctx, Cmd::AddPattern);
+        h.run();
+        let app = h.state();
+        assert_eq!(app.tracks.len(), 1);
+        assert_eq!(
+            app.tracks[0].instrument.as_ref().and_then(|i| i.kind()),
+            Some(daw_instruments::Kind::DrumMachine)
+        );
+        // The editor knows the pads, by name, and lanes land on them.
+        let pads = &app.pattern_editor.pads;
+        assert!(pads.iter().any(|(n, name)| *n == 36 && name == "Kick"));
+        let lanes: Vec<(u8, String)> = (app.patterns[0].lanes.iter())
+            .map(|l| (l.pitch, l.name.clone()))
+            .collect();
+        for (n, name) in &lanes {
+            assert_eq!(
+                pads.iter().find(|(m, _)| m == n).map(|(_, p)| p),
+                Some(name),
+                "lane {name} plays the pad of that name"
+            );
+        }
+        h.get_by_label("A lane for every pad").click();
+        h.run();
+        assert_eq!(
+            h.state().patterns[0].lanes.len(),
+            h.state().pattern_editor.pads.len()
+        );
+        // It plays through the drum machine.
+        h.state_mut().toggle_play();
+        assert!(
+            until(&mut h, 5, |a| a.master_meter.0 > 0.001),
+            "the kit is heard"
+        );
+        h.state_mut().toggle_play();
+        // Note-repeat goes on and off by command.
+        h.state_mut().run(&ctx, Cmd::NoteRepeat);
+        assert_eq!(
+            h.state().tracks[0].note_repeat,
+            Some(daw_project::StepRate::Sixteenth)
+        );
+        h.state_mut().run(&ctx, Cmd::NoteRepeat);
+        assert_eq!(h.state().tracks[0].note_repeat, None);
     }
 }

@@ -83,6 +83,7 @@ pub(crate) enum Cmd {
     AddPattern,
     MakePatternUnique,
     PatternToNotes,
+    NoteRepeat,
     AddInstrumentTrack,
     /// Adds a track with one of the built-in instruments, by its place
     /// in `daw_instruments::Kind::ALL`.
@@ -478,6 +479,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Keep the notes the selected pattern clip plays as notes, no longer following the pattern")
     .words("flatten unlink pattern notes"),
+    info(Cmd::NoteRepeat, "note-repeat", "Notes", "Note repeat on or off", &[])
+        .hint("Keys and pads held down on the instrument track play again every sixteenth, until let go")
+        .words("roll ratchet pads drums repeat"),
     info(
         Cmd::KeepNotes,
         "keep-notes",
@@ -1774,6 +1778,7 @@ impl App {
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
+            Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
         }
@@ -1874,6 +1879,16 @@ impl App {
             }
             Cmd::PatternEditor => self.workspace.toggle(Pane::Patterns),
             Cmd::AddPattern => self.add_pattern_at_playhead(),
+            Cmd::NoteRepeat => {
+                if let Some(i) = self.instrument_track(None) {
+                    let t = &mut self.tracks[i];
+                    t.note_repeat = match t.note_repeat {
+                        Some(_) => None,
+                        None => Some(daw_project::StepRate::Sixteenth),
+                    };
+                    self.rebuild();
+                }
+            }
             Cmd::MakePatternUnique => {
                 if let Some(key) = self.selected_pattern_clip() {
                     self.make_pattern_unique(&key);

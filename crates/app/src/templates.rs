@@ -54,12 +54,7 @@ pub(crate) struct Choosing {
 
 impl Choosing {
     fn new(dir: Option<&Path>) -> Choosing {
-        let mut list: Vec<(Template, Option<PathBuf>)> = built_in_templates()
-            .into_iter()
-            .map(|t| (t, None))
-            .collect();
-        let (mine, problems) = dir.map(read_templates).unwrap_or_default();
-        list.extend(mine.into_iter().map(|(t, p)| (t, Some(p))));
+        let (list, problems) = all_templates(dir);
         Choosing {
             list,
             picked: 0,
@@ -67,6 +62,18 @@ impl Choosing {
             problems,
         }
     }
+}
+
+/// Built-in templates first, then the user's in `dir` with their files,
+/// and the files that couldn't be read.
+pub(crate) fn all_templates(dir: Option<&Path>) -> (Vec<(Template, Option<PathBuf>)>, Vec<String>) {
+    let mut list: Vec<(Template, Option<PathBuf>)> = built_in_templates()
+        .into_iter()
+        .map(|t| (t, None))
+        .collect();
+    let (mine, problems) = dir.map(read_templates).unwrap_or_default();
+    list.extend(mine.into_iter().map(|(t, p)| (t, Some(p))));
+    (list, problems)
 }
 
 /// The user's templates in `dir`, by name, and the files that couldn't

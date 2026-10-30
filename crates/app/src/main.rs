@@ -40,6 +40,7 @@ mod recording;
 mod remote;
 mod share;
 mod snapshots;
+mod start;
 mod templates;
 mod tempo;
 mod theme;
@@ -279,6 +280,8 @@ struct App {
     snapshot_ui: snapshots::Snapshots,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
+    /// The start screen, and the recent projects it lists.
+    start: start::Start,
     /// Named commands, their keys, and their windows.
     commands: commands::Commands,
     proj: project::Proj,
@@ -377,6 +380,7 @@ impl App {
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
             template_ui: templates::Templates::default(),
+            start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
@@ -410,6 +414,11 @@ impl App {
         let start = app.project();
         app.proj.doc.set_quietly(&start);
         app.apply(start);
+        // Nothing to open, so the start screen offers what to do (unless
+        // turned off, or a project to recover is offered first).
+        if files.is_empty() && app.proj.found.is_none() && app.start.settings.show && !cfg!(test) {
+            app.show_start();
+        }
         for f in files {
             let f = PathBuf::from(f);
             if project::is_project(&f) {
@@ -1925,6 +1934,7 @@ impl eframe::App for App {
                         Cmd::NewProject,
                         Cmd::NewFromTemplate,
                         Cmd::OpenProject,
+                        Cmd::StartScreen,
                         Cmd::Save,
                         Cmd::SaveAs,
                         Cmd::SaveAsTemplate,
@@ -2057,7 +2067,10 @@ impl eframe::App for App {
                 }
                 if self.proj.loading() {
                     ui.spinner();
-                    ui.label("Opening project…");
+                    ui.label(match self.proj.progress.get() {
+                        (_, 0) => "Opening project…".to_string(),
+                        (done, total) => format!("Opening project: {done} of {total} files…"),
+                    });
                 }
                 if !self.imports.is_empty() {
                     ui.spinner();
@@ -2176,6 +2189,7 @@ impl eframe::App for App {
         self.updates.window(&ctx);
         self.updates.ask_window(&ctx);
         self.crashes.window(&ctx);
+        self.start_window(&ctx);
         self.project_windows(&ctx);
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);

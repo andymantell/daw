@@ -22,6 +22,7 @@ pub(crate) enum Cmd {
     NewProject,
     NewFromTemplate,
     OpenProject,
+    StartScreen,
     Save,
     SaveAs,
     SaveAsTemplate,
@@ -183,6 +184,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .words("load"),
+    info(
+        Cmd::StartScreen,
+        "start-screen",
+        "File",
+        "Start screen…",
+        &[],
+    )
+    .hint("Recent projects and templates")
+    .words("recent welcome begin"),
     info(Cmd::Save, "save", "File", "Save", &[key(CTRL, Key::S)])
         .hint("Save the project")
         .typing(),
@@ -1424,6 +1434,7 @@ impl App {
                     found: find_projects(),
                 });
             }
+            Cmd::StartScreen => self.show_start(),
             Cmd::Save => self.save_or_ask(ctx),
             Cmd::SaveAs => {
                 self.proj.dialog = Some(Dialog::SaveAs {

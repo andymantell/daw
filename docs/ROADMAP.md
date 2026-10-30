@@ -522,8 +522,13 @@ recorded rooms that come with the app where they are chosen and in Help
 → Sound credits. Twenty-one recorded rooms come with it (eighteen
 real spaces, indoors and out, and three spring reverbs; licences
 checked in decision 0011).
-Still to do: amp and cabinet simulation, the neural amp model player
-and the tuner as an insert.*
+A guitar amp (four voices, tone controls and a choice of cabinet), five
+speaker cabinets made here (or the user's own cabinet response file)
+and a player for amp capture files the user supplies were added
+2026-10-30, at risk; the capture library's licence is checked in
+decision 0012 and the listening checks are in
+`docs/review-queue/2.5-amp-and-cabinet.md`.
+Still to do: the tuner as an insert.*
 - EQ, compressor, gate, limiter, algorithmic and convolution reverb, delay.
 - Guitar amp and cabinet simulation (our own models and impulse
   responses). Tuner as an insert.

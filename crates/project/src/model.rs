@@ -372,10 +372,12 @@ pub struct Effect {
     pub builtin: String,
     /// A built-in effect's settings, by name.
     pub params: Vec<(String, f64)>,
-    /// For a built-in convolution reverb, the response it uses: empty
-    /// for its own rooms, `room:` and an id for a recorded room that
-    /// comes with the app, or else a sound file (an asset name, or a
-    /// full path until the project is saved).
+    /// The file a built-in effect uses. For a convolution reverb or a
+    /// speaker cabinet, its response: empty for its own rooms or
+    /// cabinets, `room:` and an id for a recorded room that comes with
+    /// the app, or else a sound file. For an amp capture player, its
+    /// capture file (empty for none). A file is an asset name, or a full
+    /// path until the project is saved.
     pub response: String,
 }
 

@@ -1368,6 +1368,7 @@ impl App {
                     record_offset: None,
                     measured_at: None,
                     direct_monitoring: false,
+                    monitor: daw_audio_io::MonitorOutputs::default(),
                 });
                 egui::Grid::new("device").num_columns(2).show(ui, |ui| {
                     ui.label("Driver");

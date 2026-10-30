@@ -209,6 +209,7 @@ mod tests {
                 record_offset: None,
                 measured_at: None,
                 direct_monitoring: false,
+                monitor: daw_audio_io::MonitorOutputs::default(),
             });
             app.latency.open = true;
             app.latency.inputs = 2;

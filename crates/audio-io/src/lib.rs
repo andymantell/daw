@@ -46,6 +46,19 @@ pub trait Duplex: Send + 'static {
         right: &mut [f32],
         click: Option<&mut [f32]>,
     );
+
+    /// The device outputs the main pair goes to for the block just
+    /// processed, instead of the profile's own: the speakers chosen in
+    /// the monitor section.
+    fn main_out(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Calls `f` with each further device output channel and its samples
+    /// for the block just processed: the headphone mixes.
+    fn each_extra_out(&self, f: &mut dyn FnMut(usize, &[f32])) {
+        let _ = f;
+    }
 }
 
 impl Duplex for Engine {
@@ -58,6 +71,14 @@ impl Duplex for Engine {
         click: Option<&mut [f32]>,
     ) {
         Engine::process_duplex(self, input, channels, left, right, click);
+    }
+
+    fn main_out(&self) -> Option<(usize, usize)> {
+        Engine::main_out(self).map(|(l, r)| (l as usize, r as usize))
+    }
+
+    fn each_extra_out(&self, f: &mut dyn FnMut(usize, &[f32])) {
+        self.each_cue_out(f);
     }
 }
 
@@ -87,6 +108,31 @@ pub struct DeviceProfile {
     /// The player listens through the interface's own direct monitoring,
     /// so the app never plays inputs back (no doubled sound).
     pub direct_monitoring: bool,
+    /// Where the monitor section's speakers, headphone mixes and
+    /// talkback microphone are plugged in.
+    pub monitor: MonitorOutputs,
+}
+
+/// The monitor section's outputs and talkback input on a device.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MonitorOutputs {
+    /// Trim on the main outputs' speakers, in dB.
+    pub main_trim_db: f32,
+    /// More speakers to switch to, beside those on the main outputs.
+    pub speakers: Vec<Speakers>,
+    /// The outputs (left, right) for each headphone mix, in order; `None`
+    /// for a mix not plugged in anywhere.
+    pub phones: Vec<Option<(usize, usize)>>,
+    /// The input channel the talkback microphone is on.
+    pub talkback: Option<usize>,
+}
+
+/// A set of speakers on two outputs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Speakers {
+    pub name: String,
+    pub out: (usize, usize),
+    pub trim_db: f32,
 }
 
 /// One device as the driver describes it.
@@ -186,6 +232,7 @@ pub fn default_profile() -> Option<DeviceProfile> {
         record_offset: None,
         measured_at: None,
         direct_monitoring: false,
+        monitor: MonitorOutputs::default(),
     })
 }
 
@@ -624,6 +671,8 @@ where
     let mut r = vec![0.0f32; MAX_BLOCK];
     let mut c = vec![0.0f32; MAX_BLOCK];
     let mut inp = vec![0.0f32; MAX_BLOCK * in_ch];
+    // Every output channel of a block, before conversion.
+    let mut mix = vec![0.0f32; MAX_BLOCK * chans];
     let s = status.clone();
     let on_error = {
         let s = status.clone();
@@ -672,20 +721,11 @@ where
                         }
                     }
                     engine.process_duplex(bi, in_ch, bl, br, click_ch.map(|_| &mut *bc));
-                    for (i, frame) in block.chunks_mut(chans).enumerate() {
-                        for (ch, out) in frame.iter_mut().enumerate() {
-                            let mut v = 0.0;
-                            if ch == l_ch {
-                                v += bl[i];
-                            }
-                            if ch == r_ch {
-                                v += br[i];
-                            }
-                            if Some(ch) == click_ch {
-                                v += bc[i];
-                            }
-                            *out = T::from_sample(v);
-                        }
+                    let mix = &mut mix[..n * chans];
+                    let main = (&*bl, &*br, click_ch.map(|ch| (ch, &*bc)));
+                    interleave(&engine, chans, (l_ch, r_ch), main, mix);
+                    for (out, v) in block.iter_mut().zip(mix.iter()) {
+                        *out = T::from_sample(*v);
                     }
                 }
                 s.note_busy(t0.elapsed(), frames, rate);
@@ -694,6 +734,36 @@ where
             None,
         )
         .map_err(|e| format!("could not open the output: {e}"))
+}
+
+/// Lays one processed block out on the device's `chans` channels in
+/// `mix`: the main pair on the speakers' outputs (`main` unless the
+/// engine says otherwise), the click on its own, and the headphone mixes.
+type MainBlock<'a> = (&'a [f32], &'a [f32], Option<(usize, &'a [f32])>);
+
+fn interleave<P: Duplex>(
+    engine: &P,
+    chans: usize,
+    main: (usize, usize),
+    (l, r, click): MainBlock,
+    mix: &mut [f32],
+) {
+    let n = mix.len() / chans.max(1);
+    mix.fill(0.0);
+    let mut add = |ch: usize, x: &[f32]| {
+        if ch < chans {
+            for (i, v) in x.iter().take(n).enumerate() {
+                mix[i * chans + ch] += v;
+            }
+        }
+    };
+    let (l_out, r_out) = engine.main_out().unwrap_or(main);
+    add(l_out, l);
+    add(r_out, r);
+    if let Some((ch, c)) = click {
+        add(ch, c);
+    }
+    engine.each_extra_out(&mut add);
 }
 
 /// Device profiles saved between runs: the one in use, and every one
@@ -752,6 +822,22 @@ impl SavedProfiles {
             if p.direct_monitoring {
                 s += "direct_monitoring = yes\n";
             }
+            let m = &p.monitor;
+            if m.main_trim_db != 0.0 {
+                s += &format!("main_trim = {}\n", m.main_trim_db);
+            }
+            for sp in &m.speakers {
+                let (l, r) = sp.out;
+                s += &format!("speakers = {l} {r} {} {}\n", sp.trim_db, sp.name);
+            }
+            for (k, ph) in m.phones.iter().enumerate() {
+                if let Some((l, r)) = ph {
+                    s += &format!("phones = {k} {l} {r}\n");
+                }
+            }
+            if let Some(t) = m.talkback {
+                s += &format!("talkback = {t}\n");
+            }
             s += "\n";
         }
         s
@@ -777,6 +863,7 @@ impl SavedProfiles {
                     record_offset: None,
                     measured_at: None,
                     direct_monitoring: false,
+                    monitor: MonitorOutputs::default(),
                 });
                 continue;
             }
@@ -805,6 +892,31 @@ impl SavedProfiles {
                     }
                 }
                 "direct_monitoring" => p.direct_monitoring = v == "yes",
+                "main_trim" => p.monitor.main_trim_db = v.parse().unwrap_or(0.0),
+                "speakers" => {
+                    let mut it = v.splitn(4, ' ');
+                    let mut num = || it.next().and_then(|x| x.parse::<f32>().ok());
+                    if let (Some(l), Some(r), Some(trim)) = (num(), num(), num()) {
+                        p.monitor.speakers.push(Speakers {
+                            name: it.next().unwrap_or("").trim().into(),
+                            out: (l as usize, r as usize),
+                            trim_db: trim,
+                        });
+                    }
+                }
+                "phones" => {
+                    let mut it = v.split_whitespace().filter_map(|x| x.parse::<usize>().ok());
+                    if let (Some(k), Some(l), Some(r)) = (it.next(), it.next(), it.next())
+                        && k < 64
+                    {
+                        let ph = &mut p.monitor.phones;
+                        if ph.len() <= k {
+                            ph.resize(k + 1, None);
+                        }
+                        ph[k] = Some((l, r));
+                    }
+                }
+                "talkback" => p.monitor.talkback = v.parse().ok(),
                 _ => {}
             }
         }
@@ -830,6 +942,16 @@ mod tests {
             record_offset: Some(271),
             measured_at: Some((48_000, Some(128))),
             direct_monitoring: true,
+            monitor: MonitorOutputs {
+                main_trim_db: -1.5,
+                speakers: vec![Speakers {
+                    name: "Small = near".into(),
+                    out: (2, 3),
+                    trim_db: 2.0,
+                }],
+                phones: vec![Some((4, 5)), None, Some((6, 7))],
+                talkback: Some(7),
+            },
         }
     }
 
@@ -852,6 +974,41 @@ mod tests {
             back.for_device("ASIO", "UMC1820").unwrap().record_offset,
             Some(271)
         );
+    }
+
+    /// Stands in for the engine: speakers moved, and one headphone mix.
+    struct Routed;
+
+    impl Duplex for Routed {
+        fn process_duplex(
+            &mut self,
+            _: &[f32],
+            _: usize,
+            _: &mut [f32],
+            _: &mut [f32],
+            _: Option<&mut [f32]>,
+        ) {
+        }
+
+        fn main_out(&self) -> Option<(usize, usize)> {
+            Some((2, 3))
+        }
+
+        fn each_extra_out(&self, f: &mut dyn FnMut(usize, &[f32])) {
+            f(4, &[0.5, 0.5]);
+            f(5, &[0.25, 0.25]);
+            // Past the device's channels: left out.
+            f(9, &[1.0, 1.0]);
+        }
+    }
+
+    #[test]
+    fn outputs_go_where_the_monitor_section_says() {
+        let mut mix = vec![9.0; 2 * 6];
+        let (l, r, c) = ([1.0, 1.0], [-1.0, -1.0], [0.1, 0.1]);
+        interleave(&Routed, 6, (0, 1), (&l, &r, Some((1, &c))), &mut mix);
+        assert_eq!(mix[..6], [0.0, 0.1, 1.0, -1.0, 0.5, 0.25]);
+        assert_eq!(mix[6..], mix[..6]);
     }
 
     #[test]

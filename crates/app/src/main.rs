@@ -29,6 +29,7 @@ mod fx;
 mod groups;
 mod hitpoints;
 mod instrument;
+mod kits;
 mod latency;
 mod lessons;
 mod meters;
@@ -308,6 +309,8 @@ struct App {
     saved: SavedProfiles,
     effects: Effects,
     tuner: tuner::Tuner,
+    /// Electronic drum kit profiles and the learn wizard.
+    kits: kits::Kits,
     meters: meters::Meters,
     export: export::Export,
     freezer: freeze::Freezer,
@@ -476,6 +479,7 @@ impl App {
             assignments: Vec::new(),
             lessons_ui: lessons::Lessons::default(),
             midi: midi::Midi::default(),
+            kits: kits::Kits::new((!cfg!(test)).then(|| config_dir().join("kits"))),
             pending_instruments: Vec::new(),
             notes_editor: notes_editor::Editor::default(),
             patterns: Vec::new(),
@@ -2264,6 +2268,7 @@ impl eframe::App for App {
                         Cmd::AudioDevice,
                         Cmd::Plugins,
                         Cmd::PerformanceCheck,
+                        Cmd::DrumKits,
                         Cmd::KeyCommands,
                         Cmd::Theme,
                     ] {
@@ -2478,6 +2483,7 @@ impl eframe::App for App {
             }
         }
         self.perf_window(&ctx);
+        self.kits_update(&ctx);
         self.layout_windows(&ctx);
         self.themes.window(&ctx);
         self.command_windows(&ctx);

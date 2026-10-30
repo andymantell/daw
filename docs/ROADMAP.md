@@ -792,7 +792,9 @@ on the drum machine (3.4). Checks in `docs/review-queue/3.3-patterns.md`.*
     sends, including the hi-hat pedal's range. This is the route for any
     kit we don't know. It needs only MIDI input (3.1), so it is built
     early and on its own, well before the instrument, as a small tool
-    under the MIDI settings that writes a profile file.
+    under the MIDI settings that writes a profile file. *Built
+    2026-10-30, at risk: Settings → Drum kits; see
+    [review-queue/3.4-drum-kit-learn.md](review-queue/3.4-drum-kit-learn.md).*
   - **Learn once, ship by default:** a learned profile is saved as a data
     file that can be exported, imported and contributed to the bundled
     profile library, so a kit the project owner has learned ships in every

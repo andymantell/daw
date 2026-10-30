@@ -303,6 +303,7 @@ impl App {
     pub(crate) fn finish_notes(&mut self) -> bool {
         let mut captured = Vec::new();
         self.ctl.take_captured(&mut captured);
+        self.kits.hear(&captured, &self.midi.ports.inputs);
         if captured.is_empty() {
             return false;
         }

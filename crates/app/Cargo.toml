@@ -19,6 +19,7 @@ daw-audio-io = { path = "../audio-io" }
 daw-collab = { path = "../collab" }
 daw-effects = { path = "../effects" }
 daw-engine = { path = "../engine" }
+daw-instruments = { path = "../instruments" }
 daw-plugins = { path = "../plugins" }
 daw-project = { path = "../project" }
 daw-remote = { path = "../remote" }

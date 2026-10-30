@@ -379,7 +379,7 @@ pub struct Effects {
 }
 
 /// A room picked for a convolution reverb.
-enum RoomPick {
+pub(crate) enum RoomPick {
     /// One made here, by index.
     Made(usize),
     Recorded(&'static daw_effects::library::Room),
@@ -2031,7 +2031,11 @@ fn room_note(ui: &egui::Ui, b: &daw_effects::Effect) -> Option<RichText> {
     Some(RichText::new(line).small().weak())
 }
 
-fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<RoomPick> {
+pub(crate) fn builtin_params(
+    ui: &mut egui::Ui,
+    id: u64,
+    b: &daw_effects::Effect,
+) -> Option<RoomPick> {
     let kind = b.kind();
     let mut pick = None;
     egui::Grid::new(("builtin", id))

@@ -295,6 +295,7 @@ impl App {
             clips,
             note_clips: t.note_clips.clone(),
             instrument: t.instrument.as_ref().map(crate::instrument::Slot::value),
+            instrument_outputs: t.instrument_outputs.clone(),
             effects,
             frozen: t.frozen.clone(),
             freeze: t.freeze,
@@ -478,6 +479,7 @@ impl App {
         self.proj.missing_clips.clear();
         self.proj.missing_fx.clear();
         let mut problems = Vec::new();
+        let read = self.sound_reader();
         // Tracks playing their frozen audio for missing plugins.
         let mut frozen = Vec::new();
         let mut tracks = Vec::new();
@@ -495,13 +497,12 @@ impl App {
             t.group = pt.group.clone();
             t.freeze = pt.freeze;
             t.note_clips = pt.note_clips.clone();
+            t.instrument_outputs = pt.instrument_outputs.clone();
             match (&mut t.instrument, &pt.instrument) {
-                (Some(slot), Some(e)) if slot.key == e.id && slot.builtin == e.builtin => {
-                    slot.params.set_all(&e.params);
-                    slot.name = e.name.clone();
-                }
+                (Some(slot), Some(e)) if slot.same_shape(e) => slot.load(e),
                 (slot, Some(e)) => {
-                    let new = crate::instrument::Slot::restore(e);
+                    let (new, missing) = crate::instrument::Slot::restore(e, &read);
+                    problems.extend(missing);
                     self.pending_instruments.push((new.id, new.make(self.rate)));
                     *slot = Some(new);
                 }
@@ -714,6 +715,16 @@ impl App {
                 self.proj.sources.insert(name.clone(), s.source.clone());
             }
             self.proj.moved.insert(old, name);
+        }
+        // So do instruments' sound files.
+        for t in &mut self.tracks {
+            let Some(slot) = &mut t.instrument else {
+                continue;
+            };
+            for r in slot.outside_files() {
+                let name = folder.add_asset(Path::new(&r), false)?;
+                slot.rename_sample(&r, &name);
+            }
         }
         // So do reverb response files.
         for s in self.tracks.iter().flat_map(|t| &t.fx) {

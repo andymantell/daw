@@ -391,8 +391,12 @@ impl App {
             t.clips.retain(|c| c.key != clip);
             if t.clips.len() != before {
                 any = true;
-                let newest = timeline::take_count(&t.clips).checked_sub(1);
-                timeline::choose_take(&mut t.clips, newest);
+                if t.comp.is_some() {
+                    t.takes(self.rate).takes_gone();
+                } else {
+                    let newest = timeline::take_count(&t.clips).checked_sub(1);
+                    timeline::choose_take(&mut t.clips, newest);
+                }
             }
         }
         if any {

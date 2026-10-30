@@ -272,6 +272,7 @@ crates/
   plugin-host/      # out-of-process plugin host binary + IPC
   plugin-formats/   # VST 3 / CLAP / AU / ARA adapters
   collab/           # sessions, bundles, folder sync, asset transfer
+  notation/         # tab, staff and drum layout, MusicXML, text tab, fret assignment
   test-audio/       # golden-render fixtures and comparison tools
 docs/
   ROADMAP.md · ARCHITECTURE.md · CLEAN_ROOM.md · GLOSSARY.md

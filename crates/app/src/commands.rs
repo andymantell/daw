@@ -42,6 +42,9 @@ pub(crate) enum Cmd {
     ClearSelection,
     Crossfade,
     ClipFades,
+    Copy,
+    Paste,
+    Bounce,
     EditGroups,
     FixTiming,
     ZoomIn,
@@ -319,6 +322,30 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Fade in, fade out and volume of the selected clips")
     .words("gain level fade curve envelope"),
+    info(
+        Cmd::Copy,
+        "copy",
+        "Edit",
+        "Copy clips",
+        &[key(CTRL, Key::C)],
+    )
+    .hint("Copy the selected clips, to paste at the playhead or onto a track")
+    .words("duplicate clipboard"),
+    info(
+        Cmd::Paste,
+        "paste",
+        "Edit",
+        "Paste clips",
+        &[key(CTRL, Key::V)],
+    )
+    .hint("Paste the copied clips at the playhead, each on the track it came from")
+    .words("duplicate clipboard"),
+    info(Cmd::Bounce, "bounce", "Edit", "Bounce to a new track", &[])
+        .hint(
+            "The selected clips through their track's effects, as new audio on a track beside \
+             it; they are muted where they are",
+        )
+        .words("render in place consolidate print"),
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
@@ -1523,6 +1550,14 @@ impl App {
             }
             Cmd::HitPoints => self.hits_ui.open = true,
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
+            Cmd::Copy => self.copy_clips(),
+            Cmd::Paste => {
+                let at = self.ctl.status().position().0;
+                if self.paste_clips(None, at) {
+                    self.rebuild();
+                }
+            }
+            Cmd::Bounce => self.bounce_selection(),
             Cmd::NextTheme => self.themes.next(),
             Cmd::LightDark => self.themes.flip(ctx),
             Cmd::FindCommand => {

@@ -33,7 +33,7 @@ pub use model::{
     Articulation, Assignment, AutoPoint, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup,
     Controller, CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade,
     Frozen, FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, InstrumentOutput, Lane,
-    LaneTarget, Marker, MeterChange, MidiMap, Note, NoteClip, PPQ, Practice, Project, Send,
+    LaneTarget, Layer, Marker, MeterChange, MidiMap, Note, NoteClip, PPQ, Practice, Project, Send,
     TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings,
 };
 pub use pattern::{

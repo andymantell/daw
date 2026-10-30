@@ -31,6 +31,7 @@ mod hitpoints;
 mod instrument;
 mod kits;
 mod latency;
+mod layers;
 mod lessons;
 mod meters;
 mod midi;
@@ -106,6 +107,9 @@ struct Track {
     /// Where the instrument's extra outputs go: a drum machine's pads
     /// on buses of their own.
     instrument_outputs: Vec<daw_project::InstrumentOutput>,
+    /// Layered instruments (roadmap 3.5): when there are any, they play
+    /// the notes in place of `instrument`, which is then `None`.
+    layers: Vec<layers::Layer>,
     /// A MIDI output port the track's notes go to as well (this
     /// computer's; not saved with the project).
     midi_out: Option<usize>,
@@ -158,6 +162,7 @@ impl Track {
             note_clips: Vec::new(),
             instrument: None,
             instrument_outputs: Vec::new(),
+            layers: Vec::new(),
             midi_out: None,
             fx: Vec::new(),
             frozen: None,
@@ -188,6 +193,15 @@ impl Track {
         t.instrument = Some(instrument::Slot::synth());
         t.monitor = true;
         t
+    }
+
+    /// Every instrument it has: its own, or its layers'.
+    fn instruments(&self) -> impl Iterator<Item = &instrument::Slot> {
+        (self.instrument.iter()).chain(self.layers.iter().map(|l| &l.slot))
+    }
+
+    fn instruments_mut(&mut self) -> impl Iterator<Item = &mut instrument::Slot> {
+        (self.instrument.iter_mut()).chain(self.layers.iter_mut().map(|l| &mut l.slot))
     }
 
     /// The track's notes as the engine plays them, with their
@@ -611,10 +625,8 @@ impl App {
         let rate = self.profile.as_ref().map_or(self.rate, |p| p.rate);
         self.effects.pending.clear();
         self.pending_instruments.clear();
-        for t in &self.tracks {
-            if let Some(i) = &t.instrument {
-                self.pending_instruments.push((i.id, i.make(rate)));
-            }
+        for i in self.tracks.iter().flat_map(|t| t.instruments()) {
+            self.pending_instruments.push((i.id, i.make(rate)));
         }
         self.midi.start(&mut self.ctl);
         for t in &mut self.tracks {
@@ -821,11 +833,13 @@ impl App {
             // With direct monitoring the interface plays the input.
             spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
             spec.inserts = fx::specs(&t.fx);
+            layers::place(&t.layers, &t.fx, &mut spec.inserts);
             let (notes, expression, controls) = t.note_specs();
             spec.notes = notes.into();
             spec.expression = expression.into();
             spec.controls = controls;
             spec.instrument = t.instrument.as_ref().map(instrument::Slot::spec);
+            spec.layers = t.layers.iter().map(layers::Layer::spec).collect();
             spec.notes_live = t.kind.plays_notes() && (t.arm || t.monitor);
             spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
             self.route(t, &mut spec);
@@ -910,7 +924,7 @@ impl App {
                 fx.push((slot.id, proc));
             }
             let mut instruments: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> =
-                (tracks.iter().filter_map(|t| t.instrument.as_ref()))
+                (tracks.iter().flat_map(|t| t.instruments()))
                     .map(|i| (i.id, i.make(rate)))
                     .collect();
             s.compile_all(audio::MAX_BLOCK, &mut fx, &mut instruments)
@@ -925,7 +939,9 @@ impl App {
             )
         } else {
             // Room for effects to ring out after the last clip.
-            let tail = if (self.tracks.iter()).any(|t| !t.fx.is_empty() || t.instrument.is_some()) {
+            let tail = if (self.tracks.iter())
+                .any(|t| !t.fx.is_empty() || t.instruments().next().is_some())
+            {
                 2 * self.rate as i64
             } else {
                 0
@@ -2239,6 +2255,10 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     self.menu_item(ui, Cmd::MidiLearn);
+                    ui.separator();
+                    for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
+                        self.menu_item(ui, c);
+                    }
                 });
                 ui.menu_button("Transport", |ui| {
                     for c in [
@@ -2464,10 +2484,12 @@ impl eframe::App for App {
                 .collect();
             match (self.tracks.get_mut(i), note) {
                 (Some(t), Some((note, missing))) => {
+                    let layers = layers::chains(&t.layers);
                     if self.effects.track_window(
                         &ctx,
                         &t.name,
                         &mut t.fx,
+                        &layers,
                         &missing,
                         note.as_deref(),
                         self.rate,

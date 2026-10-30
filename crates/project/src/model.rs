@@ -162,7 +162,12 @@ pub struct Track {
     /// on buses of their own), by output number from 1. An output with
     /// no bus here plays through the track, or not at all for a send.
     pub instrument_outputs: Vec<InstrumentOutput>,
-    /// Insert effects, in order.
+    /// Layered instruments (roadmap 3.5): when there are any, they play
+    /// the notes in place of `instrument`, all at once, each the notes
+    /// in its ranges, through its own effects. In order.
+    pub layers: Vec<Layer>,
+    /// Insert effects, in order. Those whose [`Effect::container`] is a
+    /// layer's id are that layer's.
     pub effects: Vec<Effect>,
     /// The track rendered through its effects, for computers that lack
     /// one of its plugins.
@@ -202,6 +207,7 @@ impl Track {
             note_clips: Vec::new(),
             instrument: None,
             instrument_outputs: Vec::new(),
+            layers: Vec::new(),
             effects: Vec::new(),
             frozen: None,
             freeze: false,
@@ -228,6 +234,7 @@ impl Track {
     pub fn wants_frozen(&self) -> bool {
         (self.effects.iter()).any(|e| !e.bypass && (e.is_plugin() || self.freeze))
             || self.instrument.as_ref().is_some_and(Effect::is_plugin)
+            || self.layers.iter().any(|l| l.instrument.is_plugin())
     }
 
     /// The track's notes as they play: each note clip's notes that fall
@@ -893,6 +900,44 @@ impl Effect {
             v.extend(e.assets());
         }
         v
+    }
+}
+
+/// One instrument of a layered instrument (roadmap 3.5). Every layer
+/// hears the track's notes; each plays those in its key and velocity
+/// ranges, moved by its transpose, through its own effects (the track's
+/// effects whose [`Effect::container`] is the layer's id), at its own
+/// level and pan, and the layers are mixed before the track's effects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layer {
+    pub id: String,
+    /// One that comes with the app, or a plugin, like a track's.
+    pub instrument: Effect,
+    pub gain_db: f64,
+    /// −1 (left) to 1 (right).
+    pub pan: f64,
+    pub mute: bool,
+    /// The lowest and highest notes it plays, 0 to 127 (60 is middle C).
+    pub keys: (u8, u8),
+    /// The softest and loudest notes it plays, 1 to 127.
+    pub velocities: (u8, u8),
+    /// Semitones its notes are moved by, −48 to 48.
+    pub transpose: i32,
+}
+
+impl Layer {
+    /// A layer playing every note as it is.
+    pub fn new(id: String, instrument: Effect) -> Layer {
+        Layer {
+            id,
+            instrument,
+            gain_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            keys: (0, 127),
+            velocities: (1, 127),
+            transpose: 0,
+        }
     }
 }
 

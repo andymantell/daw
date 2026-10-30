@@ -1231,13 +1231,16 @@ impl Effects {
 
     /// The effects window for one track, with the names of its effects
     /// whose plugins are missing here and a line about its frozen audio.
-    /// Returns true if the chain changed and the graph needs rebuilding.
+    /// `layers` are its layered instrument's layers (key and heading),
+    /// shown as chains before the track's own. Returns true if the chain
+    /// changed and the graph needs rebuilding.
     #[allow(clippy::too_many_arguments)]
     pub fn track_window(
         &mut self,
         ctx: &egui::Context,
         track: &str,
         slots: &mut Vec<FxSlot>,
+        layers: &[(String, String)],
         missing: &[String],
         frozen: Option<&str>,
         rate: u32,
@@ -1261,7 +1264,7 @@ impl Effects {
             .default_pos(egui::pos2(300.0, 240.0))
             .default_width(420.0)
             .show(ctx, |ui| {
-                if slots.is_empty() && missing.is_empty() {
+                if slots.is_empty() && missing.is_empty() && layers.is_empty() {
                     ui.label("No effects on this track.");
                 }
                 for name in missing {
@@ -1271,9 +1274,11 @@ impl Effects {
                     });
                     ui.separator();
                 }
-                // Every container's chains, to move an effect into.
-                let targets: Vec<(String, u32, String)> = (slots.iter())
-                    .flat_map(|c| {
+                // Every layer and container's chains, to move an effect
+                // into.
+                let targets: Vec<(String, u32, String)> = (layers.iter())
+                    .map(|(key, name)| (key.clone(), 0, name.clone()))
+                    .chain(slots.iter().flat_map(|c| {
                         (0..c.chains()).map(move |b| {
                             (
                                 c.key.clone(),
@@ -1281,7 +1286,7 @@ impl Effects {
                                 format!("{}: {}", c.name, c.chain_name(b)),
                             )
                         })
-                    })
+                    }))
                     .collect();
                 let effects: Vec<Available> = self
                     .list
@@ -1289,8 +1294,29 @@ impl Effects {
                     .into_iter()
                     .filter(|p| p.enabled && !p.class.is_instrument())
                     .collect();
-                for row in tree(slots) {
+                for row in tree(slots, layers) {
                     let (i, depth, idle) = match row {
+                        Row::Layer { n } => {
+                            let (key, name) = &layers[n];
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(name).italics().strong());
+                                ui.menu_button("Add…", |ui| {
+                                    if let Some(p) = add_list(ui, &mut self.filter, &effects) {
+                                        add = Some((p, Some((key.clone(), 0))));
+                                        ui.close();
+                                    }
+                                })
+                                .response
+                                .accessible_name(format!("Add an effect to {name}"));
+                            });
+                            continue;
+                        }
+                        Row::Own => {
+                            ui.label(
+                                RichText::new("The track's own chain, after the layers").italics(),
+                            );
+                            continue;
+                        }
                         Row::Chain { of, branch, depth } => {
                             let name = slots[of].chain_name(branch);
                             let key = slots[of].key.clone();
@@ -1310,7 +1336,7 @@ impl Effects {
                         }
                         Row::Fx { i, depth, idle } => (i, depth, idle),
                     };
-                    let sib = siblings(slots, i);
+                    let sib = siblings(slots, layers, i);
                     let at = sib.iter().position(|&j| j == i).unwrap_or(0);
                     let up = at.checked_sub(1).map(|p| sib[p]);
                     let down = sib.get(at + 1).copied();
@@ -1585,6 +1611,11 @@ pub fn specs(slots: &[FxSlot]) -> Vec<InsertSpec> {
 /// One line of the effects window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
+    /// The heading of a layered instrument's layer `n`, whose effects
+    /// follow it.
+    Layer { n: usize },
+    /// The heading of the track's own chain, after the layers'.
+    Own,
     /// The effect at this index, nested `depth` deep. `idle` when it
     /// doesn't play: its container has no chain of that number.
     Fx { i: usize, depth: usize, idle: bool },
@@ -1597,17 +1628,21 @@ pub enum Row {
 }
 
 /// Whether the slot at `i` sits in the track's own chain: it names no
-/// container, or one that isn't there.
-fn on_top(slots: &[FxSlot], i: usize) -> bool {
+/// layer or container, or one that isn't there.
+fn on_top(slots: &[FxSlot], layers: &[(String, String)], i: usize) -> bool {
     match &slots[i].place {
         None => true,
-        Some((key, _)) => !slots.iter().any(|c| &c.key == key && c.chains() > 0),
+        Some((key, _)) => {
+            !layers.iter().any(|l| &l.0 == key)
+                && !slots.iter().any(|c| &c.key == key && c.chains() > 0)
+        }
     }
 }
 
-/// The effects window's lines: the track's chain, with each
-/// container's chains nested under it, as the engine plays them.
-pub fn tree(slots: &[FxSlot]) -> Vec<Row> {
+/// The effects window's lines: each layer's chain, if the track has
+/// layers, then the track's chain, with each container's chains nested
+/// under it, as the engine plays them.
+pub fn tree(slots: &[FxSlot], layers: &[(String, String)]) -> Vec<Row> {
     fn walk(slots: &[FxSlot], ks: &[usize], depth: usize, seen: &mut [bool], rows: &mut Vec<Row>) {
         for &i in ks {
             if std::mem::replace(&mut seen[i], true) {
@@ -1653,7 +1688,19 @@ pub fn tree(slots: &[FxSlot]) -> Vec<Row> {
     }
     let mut rows = Vec::new();
     let mut seen = vec![false; slots.len()];
-    let top: Vec<usize> = (0..slots.len()).filter(|&i| on_top(slots, i)).collect();
+    for (n, (key, _)) in layers.iter().enumerate() {
+        rows.push(Row::Layer { n });
+        let inside: Vec<usize> = (0..slots.len())
+            .filter(|&j| slots[j].place.as_ref().is_some_and(|(k, _)| k == key))
+            .collect();
+        walk(slots, &inside, 1, &mut seen, &mut rows);
+    }
+    if !layers.is_empty() {
+        rows.push(Row::Own);
+    }
+    let top: Vec<usize> = (0..slots.len())
+        .filter(|&i| on_top(slots, layers, i))
+        .collect();
     walk(slots, &top, 0, &mut seen, &mut rows);
     // Anything left (containers inside each other in a loop) is shown
     // so it can be moved or removed; it doesn't play.
@@ -1670,9 +1717,11 @@ pub fn tree(slots: &[FxSlot]) -> Vec<Row> {
 }
 
 /// The slots in the same chain as `i`, in order.
-fn siblings(slots: &[FxSlot], i: usize) -> Vec<usize> {
-    if on_top(slots, i) {
-        (0..slots.len()).filter(|&j| on_top(slots, j)).collect()
+fn siblings(slots: &[FxSlot], layers: &[(String, String)], i: usize) -> Vec<usize> {
+    if on_top(slots, layers, i) {
+        (0..slots.len())
+            .filter(|&j| on_top(slots, layers, j))
+            .collect()
     } else {
         (0..slots.len())
             .filter(|&j| slots[j].place == slots[i].place)
@@ -2459,7 +2508,7 @@ mod tests {
         let fx = &h.state().tracks[0].fx;
         assert_eq!(fx.len(), 2);
         assert_eq!(fx[1].place, Some((fx[0].key.clone(), 0)));
-        let rows = super::tree(fx);
+        let rows = super::tree(fx, &[]);
         assert_eq!(rows.len(), 4, "container, chain 1, EQ, chain 2: {rows:?}");
 
         // Heard: two chains of the same sound, one through an EQ turned

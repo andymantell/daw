@@ -157,8 +157,8 @@ impl ProjectDoc {
                     .chain(t.frozen.iter().map(|f| f.asset.clone()))
                     .chain(t.effects.iter().flat_map(|e| e.assets()).map(String::from))
                     .chain(
-                        t.instrument
-                            .iter()
+                        (t.instrument.iter())
+                            .chain(t.layers.iter().map(|l| &l.instrument))
                             .flat_map(|e| e.assets())
                             .map(String::from),
                     )

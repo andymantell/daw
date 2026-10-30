@@ -570,20 +570,25 @@ pub struct Shown {
     pub cmd: Option<Cmd>,
     /// Something to tell the user.
     pub message: Option<String>,
+    /// A change to the track's layered instruments to make.
+    pub layer: Option<crate::layers::Edit>,
 }
 
 /// The instruments to choose from, in the order shown.
-fn choices() -> Vec<(Option<Kind>, &'static str)> {
+pub(crate) fn choices() -> Vec<(Option<Kind>, &'static str)> {
     let mut v = vec![(None, "Simple synth")];
     v.extend(Kind::ALL.iter().map(|k| (Some(*k), k.name())));
     v
 }
 
-/// The instrument window for a track: which instrument, its controls,
-/// and the MIDI output its notes also go to.
-pub fn window(ctx: &egui::Context, t: &mut crate::Track, cx: Ctx) -> Shown {
+/// The instrument window for a track: which instrument (or layered
+/// instruments, roadmap 3.5), its controls, and the MIDI output its
+/// notes also go to.
+pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
+    use crate::layers::Edit;
     let mut open = true;
     let mut shown = Shown::default();
+    let layered = !t.layers.is_empty();
     egui::Window::new(format!("Instrument: {}", t.name))
         .id(egui::Id::unique("track-instrument"))
         .open(&mut open)
@@ -592,17 +597,23 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, cx: Ctx) -> Shown {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Instrument");
-                let current = t.instrument.as_ref().map_or("None", |i| i.name.as_str());
-                let now = t.instrument.as_ref().map(|i| i.kind());
+                let current = match &t.instrument {
+                    _ if layered => "Layered instruments",
+                    Some(i) => i.name.as_str(),
+                    None => "None",
+                };
+                let now = t.instrument.as_ref().filter(|_| !layered).map(|i| i.kind());
                 egui::ComboBox::from_id_salt("instrument-choice")
                     .selected_text(current)
                     .show_ui(ui, |ui| {
+                        let none = t.instrument.is_none() && !layered;
                         if ui
-                            .selectable_label(t.instrument.is_none(), "None")
+                            .selectable_label(none, "None")
                             .on_hover_text("Notes go only to the MIDI output, if one is chosen")
                             .clicked()
-                            && t.instrument.is_some()
+                            && !none
                         {
+                            crate::layers::drop_layers(t);
                             t.instrument = None;
                             shown.changed = true;
                         }
@@ -619,14 +630,39 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, cx: Ctx) -> Shown {
                             {
                                 let s = kind.map_or_else(Slot::synth, Slot::new);
                                 cx.pending.push((s.id, s.make(cx.rate)));
+                                crate::layers::drop_layers(t);
                                 t.instrument = Some(s);
                                 shown.changed = true;
                             }
+                        }
+                        if ui
+                            .selectable_label(layered, "Layered instruments")
+                            .on_hover_text(
+                                "Several instruments playing the same notes, each with its own \
+                                 range of notes, level and effects: for a keyboard split or a \
+                                 doubled sound. The instrument now becomes the first layer",
+                            )
+                            .clicked()
+                            && !layered
+                        {
+                            shown.layer = Some(Edit::Add);
                         }
                     })
                     .response
                     .accessible_name("Instrument");
             });
+            if layered {
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(560.0)
+                    .show(ui, |ui| {
+                        let edit = crate::layers::controls(ui, &mut t.layers, &mut cx, &mut shown);
+                        shown.layer = edit.or(shown.layer);
+                    });
+                ui.separator();
+                midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
+                return;
+            }
             let Some(slot) = &mut t.instrument else {
                 return;
             };
@@ -634,33 +670,39 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, cx: Ctx) -> Shown {
             egui::ScrollArea::vertical()
                 .max_height(520.0)
                 .show(ui, |ui| {
-                    let renew = match slot.kind() {
-                        None => {
-                            slot.simple_controls(ui);
-                            false
-                        }
-                        Some(Kind::Synth) => synth_controls(ui, slot),
-                        Some(Kind::Sampler) => sampler_controls(ui, slot, &cx, &mut shown),
-                        Some(Kind::DrumSampler) => drum_sampler_controls(ui, slot, &cx, &mut shown),
-                        Some(Kind::DrumMachine) => drum_machine_controls(
-                            ui,
-                            slot,
-                            &mut t.instrument_outputs,
-                            &cx,
-                            &mut shown,
-                        ),
-                        Some(Kind::Slicer) => slicer_controls(ui, slot, &cx, &mut shown),
-                    };
-                    if renew {
-                        slot.renew(cx.rate, cx.pending);
-                        shown.changed = true;
-                    }
+                    slot_controls(ui, slot, &mut t.instrument_outputs, &mut cx, &mut shown);
                 });
             ui.separator();
             midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
         });
     shown.open = open;
     shown
+}
+
+/// The controls of the instrument in `slot`, with where its extra
+/// outputs go. Changing what it is made of gives it a new instrument.
+pub(crate) fn slot_controls(
+    ui: &mut egui::Ui,
+    slot: &mut Slot,
+    outputs: &mut Vec<daw_project::InstrumentOutput>,
+    cx: &mut Ctx,
+    shown: &mut Shown,
+) {
+    let renew = match slot.kind() {
+        None => {
+            slot.simple_controls(ui);
+            false
+        }
+        Some(Kind::Synth) => synth_controls(ui, slot),
+        Some(Kind::Sampler) => sampler_controls(ui, slot, cx, shown),
+        Some(Kind::DrumSampler) => drum_sampler_controls(ui, slot, cx, shown),
+        Some(Kind::DrumMachine) => drum_machine_controls(ui, slot, outputs, cx, shown),
+        Some(Kind::Slicer) => slicer_controls(ui, slot, cx, shown),
+    };
+    if renew {
+        slot.renew(cx.rate, cx.pending);
+        shown.changed = true;
+    }
 }
 
 fn midi_out_picker(
@@ -1416,6 +1458,9 @@ impl crate::App {
         }
         if let Some(cmd) = shown.cmd {
             self.run(ctx, cmd);
+        }
+        if let Some(edit) = shown.layer {
+            self.layer_edit(i, edit);
         }
         if !shown.open {
             self.instrument_open = None;

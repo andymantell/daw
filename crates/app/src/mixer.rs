@@ -184,7 +184,7 @@ impl App {
                     } else {
                         if t.kind.plays_notes() {
                             let open = self.instrument_open == Some(i);
-                            let label = t.instrument.as_ref().map_or("Instrument", |i| {
+                            let label = t.instrument.as_ref().map_or(if t.layers.is_empty() { "Instrument" } else { "Layers" }, |i| {
                                 match i.kind() {
                                     None | Some(daw_instruments::Kind::Synth) => "Synth",
                                     Some(daw_instruments::Kind::Sampler) => "Sampler",

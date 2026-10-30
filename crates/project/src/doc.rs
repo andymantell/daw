@@ -46,9 +46,9 @@ use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
-    GrooveStep, HitPoint, InstrumentOutput, Lane, Marker, MeterChange, MidiMap, Note, NoteClip,
-    Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
-    TrackKind, TrainerSettings, is_asset_name,
+    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Note,
+    NoteClip, Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup,
+    Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -1141,6 +1141,7 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         None if m.get("instrument").is_some() => w.delete(m, "instrument"),
         None => {}
     }
+    write_layers(w, m, t);
     write_note_clips(w, m, t);
     write_comps(w, m, t);
     match &t.frozen {
@@ -1246,6 +1247,98 @@ fn write_effect(w: &mut Writer, em: &LoroMap, e: &Effect) {
                 .map_or(LoroValue::Null, LoroValue::from),
         );
     }
+}
+
+/// A track's layered instruments: a `layers` map from id to layer, each
+/// with its settings and an `instrument` map like an effect's, and their
+/// order in `layer_order`. Tracks never layered gain no entries.
+fn write_layers(w: &mut Writer, m: &LoroMap, t: &Track) {
+    if t.layers.is_empty() && m.get("layers").is_none() {
+        return;
+    }
+    let layers = w.fixed(m, "layers");
+    let keep: HashSet<&str> = t.layers.iter().map(|l| l.id.as_str()).collect();
+    for id in keys(&layers) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&layers, &id);
+        }
+    }
+    for l in &t.layers {
+        let lm = w.child(&layers, &l.id);
+        w.put(&lm, "gain_db", l.gain_db);
+        w.put(&lm, "pan", l.pan);
+        w.put(&lm, "mute", l.mute);
+        w.put(&lm, "key_low", i64::from(l.keys.0));
+        w.put(&lm, "key_high", i64::from(l.keys.1));
+        w.put(&lm, "velocity_low", i64::from(l.velocities.0));
+        w.put(&lm, "velocity_high", i64::from(l.velocities.1));
+        w.put(&lm, "transpose", i64::from(l.transpose));
+        let im = w.child(&lm, "instrument");
+        w.put(&im, "id", l.instrument.id.as_str());
+        write_effect(w, &im, &l.instrument);
+    }
+    let Ok(order) = m.ensure_mergeable_movable_list("layer_order") else {
+        return;
+    };
+    let ids: Vec<String> = t.layers.iter().map(|l| l.id.clone()).collect();
+    w.order(&order, &ids);
+}
+
+/// A track's layers, in order: those the order list names, then any it
+/// doesn't (one added by someone at the same time), by id.
+fn read_layers(t: &LoroMapValue) -> Vec<Layer> {
+    let Some(LoroValue::Map(layers)) = t.get("layers") else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(LoroValue::List(order)) = t.get("layer_order") {
+        for v in order.iter() {
+            if let LoroValue::String(s) = v
+                && layers.contains_key(s.as_str())
+                && !ids.iter().any(|i| i == s.as_str())
+            {
+                ids.push(s.to_string());
+            }
+        }
+    }
+    let mut rest: Vec<&String> = layers.keys().filter(|k| !ids.contains(k)).collect();
+    rest.sort();
+    ids.extend(rest.into_iter().cloned());
+    let byte = |lm: &LoroMapValue, k: &str, lo: u8, or: u8| {
+        int(lm, k).map_or(or, |v| v.clamp(i64::from(lo), 127) as u8)
+    };
+    let mut out = Vec::new();
+    for id in ids {
+        let Some(LoroValue::Map(lm)) = layers.get(&id) else {
+            continue;
+        };
+        let instrument = match lm.get("instrument") {
+            Some(LoroValue::Map(im)) => {
+                let iid = string(im, "id").unwrap_or_else(|| format!("{id}-instrument"));
+                read_effect(iid, im)
+            }
+            _ => Effect::default(),
+        };
+        out.push(Layer {
+            instrument,
+            gain_db: float(lm, "gain_db")
+                .filter(|v| v.is_finite())
+                .unwrap_or(0.0),
+            pan: float(lm, "pan")
+                .filter(|v| v.is_finite())
+                .unwrap_or(0.0)
+                .clamp(-1.0, 1.0),
+            mute: boolean(lm, "mute").unwrap_or(false),
+            keys: (byte(lm, "key_low", 0, 0), byte(lm, "key_high", 0, 127)),
+            velocities: (
+                byte(lm, "velocity_low", 1, 1),
+                byte(lm, "velocity_high", 1, 127),
+            ),
+            transpose: int(lm, "transpose").map_or(0, |v| v.clamp(-48, 48) as i32),
+            id,
+        });
+    }
+    out
 }
 
 /// A track's note clips: a `note_clips` map from id to clip, each a map
@@ -1644,6 +1737,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         clips: Vec::new(),
         note_clips: Vec::new(),
         instrument: None,
+        layers: Vec::new(),
         effects: Vec::new(),
         frozen: t.get("frozen").and_then(read_frozen),
         freeze: boolean(t, "freeze").unwrap_or(false),
@@ -1748,6 +1842,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         let id = string(im, "id").unwrap_or_else(|| "instrument".to_string());
         track.instrument = Some(read_effect(id, im));
     }
+    track.layers = read_layers(t);
     track.note_clips = read_note_clips(t);
     track
 }
@@ -2693,6 +2788,74 @@ mod tests {
         assert!(doc.set(&q));
         assert_eq!(doc.get().tracks[0].instrument, q.tracks[0].instrument);
         assert!(doc.get().tracks[0].instrument_outputs.is_empty());
+    }
+
+    #[test]
+    fn layered_instruments_round_trip_in_order() {
+        let synth = |id: &str, wave: f64| Effect {
+            id: id.into(),
+            name: "Simple synth".into(),
+            builtin: "synth".into(),
+            params: vec![("wave".into(), wave)],
+            ..Effect::default()
+        };
+        let mut p = Project::default();
+        let mut t = Track::new("k".into(), "Keys".into());
+        t.kind = TrackKind::Instrument;
+        let mut low = Layer::new("l2".into(), synth("i2", 2.0));
+        low.keys = (0, 59);
+        low.transpose = -12;
+        low.gain_db = -6.0;
+        low.pan = -0.5;
+        let mut high = Layer::new("l1".into(), synth("i1", 1.0));
+        high.keys = (60, 127);
+        high.velocities = (64, 127);
+        high.mute = true;
+        // Out of id order, to show the order is kept.
+        t.layers = vec![low, high];
+        t.effects.push(Effect {
+            id: "e1".into(),
+            name: "EQ".into(),
+            builtin: "eq".into(),
+            container: Some("l1".into()),
+            ..Effect::default()
+        });
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        assert!(doc.set(&p));
+        let back = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap().get();
+        assert_eq!(back.tracks[0].layers, p.tracks[0].layers);
+        assert_eq!(back.tracks[0].effects, p.tracks[0].effects);
+        assert!(!doc.set(&back));
+        // Reordered, then one removed.
+        let mut q = back.clone();
+        q.tracks[0].layers.swap(0, 1);
+        assert!(doc.set(&q));
+        assert_eq!(doc.get().tracks[0].layers[0].id, "l1");
+        q.tracks[0].layers.remove(0);
+        assert!(doc.set(&q));
+        let back = doc.get();
+        assert_eq!(back.tracks[0].layers.len(), 1);
+        assert_eq!(back.tracks[0].layers[0].keys, (0, 59));
+        // A track never layered gains no entry.
+        let LoroValue::Map(tracks) = doc.doc.get_map("tracks").get_deep_value() else {
+            panic!()
+        };
+        let LoroValue::Map(k) = tracks.get("k").unwrap() else {
+            panic!()
+        };
+        assert!(k.get("layers").is_some());
+        let mut plain = Project::default();
+        plain.tracks.push(Track::new("g".into(), "Guitar".into()));
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&plain);
+        let LoroValue::Map(tracks) = doc.doc.get_map("tracks").get_deep_value() else {
+            panic!()
+        };
+        let LoroValue::Map(g) = tracks.get("g").unwrap() else {
+            panic!()
+        };
+        assert!(g.get("layers").is_none() && g.get("layer_order").is_none());
     }
 
     #[test]

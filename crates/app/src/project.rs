@@ -296,6 +296,7 @@ impl App {
             note_clips: t.note_clips.clone(),
             instrument: t.instrument.as_ref().map(crate::instrument::Slot::value),
             instrument_outputs: t.instrument_outputs.clone(),
+            layers: t.layers.iter().map(crate::layers::Layer::value).collect(),
             effects,
             frozen: t.frozen.clone(),
             freeze: t.freeze,
@@ -508,6 +509,25 @@ impl App {
                 }
                 (slot, None) => *slot = None,
             }
+            let mut had: HashMap<String, crate::layers::Layer> =
+                t.layers.drain(..).map(|l| (l.key.clone(), l)).collect();
+            for pl in &pt.layers {
+                let layer = match had.remove(&pl.id) {
+                    Some(mut l) if l.slot.same_shape(&pl.instrument) => {
+                        l.slot.load(&pl.instrument);
+                        l.set(pl);
+                        l
+                    }
+                    _ => {
+                        let (l, missing) = crate::layers::Layer::restore(pl, &read);
+                        problems.extend(missing);
+                        self.pending_instruments
+                            .push((l.slot.id, l.slot.make(self.rate)));
+                        l
+                    }
+                };
+                t.layers.push(layer);
+            }
             t.automation = (pt.automation.iter())
                 .map(|l| daw_project::Lane {
                     param: l.param.clone(),
@@ -717,10 +737,7 @@ impl App {
             self.proj.moved.insert(old, name);
         }
         // So do instruments' sound files.
-        for t in &mut self.tracks {
-            let Some(slot) = &mut t.instrument else {
-                continue;
-            };
+        for slot in self.tracks.iter_mut().flat_map(|t| t.instruments_mut()) {
             for r in slot.outside_files() {
                 let name = folder.add_asset(Path::new(&r), false)?;
                 slot.rename_sample(&r, &name);

@@ -151,6 +151,9 @@ pub struct Proj {
     /// The next change written is not an edit (audio reopened at a new
     /// rate), so it is kept out of undo.
     pub quiet_next: bool,
+    /// The name of the next change written, as its undo step is called
+    /// (an assistant's request).
+    pub(crate) label: Option<String>,
     /// The window may close: unsaved changes have been dealt with.
     may_close: bool,
     title: String,
@@ -189,6 +192,7 @@ impl Proj {
             last_device_write: Instant::now(),
             bundle_job: None,
             quiet_next: false,
+            label: None,
             may_close: false,
             title: String::new(),
             recovery: (!cfg!(test)).then(recovery_file),
@@ -339,6 +343,10 @@ impl App {
         if !force && (ctx.input(|i| i.pointer.any_down()) || ctx.egui_wants_keyboard_input()) {
             return;
         }
+        // An assistant's edit is written as a step of its own.
+        if !force && self.agent.holding() {
+            return;
+        }
         if self.proj.loading() {
             return;
         }
@@ -354,6 +362,8 @@ impl App {
         }
         if std::mem::take(&mut self.proj.quiet_next) {
             self.proj.doc.set_quietly(&p);
+        } else if let Some(label) = &self.proj.label {
+            self.proj.doc.set_labelled(&p, label);
         } else {
             self.proj.doc.set(&p);
         }

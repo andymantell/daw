@@ -211,6 +211,15 @@ impl ProjectDoc {
         changed
     }
 
+    /// Like [`set`](Self::set), with the edit's name kept in the
+    /// history as its commit message.
+    pub fn set_labelled(&mut self, p: &Project, label: &str) -> bool {
+        let changed = self.write(p);
+        self.doc.set_next_commit_message(label);
+        self.doc.commit();
+        changed
+    }
+
     /// Like [`set`](Self::set), but not undoable: for bringing the
     /// document up to date with things that aren't edits, such as plugin
     /// settings read when saving.

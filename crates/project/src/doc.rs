@@ -46,9 +46,9 @@ use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
-    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Note,
-    NoteClip, Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup,
-    Track, TrackKind, TrainerSettings, VideoClip, is_asset_name,
+    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Notation,
+    NotationView, Note, NoteClip, Practice, Project, Scale, Send, TabBlock, Technique, TempoChange,
+    TimecodeSetup, Track, TrackKind, TrainerSettings, VideoClip, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -1187,6 +1187,21 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     }
     write_layers(w, m, t);
     write_note_clips(w, m, t);
+    // The notation lane: one map. Tracks that never had one gain no entry.
+    match &t.notation {
+        Some(n) => {
+            let nm = w.child(m, "notation");
+            w.put(&nm, "view", n.view.name());
+            let tuning: Vec<LoroValue> = n.tuning.iter().map(|&p| i64::from(p).into()).collect();
+            w.put(&nm, "tuning", LoroValue::List(tuning.into()));
+            w.put(&nm, "tuning_name", n.tuning_name.as_str());
+            w.put(&nm, "capo", i64::from(n.capo));
+            w.put(&nm, "staff", n.staff);
+            w.put(&nm, "rhythm", n.rhythm);
+        }
+        None if m.get("notation").is_some() => w.delete(m, "notation"),
+        None => {}
+    }
     write_comps(w, m, t);
     match &t.frozen {
         Some(f) => {
@@ -1794,7 +1809,27 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         instrument_outputs: Vec::new(),
         group: string(t, "group").filter(|s| !s.is_empty()),
         automation: Vec::new(),
+        notation: None,
     };
+    if let Some(LoroValue::Map(nm)) = t.get("notation") {
+        let tuning = match nm.get("tuning") {
+            Some(LoroValue::List(l)) => (l.iter())
+                .filter_map(|v| match v {
+                    LoroValue::I64(p) => u8::try_from(*p).ok().filter(|p| *p < 128),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        track.notation = Some(Notation {
+            view: NotationView::from_name(&string(nm, "view").unwrap_or_default()),
+            tuning,
+            tuning_name: string(nm, "tuning_name").unwrap_or_default(),
+            capo: int(nm, "capo").map_or(0, |c| c.clamp(0, 24) as u8),
+            staff: boolean(nm, "staff").unwrap_or(false),
+            rhythm: boolean(nm, "rhythm").unwrap_or(true),
+        });
+    }
     (track.comps, track.comp) = read_comps(t);
     if let Some(LoroValue::Map(lanes)) = t.get("automation") {
         let mut params: Vec<&str> = lanes.keys().map(|k| k.as_str()).collect();
@@ -2419,6 +2454,30 @@ mod tests {
         p.cue_mixes.clear();
         doc.set(&p);
         assert!(doc.get().cue_mixes.is_empty());
+    }
+
+    #[test]
+    fn notation_lanes_round_trip_and_come_off() {
+        let mut p = Project::default();
+        let mut t = Track::new("g".into(), "Guitar".into());
+        let mut n = Notation::guitar();
+        n.tuning = vec![64, 59, 55, 50, 45, 38];
+        n.tuning_name = "Drop D".into();
+        n.capo = 2;
+        n.staff = true;
+        t.notation = Some(n.clone());
+        let mut d = Track::new("d".into(), "Drums".into());
+        d.notation = Some(Notation::drums());
+        p.tracks = vec![t, d, Track::new("a".into(), "Audio".into())];
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let back = doc.get();
+        assert_eq!(back.tracks[0].notation, Some(n));
+        assert_eq!(back.tracks[1].notation, Some(Notation::drums()));
+        assert_eq!(back.tracks[2].notation, None);
+        p.tracks[0].notation = None;
+        doc.set(&p);
+        assert_eq!(doc.get().tracks[0].notation, None);
     }
 
     #[test]

@@ -33,8 +33,9 @@ pub use model::{
     Articulation, Assignment, AutoPoint, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup,
     Controller, CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade,
     Frozen, FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, InstrumentOutput, Lane,
-    LaneTarget, Layer, Marker, MeterChange, MidiMap, Note, NoteClip, PPQ, Practice, Project, Send,
-    TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, VideoClip,
+    LaneTarget, Layer, Marker, MeterChange, MidiMap, Notation, NotationView, Note, NoteClip, PPQ,
+    Practice, Project, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
+    TrainerSettings, VideoClip,
 };
 pub use pattern::{
     DRUM_LANES, Direction, MAX_GATE, MAX_REPEATS, MAX_STEPS, MIN_GATE, Pattern, PatternLane, Roll,

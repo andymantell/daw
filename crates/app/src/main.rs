@@ -38,6 +38,7 @@ mod midi;
 mod midifile;
 mod mixer;
 mod monitor;
+mod notation;
 mod note_tools;
 mod notes;
 mod notes_editor;
@@ -142,6 +143,8 @@ struct Track {
     group: Option<String>,
     /// Automation lanes, with positions at the app's rate.
     automation: Vec<daw_project::Lane>,
+    /// Its notes shown as tab or a staff under it (roadmap 3.8).
+    notation: Option<daw_project::Notation>,
 }
 
 impl Track {
@@ -182,6 +185,7 @@ impl Track {
             sends: Vec::new(),
             group: None,
             automation: Vec::new(),
+            notation: None,
         }
     }
 
@@ -361,6 +365,8 @@ struct App {
     grooves: Vec<daw_project::Groove>,
     midi_maps: Vec<daw_project::MidiMap>,
     note_tools: note_tools::NoteTools,
+    /// Notation lanes under tracks (roadmap 3.8).
+    notation: notation::Lanes,
     timeline: timeline::Timeline,
     perf: perf::Perf,
     /// Lesson notes and tab blocks, as in the project, and their window.
@@ -495,6 +501,7 @@ impl App {
             grooves: Vec::new(),
             midi_maps: Vec::new(),
             note_tools: note_tools::NoteTools::default(),
+            notation: notation::Lanes::default(),
             hits_ui: hitpoints::HitPointsWindow::default(),
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
@@ -1252,6 +1259,7 @@ impl App {
             hits: &hits,
             freeze: &freeze,
             can_paste: !self.renders.copied.is_empty(),
+            bands: &[],
         };
         self.timeline.groups = self.lane_groups();
         self.timeline.band = if self.video.clips.is_empty() && !self.video.busy() {
@@ -1259,7 +1267,18 @@ impl App {
         } else {
             video::BAND
         };
-        let out = self.with_song(|tl, song| tl.show(ui, song, &view));
+        // The notation bands borrow their layouts, taken out of the app
+        // while the timeline draws.
+        self.refresh_notation(&map);
+        let built = self.take_notation_layouts();
+        let bands = App::bands(&self.tracks, &built, self.notation.entry.as_ref());
+        let shown = timeline::View {
+            bands: &bands,
+            ..view
+        };
+        let out = self.with_song(|tl, song| tl.show(ui, song, &shown));
+        drop(bands);
+        self.put_notation_layouts(built);
         if let Some(r) = out.band {
             let snap = self.timeline.snap.then_some(self.timeline.grid);
             let band = self.video.band(
@@ -1283,6 +1302,11 @@ impl App {
             if let Some(f) = band.seek {
                 self.send(Command::Seek(Frames(f)));
             }
+        }
+        if let Some((lane, tick, y)) = out.notation_band {
+            self.band_clicked(lane, tick, y);
+        } else if out.off_band {
+            self.notation.entry = None;
         }
         if let Some(id) = out.pin {
             self.comment_ui.show_thread(&id);
@@ -2266,6 +2290,7 @@ impl eframe::App for App {
                     self.menu_item(ui, Cmd::Export);
                     self.menu_item(ui, Cmd::ImportMidi);
                     self.menu_item(ui, Cmd::ExportMidi);
+                    self.menu_item(ui, Cmd::ImportMusicXml);
                 });
                 ui.menu_button("Edit", |ui| {
                     self.menu_item(ui, Cmd::Undo);
@@ -2312,6 +2337,33 @@ impl eframe::App for App {
                     self.menu_item(ui, Cmd::MidiLearn);
                     ui.separator();
                     for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
+                        self.menu_item(ui, c);
+                    }
+                });
+                ui.menu_button("Notation", |ui| {
+                    for c in [Cmd::NotationLane, Cmd::NotationView, Cmd::NotationSettings] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [
+                        Cmd::TabEntry,
+                        Cmd::StringUp,
+                        Cmd::StringDown,
+                        Cmd::AssignFrets,
+                    ] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::PracticeMutePart, Cmd::ContinuousScroll] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [
+                        Cmd::ImportMusicXml,
+                        Cmd::ExportMusicXml,
+                        Cmd::ExportTextTab,
+                        Cmd::PrintNotation,
+                    ] {
                         self.menu_item(ui, c);
                     }
                 });
@@ -2565,6 +2617,7 @@ impl eframe::App for App {
         self.layout_windows(&ctx);
         self.themes.window(&ctx);
         self.command_windows(&ctx);
+        self.notation_window(&ctx);
         self.updates.poll(&ctx);
         self.updates.window(&ctx);
         self.updates.ask_window(&ctx);

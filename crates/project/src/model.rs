@@ -196,6 +196,102 @@ pub struct Track {
     /// Automation lanes (roadmap 2.6): a line each for the settings that
     /// change as the song plays, in the order added.
     pub automation: Vec<Lane>,
+    /// Its notes shown as tab or a staff under it (roadmap 3.8), or
+    /// `None` for no notation lane.
+    pub notation: Option<Notation>,
+}
+
+/// How a track's notes are shown as notation (roadmap 3.8, decision
+/// 0009): a view of its notes, not a separate score. The notes' own
+/// strings, frets and techniques are what tab shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notation {
+    pub view: NotationView,
+    /// For tab: each string's open pitch, from the highest (string 1)
+    /// down.
+    pub tuning: Vec<u8>,
+    /// What the tuning is called ("Standard", "Drop D").
+    pub tuning_name: String,
+    /// The fret the capo is on, 0 for none. Frets are counted from it.
+    pub capo: u8,
+    /// For tab: a standard staff above it.
+    pub staff: bool,
+    /// For tab: stems and beams under it.
+    pub rhythm: bool,
+}
+
+/// What a notation lane shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NotationView {
+    /// Guitar or bass tab.
+    #[default]
+    Tab,
+    /// A standard five-line staff.
+    Staff,
+    /// A drum staff, from the standard percussion key map.
+    Drums,
+}
+
+impl NotationView {
+    pub const ALL: [NotationView; 3] =
+        [NotationView::Tab, NotationView::Staff, NotationView::Drums];
+
+    /// As the document stores it. Never change one.
+    pub fn name(self) -> &'static str {
+        match self {
+            NotationView::Tab => "tab",
+            NotationView::Staff => "staff",
+            NotationView::Drums => "drums",
+        }
+    }
+
+    pub fn from_name(s: &str) -> NotationView {
+        NotationView::ALL
+            .into_iter()
+            .find(|v| v.name() == s)
+            .unwrap_or_default()
+    }
+}
+
+impl Notation {
+    /// Six-string guitar tab in standard tuning.
+    pub fn guitar() -> Notation {
+        Notation {
+            view: NotationView::Tab,
+            tuning: vec![64, 59, 55, 50, 45, 40],
+            tuning_name: "Standard".into(),
+            capo: 0,
+            staff: false,
+            rhythm: true,
+        }
+    }
+
+    /// Four-string bass tab in standard tuning.
+    pub fn bass() -> Notation {
+        Notation {
+            tuning: vec![43, 38, 33, 28],
+            tuning_name: "Bass standard".into(),
+            ..Notation::guitar()
+        }
+    }
+
+    /// A drum staff.
+    pub fn drums() -> Notation {
+        Notation {
+            view: NotationView::Drums,
+            tuning: Vec::new(),
+            tuning_name: String::new(),
+            ..Notation::guitar()
+        }
+    }
+
+    /// A standard staff.
+    pub fn staff() -> Notation {
+        Notation {
+            view: NotationView::Staff,
+            ..Notation::drums()
+        }
+    }
 }
 
 impl Track {
@@ -223,6 +319,7 @@ impl Track {
             sends: Vec::new(),
             group: None,
             automation: Vec::new(),
+            notation: None,
         }
     }
 

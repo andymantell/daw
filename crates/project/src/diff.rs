@@ -501,6 +501,13 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             n => format!("Automation changed ({n} lanes)"),
         });
     }
+    if before.notation != after.notation {
+        out.push(match (&before.notation, &after.notation) {
+            (None, Some(_)) => "Notation lane shown".into(),
+            (Some(_), None) => "Notation lane taken off".into(),
+            _ => "Notation lane changed".into(),
+        });
+    }
 
     // Clips.
     let was: HashMap<&str, &Clip> = before.clips.iter().map(|c| (c.id.as_str(), c)).collect();

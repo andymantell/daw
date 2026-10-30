@@ -248,7 +248,13 @@ pub(crate) fn wrap(
     out: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), Error> {
+    // The sound waits for the picture below, so a file without one is
+    // turned away first. One this system can't decode can still be
+    // copied, as its picture isn't decoded.
     init()?;
+    if let Err(e @ Error::NoPicture) = probe(video) {
+        return Err(e);
+    }
     let failed = |e: &dyn std::fmt::Display| Error::CantWrap(e.to_string());
     let (mux_name, encoders) = container(out);
     let mux = make(mux_name)?;
@@ -299,12 +305,27 @@ pub(crate) fn wrap(
         .and_then(|t| mux.compatible_pad_template(&t))
         .and_then(|t| mux.request_pad(&t, None, None))
         .ok_or_else(|| Error::CantWrap(format!("{mux_name} takes no sound of this kind")))?;
-    (last.static_pad("src").expect("a queue's output"))
-        .link(&audio_pad)
-        .map_err(|e| failed(&e))?;
+    let audio_out = last.static_pad("src").expect("a queue's output");
+    audio_out.link(&audio_pad).map_err(|e| failed(&e))?;
+    // The sound waits until the picture is joined to the muxer: some
+    // kinds of file (Ogg) must start every stream before any data.
+    let held = Arc::new(Mutex::new(
+        audio_out.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, |_, _| {
+            gst::PadProbeReturn::Ok
+        }),
+    ));
+    let release = {
+        let (pad, held) = (audio_out.clone(), held.clone());
+        move || {
+            if let Some(id) = held.lock().unwrap().take() {
+                pad.remove_probe(id);
+            }
+        }
+    };
 
     // The picture: its first stream, as it is, into the muxer. Anything
     // else in the file (its own sound, subtitles) is left behind.
+    let release2 = release.clone();
     let linked = Arc::new(Mutex::new(false));
     let problem: Arc<Mutex<Option<String>>> = Arc::default();
     {
@@ -346,18 +367,29 @@ pub(crate) fn wrap(
                     f.static_pad("sink")
                 })
             };
+            let video = into.is_some() && is_video;
             if let Some(to) = into {
                 let _ = pad.link(&to);
             }
+            if video {
+                drop(done);
+                release();
+            }
         });
     }
+    // A file with no picture lets the sound go, to end.
+    parse.connect_no_more_pads(move |_| release2());
     let stop = Stop(p.clone());
     p.set_state(gst::State::Playing)
         .map_err(|_| Error::CantWrap(failure(&p).unwrap_or_else(|| "it didn't start".into())))?;
     let bus = p.bus().ok_or(Error::CantWrap("no bus".into()))?;
+    let began = std::time::Instant::now();
     let result = loop {
         if cancel.load(Ordering::Relaxed) {
             break Err(Error::CantWrap("cancelled".into()));
+        }
+        if !*linked.lock().unwrap() && began.elapsed() > PATIENCE.into() {
+            break Err(Error::CantWrap("the film's picture never came".into()));
         }
         if let Some(why) = problem.lock().unwrap().take() {
             break Err(Error::CantWrap(why));

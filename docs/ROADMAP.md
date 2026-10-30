@@ -576,6 +576,14 @@ Still to do: the tuner as an insert.*
 - Built on the same processor interface as hosted plugins.
 
 ### 2.6 Automation (M)
+*Built 2026-10-30, at risk. A lane for any setting of a track (volume,
+pan, each send, each built-in effect's setting, each plugin parameter)
+in an Automation pane in line with the timeline, with Off, Read,
+Touch, Latch and Write per track. The engine follows volume, pan, send
+and built-in lanes block by block, in playback and export alike;
+plugin lanes are set from the window thread while playing and are not
+followed by an export yet. Clip-level automation is the clip volume
+line (2.1). Checks are in `docs/review-queue/2.6-automation.md`.*
 - Automation lanes for every parameter, including plugin parameters.
 - Read/touch/latch/write modes. Clip-level automation.
 

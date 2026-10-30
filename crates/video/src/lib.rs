@@ -358,11 +358,11 @@ mod tests {
     fn decoding_times_come_before_showing_times() {
         // Shown in order: decoded as shown, no delay.
         assert_eq!(decode_times(&[0, 10, 20, 30]), (vec![0, 10, 20, 30], 0));
-        // Stored I P B B, with the P shown third: each is decoded no
-        // later than it is shown, a frame's worth earlier at most.
+        // Stored I P B B, with the P shown fourth: each is decoded no
+        // later than it is shown, and a frame's worth earlier is enough.
         let (dts, delay) = decode_times(&[0, 30, 10, 20, 60, 40, 50]);
-        assert_eq!(delay, 20);
-        assert_eq!(dts, vec![-20, -10, 0, 10, 20, 30, 40]);
+        assert_eq!(delay, 10);
+        assert_eq!(dts, vec![-10, 0, 10, 20, 30, 40, 50]);
         for (d, s) in dts.iter().zip([0, 30, 10, 20, 60, 40, 50]) {
             assert!(d <= &s);
         }

@@ -1198,6 +1198,7 @@ dependencies = [
  "daw-effects",
  "daw-engine",
  "daw-instruments",
+ "daw-notation",
  "daw-plugins",
  "daw-project",
  "daw-remote",

@@ -108,6 +108,19 @@ pub(crate) enum Cmd {
     SingleInstrument,
     ImportMidi,
     ExportMidi,
+    NotationLane,
+    NotationView,
+    NotationSettings,
+    TabEntry,
+    StringUp,
+    StringDown,
+    AssignFrets,
+    PracticeMutePart,
+    ContinuousScroll,
+    ImportMusicXml,
+    ExportMusicXml,
+    ExportTextTab,
+    PrintNotation,
     AudioDevice,
     Plugins,
     PerformanceCheck,
@@ -1023,6 +1036,117 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .words("reverb rooms licence attribution"),
+    info(
+        Cmd::NotationLane,
+        "notation-lane",
+        "Notation",
+        "Show notation lane",
+        &[],
+    )
+    .hint("Show the track's notes as tab or a staff under it, or take it off")
+    .words("tab tablature staff score drums notes view"),
+    info(
+        Cmd::NotationView,
+        "notation-view",
+        "Notation",
+        "Next notation view",
+        &[],
+    )
+    .hint("Tab, then a standard staff, then a drum staff")
+    .words("tab staff drums score"),
+    info(
+        Cmd::NotationSettings,
+        "notation-settings",
+        "Notation",
+        "Notation lane…",
+        &[],
+    )
+    .hint("Tuning, capo, staff and rhythm for the track's notation lane")
+    .words("tab tuning capo drop strings bass guitar"),
+    info(Cmd::TabEntry, "tab-entry", "Notation", "Type tab", &[key(NONE, Key::T)])
+        .hint("Type fret numbers onto the tab: arrows move, Delete clears, Escape stops")
+        .words("tablature enter fret string write"),
+    info(
+        Cmd::StringUp,
+        "string-up",
+        "Notation",
+        "Move notes to the string above",
+        &[],
+    )
+    .hint("The same notes played on the next higher string (the note editor's selection, or under the tab cursor)")
+    .words("tab fret position higher"),
+    info(
+        Cmd::StringDown,
+        "string-down",
+        "Notation",
+        "Move notes to the string below",
+        &[],
+    )
+    .hint("The same notes played on the next lower string (the note editor's selection, or under the tab cursor)")
+    .words("tab fret position lower"),
+    info(
+        Cmd::AssignFrets,
+        "assign-frets",
+        "Notation",
+        "Choose strings and frets",
+        &[],
+    )
+    .hint("Write the strings and frets the tab shows into the notes that have none")
+    .words("tab fingering positions automatic"),
+    info(
+        Cmd::PracticeMutePart,
+        "practice-mute-part",
+        "Notation",
+        "Practice-mute this part",
+        &[],
+    )
+    .hint("Silence the notation track's part, to play it yourself")
+    .words("play along mute practise practice"),
+    info(
+        Cmd::ContinuousScroll,
+        "continuous-scroll",
+        "View",
+        "Scroll along with playback",
+        &[],
+    )
+    .hint("While playing, the lanes move under a still playhead, rather than a page at a time")
+    .words("follow page continuous notation"),
+    info(
+        Cmd::ImportMusicXml,
+        "import-musicxml",
+        "File",
+        "Import MusicXML…",
+        &[],
+    )
+    .hint("Each part becomes an instrument track, shown as its tab, staff or drum staff")
+    .words("notation score tab xml"),
+    info(
+        Cmd::ExportMusicXml,
+        "export-musicxml",
+        "File",
+        "Export notation as MusicXML…",
+        &[],
+    )
+    .hint("The tracks with notation lanes, as a score other notation programs open")
+    .words("score tab xml"),
+    info(
+        Cmd::ExportTextTab,
+        "export-text-tab",
+        "File",
+        "Export tab as text…",
+        &[],
+    )
+    .hint("The tab as plain text, to paste into a message")
+    .words("ascii tablature txt"),
+    info(
+        Cmd::PrintNotation,
+        "print-notation",
+        "File",
+        "Print notation to PDF…",
+        &[],
+    )
+    .hint("The notation lanes as pages to print, with the drum legend")
+    .words("pdf score tab paper"),
 ];
 
 impl Cmd {
@@ -1748,6 +1872,8 @@ impl App {
     /// Runs the commands whose keys were pressed. Called before
     /// anything is drawn, so they come before the controls see the keys.
     pub(crate) fn command_keys(&mut self, ctx: &egui::Context) {
+        // Typing tab takes numbers and arrows first.
+        self.notation_keys(ctx);
         // A clip or marker holding the keyboard is not a text field.
         let typing = ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx);
         for cmd in self.commands.pressed(ctx, typing) {
@@ -1960,6 +2086,30 @@ impl App {
             }
             Cmd::ImportMidi => self.pick_midi_file(ctx),
             Cmd::ExportMidi => self.export_midi_file(),
+            Cmd::NotationLane => self.toggle_notation_lane(),
+            Cmd::NotationView => self.next_notation_view(),
+            Cmd::NotationSettings => self.open_notation_window(),
+            Cmd::TabEntry => self.toggle_tab_entry(),
+            Cmd::StringUp => self.notes_to_string(-1),
+            Cmd::StringDown => self.notes_to_string(1),
+            Cmd::AssignFrets => match self.notation_track() {
+                Some(i) => {
+                    let n = self.assign_frets(i);
+                    self.message = Some(format!("Chose strings and frets for {n} notes."));
+                }
+                None => self.message = Some("No track shows tab.".into()),
+            },
+            Cmd::PracticeMutePart => {
+                if let Some(i) = self.notation_track() {
+                    let on = !self.tracks[i].practice_mute;
+                    self.set_practice_mute(i, on);
+                }
+            }
+            Cmd::ContinuousScroll => self.timeline.continuous = !self.timeline.continuous,
+            Cmd::ImportMusicXml => self.pick_musicxml_file(),
+            Cmd::ExportMusicXml => self.export_notation(crate::notation::NotationFile::MusicXml),
+            Cmd::ExportTextTab => self.export_notation(crate::notation::NotationFile::TextTab),
+            Cmd::PrintNotation => self.export_notation(crate::notation::NotationFile::Pdf),
             Cmd::AutomationLanes => self.workspace.toggle(Pane::Automation),
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::Video => self.workspace.toggle(Pane::Video),

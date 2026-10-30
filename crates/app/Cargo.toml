@@ -20,6 +20,7 @@ daw-collab = { path = "../collab" }
 daw-effects = { path = "../effects" }
 daw-engine = { path = "../engine" }
 daw-instruments = { path = "../instruments" }
+daw-notation = { path = "../notation" }
 daw-plugins = { path = "../plugins" }
 daw-project = { path = "../project" }
 daw-remote = { path = "../remote" }

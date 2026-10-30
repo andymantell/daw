@@ -308,6 +308,7 @@ impl App {
             output: t.output.clone(),
             sends: t.sends.clone(),
             group: t.group.clone(),
+            notation: t.notation.clone(),
             automation: (t.automation.iter())
                 .map(|l| daw_project::Lane {
                     param: l.param.clone(),
@@ -506,6 +507,7 @@ impl App {
             t.freeze = pt.freeze;
             t.note_clips = pt.note_clips.clone();
             t.instrument_outputs = pt.instrument_outputs.clone();
+            t.notation = pt.notation.clone();
             match (&mut t.instrument, &pt.instrument) {
                 (Some(slot), Some(e)) if slot.same_shape(e) => slot.load(e),
                 (slot, Some(e)) => {

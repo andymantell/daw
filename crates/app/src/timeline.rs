@@ -702,6 +702,8 @@ pub struct View<'a> {
     pub freeze: &'a [(bool, bool)],
     /// Clips have been copied.
     pub can_paste: bool,
+    /// Each lane's notation band under its row, if it shows one.
+    pub bands: &'a [Option<crate::notation::Band<'a>>],
 }
 
 /// Something asked of a track from its menu.
@@ -750,6 +752,11 @@ pub struct Outcome {
     pub band: Option<Rect>,
     /// Add, edit or copy a drum pattern (roadmap 3.3).
     pub pattern: Option<PatternAsk>,
+    /// A lane's notation band was clicked: the lane, the tick under the
+    /// pointer, and the height into the band.
+    pub notation_band: Option<(usize, i64, f32)>,
+    /// Somewhere else on the lanes was clicked.
+    pub off_band: bool,
 }
 
 /// What the timeline asks of patterns, which the app keeps.
@@ -881,6 +888,8 @@ enum Hit {
         index: usize,
         edge: bool,
     },
+    /// The notation band under a lane's row.
+    Band(usize),
     Lane,
 }
 
@@ -964,6 +973,9 @@ pub struct Timeline {
     pub ripple: bool,
     /// Show each clip's volume line, to drag and add points to.
     pub show_volume: bool,
+    /// While playing, scroll the lanes along under a still playhead
+    /// rather than a page at a time.
+    pub continuous: bool,
     /// The project's active edit groups, set by the app each frame.
     pub groups: Vec<LaneGroup>,
     /// Edit grouped tracks together; off, each clip is edited alone.
@@ -1028,6 +1040,7 @@ impl Default for Timeline {
             magnet: false,
             ripple: false,
             show_volume: false,
+            continuous: false,
             groups: Vec::new(),
             group_edit: true,
             fades_open: false,
@@ -2332,9 +2345,25 @@ impl Timeline {
             ));
         }
         let lanes_n = song.lanes.len().max(1);
-        let lane_h = ((rect.height() - tracks_top) / lanes_n as f32).clamp(36.0, 80.0);
+        // A lane with a notation band is its row and the band under it.
+        let band_h = |i: usize| {
+            (view.bands.get(i))
+                .and_then(Option::as_ref)
+                .map_or(0.0, crate::notation::Band::height)
+        };
+        let bands: f32 = (0..song.lanes.len()).map(band_h).sum();
+        let lane_h = ((rect.height() - tracks_top - bands) / lanes_n as f32).clamp(36.0, 80.0);
+        // Where each lane starts down the lanes, and where the last ends.
+        let mut offs = Vec::with_capacity(lanes_n + 1);
+        let mut down = 0.0;
+        for i in 0..lanes_n {
+            offs.push(down);
+            down += lane_h + band_h(i);
+        }
+        offs.push(down);
+        let offs = &offs;
         // Lanes that don't fit scroll up and down.
-        let overflow = (lanes_n as f32 * lane_h - (rect.height() - tracks_top)).max(0.0);
+        let overflow = (down - (rect.height() - tracks_top)).max(0.0);
         let left = rect.left() + HEADER;
         self.width = (rect.right() - left).max(50.0);
         let rate = view.rate as f64;
@@ -2365,19 +2394,28 @@ impl Timeline {
         let scroll = self.scroll;
         let x_of = move |f: i64| left + ((f as f64 / rate - scroll) * pps) as f32;
         let frame_of = move |x: f32| ((scroll + (x - left) as f64 / pps) * rate).round() as i64;
-        let lane_top = |i: usize| rect.top() + tracks_top + i as f32 * lane_h - vscroll;
-        // The track at a height, held to the first and last.
-        let lane_at = move |y: f32| {
-            let l = ((y - rect.top() - tracks_top + vscroll) / lane_h).floor();
-            (l.max(0.0) as usize).min(lanes_n - 1)
+        let lane_top = |i: usize| rect.top() + tracks_top + offs[i.min(lanes_n)] - vscroll;
+        // The track at a height, unheld, then held to the first and last.
+        let lane_under = move |y: f32| {
+            let down = y - rect.top() - tracks_top + vscroll;
+            offs[1..].partition_point(|&o| o <= down)
         };
+        let lane_at = move |y: f32| lane_under(y).min(lanes_n - 1);
 
         if let Some((sr, sresp)) = &strip {
             self.strip(ui, *sr, sresp, view, &x_of, &frame_of, &mut out);
         }
 
-        // Keep the playhead in view while playing.
-        if view.playing && self.drag.is_none() {
+        // Keep the playhead in view while playing: a page at a time, or
+        // with the lanes moving under it a third of the way along.
+        if view.playing && self.drag.is_none() && self.continuous {
+            let to = (view.playhead as f64 / rate - 0.33 * (rect.width() - HEADER) as f64 / pps)
+                .max(0.0);
+            if (to - self.scroll).abs() > 1e-6 {
+                self.scroll = to;
+                ui.ctx().request_repaint();
+            }
+        } else if view.playing && self.drag.is_none() {
             let x = x_of(view.playhead);
             if x > rect.right() - 20.0 || x < left {
                 self.scroll =
@@ -2415,7 +2453,10 @@ impl Timeline {
             if pos.y < rect.top() + tracks_top {
                 return None;
             }
-            let lane = ((pos.y - rect.top() - tracks_top + vscroll) / lane_h) as usize;
+            let lane = lane_under(pos.y);
+            if lane < song.lanes.len() && pos.y > lane_top(lane) + lane_h {
+                return Some(Hit::Band(lane));
+            }
             let notes = &song.lanes.get(lane)?.notes;
             for (index, c) in notes.iter().enumerate().rev() {
                 let x0 = x_of(view.map.frames_at(Ticks(c.start)).0);
@@ -2766,7 +2807,9 @@ impl Timeline {
         if resp.clicked()
             && let Some(p) = resp.interact_pointer_pos()
         {
-            match hit(p, song) {
+            let h = hit(p, song);
+            out.off_band = !matches!(h, Some(Hit::Band(_)));
+            match h {
                 Some(Hit::Clip { id, .. }) => {
                     if modifiers.shift || modifiers.command {
                         self.toggle_selected(song, id);
@@ -2789,6 +2832,10 @@ impl Timeline {
                     self.selected.clear();
                     self.note_sel = None;
                     out.seek = Some(snap_to(frame_of(p.x)).max(0));
+                }
+                Some(Hit::Band(lane)) => {
+                    let tick = view.map.ticks_at(Frames(frame_of(p.x).max(0))).0;
+                    out.notation_band = Some((lane, tick, p.y - lane_top(lane) - lane_h));
                 }
                 Some(Hit::NoteClip { lane, index, .. }) => {
                     self.selected.clear();
@@ -2852,7 +2899,7 @@ impl Timeline {
         {
             self.menu = hit(p, song).map(|h| (h, frame_of(p.x).max(0)));
             self.menu_lane = (p.y >= rect.top() + tracks_top)
-                .then(|| ((p.y - rect.top() - tracks_top + vscroll) / lane_h) as usize)
+                .then(|| lane_under(p.y))
                 .filter(|&l| l < song.lanes.len());
             if let Some((Hit::Clip { id, .. }, _)) = self.menu
                 && !self.selected.contains(&id)
@@ -3281,6 +3328,23 @@ impl Timeline {
                 view,
                 &x_of,
             );
+            if let Some(Some(band)) = view.bands.get(i) {
+                let r = Rect::from_min_max(
+                    pos2(rect.left(), top + lane_h),
+                    pos2(rect.right(), top + lane_h + band.height()),
+                );
+                if r.bottom() >= rect.top() + tracks_top && r.top() <= rect.bottom() {
+                    let tick_x = |t: i64| x_of(view.map.frames_at(Ticks(t)).0);
+                    crate::notation::draw_band(&lanes, &look, band, r, left, &tick_x);
+                }
+                lanes.line_segment(
+                    [
+                        pos2(rect.left(), r.bottom()),
+                        pos2(rect.right(), r.bottom()),
+                    ],
+                    Stroke::new(look.line, tc.line),
+                );
+            }
         }
         if song.lanes.is_empty() {
             painter.text(

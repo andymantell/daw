@@ -260,7 +260,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.toggle_value(&mut t.mix.solo, "Solo")
                             .accessible_name(format!("Solo {name}"));
-                        if t.kind == TrackKind::Audio {
+                        if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
                             ui.toggle_value(&mut t.practice_mute, "🎧")
                                 .accessible_name(format!("Practice mute {name}"))
                                 .on_hover_text(

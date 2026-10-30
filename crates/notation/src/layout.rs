@@ -131,6 +131,94 @@ pub fn layout(score: &Score, options: &LayoutOptions) -> Vec<Page> {
     b.finish()
 }
 
+/// A part laid out as one line along a timeline, for a notation lane:
+/// bar `i` of `bars` runs across from `spans[i].0` to `spans[i].1`, and
+/// each note sits where its moment falls in its bar, so the notation
+/// lines up with the timeline at any zoom. There is no clef or time
+/// signature at the start (the lane draws its own beside the line), and
+/// the rows are the same height whichever bars are shown, so the lane
+/// doesn't jump as it scrolls. Units are as `space` (the staff space)
+/// sets them; y grows down from 0.
+pub fn strip(part: &Part, bars: std::ops::Range<usize>, spans: &[(f32, f32)], space: f32) -> Page {
+    let o = LayoutOptions {
+        page_width: f32::MAX,
+        page_height: f32::MAX,
+        margin: 0.0,
+        space,
+    };
+    let height = strip_height(part, space);
+    let bars = bars.start.min(part.bars.len())..bars.end.min(part.bars.len());
+    let mut b = Builder::new(&o);
+    let mut all = vec![(0.0, 0.0); part.bars.len()];
+    for (i, s) in bars.clone().zip(spans) {
+        all[i] = *s;
+    }
+    let bars = bars.start..bars.end.min(bars.start + spans.len());
+    if bars.is_empty() {
+        return Page {
+            width: 0.0,
+            height,
+            items: Vec::new(),
+        };
+    }
+    b.spans = Some(all);
+    let times = part.time_signatures();
+    let keys = key_signatures(part);
+    let plans: Vec<BarPlan> = part
+        .bars
+        .iter()
+        .enumerate()
+        .map(|(i, bar)| {
+            if bars.contains(&i) {
+                plan_bar(part, bar, times[i], keys[i], space)
+            } else {
+                BarPlan {
+                    ticks: Vec::new(),
+                    widths: Vec::new(),
+                    lead: 0.0,
+                }
+            }
+        })
+        .collect();
+    b.system(part, bars.clone(), &plans, &times, &keys, 0.0, false);
+    Page {
+        width: spans[bars.len() - 1].1 - spans[0].0,
+        height,
+        items: b.items,
+    }
+}
+
+/// How tall [`strip`] lays a part out: the same for every range of bars.
+pub fn strip_height(part: &Part, space: f32) -> f32 {
+    strip_rows(part, space).height
+}
+
+/// Where a [`strip`]'s staff and tab sit, down from its top.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StripRows {
+    /// The top line of the five-line staff, if there is one.
+    pub staff_top: Option<f32>,
+    /// The top (first) string of the tab, if there is one.
+    pub tab_top: Option<f32>,
+    /// From one tab string to the next.
+    pub string_gap: f32,
+    pub height: f32,
+}
+
+pub fn strip_rows(part: &Part, space: f32) -> StripRows {
+    let o = LayoutOptions {
+        space,
+        ..LayoutOptions::default()
+    };
+    let rows = Builder::new(&o).rows(part, 0..part.bars.len());
+    StripRows {
+        staff_top: rows.staff_top,
+        tab_top: rows.tab_top,
+        string_gap: TAB_GAP * space,
+        height: rows.bottom,
+    }
+}
+
 /// One bar's horizontal plan: a column per moment where something starts.
 struct BarPlan {
     ticks: Vec<u32>,
@@ -165,6 +253,8 @@ struct Builder<'a> {
     pages: Vec<Page>,
     items: Vec<Item>,
     y: f32,
+    /// Laying out a strip: where each bar starts and ends across, by bar.
+    spans: Option<Vec<(f32, f32)>>,
 }
 
 impl<'a> Builder<'a> {
@@ -175,6 +265,7 @@ impl<'a> Builder<'a> {
             pages: Vec::new(),
             items: Vec::new(),
             y: o.margin,
+            spans: None,
         }
     }
 
@@ -353,7 +444,8 @@ impl<'a> Builder<'a> {
         let sp = self.sp;
         let width = self.o.page_width - 2.0 * self.o.margin;
         let first = bars.start;
-        let show_time = first == 0 || part.bars[first].time.is_some();
+        let strip = self.spans.is_some();
+        let show_time = !strip && (first == 0 || part.bars[first].time.is_some());
         let head = self.system_head_width(part, keys[first], show_time);
 
         // Stretch the columns to fill the line, except a short last line.
@@ -367,7 +459,15 @@ impl<'a> Builder<'a> {
             stretch = 1.0;
         }
 
-        let rows = self.rows(part, bars.clone());
+        // A strip's rows are the whole part's, so they don't move.
+        let rows = self.rows(
+            part,
+            if strip {
+                0..part.bars.len()
+            } else {
+                bars.clone()
+            },
+        );
         self.ensure(rows.bottom);
         let top = self.y;
         let rows = Rows {
@@ -381,28 +481,44 @@ impl<'a> Builder<'a> {
         };
 
         // Column x positions.
-        let x0 = self.o.margin;
-        let mut x = x0 + head;
         let mut col_x: HashMap<(usize, u32), f32> = HashMap::new();
         let mut bar_lines = Vec::new();
-        for i in bars.clone() {
-            let p = &plans[i];
-            x += p.lead;
-            for (t, w) in p.ticks.iter().zip(&p.widths) {
-                col_x.insert((i, *t), x);
-                x += w * stretch;
+        let (x0, x_end) = if let Some(spans) = &self.spans {
+            // Each note where its moment falls, just after it so a note
+            // on the beat clears the bar line.
+            bar_lines.push(spans[first].0);
+            for i in bars.clone() {
+                let (a, b) = spans[i];
+                let len = times[i].bar_ticks().max(1) as f32;
+                for t in &plans[i].ticks {
+                    col_x.insert((i, *t), a + 0.3 * sp + (b - a) * *t as f32 / len);
+                }
+                bar_lines.push(b);
             }
-            x += sp;
-            bar_lines.push(x);
-        }
-        let x_end = if last && stretch == 1.0 {
-            x
+            (spans[first].0, spans[bars.end - 1].1)
         } else {
-            x0 + width
+            let x0 = self.o.margin;
+            let mut x = x0 + head;
+            for i in bars.clone() {
+                let p = &plans[i];
+                x += p.lead;
+                for (t, w) in p.ticks.iter().zip(&p.widths) {
+                    col_x.insert((i, *t), x);
+                    x += w * stretch;
+                }
+                x += sp;
+                bar_lines.push(x);
+            }
+            let x_end = if last && stretch == 1.0 {
+                x
+            } else {
+                x0 + width
+            };
+            if let Some(l) = bar_lines.last_mut() {
+                *l = x_end;
+            }
+            (x0, x_end)
         };
-        if let Some(l) = bar_lines.last_mut() {
-            *l = x_end;
-        }
 
         // Every event's x, per voice in time order.
         let mut voices: HashMap<u8, Vec<Placed>> = HashMap::new();
@@ -418,19 +534,21 @@ impl<'a> Builder<'a> {
             }
         }
 
-        // Bar number at the start of the line.
-        let number_y = rows.staff_top.or(rows.tab_top).unwrap_or(top) - 1.2 * sp;
-        let number_y = rows
-            .chord_y
-            .map_or(number_y, |c| number_y.min(c - 2.0 * sp));
-        self.text(
-            x0,
-            number_y,
-            &format!("{}", first + 1),
-            1.6 * sp,
-            Anchor::Start,
-            false,
-        );
+        // Bar number at the start of the line; a strip's ruler has them.
+        if !strip {
+            let number_y = rows.staff_top.or(rows.tab_top).unwrap_or(top) - 1.2 * sp;
+            let number_y = rows
+                .chord_y
+                .map_or(number_y, |c| number_y.min(c - 2.0 * sp));
+            self.text(
+                x0,
+                number_y,
+                &format!("{}", first + 1),
+                1.6 * sp,
+                Anchor::Start,
+                false,
+            );
+        }
 
         // Chord names and boxes.
         if let Some(cy) = rows.chord_y {
@@ -457,13 +575,15 @@ impl<'a> Builder<'a> {
                         Clef::Treble8vb
                     };
                     self.staff_lines(x0, x_end, staff_top, 5, sp);
-                    self.staff_head(
-                        x0,
-                        staff_top,
-                        Some(clef),
-                        keys[first],
-                        show_time.then_some(times[first]),
-                    );
+                    if !strip {
+                        self.staff_head(
+                            x0,
+                            staff_top,
+                            Some(clef),
+                            keys[first],
+                            show_time.then_some(times[first]),
+                        );
+                    }
                     self.pitched_notes(part, &voices, staff_top, clef, keys, times);
                     self.bar_lines(&bar_lines, staff_top, staff_top + 4.0 * sp, last);
                 }
@@ -482,27 +602,31 @@ impl<'a> Builder<'a> {
             PartKind::Staff { clef } => {
                 let staff_top = rows.staff_top.expect("staff row");
                 self.staff_lines(x0, x_end, staff_top, 5, sp);
-                self.staff_head(
-                    x0,
-                    staff_top,
-                    Some(*clef),
-                    keys[first],
-                    show_time.then_some(times[first]),
-                );
+                if !strip {
+                    self.staff_head(
+                        x0,
+                        staff_top,
+                        Some(*clef),
+                        keys[first],
+                        show_time.then_some(times[first]),
+                    );
+                }
                 self.pitched_notes(part, &voices, staff_top, *clef, keys, times);
                 self.bar_lines(&bar_lines, staff_top, staff_top + 4.0 * sp, last);
             }
             PartKind::Drums(map) => {
                 let staff_top = rows.staff_top.expect("staff row");
                 self.staff_lines(x0, x_end, staff_top, 5, sp);
-                self.staff_head(x0, staff_top, None, 0, show_time.then_some(times[first]));
+                if !strip {
+                    self.staff_head(x0, staff_top, None, 0, show_time.then_some(times[first]));
+                }
                 self.drum_notes(part, map, &voices, staff_top, times);
                 self.bar_lines(&bar_lines, staff_top, staff_top + 4.0 * sp, last);
             }
         }
 
-        // Time signature changes inside the line.
-        for i in bars.clone().skip(1) {
+        // Time signature changes inside the line; a strip's ruler has them.
+        for i in bars.clone().skip(1).filter(|_| !strip) {
             if let Some(t) = part.bars[i].time {
                 let x = plans[i].ticks.first().map_or(0.0, |t0| col_x[&(i, *t0)]) - 2.4 * sp;
                 for top in [
@@ -1235,7 +1359,9 @@ impl<'a> Builder<'a> {
             (g::TAB_CLEF_6, 6.05)
         };
         let scale = (height * 0.8 / (clef_h * sp)).max(0.4);
-        self.glyph_scaled(x0 + 1.0 * sp, top + height / 2.0, clef, scale);
+        if self.spans.is_none() {
+            self.glyph_scaled(x0 + 1.0 * sp, top + height / 2.0, clef, scale);
+        }
         if show_time && rows.staff_top.is_none() {
             self.time_sig(x0 + 3.6 * sp, top + height / 2.0, times[first]);
         }
@@ -1854,6 +1980,44 @@ pub(crate) mod tests {
                 bars: bars_v,
             }],
         }
+    }
+
+    #[test]
+    fn a_strip_puts_notes_where_their_moments_fall() {
+        let part = &tab_score(3).parts[0];
+        let spans = [(100.0, 300.0), (300.0, 500.0)];
+        let page = strip(part, 1..3, &spans, 5.0);
+        // Fret numbers centred just after each beat of bars 2 and 3.
+        let frets: Vec<f32> = page
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text {
+                    at, text, knockout, ..
+                } if *knockout && text == "0" => Some(at.0),
+                _ => None,
+            })
+            .collect();
+        let centre = 0.3 * 5.0 + HEAD_W / 2.0 * 5.0;
+        assert_eq!(frets.len(), 2);
+        assert!((frets[0] - (100.0 + centre)).abs() < 0.01, "{frets:?}");
+        assert!((frets[1] - (300.0 + centre)).abs() < 0.01, "{frets:?}");
+        // No clef, and every bar line where a bar starts or ends.
+        assert!(!glyphs(std::slice::from_ref(&page)).contains(&g::TAB_CLEF_6));
+        let bar_x: Vec<f32> = page
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Line { from, to, .. } if from.0 == to.0 => Some(from.0),
+                _ => None,
+            })
+            .filter(|x| [100.0, 300.0, 500.0].contains(x))
+            .collect();
+        assert!(bar_x.contains(&100.0) && bar_x.contains(&300.0) && bar_x.contains(&500.0));
+        // The same height whichever bars are shown.
+        assert_eq!(page.height, strip(part, 0..1, &spans[..1], 5.0).height);
+        assert_eq!(page.height, strip_height(part, 5.0));
+        assert!(strip(part, 5..9, &spans, 5.0).items.is_empty());
     }
 
     #[test]

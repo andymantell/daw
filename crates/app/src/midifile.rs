@@ -37,9 +37,17 @@ pub(crate) fn tracks_for(file: &midifile::MidiFile, file_name: &str) -> Vec<Trac
         // The clip runs from the start of the bar to the end of the
         // last note, rounded up to a whole beat.
         let len = ((end + PPQ - 1) / PPQ) * PPQ;
-        let mut clip = NoteClip::new(daw_project::new_id(), name, 0, len);
+        let mut clip = NoteClip::new(daw_project::new_id(), name.clone(), 0, len);
         clip.notes = mt.notes.clone();
         clip.sort_notes();
+        // Drum parts (on the drum channel) and parts named for a guitar
+        // or bass are shown as a drum staff or tab, with strings and
+        // frets chosen for them.
+        let lower = name.to_lowercase();
+        let drums = !mt.notes.is_empty() && mt.notes.iter().all(|n| n.channel == 9);
+        if drums || ["guitar", "gtr", "bass"].iter().any(|w| lower.contains(w)) {
+            t.notation = Some(crate::notation::guess(&name, &mt.notes));
+        }
         t.note_clips.push(clip);
         out.push(t);
     }
@@ -209,6 +217,35 @@ mod tests {
         // To the end of the last note, in whole beats.
         assert_eq!(t[0].note_clips[0].len, PPQ * 6);
         assert_ne!(t[0].note_clips[0].id, t[1].note_clips[0].id);
+    }
+
+    #[test]
+    fn drum_and_guitar_parts_come_in_with_notation_lanes() {
+        let mut hit = Note::new(0, PPQ, 36, 120);
+        hit.channel = 9;
+        let track = |name: &str, notes: Vec<Note>| MidiTrack {
+            name: name.into(),
+            notes,
+        };
+        let f = midifile::MidiFile {
+            tempo_bpm: None,
+            signature: None,
+            tracks: vec![
+                track("Kit", vec![hit]),
+                track("Lead Guitar", vec![Note::new(0, PPQ, 64, 90)]),
+                track("Fretless Bass", vec![Note::new(0, PPQ, 40, 90)]),
+                track("Piano", vec![Note::new(0, PPQ, 60, 90)]),
+            ],
+        };
+        let t = tracks_for(&f, "song");
+        let views: Vec<_> = (t.iter())
+            .map(|t| t.notation.as_ref().map(|n| (n.view, n.tuning.len())))
+            .collect();
+        use daw_project::NotationView::*;
+        assert_eq!(
+            views,
+            [Some((Drums, 0)), Some((Tab, 6)), Some((Tab, 4)), None]
+        );
     }
 
     #[test]

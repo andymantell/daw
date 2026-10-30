@@ -95,6 +95,16 @@ fn font_definitions() -> egui::FontDefinitions {
         list.extend(fallback.iter().cloned());
         defs.families.insert(FontFamily::Name(f.id.into()), list);
     }
+    // The music font, for notation lanes: its glyphs only.
+    let music = crate::notation::MUSIC_FONT;
+    defs.font_data.insert(
+        music.into(),
+        Arc::new(egui::FontData::from_static(
+            crate::notation::MUSIC_FONT_DATA,
+        )),
+    );
+    defs.families
+        .insert(FontFamily::Name(music.into()), vec![music.to_string()]);
     defs
 }
 

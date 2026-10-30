@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,29 @@ pub fn recovery_file() -> PathBuf {
         .join(APP_NAME)
         .join("Recovery")
         .join("Unsaved project.daw")
+}
+
+/// The most files a project opens at once. Opening is mostly reading
+/// the disk, with conversion between rates on the processor, so a few at
+/// a time is quicker than one; more than this only queue on the disk.
+const OPEN_AT_ONCE: usize = 8;
+
+/// How far a project opening in the background has got.
+#[derive(Default)]
+pub struct Progress {
+    /// Audio files it uses, once its document has been read.
+    total: AtomicUsize,
+    done: AtomicUsize,
+}
+
+impl Progress {
+    /// Files opened so far, and how many there are (0 until known).
+    pub fn get(&self) -> (usize, usize) {
+        (
+            self.done.load(Ordering::Relaxed),
+            self.total.load(Ordering::Relaxed),
+        )
+    }
 }
 
 /// What to do once unsaved changes are dealt with.
@@ -112,6 +136,8 @@ pub struct Proj {
     pub(crate) missing_clips: HashMap<String, Vec<daw_project::Clip>>,
     pub(crate) missing_fx: HashMap<String, Vec<(usize, daw_project::Effect)>>,
     loading: Option<mpsc::Receiver<Result<Loaded, String>>>,
+    /// How far the project opening has got.
+    pub(crate) progress: Arc<Progress>,
     pub dialog: Option<Dialog>,
     /// Watches the saved project's folder for other computers' changes.
     pub(crate) watch: Option<(PathBuf, FolderWatch)>,
@@ -155,6 +181,7 @@ impl Proj {
             missing_clips: HashMap::new(),
             missing_fx: HashMap::new(),
             loading: None,
+            progress: Arc::default(),
             dialog: None,
             watch: None,
             incoming: Vec::new(),
@@ -679,7 +706,9 @@ impl App {
             return Err(format!("There is already a project called {name}."));
         }
         self.proj.folder = Some(ProjectFolder::create(dir)?);
-        self.save(ctx)
+        self.save(ctx)?;
+        self.remember_recent(dir);
+        Ok(())
     }
 
     /// Saves a saved project now and then while it changes, and keeps
@@ -857,8 +886,10 @@ impl App {
         let path = std::path::absolute(&path).unwrap_or(path);
         let (tx, rx) = mpsc::channel();
         let rate = self.rate;
+        let progress = Arc::new(Progress::default());
+        self.proj.progress = progress.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(load(&path, rate));
+            let _ = tx.send(load(&path, rate, &progress));
         });
         self.proj.loading = Some(rx);
     }
@@ -883,10 +914,12 @@ impl App {
                 proj.found = self.proj.found.take();
                 proj.recovery = self.proj.recovery.take();
                 proj.doc = l.doc;
+                let dir = l.folder.dir.clone();
                 proj.folder = Some(l.folder);
                 proj.sources = l.sources;
                 proj.device_version = proj.doc.version();
                 self.proj = proj;
+                self.remember_recent(&dir);
                 self.sign_in();
                 self.apply(self.proj.doc.get());
                 self.apply_practice();
@@ -919,6 +952,8 @@ impl App {
     }
 
     fn go(&mut self, ctx: &egui::Context, then: After) {
+        // Somewhere to go: the start screen has done its job.
+        self.start.showing = None;
         // The project being left was saved or let go on purpose.
         if self.proj.folder.is_none() && !matches!(then, After::Recover) {
             self.discard_recovery();
@@ -1171,14 +1206,16 @@ pub(crate) fn ago(d: Duration) -> String {
     format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
 }
 
-/// Reads a project and opens its audio, off the UI thread.
-fn load(path: &Path, rate: u32) -> Result<Loaded, String> {
+/// Reads a project and opens its audio, off the UI thread: several files
+/// at once, each asset once, counting them off in `progress`.
+fn load(path: &Path, rate: u32, progress: &Progress) -> Result<Loaded, String> {
     // Other computers' copies, if it is shared, are merged in.
     let (folder, doc, mut failed) = daw_collab::open_doc(path, daw_project::new_peer())?;
     let p = doc.get();
-    let mut sources = HashMap::new();
+    // Each asset with the name of the first clip that plays it.
+    let mut wanted: Vec<(&str, &str, PathBuf)> = Vec::new();
     for c in p.tracks.iter().flat_map(|t| &t.clips) {
-        if sources.contains_key(&c.asset) {
+        if wanted.iter().any(|(a, ..)| *a == c.asset) {
             continue;
         }
         let file = if folder.has_asset(&c.asset) {
@@ -1186,11 +1223,49 @@ fn load(path: &Path, rate: u32) -> Result<Loaded, String> {
         } else {
             PathBuf::from(&c.asset)
         };
-        match import::open_at_rate(&file, rate, &cache_dir()) {
+        wanted.push((&c.asset, &c.name, file));
+    }
+    progress.total.store(wanted.len(), Ordering::Relaxed);
+    let cache = cache_dir();
+    let next = AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism()
+        .map_or(4, |n| n.get())
+        .clamp(1, OPEN_AT_ONCE)
+        .min(wanted.len());
+    let mut opened: Vec<(usize, Result<Arc<StreamSource>, String>)> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut out = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((.., file)) = wanted.get(i) else {
+                            break;
+                        };
+                        out.push((i, import::open_at_rate(file, rate, &cache)));
+                        progress.done.fetch_add(1, Ordering::Relaxed);
+                    }
+                    out
+                })
+            })
+            .collect();
+        // A file whose opening panicked is left out here, and tried
+        // again (and reported) as the project is shown.
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+    // In the project's order, so problems read the same each time.
+    opened.sort_by_key(|(i, _)| *i);
+    let mut sources = HashMap::new();
+    for (i, r) in opened {
+        let (asset, name, _) = &wanted[i];
+        match r {
             Ok(s) => {
-                sources.insert(c.asset.clone(), s);
+                sources.insert(asset.to_string(), s);
             }
-            Err(e) => failed.push(format!("{}: {e}", c.name)),
+            Err(e) => failed.push(format!("{name}: {e}")),
         }
     }
     Ok(Loaded {
@@ -1203,7 +1278,12 @@ fn load(path: &Path, rate: u32) -> Result<Loaded, String> {
 
 /// Project folders in the projects folder, most recently saved first.
 pub(crate) fn find_projects() -> Vec<PathBuf> {
-    let mut found: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(projects_dir())
+    find_projects_in(&projects_dir())
+}
+
+/// Project folders in `dir`, most recently saved first.
+pub(crate) fn find_projects_in(dir: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -1417,6 +1497,40 @@ mod tests {
         assert!(!file.exists());
         assert!(file.with_extension("daw.damaged").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_opens_its_files_side_by_side() {
+        let dir = scratch("parallel");
+        let mut h = app(&dir.join("recovery.daw"));
+        let rate = h.state().rate;
+        for i in 0..6 {
+            // Each different, as the same audio twice is kept once.
+            let copy = dir.join(format!("part {i}.wav"));
+            std::fs::rename(wav(&dir, rate + i), &copy).unwrap();
+            h.state_mut().add_file(&copy);
+        }
+        for _ in 0..400 {
+            h.step();
+            if h.state().tracks.len() == 6 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(h.state().tracks.len(), 6);
+        let song = dir.join("Six parts");
+        let ctx = ctx(&h);
+        h.state_mut().save_in(&ctx, &song).unwrap();
+        // One file gone missing is reported, the rest still open.
+        let clip = &h.state().tracks[2].clips[0];
+        let (gone, name) = (clip.path.clone(), clip.name());
+        std::fs::remove_file(&gone).unwrap();
+        let progress = super::Progress::default();
+        let l = super::load(&song, rate, &progress).unwrap();
+        assert_eq!(progress.get(), (6, 6));
+        assert_eq!(l.sources.len(), 5);
+        assert_eq!(l.failed.len(), 1, "{:?}", l.failed);
+        assert!(l.failed[0].starts_with(&name), "{:?}", l.failed);
     }
 
     #[test]

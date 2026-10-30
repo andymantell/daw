@@ -22,7 +22,8 @@ use windows::Win32::Media::MediaFoundation::{
     MF_TRANSCODE_CONTAINERTYPE, MF_VERSION, MFAudioFormat_AAC, MFAudioFormat_PCM,
     MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
     MFCreateSinkWriterFromURL, MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video,
-    MFSTARTUP_FULL, MFShutdown, MFStartup, MFTranscodeContainerType_MPEG4, MFVideoFormat_RGB32,
+    MFSTARTUP_FULL, MFSampleExtension_DecodeTimestamp, MFShutdown, MFStartup,
+    MFTranscodeContainerType_MPEG4, MFVideoFormat_RGB32,
 };
 use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PropVariantClear, PropVariantToInt64,
@@ -357,6 +358,74 @@ pub(crate) fn wrap(
     ))
 }
 
+/// How the picture's times are given to the writer.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Timing {
+    /// Count the picture's times from its first frame, so the copy's
+    /// picture starts at 0 whatever the film's own tables say.
+    pub rebase: bool,
+    /// Tell the writer when each sample is decoded, as well as when it
+    /// is shown: frames in a film are often stored out of order, and
+    /// the writer can't tell which is which from the showing times.
+    pub dts: bool,
+    /// With `dts`: push every showing time later by the reordering
+    /// delay, so no decoding time is below zero.
+    pub shift: bool,
+}
+
+/// One compressed sample from the source reader, or none at a gap.
+fn read_native(
+    vr: &IMFSourceReader,
+) -> Result<
+    (
+        u32,
+        i64,
+        Option<windows::Win32::Media::MediaFoundation::IMFSample>,
+    ),
+    Error,
+> {
+    let mut flags = 0u32;
+    let mut time = 0i64;
+    let mut sample = None;
+    unsafe {
+        vr.ReadSample(
+            VIDEO,
+            0,
+            None,
+            Some(&mut flags),
+            Some(&mut time),
+            Some(&mut sample),
+        )
+        .map_err(|e| Error::CantWrap(e.message()))?;
+    }
+    Ok((flags, time, sample))
+}
+
+/// A reader giving the film's picture as it is in the file, not decoded.
+fn native_reader(video: &Path) -> Result<(IMFSourceReader, IMFMediaType), Error> {
+    let vr = reader(video, None)?;
+    let native = unsafe { vr.GetNativeMediaType(VIDEO, 0) }.map_err(|_| Error::NoPicture)?;
+    unsafe { vr.SetCurrentMediaType(VIDEO, None, &native) }
+        .map_err(|e| Error::CantWrap(e.message()))?;
+    Ok((vr, native))
+}
+
+/// When each picture sample is shown, in the order they are in the
+/// file, in 100 ns units: read without decoding, so it takes moments.
+pub(crate) fn picture_times(video: &Path) -> Result<Vec<i64>, Error> {
+    let (vr, _) = native_reader(video)?;
+    let mut times = Vec::new();
+    loop {
+        let (flags, time, sample) = read_native(&vr)?;
+        if sample.is_some() {
+            times.push(time);
+        }
+        if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+            return Ok(times);
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn wrap_mp4(
     video: &Path,
@@ -364,13 +433,27 @@ pub(crate) fn wrap_mp4(
     out: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), Error> {
+    wrap_mp4_with(video, sound, out, cancel, Timing::default())
+}
+
+pub(crate) fn wrap_mp4_with(
+    video: &Path,
+    sound: &Path,
+    out: &Path,
+    cancel: &AtomicBool,
+    timing: Timing,
+) -> Result<(), Error> {
     let _mf = Started::new()?;
     let failed = |e: windows_core::Error| Error::CantWrap(e.message());
 
+    // When each frame is shown and decoded, from a first pass over the
+    // picture.
+    let shown = picture_times(video)?;
+    let (decoded, delay) = crate::decode_times(&shown);
+    let first = shown.iter().copied().min().unwrap_or(0);
+
     // The picture, as it is in the file: not decoded.
-    let vr = reader(video, None)?;
-    let native = unsafe { vr.GetNativeMediaType(VIDEO, 0) }.map_err(|_| Error::NoPicture)?;
-    unsafe { vr.SetCurrentMediaType(VIDEO, None, &native) }.map_err(failed)?;
+    let (vr, native) = native_reader(video)?;
 
     // The mix.
     let mut mix = hound::WavReader::open(sound)
@@ -420,6 +503,7 @@ pub(crate) fn wrap_mp4(
     let mut picture_at = Some(0i64);
     let mut sound_at = Some(0i64);
     let mut written = 0u64;
+    let mut nth = 0usize;
     while picture_at.is_some() || sound_at.is_some() {
         if cancel.load(Ordering::Relaxed) {
             return Err(Error::CantWrap("cancelled".into()));
@@ -431,26 +515,37 @@ pub(crate) fn wrap_mp4(
             _ => false,
         };
         if picture_next {
-            let mut flags = 0u32;
-            let mut time = 0i64;
-            let mut sample = None;
-            unsafe {
-                vr.ReadSample(
-                    VIDEO,
-                    0,
-                    None,
-                    Some(&mut flags),
-                    Some(&mut time),
-                    Some(&mut sample),
-                )
-                .map_err(failed)?;
-            }
+            let (flags, time, sample) = read_native(&vr)?;
             if flags & MF_SOURCE_READERF_STREAMTICK.0 as u32 != 0 {
                 unsafe { w.SendStreamTick(picture, time) }.map_err(failed)?;
             }
             if let Some(s) = sample {
-                unsafe { w.WriteSample(picture, &s) }.map_err(failed)?;
-                picture_at = Some(time);
+                let mut at = time;
+                if timing.rebase {
+                    at -= first;
+                }
+                if timing.dts && timing.shift {
+                    at += delay;
+                }
+                unsafe {
+                    if timing.rebase || (timing.dts && timing.shift) {
+                        s.SetSampleTime(at).map_err(failed)?;
+                    }
+                    if timing.dts {
+                        let mut dts = decoded.get(nth).copied().unwrap_or(at);
+                        if timing.rebase {
+                            dts -= first;
+                        }
+                        if timing.shift {
+                            dts += delay;
+                        }
+                        s.SetUINT64(&MFSampleExtension_DecodeTimestamp, dts as u64)
+                            .map_err(failed)?;
+                    }
+                    w.WriteSample(picture, &s).map_err(failed)?;
+                }
+                nth += 1;
+                picture_at = Some(at);
             }
             if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
                 picture_at = None;
@@ -493,4 +588,275 @@ pub(crate) fn wrap_mp4(
     }
     unsafe { w.Finalize() }.map_err(failed)?;
     Ok(())
+}
+
+/// Tried on CI's Windows machines, as there is no Windows PC to hand:
+/// the copy's picture must come back frame for frame where it was.
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
+
+    use windows::Win32::Media::MediaFoundation::{
+        MF_SOURCE_READER_FIRST_AUDIO_STREAM, MFSampleExtension_CleanPoint,
+        MFSampleExtension_DecodeTimestamp, MFSampleExtension_Discontinuity,
+    };
+
+    use super::*;
+    use crate::boxes;
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    fn dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("daw-mp4-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Two seconds of a stereo tone at 48 kHz, 24-bit like the app's
+    /// exports.
+    fn tone(path: &Path) {
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 24,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for i in 0..96_000 {
+            let v = ((i as f64 * 440.0 * std::f64::consts::TAU / 48_000.0).sin() * 3e6) as i32;
+            w.write_sample(v).unwrap();
+            w.write_sample(v).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    /// Which frame a fixture frame is, from its colour.
+    fn counted(f: &Frame) -> u64 {
+        let mid = ((f.height / 2 * f.width + f.width / 2) * 4) as usize;
+        (f.rgba[mid] as f64 / 10.0).round() as u64
+    }
+
+    /// Every compressed picture sample as the source reader hands it
+    /// out: its time, how long it lasts, its flags and the attributes
+    /// the writer would see.
+    fn native_samples(path: &Path) -> String {
+        let _mf = Started::new().unwrap();
+        let (vr, _) = native_reader(path).unwrap();
+        let mut lines = Vec::new();
+        loop {
+            let (flags, time, sample) = read_native(&vr).unwrap();
+            if let Some(s) = sample {
+                let len = unsafe { s.GetSampleDuration() }.unwrap_or(-1);
+                let bytes = unsafe { s.GetTotalLength() }.unwrap_or(0);
+                let key = unsafe { s.GetUINT32(&MFSampleExtension_CleanPoint) }.ok();
+                let dts = unsafe { s.GetUINT64(&MFSampleExtension_DecodeTimestamp) }
+                    .ok()
+                    .map(|v| v as i64);
+                let disc = unsafe { s.GetUINT32(&MFSampleExtension_Discontinuity) }.ok();
+                let n = unsafe { s.GetCount() }.unwrap_or(0);
+                lines.push(format!(
+                    "t={time} len={len} bytes={bytes} key={key:?} dts={dts:?} disc={disc:?} \
+                     attrs={n} flags={flags:#x}"
+                ));
+            } else {
+                lines.push(format!("no sample, flags={flags:#x}"));
+            }
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                break;
+            }
+        }
+        lines.join("\n")
+    }
+
+    /// The picture's tables as the file states them.
+    fn tables(path: &Path) -> String {
+        match boxes::picture(path) {
+            Ok(Some(t)) => format!(
+                "timescale={} samples={} edits={:?} sync={:?} durations={:?} offsets={:?}\n\
+                 first samples (decoded, shown): {:?}",
+                t.timescale,
+                t.samples,
+                t.edits,
+                t.sync,
+                t.durations,
+                t.offsets,
+                (0..6.min(t.samples as usize))
+                    .map(|n| t.times(n))
+                    .collect::<Vec<_>>()
+            ),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// The frames decoded from `path`, with the time of each.
+    fn frames(path: &Path) -> Vec<(u64, String)> {
+        let mut r = crate::Reader::open(path, (64, 48)).unwrap();
+        let mut got = Vec::new();
+        while let Some(f) = r.next_frame().unwrap() {
+            got.push((counted(&f), format!("{:.4}", f.time)));
+        }
+        got
+    }
+
+    /// How long the file's sound runs, decoded by the system, and when
+    /// it starts, in seconds.
+    fn sound(path: &Path) -> (f64, f64) {
+        let _mf = Started::new().unwrap();
+        let audio = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
+        let url = HSTRING::from(path);
+        let r = unsafe { MFCreateSourceReaderFromURL(&url, None) }.unwrap();
+        unsafe {
+            r.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)
+                .unwrap();
+            r.SetStreamSelection(audio, true).unwrap();
+        }
+        let t = unsafe { MFCreateMediaType() }.unwrap();
+        unsafe {
+            t.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio).unwrap();
+            t.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM).unwrap();
+            r.SetCurrentMediaType(audio, None, &t).unwrap();
+        }
+        let (mut total, mut start) = (0i64, None);
+        loop {
+            let mut flags = 0u32;
+            let mut time = 0i64;
+            let mut sample = None;
+            unsafe {
+                r.ReadSample(
+                    audio,
+                    0,
+                    None,
+                    Some(&mut flags),
+                    Some(&mut time),
+                    Some(&mut sample),
+                )
+                .unwrap();
+            }
+            if let Some(s) = sample {
+                start.get_or_insert(time);
+                total += unsafe { s.GetSampleDuration() }.unwrap_or(0);
+            }
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                break;
+            }
+        }
+        (total as f64 / 1e7, start.unwrap_or(0) as f64 / 1e7)
+    }
+
+    /// Writes a copy of `name` with `timing`, and reports everything
+    /// about it; `Ok` when its picture came back frame for frame.
+    fn try_copy(name: &str, timing: Timing) -> Result<(), String> {
+        let video = fixture(name);
+        let d = dir(&format!(
+            "{}-{}",
+            name.replace('.', "-"),
+            timing_name(timing)
+        ));
+        let mix = d.join("mix.wav");
+        tone(&mix);
+        let out = d.join("copy.mp4");
+        let mut report = format!("== {name} with {timing:?}\n");
+        match wrap_mp4_with(&video, &mix, &out, &AtomicBool::new(false), timing) {
+            Ok(()) => {}
+            Err(e) => return Err(format!("{report}writing failed: {e}")),
+        }
+        report += &format!("-- copy's tables:\n{}\n", tables(&out));
+        report += &format!("-- copy's samples:\n{}\n", native_samples(&out));
+        let got = frames(&out);
+        let want: Vec<u64> = (0..24).collect();
+        let numbers: Vec<u64> = got.iter().map(|g| g.0).collect();
+        let times_right = got
+            .iter()
+            .enumerate()
+            .all(|(n, g)| (g.1.parse::<f64>().unwrap() - n as f64 / 12.0).abs() < 1e-3);
+        report += &format!("-- copy's frames (number, time): {got:?}\n");
+        let (seconds, starts) = sound(&out);
+        report += &format!("-- copy's sound: {seconds:.3} s from {starts:.3} s\n");
+        let _ = std::fs::remove_dir_all(&d);
+        eprintln!("{report}");
+        if numbers == want && times_right && (seconds - 2.0).abs() < 0.1 && starts.abs() < 0.05 {
+            Ok(())
+        } else {
+            Err(report)
+        }
+    }
+
+    fn timing_name(t: Timing) -> String {
+        format!(
+            "{}{}{}",
+            if t.rebase { "r" } else { "" },
+            if t.dts { "d" } else { "" },
+            if t.shift { "s" } else { "" }
+        )
+    }
+
+    const FILMS: [&str; 2] = ["counting.mp4", "counting-bframes.mp4"];
+
+    /// What the source reader says about each fixture, for the record.
+    #[test]
+    fn the_fixtures_as_the_system_reads_them() {
+        for name in FILMS {
+            let p = fixture(name);
+            eprintln!(
+                "== {name}\n-- tables:\n{}\n-- samples:\n{}",
+                tables(&p),
+                native_samples(&p)
+            );
+            let times = picture_times(&p).unwrap();
+            let (dts, delay) = crate::decode_times(&times);
+            eprintln!("-- shown: {times:?}\n-- decoded: {dts:?} (delay {delay})");
+            let got = frames(&p);
+            eprintln!("-- frames: {got:?}");
+            assert_eq!(
+                got.iter().map(|g| g.0).collect::<Vec<_>>(),
+                (0..24).collect::<Vec<_>>()
+            );
+        }
+        // Printed for the log: seen only when a test fails.
+        panic!("for the record (not a failure of the code)");
+    }
+
+    /// Every way of giving the writer the picture's times, on both
+    /// films, so the log shows which ones keep every frame in place.
+    #[test]
+    fn a_copys_picture_is_frame_for_frame_where_it_was() {
+        let timings = [
+            Timing::default(),
+            Timing {
+                rebase: true,
+                dts: false,
+                shift: false,
+            },
+            Timing {
+                rebase: true,
+                dts: true,
+                shift: false,
+            },
+            Timing {
+                rebase: true,
+                dts: true,
+                shift: true,
+            },
+            Timing {
+                rebase: false,
+                dts: true,
+                shift: false,
+            },
+        ];
+        let mut failed = Vec::new();
+        for name in FILMS {
+            for t in timings {
+                if let Err(report) = try_copy(name, t) {
+                    failed.push(report);
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
 }

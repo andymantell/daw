@@ -30,6 +30,8 @@ mod system;
 #[path = "none.rs"]
 mod system;
 
+#[cfg(test)]
+mod boxes;
 mod cache;
 mod filmstrip;
 pub mod player;
@@ -107,6 +109,27 @@ pub(crate) fn tidy_rate((n, d): (u32, u32)) -> (u32, u32) {
         return (ntsc as u32 * 1000, 1001);
     }
     (n, d.max(1))
+}
+
+/// When each frame is decoded, from when each is shown (`shown`, in the
+/// order they are stored, which is the order they are decoded in): a
+/// frame stored before the ones it is shown after must be decoded early
+/// enough. Decoding times rise with storage order, each as late as the
+/// showing times allow, and all are held back by the same delay: the
+/// most any frame has to wait, which is returned too. Frames in showing
+/// order give a delay of 0.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn decode_times(shown: &[i64]) -> (Vec<i64>, i64) {
+    let mut in_order = shown.to_vec();
+    in_order.sort_unstable();
+    let delay = in_order
+        .iter()
+        .zip(shown)
+        .map(|(sorted, shown)| sorted - shown)
+        .max()
+        .unwrap_or(0)
+        .max(0);
+    (in_order.iter().map(|t| t - delay).collect(), delay)
 }
 
 /// One decoded picture: rows of red, green, blue and alpha bytes, top
@@ -329,6 +352,21 @@ mod tests {
         assert_eq!(tidy_rate((24000, 1001)), (24000, 1001));
         assert_eq!(tidy_rate((25, 1)), (25, 1));
         assert_eq!(tidy_rate((15, 2)), (15, 2), "7.5 stays");
+    }
+
+    #[test]
+    fn decoding_times_come_before_showing_times() {
+        // Shown in order: decoded as shown, no delay.
+        assert_eq!(decode_times(&[0, 10, 20, 30]), (vec![0, 10, 20, 30], 0));
+        // Stored I P B B, with the P shown third: each is decoded no
+        // later than it is shown, a frame's worth earlier at most.
+        let (dts, delay) = decode_times(&[0, 30, 10, 20, 60, 40, 50]);
+        assert_eq!(delay, 20);
+        assert_eq!(dts, vec![-20, -10, 0, 10, 20, 30, 40]);
+        for (d, s) in dts.iter().zip([0, 30, 10, 20, 60, 40, 50]) {
+            assert!(d <= &s);
+        }
+        assert_eq!(decode_times(&[]), (vec![], 0));
     }
 
     #[test]

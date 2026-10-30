@@ -29,6 +29,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use crate::graph::{Graph, GroupSpec, InputBlock, Level, MAX_TRACKS, Mix, Rate};
 use crate::meter::Tap;
 use crate::metronome::{self, Metronome, Voice};
+use crate::midi::{Captured, Event, LiveEvent, MAX_EVENTS, OutEvent};
 use crate::monitor::{self, ControlRoom, CueBus, CueSend, Monitor, OutPair};
 use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
@@ -303,6 +304,12 @@ pub struct Controller {
     max_block: usize,
     from_tuner: Consumer<f32>,
     from_meter: Consumer<f32>,
+    /// Where MIDI device input goes, handed to the MIDI thread once.
+    midi_in: Option<Producer<LiveEvent>>,
+    /// Notes for MIDI outputs, handed to the MIDI thread once.
+    midi_out: Option<Consumer<OutEvent>>,
+    /// Live notes as the engine saw them, for recording.
+    captured: Consumer<Captured>,
 }
 
 impl Controller {
@@ -323,6 +330,26 @@ impl Controller {
 
     /// The disk thread's side, to run with [`Streamer::spawn`] or drive
     /// by hand with [`Streamer::service`]. Can be taken once.
+    /// The queue live notes from MIDI devices go into, for the thread
+    /// that reads the devices: given once.
+    pub fn take_midi_input(&mut self) -> Option<Producer<LiveEvent>> {
+        self.midi_in.take()
+    }
+
+    /// The queue notes for MIDI outputs come out of, for the thread
+    /// that writes to the devices: given once.
+    pub fn take_midi_output(&mut self) -> Option<Consumer<OutEvent>> {
+        self.midi_out.take()
+    }
+
+    /// Live notes the engine has seen since last asked, oldest first,
+    /// for recording and keeping what was played.
+    pub fn take_captured(&mut self, into: &mut Vec<Captured>) {
+        while let Ok(c) = self.captured.pop() {
+            into.push(c);
+        }
+    }
+
     pub fn take_streamer(&mut self) -> Option<Streamer> {
         self.streamer.take()
     }
@@ -461,7 +488,17 @@ pub struct Engine {
     stretch_reset: bool,
     /// Headphone mixes, talkback and the speakers' controls.
     monitor: Monitor,
+    /// Notes from MIDI devices, and this callback's, at frame 0.
+    live: Consumer<LiveEvent>,
+    live_buf: Vec<Event>,
+    /// Notes for MIDI outputs, and live notes for the UI to record.
+    to_midi: Producer<OutEvent>,
+    to_capture: Producer<Captured>,
 }
+
+/// Live note events in flight each way: plenty for a performance
+/// between callbacks, and for the UI between frames.
+const MIDI_QUEUE: usize = 4096;
 
 /// Commands that fit in the queue before `send` refuses more.
 const QUEUE: usize = 1024;
@@ -499,6 +536,9 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let capture = Arc::new(CaptureShared::default());
     let (tuner_tx, tuner_rx) = RingBuffer::new(TUNER_QUEUE);
     let (meter_tx, meter_rx) = RingBuffer::new(METER_QUEUE);
+    let (live_tx, live_rx) = RingBuffer::new(MIDI_QUEUE);
+    let (midi_tx, midi_rx) = RingBuffer::new(MIDI_QUEUE);
+    let (cap_tx, cap_rx) = RingBuffer::new(MIDI_QUEUE);
     let recorder = Recorder::new(
         rec_rx,
         status.clone(),
@@ -522,6 +562,9 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             max_block,
             from_tuner: tuner_rx,
             from_meter: meter_rx,
+            midi_in: Some(live_tx),
+            midi_out: Some(midi_rx),
+            captured: cap_rx,
         },
         Engine {
             commands: cmd_rx,
@@ -558,6 +601,10 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             u: 0.0,
             stretch_reset: true,
             monitor: Monitor::new(max_block),
+            live: live_rx,
+            live_buf: Vec::with_capacity(MAX_EVENTS),
+            to_midi: midi_tx,
+            to_capture: cap_tx,
         },
     )
 }
@@ -637,6 +684,7 @@ impl Engine {
                         let to_disk = &mut self.to_disk;
                         g.adopt_chunks(old, |c| give_back(to_disk, c));
                         g.adopt_inserts(old);
+                        g.adopt_instruments(old);
                         g.adopt_stretchers(old);
                         g.adopt_edges(old);
                         g.adopt_cue_lines(old);
@@ -729,6 +777,7 @@ impl Engine {
         debug_assert_eq!(left.len(), right.len());
         self.apply_commands();
         self.apply_disk();
+        self.take_live();
         left.fill(0.0);
         right.fill(0.0);
         if let Some(c) = click.as_deref_mut() {
@@ -853,6 +902,29 @@ impl Engine {
     /// on, and its samples for the block just made.
     pub fn each_cue_out(&self, f: &mut dyn FnMut(usize, &[f32])) {
         self.monitor.each_cue_out(f);
+    }
+
+    /// Takes this callback's notes from the MIDI devices, all at frame
+    /// 0, and tells the UI about each with where the transport is.
+    fn take_live(&mut self) {
+        self.live_buf.clear();
+        let playing = self.playing && self.count_in_to.is_none();
+        while let Ok(e) = self.live.pop() {
+            let event = Event {
+                frame: 0,
+                ..e.event
+            };
+            if self.live_buf.len() < MAX_EVENTS {
+                self.live_buf.push(event);
+            }
+            let _ = self.to_capture.push(Captured {
+                port: e.port,
+                event,
+                at: self.pos,
+                playing,
+                recording: playing && self.recording,
+            });
+        }
     }
 
     /// Renders frames `from..` of the block while stopped: monitored
@@ -1162,6 +1234,12 @@ impl Engine {
             Some(Tap::Track(t)) if t < tracks => Some((t, &mut tl[..n], &mut tr[..n])),
             _ => None,
         };
+        // Live notes go with the callback's first block.
+        let live: &[Event] = if at == 0 { &self.live_buf } else { &[] };
+        let to_midi = &mut self.to_midi;
+        let mut midi_out = |port: usize, e: &Event| {
+            let _ = to_midi.push(OutEvent { port, event: *e });
+        };
         let missing = g.render(
             self.pos,
             self.looping,
@@ -1171,6 +1249,8 @@ impl Engine {
             play,
             rate,
             tap,
+            live,
+            Some(&mut midi_out),
         );
         self.monitor.add_tracks(g, at, n);
         if missing > 0 {

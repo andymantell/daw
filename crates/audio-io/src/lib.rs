@@ -33,6 +33,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 pub const MAX_BLOCK: usize = 4096;
 
 pub mod latency;
+pub mod midi;
 
 /// What runs in the audio callback: the engine, or a stand-in such as
 /// the latency test. Called with each block's input and outputs, as

@@ -32,6 +32,7 @@ use std::sync::Arc;
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
+use crate::midi::{Event, Instrument, MAX_EVENTS};
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
@@ -332,9 +333,45 @@ pub struct GroupSpec {
     pub mute: bool,
 }
 
+/// A note placed on the timeline (roadmap 3.1), in ticks, for an
+/// instrument track.
+/// Where events for a MIDI output go: the port, and the event.
+pub type MidiOut<'a> = &'a mut dyn FnMut(usize, &Event);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoteSpec {
+    pub start: Ticks,
+    pub len: Ticks,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub channel: u8,
+}
+
+/// An instrument on a track: the slot the engine hands the block's
+/// notes to. The instrument itself is handed to
+/// [`Session::compile_with`] once, when first added, under this `id`,
+/// like an effect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InstrumentSpec {
+    /// Unique for the life of the process.
+    pub id: u64,
+    /// Frames of delay the instrument reports, compensated on the track.
+    pub latency: u32,
+}
+
 #[derive(Clone, Debug)]
 pub struct TrackSpec {
     pub clips: Vec<ClipSpec>,
+    /// Notes the track plays, through its instrument and to its MIDI
+    /// output, in any order.
+    pub notes: Arc<[NoteSpec]>,
+    pub instrument: Option<InstrumentSpec>,
+    /// Live notes from MIDI devices play through the instrument (and go
+    /// to the MIDI output) as they arrive.
+    pub notes_live: bool,
+    /// A MIDI output port (as the app numbers them) the track's notes
+    /// go to, as well as its instrument.
+    pub midi_out: Option<usize>,
     pub mix: Mix,
     /// Effects, in processing order.
     pub inserts: Vec<InsertSpec>,
@@ -357,6 +394,10 @@ impl TrackSpec {
     pub fn new(clips: Vec<ClipSpec>) -> TrackSpec {
         TrackSpec {
             clips,
+            notes: Arc::new([]),
+            instrument: None,
+            notes_live: false,
+            midi_out: None,
             mix: Mix::default(),
             inserts: Vec::new(),
             input: None,
@@ -541,9 +582,45 @@ pub(crate) enum NodeSrc {
     Stream(usize),
 }
 
+/// A note as the audio thread plays it: frames on the timeline.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NoteNode {
+    pub start: i64,
+    pub end: i64,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub channel: u8,
+}
+
+pub(crate) struct InstrumentNode {
+    pub id: u64,
+    /// Taken over from the previous graph, or handed in when new.
+    pub inst: Option<Box<dyn Instrument>>,
+}
+
+/// The most notes one track can have sounding at once from its clips;
+/// past it, extra notes start but are not stopped until the next
+/// all-notes-off.
+const MAX_SOUNDING: usize = 256;
+
 pub(crate) struct TrackNode {
     /// Sorted by start.
     pub clips: Vec<ClipNode>,
+    /// Sorted by start.
+    pub notes: Vec<NoteNode>,
+    pub instrument: Option<InstrumentNode>,
+    pub notes_live: bool,
+    pub midi_out: Option<usize>,
+    /// This block's events, in frame order; capacity [`MAX_EVENTS`].
+    pub events: Vec<Event>,
+    /// Notes from clips sounding now, by index into `notes`; capacity
+    /// [`MAX_SOUNDING`].
+    pub sounding: Vec<usize>,
+    /// Whether the last block played; stopping sends every note off.
+    pub was_playing: bool,
+    /// Where the last block's notes ended on the timeline, so a jump
+    /// (a seek, the loop) stops the notes still sounding.
+    pub notes_at: Option<i64>,
     pub mix: Mix,
     /// Gains reached at the end of the last block, for smoothing.
     pub last: (f32, f32),
@@ -830,6 +907,114 @@ fn mix_chunk(
     }
 }
 
+/// Works out the note events for `n` output frames from `from` on the
+/// timeline (in unwrapped play time, which `looping` sends back round
+/// the loop), with each output frame covering `speed` timeline frames:
+/// notes starting in the block go on, sounding notes ending in it go
+/// off. A jump in the timeline (a seek, or going round the loop) stops
+/// every sounding note first. Events are added to `events` in frame
+/// order, up to its capacity.
+#[allow(clippy::too_many_arguments)]
+fn schedule_notes(
+    notes: &[NoteNode],
+    sounding: &mut Vec<usize>,
+    at: &mut Option<i64>,
+    looping: Option<(i64, i64)>,
+    from: f64,
+    speed: f64,
+    n: usize,
+    events: &mut Vec<Event>,
+) {
+    if notes.is_empty() && sounding.is_empty() {
+        return;
+    }
+    let speed = if speed > 0.0 { speed } else { 1.0 };
+    let mut push = |e: Event| {
+        if events.len() < events.capacity() {
+            events.push(e);
+        }
+    };
+    let stop_all = |sounding: &mut Vec<usize>, frame: u32, push: &mut dyn FnMut(Event)| {
+        for &i in sounding.iter() {
+            let nn = &notes[i];
+            push(Event::note_off(frame, nn.channel, nn.pitch, i as u32));
+        }
+        sounding.clear();
+    };
+    // The block in timeline frames, split where the loop sends it back.
+    let mut done = 0.0f64;
+    let total = n as f64 * speed;
+    while done < total {
+        let u = from + done;
+        let (pos, run) = match looping {
+            Some((a, b)) if u >= b as f64 && b > a => {
+                let len = (b - a) as f64;
+                let p = a as f64 + (u - b as f64).rem_euclid(len);
+                (p, b as f64 - p)
+            }
+            Some((_, b)) if u < b as f64 => (u, b as f64 - u),
+            _ => (u, f64::INFINITY),
+        };
+        let run = run.min(total - done).max(1e-9);
+        // Timeline frames [start, end) this stretch covers, following
+        // on from the last block where it does.
+        let start = match *at {
+            Some(a) if (a as f64 - pos).abs() <= 1.0 => a,
+            _ => pos.floor() as i64,
+        };
+        let end = ((pos + run).ceil() as i64).max(start + 1);
+        let frame_of = |t: i64| -> u32 {
+            (((t as f64 - pos) / speed + done / speed).floor().max(0.0) as u32).min(n as u32 - 1)
+        };
+        if at.is_some_and(|a| a != start) {
+            stop_all(sounding, frame_of(start), &mut push);
+        }
+        // Notes ending in this stretch.
+        let mut k = 0;
+        while k < sounding.len() {
+            let i = sounding[k];
+            let nn = &notes[i];
+            if nn.end < end {
+                push(Event::note_off(
+                    frame_of(nn.end.max(start)),
+                    nn.channel,
+                    nn.pitch,
+                    i as u32,
+                ));
+                sounding.swap_remove(k);
+            } else {
+                k += 1;
+            }
+        }
+        // Notes starting in it: binary search for the first.
+        let first = notes.partition_point(|nn| nn.start < start);
+        for (i, nn) in notes.iter().enumerate().skip(first) {
+            if nn.start >= end {
+                break;
+            }
+            push(Event::note_on(
+                frame_of(nn.start),
+                nn.channel,
+                nn.pitch,
+                nn.velocity,
+                i as u32,
+            ));
+            if nn.end < end {
+                push(Event::note_off(
+                    frame_of(nn.end),
+                    nn.channel,
+                    nn.pitch,
+                    i as u32,
+                ));
+            } else if sounding.len() < sounding.capacity() {
+                sounding.push(i);
+            }
+        }
+        *at = Some(end);
+        done += run;
+    }
+}
+
 /// The compiled, immutable-shape graph the audio thread plays.
 pub struct Graph {
     pub(crate) tempo: TempoMap,
@@ -937,6 +1122,17 @@ impl Session {
         max_block: usize,
         new_effects: &mut Vec<(u64, Box<dyn Insert>)>,
     ) -> Result<Graph, CompileError> {
+        self.compile_all(max_block, new_effects, &mut Vec::new())
+    }
+
+    /// As [`compile_with`](Self::compile_with), also taking newly made
+    /// instruments from `new_instruments` by id.
+    pub fn compile_all(
+        &self,
+        max_block: usize,
+        new_effects: &mut Vec<(u64, Box<dyn Insert>)>,
+        new_instruments: &mut Vec<(u64, Box<dyn Instrument>)>,
+    ) -> Result<Graph, CompileError> {
         if self.tracks.len() > MAX_TRACKS {
             return Err(CompileError::TooManyTracks);
         }
@@ -1002,6 +1198,28 @@ impl Session {
                 });
             }
             clips.sort_by_key(|c| c.start);
+            let mut notes: Vec<NoteNode> = (t.notes.iter())
+                .filter(|n| n.len.0 > 0 && n.pitch <= 127)
+                .map(|n| {
+                    let start = self.tempo.frames_at(n.start).0;
+                    let end = self.tempo.frames_at(Ticks(n.start.0 + n.len.0)).0;
+                    NoteNode {
+                        start,
+                        end: end.max(start + 1),
+                        pitch: n.pitch,
+                        velocity: n.velocity.clamp(1, 127),
+                        channel: n.channel & 15,
+                    }
+                })
+                .collect();
+            notes.sort_by_key(|n| (n.start, n.pitch));
+            let instrument = t.instrument.map(|i| InstrumentNode {
+                id: i.id,
+                inst: new_instruments
+                    .iter()
+                    .position(|(id, _)| *id == i.id)
+                    .map(|k| new_instruments.swap_remove(k).1),
+            });
             let monitor = t.monitor && t.input.is_some();
             if monitor && t.input.is_some_and(|i| i.stereo) {
                 stereo = true;
@@ -1022,17 +1240,27 @@ impl Session {
             let built = chain::build(&t.inserts, max_block);
             let latency = built.latency;
             befores.push(built.before);
+            let latency = latency + t.instrument.map_or(0, |i| i.latency as i64);
             // A bus sums stereo audio.
             let fed = self
                 .tracks
                 .iter()
                 .any(|o| o.output == Output::Track(ti) || o.sends.iter().any(|s| s.to == ti));
             stereo |= fed;
-            // Effects work in stereo, so a mono track becomes stereo.
-            let widen = !stereo && !inserts.is_empty();
-            stereo |= !inserts.is_empty();
+            // Effects and instruments work in stereo, so a mono track
+            // becomes stereo.
+            let widen = !stereo && !inserts.is_empty() && instrument.is_none();
+            stereo |= !inserts.is_empty() || instrument.is_some();
             tracks.push(TrackNode {
                 clips,
+                notes,
+                instrument,
+                notes_live: t.notes_live,
+                midi_out: t.midi_out,
+                events: Vec::with_capacity(MAX_EVENTS),
+                sounding: Vec::with_capacity(MAX_SOUNDING),
+                was_playing: false,
+                notes_at: None,
                 mix: t.mix,
                 last: (0.0, 0.0),
                 stereo,
@@ -1176,7 +1404,7 @@ impl Graph {
         Frames(
             self.tracks
                 .iter()
-                .flat_map(|t| t.clips.iter().map(|c| c.end))
+                .flat_map(|t| (t.clips.iter().map(|c| c.end)).chain(t.notes.iter().map(|n| n.end)))
                 .max()
                 .unwrap_or(0),
         )
@@ -1244,6 +1472,8 @@ impl Graph {
         play: bool,
         rate: Option<Rate>,
         mut tap: Option<(usize, &mut [f32], &mut [f32])>,
+        live: &[Event],
+        mut midi_out: Option<MidiOut<'_>>,
     ) -> usize {
         let n = out[0].len();
         let mut missing = 0;
@@ -1305,6 +1535,61 @@ impl Graph {
                             read_looped(&t.clips, &self.streams, looping, pos + t.latency, sl, sr)
                     }
                 }
+            }
+
+            // Notes: those from clips for this block, then the live
+            // ones, to the instrument and the MIDI output.
+            t.events.clear();
+            if play {
+                let (from, speed) = match &rate {
+                    Some(r) => (r.u + t.latency as f64 * r.speed, r.speed),
+                    None => ((pos + t.latency) as f64, 1.0),
+                };
+                schedule_notes(
+                    &t.notes,
+                    &mut t.sounding,
+                    &mut t.notes_at,
+                    looping,
+                    from,
+                    speed,
+                    n,
+                    &mut t.events,
+                );
+            } else if t.was_playing {
+                t.sounding.clear();
+                t.notes_at = None;
+                t.events.push(Event::all_notes_off(0));
+            }
+            t.was_playing = play;
+            if t.notes_live {
+                for e in live {
+                    if t.events.len() < MAX_EVENTS {
+                        t.events.push(*e);
+                    }
+                }
+            }
+            if let Some(by) = rate
+                .as_ref()
+                .map(|r| r.semitones.round() as i32)
+                .filter(|&b| b != 0)
+            {
+                for e in &mut t.events {
+                    *e = e.transposed(by);
+                }
+            }
+            t.events.sort_by_key(|e| e.frame);
+            if let Some(port) = t.midi_out
+                && let Some(out) = midi_out.as_mut()
+            {
+                for e in &t.events {
+                    out(port, e);
+                }
+            }
+            if let Some(InstrumentNode {
+                inst: Some(inst), ..
+            }) = &mut t.instrument
+            {
+                inst.process(&t.events, sl, sr);
             }
 
             if t.widen {
@@ -1415,6 +1700,48 @@ impl Graph {
                 std::mem::swap(&mut e.line, &mut o.line);
                 e.at = o.at;
                 e.last = o.last;
+            }
+        }
+    }
+
+    /// Takes over the instruments of `old` that this graph still uses,
+    /// with the notes they have sounding, so a graph change while
+    /// playing cuts nothing off.
+    pub(crate) fn adopt_instruments(&mut self, old: &mut Graph) {
+        for t in &mut self.tracks {
+            let Some(i) = t.instrument.as_mut().filter(|i| i.inst.is_none()) else {
+                continue;
+            };
+            let found = old.tracks.iter_mut().find(|o| {
+                o.instrument
+                    .as_ref()
+                    .is_some_and(|x| x.id == i.id && x.inst.is_some())
+            });
+            if let Some(o) = found {
+                i.inst = o.instrument.as_mut().and_then(|x| x.inst.take());
+                // The notes sounding carry on where this graph has the
+                // same note; one that is gone is stopped now.
+                t.notes_at = o.notes_at;
+                t.was_playing = o.was_playing;
+                for &k in &o.sounding {
+                    let on = &o.notes[k];
+                    let same = t.notes.iter().position(|nn| {
+                        (nn.start, nn.end, nn.pitch, nn.channel)
+                            == (on.start, on.end, on.pitch, on.channel)
+                    });
+                    match same {
+                        Some(j) if t.sounding.len() < t.sounding.capacity() => t.sounding.push(j),
+                        _ => t
+                            .events
+                            .push(Event::note_off(0, on.channel, on.pitch, k as u32)),
+                    }
+                }
+                if !t.events.is_empty() {
+                    if let Some(inst) = &mut i.inst {
+                        inst.process(&t.events, &mut [], &mut []);
+                    }
+                    t.events.clear();
+                }
             }
         }
     }

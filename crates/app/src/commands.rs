@@ -76,6 +76,11 @@ pub(crate) enum Cmd {
     LessonNotes,
     Lessons,
     Comments,
+    NotesEditor,
+    AddInstrumentTrack,
+    KeepNotes,
+    ImportMidi,
+    ExportMidi,
     AudioDevice,
     Plugins,
     PerformanceCheck,
@@ -239,6 +244,51 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
         .words("render bounce stems wav flac mp3 opus ogg mixdown bus"),
+    info(
+        Cmd::ImportMidi,
+        "import-midi",
+        "File",
+        "Import MIDI file…",
+        &[],
+    )
+    .hint("Each track in the file becomes an instrument track with its notes")
+    .words("notes smf mid"),
+    info(
+        Cmd::ExportMidi,
+        "export-midi",
+        "File",
+        "Export MIDI file…",
+        &[],
+    )
+    .hint("The instrument tracks' notes as a standard MIDI file")
+    .words("notes smf mid"),
+    info(
+        Cmd::AddInstrumentTrack,
+        "add-instrument-track",
+        "Edit",
+        "Add instrument track",
+        &[],
+    )
+    .hint("A track that plays notes through an instrument, from a MIDI keyboard or the note editor")
+    .words("midi synth notes"),
+    info(
+        Cmd::NotesEditor,
+        "notes-editor",
+        "View",
+        "Note editor",
+        &[key(NONE, Key::E)],
+    )
+    .hint("Draw, move and shape the notes of the selected note clip")
+    .words("piano roll midi notes velocity quantise"),
+    info(
+        Cmd::KeepNotes,
+        "keep-notes",
+        "Transport",
+        "Keep the notes I just played",
+        &[],
+    )
+    .hint("Makes a note clip from what was played on a MIDI keyboard without Record on")
+    .words("retrospective capture midi"),
     info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)]).repeat(),
     info(
         Cmd::Redo,
@@ -706,6 +756,7 @@ impl Cmd {
                 | Cmd::MonitorSection
                 | Cmd::TakeLanes
                 | Cmd::Lessons
+                | Cmd::NotesEditor
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -1522,6 +1573,28 @@ impl App {
             Cmd::Mono => self.toggle_room(|c| c.mono = !c.mono),
             Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
             Cmd::Lessons => self.workspace.toggle(Pane::Lessons),
+            Cmd::NotesEditor => self.workspace.toggle(Pane::NotesEditor),
+            Cmd::AddInstrumentTrack => {
+                let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
+                let t = crate::Track::instrument(format!("Instrument {n}"));
+                if let Some(i) = &t.instrument {
+                    self.pending_instruments.push((i.id, i.make(self.rate)));
+                }
+                self.tracks.push(t);
+                self.rebuild();
+            }
+            Cmd::KeepNotes => {
+                if self.keep_notes() {
+                    self.rebuild();
+                } else {
+                    self.message = Some(
+                        "Nothing to keep: play an instrument track from a MIDI keyboard first."
+                            .into(),
+                    );
+                }
+            }
+            Cmd::ImportMidi => self.pick_midi_file(ctx),
+            Cmd::ExportMidi => self.export_midi_file(),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),

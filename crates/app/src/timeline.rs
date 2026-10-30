@@ -29,6 +29,7 @@ use eframe::egui::{
 use crate::commands::Cmd;
 use crate::groups::{self, LaneGroup};
 use crate::theme::{Look, LoopFill, Texture, WaveStyle};
+use daw_project::{NoteClip, PPQ};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -565,6 +566,9 @@ pub fn section(markers: &[Marker], i: usize, end_bar: i64) -> (i64, i64) {
 pub struct Lane<'a> {
     pub name: &'a str,
     pub clips: &'a mut Vec<Clip>,
+    /// Note clips (roadmap 3.1), in ticks; drawn and moved here, and
+    /// edited in the note editor.
+    pub notes: &'a mut Vec<NoteClip>,
     pub kind: daw_project::TrackKind,
     /// Sits in a folder: shown indented under it.
     pub in_folder: bool,
@@ -739,6 +743,8 @@ pub struct Outcome {
     /// Paste the copied clips onto a lane at a frame: as they are, or
     /// (true) rendered through their tracks' effects.
     pub paste: Option<(usize, i64, bool)>,
+    /// Open the note editor on this note clip, by key.
+    pub edit_notes: Option<String>,
 }
 
 /// The amounts, in dB, the clip menu's Change gain offers.
@@ -845,8 +851,41 @@ enum Hit {
     Ruler,
     Marker(usize),
     Pin(usize),
-    Clip { id: u64, zone: Zone },
+    Clip {
+        id: u64,
+        zone: Zone,
+    },
+    /// A note clip: which lane, which of its note clips, and whether
+    /// its end edge (to trim) rather than its body.
+    NoteClip {
+        lane: usize,
+        index: usize,
+        edge: bool,
+    },
     Lane,
+}
+
+/// A note clip being moved or trimmed.
+struct NoteDrag {
+    lane: usize,
+    key: String,
+    /// Timeline frame under the pointer when pressed.
+    from: i64,
+    /// Its start and length when pressed, in ticks.
+    start: i64,
+    len: i64,
+    edge: bool,
+    moved: bool,
+}
+
+/// The shortest a note clip can be trimmed to: a sixteenth note.
+const MIN_NOTE_CLIP: i64 = PPQ / 4;
+
+/// A new note clip a bar long from `at`, the `n`th made.
+fn new_note_clip(map: &TempoMap, at: i64, n: usize) -> NoteClip {
+    let start = map.ticks_at(Frames(at.max(0)));
+    let bar = map.signature_at(start).bar_ticks();
+    NoteClip::new(daw_project::new_id(), format!("Notes {n}"), start.0, bar)
 }
 
 struct Drag {
@@ -918,6 +957,9 @@ pub struct Timeline {
     fades_unsettled: bool,
     pub selected: HashSet<u64>,
     drag: Option<Drag>,
+    /// The selected note clip, by key, and one being dragged.
+    pub note_sel: Option<String>,
+    note_drag: Option<NoteDrag>,
     /// Scrubbing the playhead along the ruler.
     scrubbing: bool,
     waves: Waveforms,
@@ -974,6 +1016,8 @@ impl Default for Timeline {
             waves: Waveforms::default(),
             menu: None,
             menu_lane: None,
+            note_sel: None,
+            note_drag: None,
             rename: None,
             rename_focused: false,
             focus: None,
@@ -1886,6 +1930,83 @@ impl Timeline {
     /// The commands run on the timeline (by key, menu or search), and
     /// its own keys when no text field has the keyboard. With a clip or
     /// marker focused, the commands and arrow keys act on it.
+    /// Draws a track's note clips: a block each, with its notes as bars
+    /// placed by pitch, and its name.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_note_clips(
+        &self,
+        lanes: &egui::Painter,
+        look: &Look,
+        lane: &Lane,
+        top: f32,
+        lane_h: f32,
+        left: f32,
+        right: f32,
+        colour: Color32,
+        view: &View,
+        x_of: &dyn Fn(i64) -> f32,
+    ) {
+        let tc = look.c();
+        let order = lane
+            .notes
+            .iter()
+            .filter(|c| c.muted)
+            .chain(lane.notes.iter().filter(|c| !c.muted));
+        for c in order {
+            let x0 = x_of(view.map.frames_at(Ticks(c.start)).0);
+            let x1 = x_of(view.map.frames_at(Ticks(c.end())).0);
+            if x1 < left || x0 > right {
+                continue;
+            }
+            let full = Rect::from_x_y_ranges(x0..=x1, top + 2.0..=top + lane_h - 2.0);
+            let r = Rect::from_x_y_ranges(x0.max(left)..=x1.min(right), full.y_range());
+            let corner = look.clip_radius.min(r.height() / 2.0).min(r.width() / 2.0);
+            let selected = self.note_sel.as_deref() == Some(c.id.as_str());
+            if c.muted {
+                lanes.rect_stroke(r, corner, Stroke::new(1.0, colour), StrokeKind::Inside);
+            } else {
+                lanes.rect_filled(r, corner, tc.lane);
+                lanes.rect_filled(r, corner, tc.clip_fill.of(colour));
+            }
+            let ink = if c.muted {
+                tc.text_dim
+            } else {
+                tc.clip_text.of(colour)
+            };
+            let clipped = lanes.with_clip_rect(r.intersect(lanes.clip_rect()));
+            // The notes, placed by pitch over the range the clip uses.
+            let placed: Vec<daw_project::Note> = c.placed().collect();
+            if !placed.is_empty() {
+                let lo = placed.iter().map(|n| n.pitch).min().unwrap_or(60) as f32;
+                let hi = placed.iter().map(|n| n.pitch).max().unwrap_or(60) as f32;
+                let span = (hi - lo).max(12.0);
+                let body = Rect::from_x_y_ranges(x0..=x1, full.top() + 14.0..=full.bottom() - 3.0);
+                let row = (body.height() / (span + 1.0)).max(1.0);
+                for n in &placed {
+                    let nx0 = x_of(view.map.frames_at(Ticks(n.start)).0);
+                    let nx1 = x_of(view.map.frames_at(Ticks(n.end())).0).max(nx0 + 1.0);
+                    let y = body.bottom() - (n.pitch as f32 - lo + 1.0) * row;
+                    clipped.rect_filled(
+                        Rect::from_x_y_ranges(nx0..=nx1, y..=(y + row.min(3.0))),
+                        0.0,
+                        ink,
+                    );
+                }
+            }
+            let at = r.left_top() + vec2(4.0, 2.0);
+            let font = look.font(look.small);
+            let name = if c.muted {
+                format!("{} (muted)", c.name)
+            } else {
+                c.name.clone()
+            };
+            clipped.text(at, Align2::LEFT_TOP, name, font, ink);
+            if selected {
+                lanes.rect_stroke(r, corner, Stroke::new(2.0, tc.text), StrokeKind::Inside);
+            }
+        }
+    }
+
     fn keys(&mut self, ctx: &egui::Context, song: &mut Song, view: &View, out: &mut Outcome) {
         let focused = self.has_keyboard(ctx);
         for cmd in view.commands {
@@ -1893,6 +2014,14 @@ impl Timeline {
                 Cmd::Delete => {
                     if let Some(i) = self.focused_marker(song).filter(|_| focused) {
                         song.markers.remove(i);
+                    } else if self.selected.is_empty()
+                        && let Some(key) = self.note_sel.take()
+                    {
+                        for l in &mut song.lanes {
+                            let before = l.notes.len();
+                            l.notes.retain(|c| c.id != key);
+                            out.changed |= l.notes.len() != before;
+                        }
                     } else {
                         if focused {
                             self.select_focused(song);
@@ -2244,6 +2373,15 @@ impl Timeline {
                 return Some(Hit::Ruler);
             }
             let lane = ((pos.y - rect.top() - RULER + vscroll) / lane_h) as usize;
+            let notes = &song.lanes.get(lane)?.notes;
+            for (index, c) in notes.iter().enumerate().rev() {
+                let x0 = x_of(view.map.frames_at(Ticks(c.start)).0);
+                let x1 = x_of(view.map.frames_at(Ticks(c.end())).0);
+                if pos.x >= x0 && pos.x <= x1 {
+                    let edge = x1 - pos.x < 6.0 && x1 - x0 > 16.0;
+                    return Some(Hit::NoteClip { lane, index, edge });
+                }
+            }
             let clips = &song.lanes.get(lane)?.clips;
             // Playing clips over muted ones; later ones on top.
             let order = clips
@@ -2319,6 +2457,10 @@ impl Timeline {
                     ui.ctx().set_cursor_icon(CursorIcon::ResizeColumn)
                 }
                 Some(Hit::Clip { .. }) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
+                Some(Hit::NoteClip { edge: true, .. }) => {
+                    ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal)
+                }
+                Some(Hit::NoteClip { .. }) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
                 _ => {}
             }
         }
@@ -2382,7 +2524,47 @@ impl Timeline {
                     self.focus_next = Some(Focus::Clip(id));
                 }
                 Some(Hit::Ruler | Hit::Lane) if p.y < rect.top() + RULER => self.scrubbing = true,
+                Some(Hit::NoteClip { lane, index, edge }) => {
+                    if let Some(c) = song.lanes[lane].notes.get(index) {
+                        self.selected.clear();
+                        self.note_sel = Some(c.id.clone());
+                        self.note_drag = Some(NoteDrag {
+                            lane,
+                            key: c.id.clone(),
+                            from: frame_of(p.x),
+                            start: c.start,
+                            len: c.len,
+                            edge,
+                            moved: false,
+                        });
+                    }
+                }
                 _ => {}
+            }
+        }
+        if let Some(d) = &mut self.note_drag
+            && let Some(p) = resp.interact_pointer_pos()
+            && let Some(c) = song.lanes[d.lane].notes.iter_mut().find(|c| c.id == d.key)
+        {
+            let map = view.map;
+            let dx = frame_of(p.x) - d.from;
+            if d.edge {
+                let end = map.frames_at(Ticks(d.start + d.len)).0 + dx;
+                let end = map.ticks_at(Frames(snap_to(end))).0;
+                let len = (end - d.start).max(MIN_NOTE_CLIP);
+                if len != c.len {
+                    c.len = len;
+                    d.moved = true;
+                    out.changed = true;
+                }
+            } else {
+                let start = map.frames_at(Ticks(d.start)).0 + dx;
+                let start = map.ticks_at(Frames(snap_to(start).max(0))).0;
+                if start != c.start {
+                    c.start = start;
+                    d.moved = true;
+                    out.changed = true;
+                }
             }
         }
         if self.scrubbing
@@ -2521,6 +2703,11 @@ impl Timeline {
         }
         if resp.drag_stopped() {
             self.scrubbing = false;
+            if let Some(d) = self.note_drag.take()
+                && d.moved
+            {
+                out.changed = true;
+            }
             if let Some(d) = self.drag.take()
                 && d.moved
             {
@@ -2557,7 +2744,12 @@ impl Timeline {
                 }
                 Some(Hit::Ruler | Hit::Lane) => {
                     self.selected.clear();
+                    self.note_sel = None;
                     out.seek = Some(snap_to(frame_of(p.x)).max(0));
+                }
+                Some(Hit::NoteClip { lane, index, .. }) => {
+                    self.selected.clear();
+                    self.note_sel = song.lanes[lane].notes.get(index).map(|c| c.id.clone());
                 }
                 None => {}
             }
@@ -2566,6 +2758,24 @@ impl Timeline {
             && let Some(p) = resp.interact_pointer_pos()
         {
             match hit(p, song) {
+                Some(Hit::NoteClip { lane, index, .. }) => {
+                    if let Some(c) = song.lanes[lane].notes.get(index) {
+                        self.note_sel = Some(c.id.clone());
+                        out.edit_notes = Some(c.id.clone());
+                    }
+                }
+                // An empty place on an instrument track: a new clip.
+                Some(Hit::Lane) if p.y >= rect.top() + RULER => {
+                    let lane = lane_at(p.y);
+                    if song.lanes[lane].kind.plays_notes() {
+                        let n = song.lanes.iter().map(|l| l.notes.len()).sum::<usize>() + 1;
+                        let c = new_note_clip(view.map, snap_to(frame_of(p.x)), n);
+                        self.note_sel = Some(c.id.clone());
+                        out.edit_notes = Some(c.id.clone());
+                        song.lanes[lane].notes.push(c);
+                        out.changed = true;
+                    }
+                }
                 Some(Hit::Marker(i)) => {
                     self.rename = Some((i, song.markers[i].name.clone()));
                     self.rename_focused = false;
@@ -3012,6 +3222,18 @@ impl Timeline {
                     );
                 }
             }
+            self.draw_note_clips(
+                &lanes,
+                &look,
+                lane,
+                top,
+                lane_h,
+                left,
+                rect.right(),
+                colour,
+                view,
+                &x_of,
+            );
         }
         if song.lanes.is_empty() {
             painter.text(
@@ -3214,6 +3436,42 @@ impl Timeline {
                     ui.close();
                 }
             }
+            Some((Hit::NoteClip { lane, index, .. }, _)) => {
+                let key = (song.lanes.get(lane))
+                    .and_then(|l| l.notes.get(index))
+                    .map(|c| c.id.clone());
+                if let Some(key) = key {
+                    if ui.button("Edit notes…").clicked() {
+                        self.note_sel = Some(key.clone());
+                        out.edit_notes = Some(key.clone());
+                        ui.close();
+                    }
+                    let muted = song.lanes[lane].notes[index].muted;
+                    if ui.button(if muted { "Unmute" } else { "Mute" }).clicked() {
+                        song.lanes[lane].notes[index].muted = !muted;
+                        out.changed = true;
+                        ui.close();
+                    }
+                    if ui.button("Duplicate").clicked() {
+                        let mut c = song.lanes[lane].notes[index].clone();
+                        c.id = daw_project::new_id();
+                        c.start = c.end();
+                        for n in &mut c.notes {
+                            n.id = daw_project::new_id();
+                        }
+                        self.note_sel = Some(c.id.clone());
+                        song.lanes[lane].notes.push(c);
+                        out.changed = true;
+                        ui.close();
+                    }
+                    if ui.button("Delete").clicked() {
+                        song.lanes[lane].notes.remove(index);
+                        self.note_sel = None;
+                        out.changed = true;
+                        ui.close();
+                    }
+                }
+            }
             Some((Hit::Pin(i), _)) if i < view.pins.len() => {
                 if ui.button("Show comment").clicked() {
                     out.pin = Some(view.pins[i].id.clone());
@@ -3338,6 +3596,17 @@ impl Timeline {
                         out.hit = Some(crate::hitpoints::HitAsk::Add(at));
                         ui.close();
                     }
+                }
+                if let Some(l) = self.menu_lane.filter(|&l| song.lanes[l].kind.plays_notes())
+                    && ui.button("Add note clip here").clicked()
+                {
+                    let n = song.lanes.iter().map(|l| l.notes.len()).sum::<usize>() + 1;
+                    let c = new_note_clip(view.map, snap_to(at), n);
+                    self.note_sel = Some(c.id.clone());
+                    out.edit_notes = Some(c.id.clone());
+                    song.lanes[l].notes.push(c);
+                    out.changed = true;
+                    ui.close();
                 }
                 let on = match self.menu_lane.and_then(|l| song.lanes.get(l)) {
                     Some(l) => format!("Add comment on {} here…", l.name),
@@ -3618,6 +3887,7 @@ pub(crate) mod tests {
                 clips: &mut clips,
                 kind: daw_project::TrackKind::Audio,
                 in_folder: false,
+                notes: Box::leak(Box::default()),
             }],
             markers: &mut markers,
         };
@@ -3635,6 +3905,7 @@ pub(crate) mod tests {
                 clips: &mut clips,
                 kind: daw_project::TrackKind::Audio,
                 in_folder: false,
+                notes: Box::leak(Box::default()),
             }],
             markers: &mut markers,
         };
@@ -3666,18 +3937,21 @@ pub(crate) mod tests {
                     clips: &mut kick,
                     kind: daw_project::TrackKind::Audio,
                     in_folder: false,
+                    notes: Box::leak(Box::default()),
                 },
                 Lane {
                     name: "Snare",
                     clips: &mut snare,
                     kind: daw_project::TrackKind::Audio,
                     in_folder: false,
+                    notes: Box::leak(Box::default()),
                 },
                 Lane {
                     name: "Bass",
                     clips: &mut bass,
                     kind: daw_project::TrackKind::Audio,
                     in_folder: false,
+                    notes: Box::leak(Box::default()),
                 },
             ],
             markers: &mut markers,
@@ -3734,6 +4008,7 @@ pub(crate) mod tests {
                 clips: &mut clips,
                 kind: daw_project::TrackKind::Audio,
                 in_folder: false,
+                notes: Box::leak(Box::default()),
             }],
             markers: &mut markers,
         };
@@ -3775,6 +4050,7 @@ pub(crate) mod tests {
                 clips: &mut clips,
                 kind: daw_project::TrackKind::Audio,
                 in_folder: false,
+                notes: Box::leak(Box::default()),
             }],
             markers: &mut markers,
         };

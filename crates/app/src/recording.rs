@@ -192,6 +192,31 @@ impl App {
         if punch && self.ctl.status().playing() {
             self.send_punch();
         }
+        ui.separator();
+        ui.label("Notes");
+        egui::ComboBox::from_id_salt("notes-mode")
+            .width(170.0)
+            .selected_text(self.midi.mode.label())
+            .show_ui(ui, |ui| {
+                for m in [crate::midi::Mode::NewClip, crate::midi::Mode::Merge] {
+                    ui.selectable_value(&mut self.midi.mode, m, m.label());
+                }
+            })
+            .response
+            .accessible_name("Notes recording mode")
+            .on_hover_text(
+                "Each recording pass on an instrument track makes a new note clip, or \
+                 merges its notes into the clip already there (to build up a part)",
+            );
+        let keep_notes = ui
+            .add_enabled(self.midi.has_recent(), egui::Button::new("Keep notes"))
+            .on_hover_text("Make clips from notes played on instrument tracks without Record on")
+            .on_disabled_hover_text(
+                "Nothing played yet: monitor or arm an instrument track and play",
+            );
+        if keep_notes.clicked() && self.keep_notes() {
+            self.rebuild();
+        }
         if self.record.capture_secs > 0 && self.tracks.iter().any(|t| t.arm) {
             // The kept time counts up.
             ui.ctx()

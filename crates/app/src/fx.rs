@@ -2586,6 +2586,59 @@ mod tests {
     }
 
     #[test]
+    fn a_clap_effect_is_added_saved_and_restored_like_any_plugin() {
+        use daw_test_plugin::{CLAP_ID, CLAP_NAME, GAIN_PARAM, LATENCY};
+
+        for sandbox in [Sandbox::InApp, Sandbox::Shared] {
+            let mut fx = effects("clap");
+            fx.helper = Some(test_plugin::helper());
+            let file = test_plugin::clap();
+            let classes = daw_plugins::scan::scan_here(&file).unwrap();
+            fx.list.bundles = vec![daw_plugins::scan::BundleEntry {
+                path: file.clone(),
+                modified: 0,
+                result: Ok(classes),
+            }];
+            let a = fx.list.plugins().remove(0);
+            assert_eq!(a.class.name, CLAP_NAME);
+            let cid = daw_plugins::clap::cid_of(CLAP_ID);
+            fx.list.set_sandbox(&cid, sandbox);
+            let mut s = fx.create(&a, 48_000).unwrap();
+            assert_eq!(s.sandbox, sandbox);
+            // In a helper, one block more.
+            assert!(s.latency >= LATENCY);
+            assert_eq!(s.latency == LATENCY, sandbox == Sandbox::InApp);
+            // Gain 0.5 of the plugin's 0 to 2, lookahead off.
+            let mut bytes = 0.5f64.to_le_bytes().to_vec();
+            bytes.push(0);
+            let state = daw_plugins::PluginState {
+                component: bytes,
+                controller: None,
+            };
+            plugin_of(&s).load_state(&state).unwrap();
+            let saved = daw_project::Effect {
+                state: Some(s.state().unwrap()),
+                ..s.value()
+            };
+            assert_eq!(
+                saved.class,
+                cid.iter().map(|&b| b as u8).collect::<Vec<_>>()
+            );
+            assert_eq!(saved.bundle, file.display().to_string());
+
+            // Found again by its id, its settings kept.
+            let back = fx.restore(&saved, 48_000).unwrap();
+            assert_eq!(back.cid(), Some(&cid));
+            assert_eq!(back.name, CLAP_NAME);
+            assert_eq!(
+                plugin_of(&back).param(GAIN_PARAM),
+                Some(0.25),
+                "{sandbox:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_plugin_check_writes_a_report_beside_the_plugin_list() {
         let mut fx = effects("check");
         let bundle = test_plugin::bundle();

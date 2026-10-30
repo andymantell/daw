@@ -179,7 +179,11 @@ impl EditorWindow {
                 // Dropping the window destroys it.
                 return Err("the plugin could not open its editor".into());
             }
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*window.state as *const WinState as isize);
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_USERDATA,
+                &*window.state as *const WinState as isize,
+            );
             if let Some(f) = g.show {
                 f(plugin);
             }

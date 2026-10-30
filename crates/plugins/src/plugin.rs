@@ -46,8 +46,8 @@ use vst3::{ComPtr, ComWrapper};
 
 use daw_engine::graph::Insert;
 
-use crate::com::{ComponentHandler, MemStream, ParamChanges, host_app, read_wstr};
 use crate::clap::{ClapModule, ClapPlugin, ClapProcessor};
+use crate::com::{ComponentHandler, MemStream, ParamChanges, host_app, read_wstr};
 use crate::host::{RemotePlugin, RemoteProcessor};
 use crate::module::{ClassInfo, Module, Result};
 use crate::proto::{ProgramList, Status};
@@ -1087,7 +1087,8 @@ impl Library {
                 (Plugin::Local(p), Processor::Local(x))
             }
             Library::Clap(m) => {
-                let (p, x) = crate::clap::instantiate_with(m.clone(), cid, rate, max_block, layout)?;
+                let (p, x) =
+                    crate::clap::instantiate_with(m.clone(), cid, rate, max_block, layout)?;
                 (Plugin::Clap(p), Processor::Clap(x))
             }
         })

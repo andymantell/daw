@@ -37,6 +37,6 @@ pub mod scan;
 pub use host::{Host, Sandbox};
 pub use module::{ClassInfo, Module, cid_from_hex, cid_to_hex};
 pub use plugin::{
-    Bus, Buses, Layout, Library, LocalPlugin, LocalProcessor, Param, Plugin, PluginState, Processor,
-    instantiate, instantiate_with,
+    Bus, Buses, Layout, Library, LocalPlugin, LocalProcessor, Param, Plugin, PluginState,
+    Processor, instantiate, instantiate_with,
 };

@@ -71,7 +71,8 @@ pub const EXT: &str = "clap";
 
 /// True for a path that names a CLAP plugin (by its extension).
 pub fn is_clap(path: &Path) -> bool {
-    path.extension().is_some_and(|x| x.eq_ignore_ascii_case(EXT))
+    path.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case(EXT))
 }
 
 /// The 16 bytes the app knows the CLAP plugin `id` by: a 128-bit FNV-1a
@@ -109,7 +110,11 @@ fn text(s: *const c_char) -> String {
 
 /// Text from a fixed-size C string buffer.
 fn text_in(buf: &[c_char]) -> String {
-    let bytes: Vec<u8> = buf.iter().take_while(|&&c| c != 0).map(|&c| c as u8).collect();
+    let bytes: Vec<u8> = buf
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -185,8 +190,8 @@ impl ClapModule {
         if !bin.is_file() {
             return Err("could not load: no binary for this platform in the bundle".into());
         }
-        let lib =
-            unsafe { libloading::Library::new(&bin) }.map_err(|e| format!("could not load: {e}"))?;
+        let lib = unsafe { libloading::Library::new(&bin) }
+            .map_err(|e| format!("could not load: {e}"))?;
         let entry = unsafe { lib.get::<*const clap_plugin_entry>(b"clap_entry\0") }
             .map_err(|e| format!("no clap_entry: {e}"))?;
         let entry: *const clap_plugin_entry = *entry;
@@ -304,12 +309,11 @@ struct HostBox {
     flags: Flags,
 }
 
-const HOST_VERSION: &CStr = match CStr::from_bytes_with_nul(
-    concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes(),
-) {
-    Ok(s) => s,
-    Err(_) => c"0",
-};
+const HOST_VERSION: &CStr =
+    match CStr::from_bytes_with_nul(concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes()) {
+        Ok(s) => s,
+        Err(_) => c"0",
+    };
 
 impl HostBox {
     fn new() -> Box<HostBox> {
@@ -526,7 +530,10 @@ unsafe extern "C" fn in_size(list: *const clap_input_events) -> u32 {
     e.events.len() as u32
 }
 
-unsafe extern "C" fn in_get(list: *const clap_input_events, index: u32) -> *const clap_event_header {
+unsafe extern "C" fn in_get(
+    list: *const clap_input_events,
+    index: u32,
+) -> *const clap_event_header {
     let e = unsafe { &*((*list).ctx as *const InEvents) };
     match e.events.get(index as usize) {
         Some(ev) => &ev.header,
@@ -559,7 +566,10 @@ struct OutEvents {
     edited: bool,
 }
 
-unsafe extern "C" fn out_push(list: *const clap_output_events, ev: *const clap_event_header) -> bool {
+unsafe extern "C" fn out_push(
+    list: *const clap_output_events,
+    ev: *const clap_event_header,
+) -> bool {
     let o = unsafe { &mut *((*list).ctx as *mut OutEvents) };
     let Some(h) = (unsafe { ev.as_ref() }) else {
         return false;
@@ -617,7 +627,14 @@ impl Core {
     }
 
     fn activate(&self) -> Result<()> {
-        let ok = call!(self.plugin, activate, self.plugin, self.rate, 1, self.max_block);
+        let ok = call!(
+            self.plugin,
+            activate,
+            self.plugin,
+            self.rate,
+            1,
+            self.max_block
+        );
         if ok != Some(true) {
             return Err("the plugin could not be started".into());
         }
@@ -656,16 +673,18 @@ impl Core {
         (0..n)
             .filter_map(|i| {
                 let mut info: clap_audio_port_info = unsafe { std::mem::zeroed() };
-                (call!(self.ports, get, self.plugin, i, input, &mut info) == Some(true)).then(|| {
-                    let main = info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0;
-                    let bus = Bus {
-                        name: text_in(&info.name),
-                        // A sane cap on what we allocate for.
-                        channels: info.channel_count.min(64),
-                        aux: !main,
-                    };
-                    (bus, main)
-                })
+                (call!(self.ports, get, self.plugin, i, input, &mut info) == Some(true)).then(
+                    || {
+                        let main = info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0;
+                        let bus = Bus {
+                            name: text_in(&info.name),
+                            // A sane cap on what we allocate for.
+                            channels: info.channel_count.min(64),
+                            aux: !main,
+                        };
+                        (bus, main)
+                    },
+                )
             })
             .collect()
     }
@@ -746,7 +765,9 @@ pub fn instantiate_with(
     let c_id = CString::new(id).map_err(|_| "the plugin's id is not valid")?;
     let host = HostBox::new();
     let f = module.factory();
-    let create = f.create_plugin.ok_or("the plugin factory can't make plugins")?;
+    let create = f
+        .create_plugin
+        .ok_or("the plugin factory can't make plugins")?;
     let plugin = unsafe { create(module.factory, &host.clap, c_id.as_ptr()) };
     if plugin.is_null() {
         return Err("the plugin could not be created".into());
@@ -779,13 +800,7 @@ pub fn instantiate_with(
     };
     let (edits_tx, edits_rx) = RingBuffer::new(EDITS);
     let (back_tx, back_rx) = RingBuffer::new(EDITS);
-    let mut processor = ClapProcessor::new(
-        core.clone(),
-        edits_rx,
-        back_tx,
-        &buses,
-        max_block,
-    );
+    let mut processor = ClapProcessor::new(core.clone(), edits_rx, back_tx, &buses, max_block);
     processor.key = if layout.sidechain {
         buses.sidechain()
     } else {
@@ -1073,7 +1088,13 @@ impl ClapPlugin {
     fn gui_supports(&self, api: &CStr, floating: bool) -> bool {
         let core = &self.core;
         !core.gui.is_null()
-            && call!(core.gui, is_api_supported, core.plugin, api.as_ptr(), floating) == Some(true)
+            && call!(
+                core.gui,
+                is_api_supported,
+                core.plugin,
+                api.as_ptr(),
+                floating
+            ) == Some(true)
     }
 
     /// Opens the plugin's own window, titled `title`, or brings it to
@@ -1095,8 +1116,13 @@ impl ClapPlugin {
         }
         #[cfg(windows)]
         if self.gui_supports(CLAP_WINDOW_API_WIN32, false) {
-            if call!(core.gui, create, core.plugin, CLAP_WINDOW_API_WIN32.as_ptr(), false)
-                != Some(true)
+            if call!(
+                core.gui,
+                create,
+                core.plugin,
+                CLAP_WINDOW_API_WIN32.as_ptr(),
+                false
+            ) != Some(true)
             {
                 return Err("the plugin could not open its editor".into());
             }

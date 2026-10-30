@@ -165,7 +165,7 @@ My Lesson.project/              (folder; a tar of it is a bundle)
 ```
  Engine ──(shared-memory audio buffers + lock-free event queues)──► Plugin host process
                                                                      ├─ VST 3 adapter (candidate: `vst3` bindings)
-                                                                     ├─ CLAP adapter  (candidate: `clack`)
+                                                                     ├─ CLAP adapter  (`clap-sys` bindings, decision 0013)
                                                                      ├─ AU adapter    (macOS, own bindings)
                                                                      └─ ARA 2 adapter (Phase 7)
 ```

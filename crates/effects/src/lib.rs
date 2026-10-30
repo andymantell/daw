@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Effects that come with the app (roadmap 2.5): EQ, compressor, gate,
-//! limiter, delay, an algorithmic reverb, a convolution reverb, a guitar
-//! amp, speaker cabinets and a player for amp captures. Each runs as a
-//! track insert, like a hosted plugin.
+//! Effects that come with the app (roadmaps 2.5 and 3.5): EQ, compressor,
+//! gate, limiter, de-esser, multiband dynamics, transient shaper,
+//! saturation, delay, chorus, flanger, phaser, tremolo, an algorithmic
+//! reverb, a convolution reverb, a guitar amp, speaker cabinets and a
+//! player for amp captures. Each runs as a track insert, like a hosted
+//! plugin.
 //!
 //! An [`Effect`] holds the settings, shared without locks with the
 //! [`Processor`] made from it, which runs on the audio thread. Every
@@ -19,13 +21,18 @@ mod biquad;
 mod cabinet;
 pub mod capture;
 mod convolution;
+mod deesser;
 mod delay;
 mod dynamics;
 mod eq;
 pub mod library;
+mod modulation;
+mod multiband;
 mod resample;
 pub mod response;
 mod reverb;
+mod saturation;
+mod transient;
 
 pub use capture::Capture;
 pub use response::Response;
@@ -44,7 +51,15 @@ pub enum Kind {
     Compressor,
     Gate,
     Limiter,
+    DeEsser,
+    Multiband,
+    Transient,
+    Saturation,
     Delay,
+    Chorus,
+    Flanger,
+    Phaser,
+    Tremolo,
     Reverb,
     Convolution,
     Amp,
@@ -53,12 +68,21 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    /// In the order the effects list shows them.
+    pub const ALL: [Kind; 18] = [
         Kind::Eq,
         Kind::Compressor,
         Kind::Gate,
         Kind::Limiter,
+        Kind::DeEsser,
+        Kind::Multiband,
+        Kind::Transient,
+        Kind::Saturation,
         Kind::Delay,
+        Kind::Chorus,
+        Kind::Flanger,
+        Kind::Phaser,
+        Kind::Tremolo,
         Kind::Reverb,
         Kind::Convolution,
         Kind::Amp,
@@ -73,7 +97,15 @@ impl Kind {
             Kind::Compressor => "compressor",
             Kind::Gate => "gate",
             Kind::Limiter => "limiter",
+            Kind::DeEsser => "de-esser",
+            Kind::Multiband => "multiband",
+            Kind::Transient => "transient-shaper",
+            Kind::Saturation => "saturation",
             Kind::Delay => "delay",
+            Kind::Chorus => "chorus",
+            Kind::Flanger => "flanger",
+            Kind::Phaser => "phaser",
+            Kind::Tremolo => "tremolo",
             Kind::Reverb => "reverb",
             Kind::Convolution => "convolution",
             Kind::Amp => "amp",
@@ -93,7 +125,15 @@ impl Kind {
             Kind::Compressor => "Compressor",
             Kind::Gate => "Noise gate",
             Kind::Limiter => "Limiter",
+            Kind::DeEsser => "De-esser",
+            Kind::Multiband => "Multiband compressor",
+            Kind::Transient => "Transient shaper",
+            Kind::Saturation => "Saturation",
             Kind::Delay => "Delay",
+            Kind::Chorus => "Chorus",
+            Kind::Flanger => "Flanger",
+            Kind::Phaser => "Phaser",
+            Kind::Tremolo => "Tremolo",
             Kind::Reverb => "Reverb",
             Kind::Convolution => "Room reverb",
             Kind::Amp => "Guitar amp",
@@ -115,7 +155,19 @@ impl Kind {
             Kind::Compressor => "Evens out loud and quiet playing",
             Kind::Gate => "Silences hum and hiss between notes",
             Kind::Limiter => "Stops the level going over a ceiling, for the master or a loud part",
+            Kind::DeEsser => "Tames sharp \"s\" sounds and pick clicks when they get loud",
+            Kind::Multiband => {
+                "Compresses the bass, middle and treble separately, each with its own level"
+            }
+            Kind::Transient => {
+                "Makes the start of each note punchier or softer, and its ring longer or shorter"
+            }
+            Kind::Saturation => "Warmth and grit, from gentle to heavy, in up to four stages",
             Kind::Delay => "Echoes",
+            Kind::Chorus => "Thickens the sound, as if several players played it together",
+            Kind::Flanger => "A sweeping, jet-like whoosh",
+            Kind::Phaser => "A swirling sweep of moving notches",
+            Kind::Tremolo => "Pulses the level, or moves the sound from side to side",
             Kind::Reverb => "A smooth, adjustable reverb",
             Kind::Convolution => "The sound of a room, made from its echo pattern",
             Kind::Amp => "A guitar amp, from clean to high gain, with a speaker cabinet",
@@ -130,7 +182,15 @@ impl Kind {
             Kind::Compressor => dynamics::COMPRESSOR,
             Kind::Gate => dynamics::GATE,
             Kind::Limiter => dynamics::LIMITER,
+            Kind::DeEsser => deesser::PARAMS,
+            Kind::Multiband => multiband::PARAMS,
+            Kind::Transient => transient::PARAMS,
+            Kind::Saturation => saturation::PARAMS,
             Kind::Delay => delay::PARAMS,
+            Kind::Chorus => modulation::CHORUS,
+            Kind::Flanger => modulation::FLANGER,
+            Kind::Phaser => modulation::PHASER,
+            Kind::Tremolo => modulation::TREMOLO,
             Kind::Reverb => reverb::PARAMS,
             Kind::Convolution => convolution::PARAMS,
             Kind::Amp => amp::PARAMS,
@@ -141,7 +201,10 @@ impl Kind {
 
     /// Whether it shows how much it is turning the level down.
     pub fn has_meter(self) -> bool {
-        matches!(self, Kind::Compressor | Kind::Gate | Kind::Limiter)
+        matches!(
+            self,
+            Kind::Compressor | Kind::Gate | Kind::Limiter | Kind::DeEsser | Kind::Multiband
+        )
     }
 
     /// What kind of file it can use, as [`Effect::set_response`] or
@@ -435,7 +498,15 @@ impl Effect {
             Kind::Compressor => Box::new(dynamics::Compressor::new(rate)),
             Kind::Gate => Box::new(dynamics::Gate::new(rate)),
             Kind::Limiter => Box::new(dynamics::Limiter::new(rate)),
+            Kind::DeEsser => Box::new(deesser::DeEsser::new(rate)),
+            Kind::Multiband => Box::new(multiband::Multiband::new(rate)),
+            Kind::Transient => Box::new(transient::Transient::new(rate)),
+            Kind::Saturation => Box::new(saturation::Saturation::new(rate)),
             Kind::Delay => Box::new(delay::Delay::new(rate)),
+            Kind::Chorus => Box::new(modulation::Chorus::new(rate)),
+            Kind::Flanger => Box::new(modulation::Flanger::new(rate)),
+            Kind::Phaser => Box::new(modulation::Phaser::new(rate)),
+            Kind::Tremolo => Box::new(modulation::Tremolo::new(rate)),
             Kind::Reverb => Box::new(reverb::Reverb::new(rate)),
             Kind::Convolution | Kind::Cabinet => {
                 let loaded = (self.source.lock().ok())

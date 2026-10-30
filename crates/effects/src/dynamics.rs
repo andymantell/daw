@@ -104,7 +104,7 @@ impl Dsp for Compressor {
 impl Compressor {
     /// The gain for one frame whose level (own or sidechain) is `peak`.
     #[inline]
-    fn step(&mut self, peak: f32) -> f32 {
+    pub(crate) fn step(&mut self, peak: f32) -> f32 {
         let x = db(peak as f64);
         let want = self.reduce(x);
         let a = if want > self.level {

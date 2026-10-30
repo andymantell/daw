@@ -288,6 +288,7 @@ impl App {
             clips,
             effects,
             frozen: t.frozen.clone(),
+            freeze: t.freeze,
             comps: self.comps_value(t),
             comp: t.comp.clone(),
             kind: t.kind,
@@ -370,7 +371,7 @@ impl App {
 
     /// The audio for an asset: one already open, or the file, opened
     /// (and converted to the device's rate if needed) now.
-    fn source_for(&mut self, asset: &str) -> Result<Arc<StreamSource>, String> {
+    pub(crate) fn source_for(&mut self, asset: &str) -> Result<Arc<StreamSource>, String> {
         let asset = self
             .proj
             .moved
@@ -468,6 +469,7 @@ impl App {
             t.output = pt.output.clone();
             t.sends = pt.sends.clone();
             t.group = pt.group.clone();
+            t.freeze = pt.freeze;
             t.mix = Mix {
                 gain_db: pt.gain_db as f32,
                 pan: pt.pan as f32,
@@ -580,13 +582,14 @@ impl App {
             t.comp = pt.comp.clone();
             t.frozen = pt.frozen.clone();
             t.frozen_audio = None;
+            let missing = self.proj.missing_fx.contains_key(&pt.id);
             if let Some(f) = &pt.frozen
-                && self.proj.missing_fx.contains_key(&pt.id)
+                && (missing || pt.freeze)
             {
                 match self.source_for(&f.asset) {
                     Ok(s) => {
                         t.frozen_audio = Some(s);
-                        if f.fits(pt, p.rate) {
+                        if missing && f.fits(pt, p.rate) {
                             frozen.push(pt.name.clone());
                         }
                     }

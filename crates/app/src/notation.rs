@@ -1511,8 +1511,7 @@ impl App {
             t.note_clips.push(clip);
             t.notation = Some(notation_of(part));
             if let Some(inst) = &t.instrument {
-                self.pending_instruments
-                    .push((inst.id, inst.make(self.rate)));
+                inst.make_into(self.rate, &mut self.pending_instruments);
             }
             self.tracks.push(t);
             added += 1;

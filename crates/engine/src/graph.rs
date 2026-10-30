@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
+use crate::monitor::{CueLine, CueSend, MAX_CUES};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
 use crate::time::{Frames, TempoMap, Ticks};
@@ -259,6 +260,8 @@ pub struct TrackSpec {
     /// The control group it belongs to, by index in
     /// [`Session::groups`].
     pub group: Option<usize>,
+    /// Its level in each headphone mix (see [`crate::monitor`]).
+    pub cues: [CueSend; MAX_CUES],
 }
 
 impl TrackSpec {
@@ -273,6 +276,7 @@ impl TrackSpec {
             output: Output::Master,
             sends: Vec::new(),
             group: None,
+            cues: [CueSend::default(); MAX_CUES],
         }
     }
 }
@@ -475,6 +479,11 @@ pub(crate) struct TrackNode {
     /// Soloing: this track is heard because it, or a track routed into
     /// it, is soloed.
     pub heard: bool,
+    /// Its levels in the headphone mixes, the gains reached at the end
+    /// of the last block, and the delay lining them up with the master.
+    pub cues: [CueSend; MAX_CUES],
+    pub cue_last: [(f32, f32); MAX_CUES],
+    pub cue_line: CueLine,
 }
 
 pub(crate) struct InsertNode {
@@ -947,6 +956,9 @@ impl Session {
                 group: t.group,
                 incoming: Vec::new(),
                 heard: false,
+                cues: t.cues,
+                cue_last: [(0.0, 0.0); MAX_CUES],
+                cue_line: CueLine::default(),
             });
         }
 
@@ -1021,6 +1033,7 @@ impl Session {
         }
         for (t, d) in tracks.iter_mut().zip(&downstream) {
             t.latency += d;
+            t.cue_line = CueLine::new(*d as usize);
         }
 
         let mut g = Graph {
@@ -1051,7 +1064,9 @@ impl Session {
         // Start each track at its settled gains, so a new graph does not
         // fade in.
         for i in 0..n {
-            g.tracks[i].last = g.tracks[i].target(g.any_solo, &g.groups, true);
+            let t = &mut g.tracks[i];
+            t.last = t.target(g.any_solo, &g.groups, true);
+            t.cue_last = std::array::from_fn(|k| t.cues[k].gains(t.stereo));
         }
         Ok(g)
     }

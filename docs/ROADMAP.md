@@ -474,6 +474,15 @@ tools are still to come. Checks are in
     later adds looper pages to this app.
 
 ### 2.3 Mixer, routing & monitoring (L)
+*Routing built 2026-10-30, at risk. Done so far: buses (a track with no
+clips that others go to, as a group or an effect return), folders (a bus
+whose tracks sit under it), sends before or after the fader with their
+own level and mute, control groups with one fader and mute over several
+tracks, a sidechain on the built-in compressor and gate, and delay
+compensation across every route, proved by null tests
+(`crates/engine/tests/routing.rs`). The mixer is its own module and pane
+(`app/mixer.rs`). Not yet: the monitor section, sidechains into plugins.
+Owner checks in `docs/review-queue/2.3-mixer-routing.md`.*
 - Inserts, sends (pre/post fader), effect return buses, group buses,
   folder tracks.
 - Control-group (VCA-style) faders. Sidechain inputs.

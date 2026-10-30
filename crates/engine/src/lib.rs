@@ -22,3 +22,4 @@ pub mod synth;
 pub mod time;
 pub mod timecode;
 pub mod tuner;
+pub mod warp;

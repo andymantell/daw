@@ -69,15 +69,31 @@ until then.
   without Record on (3.1); chaining several commands into one key
   (macros); finding and removing audio no longer used; turning a track off
   to save processing; solo-safe and a listen bus; starting with every
-  plugin off after a crash.
+  plugin off after a crash; plugin window improvements from the wish-list.
 
-## From the user wish-list research
+## Set D: from the user wish-list research
 
 The survey is in [research/FEATURE_GAPS.md](../research/FEATURE_GAPS.md)
 under "What users ask for". Most requests overlap items already here
-(A1, A3, A4, A7, B2). Its three **High** wishes are suggested for the
-owner to choose from, not yet started: a simpler mode for beginners,
-guided audio setup, and accessibility across the whole app.
+(A1, A3, A4, A7, B2). These are the new ones worth building now. D1, D2,
+D4 and D5 can start at once; D3 starts once a few Set A panes have merged,
+so it sweeps them too.
+
+| # | Item (plain English) | Starts | Main code areas | Needs from the owner |
+|---|---|---|---|---|
+| D1 | **A simpler mode for beginners**: a switch that shows only the everyday controls and menus, with the rest one click away. Each command in the shared table is marked everyday or advanced, so the mode works the same in menus, key commands, command search and the agent interface. | Now | a flag per command in `app/commands.rs`, new `app/simple_mode.rs`, small checks in each pane | Which controls a student needs; trying it with the teacher. |
+| D2 | **Guided audio setup**: a first-run and on-demand guide that picks the interface, its driver and a buffer size, checks input level and monitoring, measures latency with the existing tool, and explains each problem it finds in plain words. | Now | new `app/audio_setup.rs`, `audio-io` (device queries), `audio-io/latency.rs` (called) | Running it on the PC with the UMC1820. |
+| D3 | **Accessibility across the whole app**: extend the timeline's screen-reader and keyboard work to every pane (mixer, effects, note editor, notation, lessons), keep controls in fixed places, make built-in effect panels readable, and add ways to hear values such as pan, level and automation. After this, every new pane meets the same checks before it merges. | After a few Set A panes merge | `app/a11y.rs`, each pane's module (small changes) | A screen-reader user's view, if one can be found. |
+| D4 | **Fretboard view**: a pane showing a guitar or bass neck, in any tuning and capo, with the notes playing now, a chosen scale, mode, chord or arpeggio, and the selected notes. Clicking a fret enters a note. Uses the project's key and scale. | Now | new `app/fretboard.rs`, `project/scale.rs` (read) | Trying it in a lesson. |
+| D5 | **Record at a slower speed**: play the song slowed down with its pitch kept, record over it, and the take is sped back up to the song's tempo, so a hard passage can be learnt and recorded slowly. Uses the current speed engine, at risk on 0.6, and rebases on A7 when that changes it. | Now | `app/recording.rs`, `engine/record.rs`, `engine/stretch.rs` (called) | Listening to a take recorded at 70%. |
+
+D1 touches every pane lightly, as `app/main.rs` already is; each check is
+one line, so it rebases easily. D5 and A7 share the stretcher: D5 only
+calls it.
+
+Plugin window improvements (tabs, following the selected track, CPU per
+plugin, a list of the plugins a project uses) join the small items in
+Set C. The low-priority wishes stay in the survey.
 
 ## Still waiting on the owner
 

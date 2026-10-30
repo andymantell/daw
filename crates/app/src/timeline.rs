@@ -32,7 +32,7 @@ use crate::theme::{Look, LoopFill, Texture, WaveStyle};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-fn next_id() -> u64 {
+pub(crate) fn next_id() -> u64 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -63,6 +63,9 @@ pub struct Clip {
     pub take: Option<usize>,
     /// Out of the mix: an older take under a newer one.
     pub muted: bool,
+    /// A piece of the track's comp, cut from take `take` (see
+    /// [`crate::comping`]).
+    pub comp: bool,
     /// The clip's own volume, in dB.
     pub gain_db: f32,
     /// Fades at the start and end, in frames; together never longer
@@ -135,6 +138,7 @@ impl Clip {
             offset: 0,
             take,
             muted: false,
+            comp: false,
             gain_db: 0.0,
             fade_in: Fade::default(),
             fade_out: Fade::default(),
@@ -623,6 +627,7 @@ impl Song<'_> {
             };
             c.take = None;
             c.muted = false;
+            c.comp = false;
         }
     }
 
@@ -714,7 +719,7 @@ const GAIN_STEPS: [f32; 6] = [6.0, 3.0, 1.0, -1.0, -3.0, -6.0];
 const BASE_HOP: usize = 256;
 
 /// A file's peaks at successively halved resolutions.
-struct Waveform {
+pub(crate) struct Waveform {
     levels: Vec<Vec<(f32, f32)>>,
 }
 
@@ -735,7 +740,7 @@ impl Waveform {
     }
 
     /// Lowest and highest sample in source frames `from..to`.
-    fn range(&self, from: usize, to: usize) -> (f32, f32) {
+    pub(crate) fn range(&self, from: usize, to: usize) -> (f32, f32) {
         let span = to.saturating_sub(from).max(1);
         // The coarsest level still finer than the span.
         let mut l = 0;
@@ -901,6 +906,19 @@ pub struct Timeline {
     focus_next: Option<Focus>,
 }
 
+impl Timeline {
+    /// Seconds at the left edge of the lanes, and points per second,
+    /// for drawing in line with them.
+    pub(crate) fn x_view(&self) -> (f64, f32) {
+        (self.scroll, self.px_per_sec)
+    }
+
+    /// A file's waveform, once worked out.
+    pub(crate) fn wave(&mut self, src: &Arc<StreamSource>) -> Option<Arc<Waveform>> {
+        self.waves.get(src)
+    }
+}
+
 impl Default for Timeline {
     fn default() -> Timeline {
         Timeline {
@@ -932,7 +950,7 @@ impl Default for Timeline {
 }
 
 /// Track names to the left of the lanes.
-const HEADER: f32 = 110.0;
+pub(crate) const HEADER: f32 = 110.0;
 /// The ruler: marker flags on top, then tempo and time-signature
 /// changes, then the loop and bar numbers.
 const RULER: f32 = 38.0;
@@ -993,7 +1011,13 @@ fn draw_volume(painter: &egui::Painter, look: &Look, c: &Clip, r: Rect, x_of: &d
 
 /// A clip's waveform, from its columns of `(x, top, bottom)`, in the
 /// theme's style.
-fn draw_wave(painter: &egui::Painter, look: &Look, cols: &[(f32, f32, f32)], mid: f32, c: Color32) {
+pub(crate) fn draw_wave(
+    painter: &egui::Painter,
+    look: &Look,
+    cols: &[(f32, f32, f32)],
+    mid: f32,
+    c: Color32,
+) {
     let w = look.wave_weight;
     // One line swinging between the top and bottom, two pixels a step.
     let swing = || -> Vec<Pos2> {

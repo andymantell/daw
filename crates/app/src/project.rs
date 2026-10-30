@@ -215,6 +215,7 @@ impl App {
                 len: c.len as i64,
                 take: c.take.map(|t| t as u32),
                 muted: c.muted,
+                comp: c.comp,
                 seq: 0,
                 gain_db: c.gain_db as f64,
                 fade_in: fade_value(c.fade_in),
@@ -255,7 +256,18 @@ impl App {
             clips,
             effects,
             frozen: t.frozen.clone(),
+            comps: self.comps_value(t),
+            comp: t.comp.clone(),
         }
+    }
+
+    /// The track's comps, the one playing as its pieces now have it.
+    fn comps_value(&self, t: &Track) -> Vec<daw_project::Comp> {
+        let mut comps = t.comps.clone();
+        if let Some(c) = comps.iter_mut().find(|c| Some(&c.id) == t.comp.as_ref()) {
+            c.parts = crate::comping::parts_of(&t.clips);
+        }
+        comps
     }
 
     /// Writes any change to the document, unless one is under way (a
@@ -436,6 +448,7 @@ impl App {
                 c.len = (scale(pc.len).max(0) as usize).min(c.source.frames - c.offset);
                 c.take = pc.take.map(|t| t as usize);
                 c.muted = pc.muted;
+                c.comp = pc.comp;
                 c.gain_db = pc.gain_db as f32;
                 c.fade_in = fade_from(pc.fade_in, &scale);
                 c.fade_out = fade_from(pc.fade_out, &scale);
@@ -477,6 +490,19 @@ impl App {
                     },
                 }
             }
+            t.comps = (pt.comps.iter())
+                .map(|c| daw_project::Comp {
+                    parts: (c.parts.iter())
+                        .map(|p| daw_project::CompPart {
+                            start: scale(p.start),
+                            end: scale(p.end),
+                            ..*p
+                        })
+                        .collect(),
+                    ..c.clone()
+                })
+                .collect();
+            t.comp = pt.comp.clone();
             t.frozen = pt.frozen.clone();
             t.frozen_audio = None;
             if let Some(f) = &pt.frozen

@@ -73,6 +73,10 @@ pub struct Track {
     /// The track rendered through its effects, for computers that lack
     /// one of its plugins.
     pub frozen: Option<Frozen>,
+    /// Comps made from the track's takes, in the order made.
+    pub comps: Vec<Comp>,
+    /// The comp that plays, by id, or `None` for the takes as recorded.
+    pub comp: Option<String>,
 }
 
 impl Track {
@@ -87,6 +91,8 @@ impl Track {
             clips: Vec::new(),
             effects: Vec::new(),
             frozen: None,
+            comps: Vec::new(),
+            comp: None,
         }
     }
 
@@ -255,6 +261,9 @@ pub struct Clip {
     /// Which recorded take (from 0), or `None` for an imported file.
     pub take: Option<u32>,
     pub muted: bool,
+    /// A piece of the track's comp, cut from take `take`: made again
+    /// whenever the comp changes.
+    pub comp: bool,
     /// Order among the track's clips; higher is on top.
     pub seq: i64,
     /// The clip's own gain, in dB.
@@ -297,6 +306,26 @@ impl Clip {
             .map(|b| format!("{b:02x}"))
             .collect()
     }
+}
+
+/// A comp: which take plays where, chosen from a track's takes
+/// (roadmap 2.2). The pieces that play are clips marked
+/// [`Clip::comp`]; these parts say where they came from.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Comp {
+    pub id: String,
+    pub name: String,
+    /// In time order, not overlapping.
+    pub parts: Vec<CompPart>,
+}
+
+/// Take `take` plays from `start` to `end`, in frames at the project's
+/// rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompPart {
+    pub take: u32,
+    pub start: i64,
+    pub end: i64,
 }
 
 /// A fade at one end of a clip.

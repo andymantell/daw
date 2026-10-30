@@ -53,6 +53,7 @@ pub(crate) enum Cmd {
     Metronome,
     CountIn,
     Mixer,
+    TakeLanes,
     FullSize,
     /// Recalls saved layout n, counted from 0.
     Layout(u8),
@@ -396,6 +397,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Mixer, "mixer", "View", "Mixer", &[])
         .hint("Show or hide the mixer")
         .words("pane faders tracks"),
+    info(Cmd::TakeLanes, "take-lanes", "View", "Take lanes", &[])
+        .hint("Show or hide each take of a track, to comp from")
+        .words("comp comping takes loop recording swipe best"),
     info(
         Cmd::FullSize,
         "full-size",
@@ -601,7 +605,12 @@ impl Cmd {
     pub(crate) fn on_workspace(self) -> bool {
         matches!(
             self,
-            Cmd::Mixer | Cmd::FullSize | Cmd::Layout(_) | Cmd::SaveLayout | Cmd::PaneWindows
+            Cmd::Mixer
+                | Cmd::TakeLanes
+                | Cmd::FullSize
+                | Cmd::Layout(_)
+                | Cmd::SaveLayout
+                | Cmd::PaneWindows
         )
     }
 
@@ -1407,6 +1416,7 @@ impl App {
             }
             Cmd::CountIn => self.count_in = !self.count_in,
             Cmd::Mixer => self.workspace.toggle(Pane::Mixer),
+            Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),

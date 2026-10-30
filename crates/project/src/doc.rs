@@ -39,9 +39,9 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Clip, Comment, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint,
-    Marker, MeterChange, Practice, Project, TabBlock, TempoChange, Track, TrainerSettings,
-    is_asset_name,
+    Clip, Comment, Comp, CompPart, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip,
+    GainPoint, Marker, MeterChange, Practice, Project, TabBlock, TempoChange, Track,
+    TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -756,6 +756,9 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         );
         w.put(&cm, "muted", c.muted);
         w.put(&cm, "seq", c.seq);
+        if c.comp || cm.get("comp").is_some() {
+            w.put(&cm, "comp", c.comp);
+        }
         // Clips at their plain level, as all were before fades, gain no
         // new entries.
         let plain = |k: &str, unset: bool| unset && cm.get(k).is_none();
@@ -818,6 +821,7 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
             );
         }
     }
+    write_comps(w, m, t);
     match &t.frozen {
         Some(f) => {
             w.put(m, "frozen", frozen_value(f));
@@ -835,6 +839,81 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     w.order(&order_list, &ids);
 }
 
+/// A track's comps: a `comps` map from id to its name and parts, each
+/// part a list of take, start and end, and `comp`, the one that plays.
+/// Tracks never comped gain no entries.
+fn write_comps(w: &mut Writer, m: &LoroMap, t: &Track) {
+    if t.comps.is_empty() && m.get("comps").is_none() {
+        return;
+    }
+    let comps = w.fixed(m, "comps");
+    let keep: HashSet<&str> = t.comps.iter().map(|c| c.id.as_str()).collect();
+    for id in keys(&comps) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&comps, &id);
+        }
+    }
+    for (i, c) in t.comps.iter().enumerate() {
+        let cm = w.child(&comps, &c.id);
+        w.put(&cm, "name", c.name.as_str());
+        w.put(&cm, "n", i as i64);
+        let parts: Vec<LoroValue> = (c.parts.iter())
+            .map(|p| {
+                LoroValue::List(vec![(p.take as i64).into(), p.start.into(), p.end.into()].into())
+            })
+            .collect();
+        w.put(&cm, "parts", LoroValue::List(parts.into()));
+    }
+    w.put(m, "comp", opt_str(&t.comp));
+}
+
+/// A track's comps, in the order made. Odd parts are left out.
+fn read_comps(t: &LoroMapValue) -> (Vec<Comp>, Option<String>) {
+    let Some(LoroValue::Map(comps)) = t.get("comps") else {
+        return (Vec::new(), None);
+    };
+    let mut out: Vec<(i64, Comp)> = Vec::new();
+    for (id, c) in comps.iter() {
+        let LoroValue::Map(c) = c else { continue };
+        let mut parts: Vec<CompPart> = match c.get("parts") {
+            Some(LoroValue::List(l)) => (l.iter())
+                .filter_map(|p| match p {
+                    LoroValue::List(p) => match &p[..] {
+                        [
+                            LoroValue::I64(take),
+                            LoroValue::I64(start),
+                            LoroValue::I64(end),
+                        ] if *take >= 0 && *take <= u32::MAX as i64 && start < end => {
+                            Some(CompPart {
+                                take: *take as u32,
+                                start: *start,
+                                end: *end,
+                            })
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        parts.sort_by_key(|p| p.start);
+        let n = int(c, "n").unwrap_or(i64::MAX);
+        out.push((
+            n,
+            Comp {
+                id: id.to_string(),
+                name: string(c, "name").unwrap_or_default(),
+                parts,
+            },
+        ));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+    let out: Vec<Comp> = out.into_iter().map(|(_, c)| c).collect();
+    let comp = string(t, "comp").filter(|id| out.iter().any(|c| &c.id == id));
+    (out, comp)
+}
+
 fn read_track(id: &str, t: &LoroMapValue) -> Track {
     let mut track = Track {
         id: id.to_string(),
@@ -846,7 +925,10 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         clips: Vec::new(),
         effects: Vec::new(),
         frozen: t.get("frozen").and_then(read_frozen),
+        comps: Vec::new(),
+        comp: None,
     };
+    (track.comps, track.comp) = read_comps(t);
     if let Some(LoroValue::Map(clips)) = t.get("clips") {
         for (cid, c) in clips.iter() {
             let LoroValue::Map(c) = c else { continue };
@@ -859,6 +941,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 len: int(c, "len").unwrap_or(0),
                 take: int(c, "take").map(|v| v as u32),
                 muted: boolean(c, "muted").unwrap_or(false),
+                comp: boolean(c, "comp").unwrap_or(false),
                 seq: int(c, "seq").unwrap_or(0),
                 gain_db: float(c, "gain_db").filter(|g| g.is_finite()).unwrap_or(0.0),
                 fade_in: read_fade(c, "fade_in"),
@@ -1169,6 +1252,47 @@ fn binary(m: &LoroMapValue, k: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::Track;
+
+    #[test]
+    fn comps_keep_their_order_parts_and_which_plays() {
+        let mut t = Track::new("t1".into(), "Guitar".into());
+        t.clips.push(Clip {
+            id: "c1".into(),
+            asset: "a.wav".into(),
+            len: 100,
+            take: Some(0),
+            comp: true,
+            ..Default::default()
+        });
+        let part = |take, start, end| CompPart { take, start, end };
+        for (id, name) in [("zz", "Comp 1"), ("aa", "Verse best")] {
+            t.comps.push(Comp {
+                id: id.into(),
+                name: name.into(),
+                parts: vec![part(0, 0, 50), part(1, 50, 100)],
+            });
+        }
+        t.comp = Some("aa".into());
+        let p = Project {
+            tracks: vec![t],
+            ..Project::default()
+        };
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        assert_eq!(doc.get(), p);
+        // A track never comped gains no entries.
+        let mut plain = Project::default();
+        plain.tracks.push(Track::new("t2".into(), "Bass".into()));
+        let mut doc = ProjectDoc::new(2);
+        doc.set(&plain);
+        let LoroValue::Map(ts) = doc.tracks().get_deep_value() else {
+            panic!()
+        };
+        let Some(LoroValue::Map(t)) = ts.get("t2") else {
+            panic!()
+        };
+        assert!(t.get("comps").is_none() && t.get("comp").is_none());
+    }
 
     #[test]
     fn clips_at_their_plain_level_add_no_entries() {

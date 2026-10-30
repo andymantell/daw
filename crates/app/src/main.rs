@@ -19,6 +19,7 @@
 
 mod commands;
 mod comments;
+mod comping;
 mod crash;
 mod export;
 mod freeze;
@@ -89,6 +90,9 @@ struct Track {
     frozen_audio: Option<Arc<StreamSource>>,
     /// Peak levels shown on the meter, decaying.
     meter: (f32, f32),
+    /// Comps made from the track's takes, and the one that plays.
+    comps: Vec<daw_project::Comp>,
+    comp: Option<String>,
 }
 
 impl Track {
@@ -114,6 +118,8 @@ impl Track {
             frozen: None,
             frozen_audio: None,
             meter: (0.0, 0.0),
+            comps: Vec::new(),
+            comp: None,
         }
     }
 }
@@ -228,6 +234,7 @@ struct App {
     /// Tracks edited together, as in the project, and their window.
     edit_groups: Vec<daw_project::EditGroup>,
     groups_ui: groups::Groups,
+    takes_ui: comping::TakesPane,
     /// Pinned comments, as in the project, and their panel.
     comments: Vec<daw_project::Comment>,
     comment_ui: comments::Comments,
@@ -322,6 +329,7 @@ impl App {
             notes_ui: notes::Notes::default(),
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
+            takes_ui: comping::TakesPane::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
@@ -756,7 +764,7 @@ impl App {
         let start = take.clip_start(Frames(offset as i64)).0;
         let clip = Clip::new(source, take.path.clone(), start, None);
         let keys = (t.key.clone(), clip.key.clone());
-        timeline::add_take(&mut t.clips, clip);
+        t.takes(self.rate).add_take(clip);
         Ok(keys)
     }
 
@@ -1415,7 +1423,8 @@ impl App {
             self.send(Command::SetMix { track, mix });
         }
         if let Some((i, k)) = chosen {
-            timeline::choose_take(&mut self.tracks[i].clips, k);
+            let rate = self.rate;
+            self.tracks[i].takes(rate).choose_take(k);
             rebuild = true;
         }
         if rebuild {
@@ -1856,9 +1865,13 @@ fn take_picker(ui: &mut egui::Ui, track: usize, t: &Track) -> Option<Option<usiz
     }
     let now = timeline::active_take(&t.clips);
     let mut pick = now;
+    let shown = match t.comp_name() {
+        Some(comp) => comp.to_string(),
+        None => now.map_or("Off".into(), |i| format!("Take {}", i + 1)),
+    };
     egui::ComboBox::from_id_salt(("take", track))
         .width(70.0)
-        .selected_text(now.map_or("Off".into(), |i| format!("Take {}", i + 1)))
+        .selected_text(shown)
         .show_ui(ui, |ui| {
             for i in (0..n).rev() {
                 ui.selectable_value(&mut pick, Some(i), format!("Take {}", i + 1));

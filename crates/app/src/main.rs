@@ -1045,6 +1045,9 @@ impl App {
         let pins = self.comment_ui.pins(&self.comments, &ids);
         let commands = std::mem::take(&mut self.commands.timeline);
         let hits = self.hit_points.clone();
+        let freeze: Vec<(bool, bool)> = (self.tracks.iter())
+            .map(|t| (render::can_freeze(t), t.freeze))
+            .collect();
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -1057,6 +1060,8 @@ impl App {
             commands: &commands,
             timecode: self.shown_clock(),
             hits: &hits,
+            freeze: &freeze,
+            can_paste: !self.renders.copied.is_empty(),
         };
         self.timeline.groups = self.lane_groups();
         let out = self.with_song(|tl, song| tl.show(ui, song, &view));
@@ -1081,6 +1086,24 @@ impl App {
         if let Some(how) = out.process {
             self.processing
                 .start(&self.tracks, &self.timeline.selected, how);
+        }
+        if out.copy {
+            self.copy_clips();
+        }
+        if out.bounce {
+            self.bounce_selection();
+        }
+        if let Some((lane, at, rendered)) = out.paste {
+            if rendered {
+                self.paste_rendered(lane, at);
+            } else if self.paste_clips(Some(lane), at) {
+                self.rebuild();
+            }
+        }
+        match out.track {
+            Some((i, timeline::TrackAsk::Freeze)) => self.toggle_freeze(ui.ctx(), i),
+            Some((i, timeline::TrackAsk::RenderInPlace)) => self.render_in_place(i),
+            None => {}
         }
         if out.undo {
             self.undo(ui.ctx());
@@ -1994,6 +2017,10 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     for c in [Cmd::HitPoint, Cmd::HitPoints] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::Copy, Cmd::Paste, Cmd::Bounce] {
                         self.menu_item(ui, c);
                     }
                     ui.separator();

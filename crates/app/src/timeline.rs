@@ -694,6 +694,18 @@ pub struct View<'a> {
     /// The picture's timecode, if shown.
     pub timecode: Option<daw_engine::timecode::Clock>,
     pub hits: &'a [daw_project::HitPoint],
+    /// Each lane's track: whether it can be frozen, and whether it is.
+    pub freeze: &'a [(bool, bool)],
+    /// Clips have been copied.
+    pub can_paste: bool,
+}
+
+/// Something asked of a track from its menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackAsk {
+    /// Freeze it, or unfreeze it.
+    Freeze,
+    RenderInPlace,
 }
 
 /// What the app should do after the timeline is drawn.
@@ -718,6 +730,15 @@ pub struct Outcome {
     pub process: Option<Process>,
     /// Add or move a hit point, or open their window.
     pub hit: Option<crate::hitpoints::HitAsk>,
+    /// Freeze or render the track on this lane.
+    pub track: Option<(usize, TrackAsk)>,
+    /// Bounce the selected clips to new tracks.
+    pub bounce: bool,
+    /// Copy the selected clips.
+    pub copy: bool,
+    /// Paste the copied clips onto a lane at a frame: as they are, or
+    /// (true) rendered through their tracks' effects.
+    pub paste: Option<(usize, i64, bool)>,
 }
 
 /// The amounts, in dB, the clip menu's Change gain offers.
@@ -3171,6 +3192,22 @@ impl Timeline {
                     }
                 });
                 ui.separator();
+                if ui.button("Copy").clicked() {
+                    out.copy = true;
+                    ui.close();
+                }
+                if ui
+                    .button("Bounce to a new track")
+                    .on_hover_text(
+                        "The selected clips through their track's effects, as new audio on a \
+                         track beside it; they are muted where they are",
+                    )
+                    .clicked()
+                {
+                    out.bounce = true;
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Add comment here…").clicked() {
                     out.comment_at = Some((self.menu_lane, snap_to(at)));
                     ui.close();
@@ -3202,6 +3239,68 @@ impl Timeline {
                 }
             }
             Some((_, at)) => {
+                if let Some(l) = self.menu_lane
+                    && let Some(lane) = song.lanes.get(l)
+                {
+                    let audio = lane.kind == daw_project::TrackKind::Audio;
+                    if audio {
+                        if ui
+                            .add_enabled(view.can_paste, egui::Button::new("Paste here"))
+                            .clicked()
+                        {
+                            out.paste = Some((l, snap_to(at), false));
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(
+                                view.can_paste,
+                                egui::Button::new("Paste here as rendered audio"),
+                            )
+                            .on_hover_text(
+                                "The copied clips through their own tracks' effects, as one new clip",
+                            )
+                            .clicked()
+                        {
+                            out.paste = Some((l, snap_to(at), true));
+                            ui.close();
+                        }
+                    }
+                    let (can, frozen) = view.freeze.get(l).copied().unwrap_or_default();
+                    let render = if audio {
+                        "Render in place"
+                    } else {
+                        "Render group in place"
+                    };
+                    if ui
+                        .button(render)
+                        .on_hover_text(
+                            "Its audio through its effects, before its fader, as a new track \
+                             beside it; this one is kept, muted",
+                        )
+                        .clicked()
+                    {
+                        out.track = Some((l, TrackAsk::RenderInPlace));
+                        ui.close();
+                    }
+                    if frozen {
+                        if ui.button("Unfreeze").clicked() {
+                            out.track = Some((l, TrackAsk::Freeze));
+                            ui.close();
+                        }
+                    } else if ui
+                        .add_enabled(can, egui::Button::new("Freeze"))
+                        .on_hover_text(
+                            "Play it from audio rendered through its effects, with them switched \
+                             off, to save computer power",
+                        )
+                        .on_disabled_hover_text("It has no effects switched on to freeze")
+                        .clicked()
+                    {
+                        out.track = Some((l, TrackAsk::Freeze));
+                        ui.close();
+                    }
+                    ui.separator();
+                }
                 let bar = Self::bar_at(view.map, snap(view.map, at, Grid::Bar));
                 if ui.button(format!("Add marker at bar {bar}")).clicked() {
                     self.add_marker(song, bar);

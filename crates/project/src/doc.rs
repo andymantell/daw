@@ -935,6 +935,10 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
                 e.sidechain.clone().map_or(LoroValue::Null, LoroValue::from),
             );
         }
+        if !e.outputs.is_empty() || em.get("outputs").is_some() {
+            let outs: Vec<LoroValue> = e.outputs.iter().map(|&o| (o as i64).into()).collect();
+            w.put(&em, "outputs", LoroValue::List(outs.into()));
+        }
         if let Some(s) = &e.state {
             w.put(&em, "component", s.component.clone());
             w.put(
@@ -1220,6 +1224,15 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 builtin: string(e, "builtin").unwrap_or_default(),
                 response: string(e, "response").unwrap_or_default(),
                 sidechain: string(e, "sidechain").filter(|s| !s.is_empty()),
+                outputs: match e.get("outputs") {
+                    Some(LoroValue::List(l)) => (l.iter())
+                        .filter_map(|v| match v {
+                            LoroValue::I64(o) => u32::try_from(*o).ok(),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                },
                 params: match e.get("params") {
                     Some(LoroValue::Map(pm)) => {
                         let mut v: Vec<(String, f64)> = (pm.keys())
@@ -1509,6 +1522,13 @@ mod tests {
             sidechain: Some("b".into()),
             ..Effect::default()
         });
+        guitar.effects.push(Effect {
+            id: "e2".into(),
+            class: vec![7; 16],
+            sidechain: Some("b".into()),
+            outputs: vec![1, 2],
+            ..Effect::default()
+        });
         let mut bass = Track::new("b".into(), "Bass".into());
         bass.output = Some("nowhere".into());
         let mut folder = Track::new("f".into(), "Band".into());
@@ -1529,18 +1549,22 @@ mod tests {
         // The send to a track that isn't there is left out.
         assert_eq!(g.sends, p.tracks[1].sends[..1]);
         assert_eq!(g.effects[0].sidechain.as_deref(), Some("b"));
+        assert_eq!(g.effects[1].outputs, vec![1, 2]);
+        assert!(g.effects[0].outputs.is_empty());
         assert_eq!(back.tracks[2].output, None, "to the master");
 
         // Taking things off writes them as gone, and reads back plain.
         p.tracks[1].sends.clear();
         p.tracks[1].group = None;
         p.tracks[1].effects[0].sidechain = None;
+        p.tracks[1].effects[1].outputs.clear();
         p.control_groups.clear();
         doc.set(&p);
         let back = doc.get();
         assert!(back.tracks[1].sends.is_empty());
         assert_eq!(back.tracks[1].group, None);
         assert_eq!(back.tracks[1].effects[0].sidechain, None);
+        assert!(back.tracks[1].effects[1].outputs.is_empty());
         assert!(back.control_groups.is_empty());
     }
 

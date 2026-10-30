@@ -482,7 +482,17 @@ impl App {
                 match had.remove(&pe.id) {
                     Some(mut s) => {
                         s.bypass = pe.bypass;
+                        let before = s.layout();
                         s.sidechain = pe.sidechain.clone();
+                        s.outputs = pe.outputs.clone();
+                        // A plugin's side buses are switched on as it
+                        // starts, so a change makes it again.
+                        if s.is_plugin()
+                            && s.layout() != before
+                            && let Err(e) = self.effects.reload(&mut s, self.rate)
+                        {
+                            problems.push(format!("{}: {e}", pe.name));
+                        }
                         s.set_params(&pe.params);
                         if s.response_ref() != pe.response
                             && let Err(e) =

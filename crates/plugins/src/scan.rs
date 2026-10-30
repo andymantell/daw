@@ -244,6 +244,9 @@ pub struct PluginList {
     pub disabled: BTreeSet<String>,
     /// Where each plugin runs, by class ID (hex), where the user chose.
     pub sandbox: BTreeMap<String, Sandbox>,
+    /// Most plugin windows open at once (0 for no limit): opening one
+    /// more closes the one opened longest ago, to spare the computer.
+    pub editors: u32,
 }
 
 impl PluginList {
@@ -369,6 +372,9 @@ impl PluginList {
         for (cid, sb) in &self.sandbox {
             let _ = writeln!(s, "sandbox\t{cid}\t{}", sb.key());
         }
+        if self.editors > 0 {
+            let _ = writeln!(s, "editors\t{}", self.editors);
+        }
         s
     }
 
@@ -404,6 +410,7 @@ impl PluginList {
                         list.sandbox.insert(cid.to_string(), sb);
                     }
                 }
+                ["editors", n] => list.editors = n.parse().unwrap_or(0),
                 _ => {}
             }
         }

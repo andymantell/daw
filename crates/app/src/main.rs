@@ -1873,7 +1873,19 @@ impl eframe::App for App {
                         slot.name
                     ));
                 }
+                // Its buses changed: made again, with its settings.
+                if slot.needs_reload {
+                    slot.needs_reload = false;
+                    match self.effects.reload(slot, self.rate) {
+                        Ok(()) => rebuild = true,
+                        Err(e) => self.message = Some(format!("{}: {e}", slot.name)),
+                    }
+                }
             }
+        }
+        let slots = self.tracks.iter_mut().flat_map(|t| t.fx.iter_mut());
+        if let Some(m) = self.effects.cap_editors(slots) {
+            self.message = Some(m);
         }
         if let Some(e) = self.effects.poll_scan() {
             self.message = Some(e);
@@ -2162,6 +2174,43 @@ impl eframe::App for App {
     }
 }
 
+/// `--check-plugins`: scans the standard folders, checks each plugin
+/// found and writes the report to `out`. Returns the exit code.
+fn check_plugins(out: &std::path::Path) -> i32 {
+    let Ok(exe) = std::env::current_exe() else {
+        return 1;
+    };
+    let mut list = daw_plugins::scan::PluginList::default();
+    list.rescan(
+        &daw_plugins::scan::default_dirs(),
+        |b| daw_plugins::scan::scan_in_child(&exe, b, daw_plugins::scan::SCAN_TIMEOUT),
+        |b| eprintln!("scanning {}", b.display()),
+    );
+    let reports: Vec<_> = (list.plugins().iter())
+        .map(|p| {
+            eprintln!("checking {}", p.class.name);
+            daw_plugins::check::check(&exe, &p.bundle, &p.class)
+        })
+        .collect();
+    let mut text = fx::check_report(&reports);
+    for (bundle, why) in list.failures() {
+        text.push_str(&format!(
+            "\nCould not be loaded: {} ({why})",
+            bundle.display()
+        ));
+    }
+    match std::fs::write(out, text) {
+        Ok(()) => {
+            eprintln!("report written to {}", out.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("could not write {}: {e}", out.display());
+            1
+        }
+    }
+}
+
 fn main() -> eframe::Result {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     if let [flag, bundle] = args.as_slice()
@@ -2175,6 +2224,17 @@ fn main() -> eframe::Result {
         && flag == daw_plugins::host::HOST_ARG
     {
         std::process::exit(daw_plugins::host::helper_main());
+    }
+    // Checks every installed plugin for the compatibility list and
+    // writes the report (to the file named, or plugin-check.md here).
+    if let [flag, rest @ ..] = args.as_slice()
+        && flag == "--check-plugins"
+        && rest.len() <= 1
+    {
+        let out = rest
+            .first()
+            .map_or("plugin-check.md".into(), std::path::PathBuf::from);
+        std::process::exit(check_plugins(&out));
     }
     if let [flag] = args.as_slice()
         && flag == "--version"

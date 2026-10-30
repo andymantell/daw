@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
+use daw_engine::automation::Target as AutoTarget;
 use daw_engine::export::{Written, write_wav};
 use daw_engine::graph::{Mix, Output, Session, TrackSpec};
 use daw_engine::stream::StreamSource;
@@ -191,13 +192,31 @@ impl App {
             spec.cues = Default::default();
             spec.mix.mute = self.tracks[i].mix.mute;
             spec.mix.solo = false;
+            // Lanes play as drawn, even one being written now.
+            for l in &mut spec.automation {
+                l.live = false;
+            }
             if who.target[i] {
                 spec.mix = Mix::default();
                 spec.output = Output::Master;
                 spec.sends.clear();
                 spec.group = None;
+                // Before the fader: its volume, pan and send lanes go to
+                // the new track instead. Effects' lanes are rendered.
+                spec.automation
+                    .retain(|l| matches!(l.target, AutoTarget::Insert { .. }));
             } else if who.heard(i) {
+                // Sends kept keep their lanes, renumbered.
+                let kept: Vec<bool> = spec.sends.iter().map(|x| who.inside(x.to)).collect();
                 spec.sends.retain(|x| who.inside(x.to));
+                spec.automation.retain_mut(|l| match l.target {
+                    AutoTarget::Send(k) if !kept.get(k).copied().unwrap_or(false) => false,
+                    AutoTarget::Send(k) => {
+                        l.target = AutoTarget::Send(kept[..k].iter().filter(|&&x| x).count());
+                        true
+                    }
+                    _ => true,
+                });
                 if !who.member[i] {
                     spec.output = Output::Track(sink);
                 }
@@ -205,6 +224,7 @@ impl App {
                 spec.clips.clear();
                 spec.inserts.clear();
                 spec.sends.clear();
+                spec.automation.clear();
                 spec.output = Output::Track(sink);
             }
         }
@@ -324,15 +344,20 @@ impl App {
         Ok(())
     }
 
-    /// What the tracks a render hears are now, to tell if they change.
+    /// What the tracks a render hears play now, to tell if they change.
     fn render_print(&self, heard: &[usize]) -> String {
         (heard.iter())
             .map(|&i| {
                 let t = &self.tracks[i];
-                format!("{}:{}", t.key, self.track_value(t).freeze_print(self.rate))
+                // Its clips: lanes move effect settings as the song plays.
+                let clips = self.track_value(t).freeze_shape(self.rate).clips;
+                let clips: Vec<String> = (clips.iter())
+                    .map(|c| format!("{}/{}/{}/{}/{}", c.asset, c.start, c.offset, c.len, c.sound))
+                    .collect();
+                format!("{}:{}", t.key, clips.join(";"))
             })
             .collect::<Vec<_>>()
-            .join(",")
+            .join("\n")
     }
 
     /// Takes in finished renders, once a frame. Each becomes one edit.
@@ -365,7 +390,7 @@ impl App {
 
     fn place_render(&mut self, job: &Job, result: Result<Written, String>) -> Result<(), String> {
         let written = result?;
-        let heard: Vec<usize> = (job.print.split(','))
+        let heard: Vec<usize> = (job.print.lines())
             .filter_map(|p| p.split(':').next())
             .filter_map(|key| self.track_index(key))
             .collect();
@@ -393,6 +418,18 @@ impl App {
                 t.output = src.output.clone();
                 t.sends = src.sends.clone();
                 t.group = src.group.clone();
+                // The fader's lanes, which the render left out.
+                t.automation = (src.automation.iter())
+                    .filter(|l| {
+                        matches!(
+                            l.target(),
+                            daw_project::LaneTarget::Gain
+                                | daw_project::LaneTarget::Pan
+                                | daw_project::LaneTarget::Send(_)
+                        )
+                    })
+                    .cloned()
+                    .collect();
                 t.clips.push(clip);
                 let at = self.after_family(i);
                 match clips {
@@ -692,7 +729,8 @@ mod tests {
         path
     }
 
-    /// What the app plays, from the start, rendered offline.
+    /// What the app plays, from the start, rendered offline in blocks
+    /// as long as a render's: lanes are read once a block.
     fn render(app: &mut App, frames: usize) -> Vec<f32> {
         let s = app.session();
         let mut keep = Vec::new();
@@ -703,8 +741,9 @@ mod tests {
             fx.push((slot.id, proc));
         }
         let g = s.compile_with(daw_audio_io::MAX_BLOCK, &mut fx).unwrap();
+        let block = daw_engine::export::LANE_BLOCK;
         let mut out = Vec::new();
-        render_with(g, Frames(0), frames, 256, |l, r| {
+        render_with(g, Frames(0), frames, block, |l, r| {
             for (a, b) in l.iter().zip(r) {
                 out.extend([*a, *b]);
             }
@@ -793,6 +832,60 @@ mod tests {
         h.state_mut().redo(&ctx);
         h.run();
         assert_eq!(h.state().tracks.len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renders_follow_automation() {
+        let dir = scratch("automation");
+        let mut h = two_tracks(&dir);
+        add_effect(&mut h, 0);
+        let app = h.state_mut();
+        let rate = app.rate as i64;
+        let effect = app.tracks[0].fx[0].key.clone();
+        let line = |param: String, a: f64, b: f64| daw_project::Lane {
+            param,
+            points: vec![
+                daw_project::AutoPoint { at: 0, value: a },
+                daw_project::AutoPoint {
+                    at: rate / 2,
+                    value: b,
+                },
+            ],
+        };
+        // The volume fades down and the delay's mix comes up.
+        app.tracks[0].automation = vec![
+            line(daw_project::Lane::GAIN.into(), 0.0, -24.0),
+            line(format!("{}{effect}:mix", daw_project::Lane::FX), 0.0, 100.0),
+        ];
+        app.rebuild();
+        h.run();
+        let app = h.state_mut();
+        let frames = 5 * rate as usize / 2;
+        let before = render(app, frames);
+        app.tracks[0].automation.clear();
+        app.rebuild();
+        let flat = render(app, frames);
+        assert!(worst(&before, &flat) > 0.05, "the lanes are heard");
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run();
+        assert_eq!(h.state().tracks[0].automation.len(), 2);
+
+        h.state_mut().render_in_place(0);
+        wait(&mut h);
+        let app = h.state_mut();
+        assert_eq!(app.message, None);
+        let params: Vec<&str> = (app.tracks[1].automation.iter())
+            .map(|l| l.param.as_str())
+            .collect();
+        assert_eq!(
+            params,
+            [daw_project::Lane::GAIN],
+            "the volume lane moves over"
+        );
+        let after = render(app, frames);
+        assert!(worst(&before, &after) < 1e-4, "{}", worst(&before, &after));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

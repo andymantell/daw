@@ -270,14 +270,20 @@ mod tests {
                 Lane {
                     name: "Kick",
                     clips: &mut kick,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
                 Lane {
                     name: "Snare",
                     clips: &mut snare,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
                 Lane {
                     name: "Bass",
                     clips: &mut bass,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
             ],
             markers: &mut Vec::new(),
@@ -309,10 +315,14 @@ mod tests {
                 Lane {
                     name: "Overhead",
                     clips: &mut a,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
                 Lane {
                     name: "Room",
                     clips: &mut b,
+                    kind: daw_project::TrackKind::Audio,
+                    in_folder: false,
                 },
             ],
             markers: &mut Vec::new(),

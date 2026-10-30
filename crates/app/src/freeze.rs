@@ -142,6 +142,7 @@ impl App {
         spec.input = None;
         spec.arm = false;
         spec.monitor = false;
+        crate::mixer::alone(&mut spec);
         let mut one = Session::new(self.tempo_map());
         one.tracks.push(spec);
         let mut plugins = Vec::new();

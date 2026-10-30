@@ -28,6 +28,9 @@ pub struct FxSlot {
     pub name: String,
     pub bypass: bool,
     pub latency: u32,
+    /// The track whose audio it listens to (a compressor's sidechain),
+    /// by the track's key in the project.
+    pub sidechain: Option<String>,
     /// Where it runs (in the app, for a built-in effect).
     pub sandbox: Sandbox,
     /// Why it stopped working: its helper process crashed or hung. The
@@ -80,6 +83,7 @@ impl FxSlot {
             id: self.key.clone(),
             name: self.name.clone(),
             bypass: self.bypass,
+            sidechain: self.sidechain.clone(),
             ..Default::default()
         };
         match &self.kind {
@@ -119,6 +123,15 @@ impl FxSlot {
     pub fn rename_response(&self, name: &str) {
         if let SlotKind::Builtin(b) = &self.kind {
             b.rename_response(name.to_string());
+        }
+    }
+
+    /// Whether a sidechain means anything to it (the built-in
+    /// compressor and gate).
+    pub fn takes_key(&self) -> bool {
+        match &self.kind {
+            SlotKind::Builtin(b) => b.kind().takes_key(),
+            SlotKind::Plugin { .. } => false,
         }
     }
 
@@ -476,6 +489,7 @@ impl Effects {
             key: daw_project::new_id(),
             name: effect.kind().name().to_string(),
             bypass: false,
+            sidechain: None,
             latency,
             sandbox: Sandbox::InApp,
             crashed: None,
@@ -504,6 +518,7 @@ impl Effects {
             key: daw_project::new_id(),
             name: name.to_string(),
             bypass: false,
+            sidechain: None,
             latency: plugin.latency(),
             sandbox: if plugin.is_remote() {
                 sandbox
@@ -547,6 +562,7 @@ impl Effects {
             let mut slot = self.builtin(effect, rate);
             slot.key = e.id.clone();
             slot.bypass = e.bypass;
+            slot.sidechain = e.sidechain.clone();
             slot.show_params = false;
             if !e.name.is_empty() {
                 slot.name = e.name.clone();
@@ -935,6 +951,7 @@ impl Effects {
         missing: &[String],
         frozen: Option<&str>,
         rate: u32,
+        others: &[(String, String)],
         message: &mut Option<String>,
     ) -> bool {
         let mut open = true;
@@ -999,6 +1016,9 @@ impl Effects {
                         }
                         ui.toggle_value(&mut s.show_params, "Controls")
                             .on_hover_text("Show the effect's settings here");
+                        if s.takes_key() {
+                            changed |= sidechain_picker(ui, s, others);
+                        }
                         if s.is_plugin() {
                             ui.menu_button("Presets", |ui| {
                                 if let Some(e) = presets_menu(ui, s, &self.presets_dir) {
@@ -1165,6 +1185,33 @@ impl Effects {
         }
         changed
     }
+}
+
+/// Chooses the track an effect listens to. Returns true if it changed.
+fn sidechain_picker(ui: &mut egui::Ui, s: &mut FxSlot, others: &[(String, String)]) -> bool {
+    let name = |k: &Option<String>| match k {
+        None => "Own audio".to_string(),
+        Some(k) => others
+            .iter()
+            .find(|(key, _)| key == k)
+            .map_or("Missing track".into(), |(_, n)| n.clone()),
+    };
+    let before = s.sidechain.clone();
+    egui::ComboBox::from_id_salt(("sidechain", s.id))
+        .width(110.0)
+        .selected_text(format!("Listen: {}", name(&s.sidechain)))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut s.sidechain, None, "Own audio");
+            for (key, n) in others {
+                ui.selectable_value(&mut s.sidechain, Some(key.clone()), n);
+            }
+        })
+        .response
+        .accessible_name(format!("Sidechain for {}", s.name))
+        .on_hover_text(
+            "Sidechain: react to another track's level instead of this one's, lined up in time",
+        );
+    s.sidechain != before
 }
 
 /// The settings of an effect: a built-in effect's own, or the host's

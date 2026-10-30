@@ -27,6 +27,7 @@ mod fx;
 mod groups;
 mod latency;
 mod meters;
+mod mixer;
 mod notes;
 mod people;
 mod perf;
@@ -58,13 +59,14 @@ use std::time::{Duration, Instant};
 use commands::Cmd;
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running, SavedProfiles};
 use daw_engine::engine::{self, Command, Controller};
-use daw_engine::graph::{ClipSpec, Input, Mix, Session, TrackSpec};
+use daw_engine::graph::{ClipSpec, Input, Mix, Output, Session, TrackSpec};
 use daw_engine::import;
 use daw_engine::metronome::Metronome;
 use daw_engine::record::{RecorderThread, Take};
 use daw_engine::stream::{StreamSource, StreamerThread};
 use daw_engine::time::{Frames, TempoMap};
-use eframe::egui::{self, RichText, vec2};
+use daw_project::TrackKind;
+use eframe::egui::{self, RichText};
 use fx::{Effects, FxSlot};
 use timeline::{Clip, Lane, Marker, Song};
 
@@ -93,6 +95,16 @@ struct Track {
     /// Comps made from the track's takes, and the one that plays.
     comps: Vec<daw_project::Comp>,
     comp: Option<String>,
+    /// Audio track, bus or folder (see [`daw_project::TrackKind`]).
+    kind: TrackKind,
+    /// The folder it sits in, by key.
+    parent: Option<String>,
+    /// The bus its audio goes to, by key: `None` for its folder, or the
+    /// master when it has none.
+    output: Option<String>,
+    sends: Vec<daw_project::Send>,
+    /// The control group it belongs to, by key.
+    group: Option<String>,
 }
 
 impl Track {
@@ -120,7 +132,18 @@ impl Track {
             meter: (0.0, 0.0),
             comps: Vec::new(),
             comp: None,
+            kind: TrackKind::Audio,
+            parent: None,
+            output: None,
+            sends: Vec::new(),
+            group: None,
         }
+    }
+
+    /// Where its audio goes: the bus it is routed to, else its folder,
+    /// else (`None`) the master.
+    fn goes_to(&self) -> Option<&str> {
+        self.output.as_deref().or(self.parent.as_deref())
     }
 }
 
@@ -177,6 +200,8 @@ enum Audio {
 
 struct App {
     tracks: Vec<Track>,
+    /// Control groups: one fader and mute over several tracks.
+    groups: Vec<daw_project::ControlGroup>,
     imports: Vec<Import>,
     tempo_bpm: f64,
     beats_per_bar: u32,
@@ -284,6 +309,7 @@ impl App {
         let (ctl, eng, disk, recorder) = new_engine();
         let mut app = App {
             tracks: Vec::new(),
+            groups: Vec::new(),
             imports: Vec::new(),
             tempo_bpm: 120.0,
             beats_per_bar: 4,
@@ -588,6 +614,12 @@ impl App {
     /// The session as the engine should play it now.
     fn session(&self) -> Session {
         let mut s = Session::new(self.tempo_map());
+        s.groups = (self.groups.iter())
+            .map(|g| daw_engine::graph::GroupSpec {
+                gain_db: g.gain_db as f32,
+                mute: g.mute,
+            })
+            .collect();
         for t in &self.tracks {
             if let Some(clip) = self.frozen_playing(t) {
                 // Its clips and effects as rendered where it has every
@@ -606,6 +638,7 @@ impl App {
                         ..f.spec()
                     })
                     .collect();
+                self.route(t, &mut spec);
                 s.tracks.push(spec);
                 continue;
             }
@@ -630,9 +663,54 @@ impl App {
             // With direct monitoring the interface plays the input.
             spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
             spec.inserts = t.fx.iter().map(FxSlot::spec).collect();
+            self.route(t, &mut spec);
             s.tracks.push(spec);
         }
         s
+    }
+
+    /// The index of the track with this key.
+    fn track_index(&self, key: &str) -> Option<usize> {
+        self.tracks.iter().position(|t| t.key == key)
+    }
+
+    /// A bus the track can be routed to: a bus or folder that is there.
+    fn bus_index(&self, key: &str) -> Option<usize> {
+        self.track_index(key)
+            .filter(|&i| self.tracks[i].kind.is_bus())
+    }
+
+    /// Fills in where `t`'s audio goes, by index: its output, sends,
+    /// control group and effects' sidechains. Anything naming a track
+    /// that isn't there goes to the master, or is left out.
+    fn route(&self, t: &Track, spec: &mut TrackSpec) {
+        spec.output = match t.goes_to().and_then(|k| self.bus_index(k)) {
+            Some(i) if self.tracks[i].key != t.key => Output::Track(i),
+            _ => Output::Master,
+        };
+        spec.sends = (self.sends_of(t).iter())
+            .map(|(s, to)| daw_engine::graph::SendSpec {
+                to: *to,
+                gain_db: s.gain_db as f32,
+                pre_fader: s.pre_fader,
+                mute: s.mute,
+            })
+            .collect();
+        spec.group = (t.group.as_deref()).and_then(|g| self.groups.iter().position(|x| x.id == g));
+        for (slot, spec) in t.fx.iter().zip(&mut spec.inserts) {
+            spec.sidechain = (slot.sidechain.as_deref())
+                .and_then(|k| self.track_index(k))
+                .filter(|&i| self.tracks[i].key != t.key);
+        }
+    }
+
+    /// The track's sends that go somewhere, with the bus's index: the
+    /// order the engine has them in.
+    fn sends_of<'a>(&self, t: &'a Track) -> Vec<(&'a daw_project::Send, usize)> {
+        (t.sends.iter())
+            .filter_map(|s| Some((s, self.bus_index(&s.to)?)))
+            .filter(|(_, i)| self.tracks[*i].key != t.key)
+            .collect()
     }
 
     /// Renders the mix (and stems, if asked) to WAV in the background.
@@ -688,6 +766,8 @@ impl App {
                 let mut spec = s.tracks[i].clone();
                 spec.mix.mute = false;
                 spec.mix.solo = false;
+                // On its own: no bus, sends, group or sidechains.
+                mixer::alone(&mut spec);
                 one.tracks.push(spec);
                 parts.push(export::Part {
                     name: format!("{:02} {}", i + 1, export::file_name(&t.name)),
@@ -901,6 +981,8 @@ impl App {
                 .map(|t| Lane {
                     name: &t.name,
                     clips: &mut t.clips,
+                    kind: t.kind,
+                    in_folder: t.parent.is_some(),
                 })
                 .collect(),
             markers: &mut self.markers,
@@ -1262,173 +1344,6 @@ impl App {
         match &self.audio {
             Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
             Audio::Stopped => 0,
-        }
-    }
-
-    fn mixer(&mut self, ui: &mut egui::Ui) {
-        if self.tracks.is_empty() {
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Drop audio or video files here to add tracks.").size(18.0));
-                ui.add_space(8.0);
-                if ui.button("Or add an empty track to record on").clicked() {
-                    self.tracks.push(Track::new("Track 1".into()));
-                    self.rebuild();
-                }
-            });
-            return;
-        }
-        let inputs = match &self.audio {
-            Audio::Running(r) | Audio::Silent(r, _) => r.input_channels as usize,
-            Audio::Stopped => 0,
-        };
-        let direct = self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
-        let frozen: Vec<bool> = (self.tracks.iter())
-            .map(|t| self.frozen_playing(t).is_some())
-            .collect();
-        let mut changes = Vec::new();
-        let mut rebuild = false;
-        let mut chosen = None;
-        egui::Grid::new("tracks")
-            .num_columns(10)
-            .spacing(vec2(10.0, 10.0))
-            .striped(true)
-            .show(ui, |ui| {
-                for h in [
-                    "Track", "Input", "", "Level", "Volume", "Pan", "", "", "Effects", "Take",
-                ] {
-                    ui.strong(h);
-                }
-                ui.end_row();
-                for (i, t) in self.tracks.iter_mut().enumerate() {
-                    let before = t.heard();
-                    let name = t.name.clone();
-                    let label = ui
-                        .horizontal(|ui| {
-                            // The track's colour, as on its lane.
-                            let (tag, _) =
-                                ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
-                            let c = theme::look(ui.ctx()).c().track(i);
-                            ui.painter().rect_filled(tag, 2.0, c);
-                            ui.label(&t.name)
-                        })
-                        .inner;
-                    if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
-                        label.on_hover_text(c.path.display().to_string());
-                    }
-                    rebuild |= input_picker(ui, i, &t.name, &mut t.input, inputs);
-                    ui.horizontal(|ui| {
-                        ui.add_enabled_ui(t.input.is_some(), |ui| {
-                            let arm = RichText::new("R").color(if t.arm {
-                                crate::theme::look(ui.ctx()).c().record
-                            } else {
-                                ui.visuals().text_color()
-                            });
-                            rebuild |= ui
-                                .toggle_value(&mut t.arm, arm)
-                                .accessible_name(format!("Arm {name} for recording"))
-                                .on_hover_text("Arm for recording (R records)")
-                                .changed();
-                            let m = ui
-                                .add_enabled(!direct, egui::Button::selectable(t.monitor, "M"))
-                                .accessible_name(format!("Monitor {name}"));
-                            if m.clicked() {
-                                t.monitor = !t.monitor;
-                                rebuild = true;
-                            }
-                            m.on_hover_text("Monitor: hear the input through this track")
-                                .on_disabled_hover_text(
-                                    "Direct monitoring is on (Settings → Audio device)",
-                                );
-                        });
-                    });
-                    let rms = self.ctl.status().track_rms(i);
-                    if meters::strip(ui, t.meter, rms)
-                        .on_hover_text("Peak and RMS. Click for the meters")
-                        .clicked()
-                    {
-                        self.meters.show(Some(t.key.clone()));
-                    }
-                    ui.name_inputs(format!("{name} volume"), |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut t.mix.gain_db, -60.0..=12.0)
-                                .suffix(" dB")
-                                .step_by(0.1),
-                        )
-                    });
-                    ui.add(egui::Slider::new(&mut t.mix.pan, -1.0..=1.0).show_value(false))
-                        .accessible_name(format!("{name} pan"))
-                        .on_hover_text("Pan");
-                    ui.toggle_value(&mut t.mix.mute, "Mute")
-                        .accessible_name(format!("Mute {name}"));
-                    ui.horizontal(|ui| {
-                        ui.toggle_value(&mut t.mix.solo, "Solo")
-                            .accessible_name(format!("Solo {name}"));
-                        ui.toggle_value(&mut t.practice_mute, "🎧")
-                            .accessible_name(format!("Practice mute {name}"))
-                            .on_hover_text("Practice mute: silence this part to play it yourself");
-                    });
-                    let fx = t.fx.len() + self.proj.missing_fx.get(&t.key).map_or(0, Vec::len);
-                    let label = match (fx, frozen[i]) {
-                        (0, _) => "FX".to_string(),
-                        (n, false) => format!("FX ({n})"),
-                        // Plays its frozen audio.
-                        (n, true) => format!("FX ({n}) ❄"),
-                    };
-                    let open = self.effects.open_track == Some(i);
-                    if ui
-                        .selectable_label(open, label)
-                        .accessible_name(format!("Effects on {name}"))
-                        .on_hover_text(
-                            t.fx.iter()
-                                .map(|f| f.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" → "),
-                        )
-                        .clicked()
-                    {
-                        self.effects.open_track = (!open).then_some(i);
-                    }
-                    if let Some(k) = take_picker(ui, i, t) {
-                        chosen = Some((i, k));
-                    }
-                    ui.end_row();
-                    if t.heard() != before {
-                        changes.push((i, t.heard()));
-                    }
-                }
-                ui.label(RichText::new("Master").strong());
-                ui.label("");
-                if ui.button("Meters…").clicked() {
-                    self.meters.show(None);
-                }
-                let rms = self.ctl.status().master_rms();
-                if meters::strip(ui, self.master_meter, rms)
-                    .on_hover_text("Peak and RMS. Click for the meters")
-                    .clicked()
-                {
-                    self.meters.show(None);
-                }
-                ui.end_row();
-            });
-        ui.horizontal(|ui| {
-            if ui.button("+ Add track").clicked() {
-                self.tracks
-                    .push(Track::new(format!("Track {}", self.tracks.len() + 1)));
-                rebuild = true;
-            }
-            rebuild |= self.input_tracks_button(ui, inputs);
-        });
-        for (track, mix) in changes {
-            self.send(Command::SetMix { track, mix });
-        }
-        if let Some((i, k)) = chosen {
-            let rate = self.rate;
-            self.tracks[i].takes(rate).choose_take(k);
-            rebuild = true;
-        }
-        if rebuild {
-            self.rebuild();
         }
     }
 
@@ -2187,6 +2102,10 @@ impl eframe::App for App {
         }
         if let Some(i) = self.effects.open_track {
             let note = self.tracks.get(i).map(|t| self.frozen_note(t));
+            let others: Vec<(String, String)> = (self.tracks.iter().enumerate())
+                .filter(|(j, _)| *j != i)
+                .map(|(_, t)| (t.key.clone(), t.name.clone()))
+                .collect();
             match (self.tracks.get_mut(i), note) {
                 (Some(t), Some((note, missing))) => {
                     if self.effects.track_window(
@@ -2196,6 +2115,7 @@ impl eframe::App for App {
                         &missing,
                         note.as_deref(),
                         self.rate,
+                        &others,
                         &mut self.message,
                     ) {
                         self.rebuild();

@@ -13,6 +13,7 @@ mod doc;
 mod folder;
 mod identity;
 mod lessons;
+pub mod midifile;
 mod model;
 mod snapshots;
 mod templates;

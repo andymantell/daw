@@ -206,6 +206,35 @@ impl Event {
     }
 }
 
+/// A note event from a MIDI device, on its way to the engine: which
+/// input port (as the app numbers them) it came from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiveEvent {
+    pub port: usize,
+    pub event: Event,
+}
+
+/// A note event on its way from the engine to a MIDI output port.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OutEvent {
+    pub port: usize,
+    pub event: Event,
+}
+
+/// A live event as the engine saw it, for recording and for keeping
+/// what was just played: where the transport was when it arrived.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Captured {
+    pub port: usize,
+    pub event: Event,
+    /// The timeline frame the event was played at.
+    pub at: i64,
+    /// The transport was playing (not counting in).
+    pub playing: bool,
+    /// The transport was recording, so armed tracks keep it.
+    pub recording: bool,
+}
+
 /// The most events one block carries. Anything past it is dropped,
 /// which is counted; a real performance never comes near.
 pub const MAX_EVENTS: usize = 1024;

@@ -75,6 +75,21 @@ impl App {
                     self.tracks.push(Track::new("Track 1".into()));
                     self.rebuild();
                 }
+                if ui
+                    .button("Or add an instrument track for notes")
+                    .on_hover_text(
+                        "A track that plays notes through an instrument: from a MIDI \
+                         keyboard, or drawn in the note editor",
+                    )
+                    .clicked()
+                {
+                    let t = Track::instrument("Instrument 1".into());
+                    if let Some(i) = &t.instrument {
+                        self.pending_instruments.push((i.id, i.make(self.rate)));
+                    }
+                    self.tracks.push(t);
+                    self.rebuild();
+                }
             });
             return;
         }
@@ -167,9 +182,22 @@ impl App {
                         ui.label("");
                         ui.label("");
                     } else {
-                        rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, inputs);
+                        if t.kind.plays_notes() {
+                            let open = self.instrument_open == Some(i);
+                            let label = t.instrument.as_ref().map_or("Instrument", |_| "Synth");
+                            if ui
+                                .selectable_label(open, label)
+                                .accessible_name(format!("Instrument on {name}"))
+                                .on_hover_text("The instrument that plays this track's notes, and its MIDI output")
+                                .clicked()
+                            {
+                                self.instrument_open = (!open).then_some(i);
+                            }
+                        } else {
+                            rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, inputs);
+                        }
                         ui.horizontal(|ui| {
-                            ui.add_enabled_ui(t.input.is_some(), |ui| {
+                            ui.add_enabled_ui(t.input.is_some() || t.kind.plays_notes(), |ui| {
                                 let arm = RichText::new("R").color(if t.arm {
                                     theme::look(ui.ctx()).c().record
                                 } else {
@@ -178,7 +206,11 @@ impl App {
                                 rebuild |= ui
                                     .toggle_value(&mut t.arm, arm)
                                     .accessible_name(format!("Arm {name} for recording"))
-                                    .on_hover_text("Arm for recording (R records)")
+                                    .on_hover_text(if t.kind.plays_notes() {
+                                        "Arm: record notes from MIDI devices (R records)"
+                                    } else {
+                                        "Arm for recording (R records)"
+                                    })
                                     .changed();
                                 let m = ui
                                     .add_enabled(!direct, egui::Button::selectable(t.monitor, "M"))
@@ -187,7 +219,11 @@ impl App {
                                     t.monitor = !t.monitor;
                                     rebuild = true;
                                 }
-                                m.on_hover_text("Monitor: hear the input through this track")
+                                m.on_hover_text(if t.kind.plays_notes() {
+                                    "Monitor: play MIDI devices through this track's instrument"
+                                } else {
+                                    "Monitor: hear the input through this track"
+                                })
                                     .on_disabled_hover_text(
                                         "Direct monitoring is on (Settings → Audio device)",
                                     );
@@ -305,6 +341,22 @@ impl App {
             if ui.button("+ Add track").clicked() {
                 self.tracks
                     .push(Track::new(format!("Track {}", self.tracks.len() + 1)));
+                rebuild = true;
+            }
+            if ui
+                .button("+ Add instrument track")
+                .on_hover_text(
+                    "A track that plays notes through an instrument: from a MIDI keyboard, \
+                     or drawn in the note editor",
+                )
+                .clicked()
+            {
+                let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
+                let t = Track::instrument(format!("Instrument {n}"));
+                if let Some(i) = &t.instrument {
+                    self.pending_instruments.push((i.id, i.make(self.rate)));
+                }
+                self.tracks.push(t);
                 rebuild = true;
             }
             if ui

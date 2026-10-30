@@ -29,9 +29,10 @@ pub(crate) enum Pane {
     Tuner,
     Takes,
     Monitor,
+    NotesEditor,
 }
 
-pub(crate) const PANES: [Pane; 8] = [
+pub(crate) const PANES: [Pane; 9] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -40,6 +41,7 @@ pub(crate) const PANES: [Pane; 8] = [
     Pane::Tuner,
     Pane::Takes,
     Pane::Monitor,
+    Pane::NotesEditor,
 ];
 
 impl Pane {
@@ -54,6 +56,7 @@ impl Pane {
             Pane::Tuner => "tuner",
             Pane::Takes => "takes",
             Pane::Monitor => "monitor",
+            Pane::NotesEditor => "notes-editor",
         }
     }
 
@@ -71,6 +74,7 @@ impl Pane {
             Pane::Tuner => "Tuner",
             Pane::Takes => "Take lanes",
             Pane::Monitor => "Monitor section",
+            Pane::NotesEditor => "Note editor",
         }
     }
 
@@ -373,7 +377,9 @@ impl Layout {
         let side_panes = [Pane::Notes, Pane::Lessons, Pane::Comments, Pane::Tuner];
         let (target, side) = match p {
             Pane::Timeline => return,
-            Pane::Mixer | Pane::Takes | Pane::Monitor => (Pane::Timeline, Side::Below),
+            Pane::Mixer | Pane::Takes | Pane::Monitor | Pane::NotesEditor => {
+                (Pane::Timeline, Side::Below)
+            }
             // Below the side panes open now, so all can be seen.
             _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
                 Some(q) => (q, Side::Below),
@@ -1529,6 +1535,7 @@ impl crate::App {
             Cmd::Mixer,
             Cmd::MonitorSection,
             Cmd::TakeLanes,
+            Cmd::NotesEditor,
             Cmd::Comments,
             Cmd::LessonNotes,
             Cmd::Lessons,
@@ -1541,6 +1548,7 @@ impl crate::App {
                 Cmd::Comments => self.comment_ui.open,
                 Cmd::LessonNotes => self.notes_ui.open,
                 Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
+                Cmd::NotesEditor => self.workspace.layout.is_open(Pane::NotesEditor),
                 _ => self.tuner.open,
             };
             ui.add_enabled_ui(true, |ui| {
@@ -1553,9 +1561,14 @@ impl crate::App {
                     ui.close();
                     let ctx = ui.ctx().clone();
                     match (c, open) {
-                        (Cmd::Mixer | Cmd::MonitorSection | Cmd::TakeLanes | Cmd::Lessons, _) => {
-                            self.run(&ctx, c)
-                        }
+                        (
+                            Cmd::Mixer
+                            | Cmd::MonitorSection
+                            | Cmd::TakeLanes
+                            | Cmd::Lessons
+                            | Cmd::NotesEditor,
+                            _,
+                        ) => self.run(&ctx, c),
                         (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
                         (Cmd::LessonNotes, true) => self.workspace.close(Pane::Notes),
                         (Cmd::Tuner, true) => self.workspace.close(Pane::Tuner),
@@ -1690,6 +1703,7 @@ impl Host for crate::App {
             Pane::Takes => self.takes_pane(ui),
             Pane::Notes => self.notes_pane(ui),
             Pane::Lessons => self.lessons_pane(ui),
+            Pane::NotesEditor => self.notes_editor_pane(ui),
             Pane::Tuner => {
                 let inputs = self.input_count();
                 if let Some(c) = self.tuner.pane(ui, inputs) {

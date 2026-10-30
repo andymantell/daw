@@ -26,12 +26,16 @@ mod freeze;
 mod fx;
 mod groups;
 mod hitpoints;
+mod instrument;
 mod latency;
 mod lessons;
 mod meters;
+mod midi;
+mod midifile;
 mod mixer;
 mod monitor;
 mod notes;
+mod notes_editor;
 mod people;
 mod perf;
 mod practice;
@@ -90,11 +94,13 @@ struct Track {
     /// Silenced to play the part yourself. Kept apart from `mix.mute`,
     /// which belongs to the mix.
     practice_mute: bool,
-    /// Note clips and the instrument, as the document has them (roadmap
-    /// 3.1). Kept through a round trip; played once the engine has
-    /// instrument tracks.
+    /// Note clips (roadmap 3.1), in ticks, and the instrument that
+    /// plays them on an instrument track.
     note_clips: Vec<daw_project::NoteClip>,
-    instrument: Option<daw_project::Effect>,
+    instrument: Option<instrument::Slot>,
+    /// A MIDI output port the track's notes go to as well (this
+    /// computer's; not saved with the project).
+    midi_out: Option<usize>,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
     /// The track rendered through its effects, as the document has it.
@@ -141,6 +147,7 @@ impl Track {
             practice_mute: false,
             note_clips: Vec::new(),
             instrument: None,
+            midi_out: None,
             fx: Vec::new(),
             frozen: None,
             frozen_audio: None,
@@ -160,6 +167,37 @@ impl Track {
     /// else (`None`) the master.
     fn goes_to(&self) -> Option<&str> {
         self.output.as_deref().or(self.parent.as_deref())
+    }
+
+    /// An instrument track with the simple synth.
+    fn instrument(name: String) -> Track {
+        let mut t = Track::new(name);
+        t.kind = TrackKind::Instrument;
+        t.instrument = Some(instrument::Slot::synth());
+        t.monitor = true;
+        t
+    }
+
+    /// The track's notes as the engine plays them.
+    fn note_specs(&self) -> Vec<daw_engine::graph::NoteSpec> {
+        if !self.kind.plays_notes() {
+            return Vec::new();
+        }
+        let placed = daw_project::Track {
+            note_clips: self.note_clips.clone(),
+            ..daw_project::Track::new(String::new(), String::new())
+        }
+        .placed_notes();
+        placed
+            .iter()
+            .map(|n| daw_engine::graph::NoteSpec {
+                start: daw_engine::time::Ticks(n.start),
+                len: daw_engine::time::Ticks(n.len),
+                pitch: n.pitch,
+                velocity: n.velocity,
+                channel: n.channel,
+            })
+            .collect()
     }
 }
 
@@ -334,6 +372,14 @@ struct App {
     workspace_cmds: Vec<Cmd>,
     /// The look, chosen per computer.
     themes: theme::Themes,
+    /// MIDI devices, and notes being recorded.
+    midi: midi::Midi,
+    /// Instruments made and not yet handed to the engine, by id.
+    pending_instruments: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)>,
+    /// The note editor pane, and the track whose instrument window is
+    /// open.
+    notes_editor: notes_editor::Editor,
+    instrument_open: Option<usize>,
 }
 
 /// How often to look for a lost device.
@@ -408,6 +454,10 @@ impl App {
             notes_ui: notes::Notes::default(),
             assignments: Vec::new(),
             lessons_ui: lessons::Lessons::default(),
+            midi: midi::Midi::default(),
+            pending_instruments: Vec::new(),
+            notes_editor: notes_editor::Editor::default(),
+            instrument_open: None,
             practice_log: practice::Logger::default(),
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
@@ -442,6 +492,7 @@ impl App {
         }
         app.look_for_recovery();
         app.audio = app.open_device(eng);
+        app.midi.start(&mut app.ctl);
         app.send_capture();
         app.sign_in();
         if people::ask_name_at_start(&app.me) {
@@ -525,6 +576,13 @@ impl App {
         // the new rate, with the same settings.
         let rate = self.profile.as_ref().map_or(self.rate, |p| p.rate);
         self.effects.pending.clear();
+        self.pending_instruments.clear();
+        for t in &self.tracks {
+            if let Some(i) = &t.instrument {
+                self.pending_instruments.push((i.id, i.make(rate)));
+            }
+        }
+        self.midi.start(&mut self.ctl);
         for t in &mut self.tracks {
             let mut failed = Vec::new();
             for (i, slot) in t.fx.iter_mut().enumerate() {
@@ -666,7 +724,11 @@ impl App {
     /// Compiles the session and sends it to the engine.
     fn rebuild(&mut self) {
         let s = self.session();
-        match s.compile_with(audio::MAX_BLOCK, &mut self.effects.pending) {
+        match s.compile_all(
+            audio::MAX_BLOCK,
+            &mut self.effects.pending,
+            &mut self.pending_instruments,
+        ) {
             Ok(g) => {
                 self.send_graph(g);
             }
@@ -717,6 +779,10 @@ impl App {
             // With direct monitoring the interface plays the input.
             spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
             spec.inserts = fx::specs(&t.fx);
+            spec.notes = t.note_specs().into();
+            spec.instrument = t.instrument.as_ref().map(instrument::Slot::spec);
+            spec.notes_live = t.kind.plays_notes() && (t.arm || t.monitor);
+            spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
             self.route(t, &mut spec);
             s.tracks.push(spec);
         }
@@ -788,7 +854,11 @@ impl App {
                 plugins.extend(p);
                 fx.push((slot.id, proc));
             }
-            s.compile_with(audio::MAX_BLOCK, &mut fx)
+            let mut instruments: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> =
+                (tracks.iter().filter_map(|t| t.instrument.as_ref()))
+                    .map(|i| (i.id, i.make(rate)))
+                    .collect();
+            s.compile_all(audio::MAX_BLOCK, &mut fx, &mut instruments)
                 .map_err(|e| e.to_string())
         };
         let all: Vec<&Track> = self.tracks.iter().collect();
@@ -800,7 +870,7 @@ impl App {
             )
         } else {
             // Room for effects to ring out after the last clip.
-            let tail = if self.tracks.iter().any(|t| !t.fx.is_empty()) {
+            let tail = if (self.tracks.iter()).any(|t| !t.fx.is_empty() || t.instrument.is_some()) {
                 2 * self.rate as i64
             } else {
                 0
@@ -1058,6 +1128,7 @@ impl App {
                 .map(|t| Lane {
                     name: &t.name,
                     clips: &mut t.clips,
+                    notes: &mut t.note_clips,
                     kind: t.kind,
                     in_folder: t.parent.is_some(),
                 })
@@ -1111,6 +1182,10 @@ impl App {
                 start: at,
                 end: None,
             });
+        }
+        if let Some(key) = out.edit_notes {
+            self.notes_editor.edit(&key);
+            self.workspace.open(workspace::Pane::NotesEditor);
         }
         if let Some(how) = out.process {
             self.processing
@@ -1695,6 +1770,8 @@ impl App {
                         self.input_devices = input_names(&draft_host(&self.draft));
                     }
                 });
+                ui.separator();
+                self.midi_controls(ui);
             });
         self.show_devices = open;
         if apply {
@@ -1962,11 +2039,17 @@ impl eframe::App for App {
                 self.open_dropped(&ctx, p);
             } else if daw_collab::bundle::is_bundle(&p) {
                 self.import_bundle(p);
+            } else if midifile::is_midi(&p) {
+                self.import_midi(&p);
             } else {
                 self.add_file(&p);
             }
         }
-        let mut rebuild = self.finish_imports() | self.finish_takes();
+        let mut rebuild = self.finish_imports() | self.finish_takes() | self.finish_notes();
+        if self.midi.changed() {
+            // A device came or went: open them again on a fresh engine.
+            self.restart_audio();
+        }
         rebuild |= self.processing.finish(&mut self.tracks, &mut self.message);
         for t in &mut self.tracks {
             for slot in &mut t.fx {
@@ -2036,10 +2119,14 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     self.menu_item(ui, Cmd::Export);
+                    self.menu_item(ui, Cmd::ImportMidi);
+                    self.menu_item(ui, Cmd::ExportMidi);
                 });
                 ui.menu_button("Edit", |ui| {
                     self.menu_item(ui, Cmd::Undo);
                     self.menu_item(ui, Cmd::Redo);
+                    ui.separator();
+                    self.menu_item(ui, Cmd::AddInstrumentTrack);
                     ui.separator();
                     for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
                         self.menu_item(ui, c);
@@ -2086,6 +2173,7 @@ impl eframe::App for App {
                         Cmd::Loop,
                         Cmd::Metronome,
                         Cmd::CountIn,
+                        Cmd::KeepNotes,
                     ] {
                         self.menu_item(ui, c);
                     }
@@ -2297,6 +2385,21 @@ impl eframe::App for App {
                     }
                 }
                 _ => self.effects.open_track = None,
+            }
+        }
+        if let Some(i) = self.instrument_open {
+            let outputs = self.midi.ports.outputs.clone();
+            match self.tracks.get_mut(i) {
+                Some(t) if t.kind.plays_notes() => {
+                    let (open, changed) = instrument::window(&ctx, t, &outputs);
+                    if changed {
+                        self.rebuild();
+                    }
+                    if !open {
+                        self.instrument_open = None;
+                    }
+                }
+                _ => self.instrument_open = None,
             }
         }
         self.perf_window(&ctx);

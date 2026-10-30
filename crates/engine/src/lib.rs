@@ -15,6 +15,7 @@ pub mod process;
 pub mod record;
 pub mod stream;
 pub mod stretch;
+pub mod synth;
 pub mod time;
 pub mod timecode;
 pub mod tuner;

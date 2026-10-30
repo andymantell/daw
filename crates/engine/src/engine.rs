@@ -29,6 +29,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use crate::graph::{Graph, GroupSpec, InputBlock, Level, MAX_TRACKS, Mix, Rate};
 use crate::meter::Tap;
 use crate::metronome::{self, Metronome, Voice};
+use crate::monitor::{self, ControlRoom, CueBus, CueSend, Monitor, OutPair};
 use crate::record::{BLOCK_SAMPLES, CaptureShared, Kind, RecBlock, Recorder, Take};
 use crate::stream::{Chunk, Placement, Playhead, Streamer, ToAudio};
 use crate::stretch;
@@ -92,6 +93,19 @@ pub enum Command {
         speed: f64,
         semitones: f64,
     },
+    /// One headphone mix's own settings (see [`crate::monitor`]).
+    SetCueBus {
+        cue: usize,
+        bus: CueBus,
+    },
+    /// One track's level in one headphone mix, without a new graph.
+    SetCueSend {
+        track: usize,
+        cue: usize,
+        send: CueSend,
+    },
+    /// The speakers' controls and talkback.
+    SetControlRoom(ControlRoom),
 }
 
 /// Shared with the UI: where playback is, and peak levels since the UI
@@ -126,6 +140,8 @@ pub struct Status {
     meter_dropped: AtomicU64,
     /// Times playback has gone round the loop.
     loops: AtomicU64,
+    /// The headphone mixes' peaks.
+    pub monitor: monitor::Meters,
 }
 
 impl Status {
@@ -153,6 +169,7 @@ impl Status {
                 .collect(),
             meter_dropped: AtomicU64::new(0),
             loops: AtomicU64::new(0),
+            monitor: monitor::Meters::new(),
         }
     }
 
@@ -442,6 +459,8 @@ pub struct Engine {
     u: f64,
     /// The stretchers must start afresh at `u`.
     stretch_reset: bool,
+    /// Headphone mixes, talkback and the speakers' controls.
+    monitor: Monitor,
 }
 
 /// Commands that fit in the queue before `send` refuses more.
@@ -538,6 +557,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             posf: 0.0,
             u: 0.0,
             stretch_reset: true,
+            monitor: Monitor::new(max_block),
         },
     )
 }
@@ -619,6 +639,7 @@ impl Engine {
                         g.adopt_inserts(old);
                         g.adopt_stretchers(old);
                         g.adopt_edges(old);
+                        g.adopt_cue_lines(old);
                     }
                     if let Some(old) = self.graph.replace(g) {
                         // The queue has room for every graph in flight;
@@ -661,6 +682,17 @@ impl Engine {
                     self.speed = speed.clamp(stretch::SPEED_RANGE.0, stretch::SPEED_RANGE.1);
                     self.semitones = semitones.clamp(-stretch::SEMITONES, stretch::SEMITONES);
                 }
+                Command::SetCueBus { cue, bus } => {
+                    if let Some(b) = self.monitor.buses.get_mut(cue) {
+                        *b = bus;
+                    }
+                }
+                Command::SetCueSend { track, cue, send } => {
+                    if let Some(g) = &mut self.graph {
+                        g.set_cue(track, cue, send);
+                    }
+                }
+                Command::SetControlRoom(room) => self.monitor.room = room,
             }
         }
     }
@@ -703,6 +735,7 @@ impl Engine {
             c.fill(0.0);
         }
         let n = left.len().min(right.len());
+        self.monitor.begin(n);
         if let Some(ch) = self.tuner_input.filter(|&c| c < channels) {
             // Whatever doesn't fit is dropped: the tuner only wants the
             // newest audio.
@@ -731,6 +764,8 @@ impl Engine {
         }
         if self.playing && self.stretching() {
             self.play_stretched(input, channels, left, right, click);
+            self.monitor
+                .finish(input, channels, left, right, &self.status.monitor);
             self.publish();
             return;
         }
@@ -755,6 +790,7 @@ impl Engine {
             let block = inp(range.clone());
             self.render(
                 block,
+                range.start,
                 &mut left[range.clone()],
                 &mut right[range.clone()],
                 !counting,
@@ -764,6 +800,7 @@ impl Engine {
             if counting || self.metronome.enabled {
                 self.clicks(len);
                 let clicks = &self.click_buf[..len];
+                self.monitor.add_click(range.start, clicks);
                 match click.as_deref_mut() {
                     Some(c) if self.metronome.separate_output => {
                         for (o, x) in c[range].iter_mut().zip(clicks) {
@@ -800,7 +837,22 @@ impl Engine {
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
         }
+        self.monitor
+            .finish(input, channels, left, right, &self.status.monitor);
         self.publish();
+    }
+
+    /// The device outputs the main pair should play on for the block
+    /// just made, when the speakers chosen in the monitor section are
+    /// not the device's main outputs.
+    pub fn main_out(&self) -> Option<OutPair> {
+        self.monitor.main_out()
+    }
+
+    /// Calls `f` with each device output channel a headphone mix plays
+    /// on, and its samples for the block just made.
+    pub fn each_cue_out(&self, f: &mut dyn FnMut(usize, &[f32])) {
+        self.monitor.each_cue_out(f);
     }
 
     /// Renders frames `from..` of the block while stopped: monitored
@@ -825,6 +877,7 @@ impl Engine {
             };
             self.render(
                 block,
+                r.start,
                 &mut left[r.clone()],
                 &mut right[r.clone()],
                 false,
@@ -1010,6 +1063,7 @@ impl Engine {
             });
             self.render(
                 block,
+                range.start,
                 &mut left[range.clone()],
                 &mut right[range.clone()],
                 !counting,
@@ -1034,6 +1088,7 @@ impl Engine {
                     );
                 }
                 let clicks = &self.click_buf[..len];
+                self.monitor.add_click(range.start, clicks);
                 match click.as_deref_mut() {
                     Some(c) if self.metronome.separate_output => {
                         for (o, x) in c[range].iter_mut().zip(clicks) {
@@ -1087,9 +1142,11 @@ impl Engine {
         }
     }
 
+    /// Renders one block, `at` frames into the callback's.
     fn render(
         &mut self,
         input: InputBlock,
+        at: usize,
         left: &mut [f32],
         right: &mut [f32],
         play: bool,
@@ -1115,6 +1172,7 @@ impl Engine {
             rate,
             tap,
         );
+        self.monitor.add_tracks(g, at, n);
         if missing > 0 {
             self.status
                 .underruns

@@ -8,6 +8,7 @@ pub mod graph;
 pub mod import;
 pub mod meter;
 pub mod metronome;
+pub mod monitor;
 pub mod process;
 pub mod record;
 pub mod stream;

@@ -2,6 +2,11 @@
 //! Exporting the mix, each track and each bus as a stem, to WAV, FLAC,
 //! MP3 or Opus (roadmap 1.8, 3.6). Rendering runs on a thread of its own with its own copies of any
 //! plugins, so playback carries on meanwhile.
+//!
+//! The mix can also go into a copy of a video clip's film, as its sound
+//! (roadmap 3.10): the mix is rendered for the length of the film from
+//! its first frame, and the system's media framework writes the copy
+//! without re-encoding the picture.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,10 +22,20 @@ use eframe::egui::{self, RichText};
 /// Each file written: its file name, and how it went.
 type Lines = Vec<(String, Result<Written, String>)>;
 
+/// A file written, and what went wrong if anything did.
+#[cfg(test)]
+pub type Outcome<'a> = (&'a str, Option<&'a str>);
+
 /// One file to write.
 pub struct Part {
     pub name: String,
     pub graph: Graph,
+    /// Rendered from here, for this many frames.
+    pub from: Frames,
+    pub frames: usize,
+    /// A video file to put the sound into a copy of, in place of a
+    /// sound file.
+    pub film: Option<PathBuf>,
 }
 
 /// What to export, as chosen in the window.
@@ -32,6 +47,10 @@ pub struct Request {
     pub format: Format,
     /// Where the new numbered folder goes.
     pub folder: PathBuf,
+    /// The mix on its own, in `format`.
+    pub mix: bool,
+    /// The mix in a copy of the video.
+    pub video: bool,
 }
 
 struct Job {
@@ -51,6 +70,7 @@ pub struct Export {
     loop_only: bool,
     stems: bool,
     bus_stems: bool,
+    video: bool,
     kind: Kind,
     mp3_kbps: Option<u32>,
     opus_kbps: Option<u32>,
@@ -150,29 +170,45 @@ impl Export {
         self.job.is_some()
     }
 
-    /// Starts writing `parts` into a new folder under `base`, from
-    /// `from` for `frames` frames each.
+    /// Starts writing `parts` into a new folder under `base`.
     pub fn start(
         &mut self,
         base: &Path,
         parts: Vec<Part>,
         plugins: Vec<Plugin>,
         format: Format,
-        from: Frames,
-        frames: usize,
     ) -> Result<(), String> {
         let folder = next_folder(base);
         std::fs::create_dir_all(&folder)
             .map_err(|e| format!("could not make {}: {e}", folder.display()))?;
         let done = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
-        let total = (frames * parts.len()) as u64;
+        let total = parts.iter().map(|p| p.frames as u64).sum();
         let (d, c, f) = (done.clone(), cancel.clone(), folder.clone());
         let thread = std::thread::spawn(move || {
             let mut out = Vec::new();
             for p in parts {
-                let name = format!("{}.{}", p.name, format.extension());
-                let r = write(p.graph, from, frames, &f.join(&name), format, &d, &c);
+                let (name, r) = match &p.film {
+                    None => {
+                        let name = format!("{}.{}", p.name, format.extension());
+                        let r = write(p.graph, p.from, p.frames, &f.join(&name), format, &d, &c);
+                        (name, r)
+                    }
+                    Some(film) => {
+                        let name = format!("{}.{}", p.name, daw_video::wrapped_extension(film));
+                        // The mix as WAV first, wrapped in the copy, then
+                        // let go of.
+                        let sound = f.join(format!(".{}.mix.wav", p.name));
+                        let r = write(p.graph, p.from, p.frames, &sound, Format::Wav, &d, &c)
+                            .and_then(|w| {
+                                daw_video::wrap(film, &sound, &f.join(&name), &c)
+                                    .map(|()| w)
+                                    .map_err(|e| e.to_string())
+                            });
+                        let _ = std::fs::remove_file(&sound);
+                        (name, r)
+                    }
+                };
                 out.push((name, r));
                 if c.load(Ordering::Relaxed) {
                     break;
@@ -190,6 +226,31 @@ impl Export {
             folder,
         });
         Ok(())
+    }
+
+    /// What Export the video with the mix asks for: only that, as the
+    /// window is set otherwise.
+    pub fn video_request(&self) -> Request {
+        Request {
+            loop_only: false,
+            stems: false,
+            bus_stems: false,
+            format: self.format(),
+            folder: self.dir().to_path_buf(),
+            mix: false,
+            video: true,
+        }
+    }
+
+    /// The last export's folder and its files, each with what went
+    /// wrong if it did, once it has finished.
+    #[cfg(test)]
+    pub fn finished(&self) -> Option<(&Path, Vec<Outcome<'_>>)> {
+        let (folder, lines) = self.result.as_ref()?;
+        let lines = (lines.iter())
+            .map(|(n, r)| (n.as_str(), r.as_ref().err().map(String::as_str)))
+            .collect();
+        Some((folder, lines))
     }
 
     /// Checks on a running export.
@@ -215,7 +276,15 @@ impl Export {
 
     /// Draws the window. Returns a request when the user presses Export.
     /// `buses` says whether the session has any buses to export.
-    pub fn window(&mut self, ctx: &egui::Context, loop_text: &str, buses: bool) -> Option<Request> {
+    /// `film` names the video the mix can go into a copy of, if there is
+    /// one.
+    pub fn window(
+        &mut self,
+        ctx: &egui::Context,
+        loop_text: &str,
+        buses: bool,
+        film: Option<&str>,
+    ) -> Option<Request> {
         let mut open = self.open;
         let mut request = None;
         egui::Window::new("Export")
@@ -237,6 +306,20 @@ impl Export {
                                  and fader",
                         )
                         .on_disabled_hover_text("This song has no buses");
+                    });
+                    ui.add_enabled_ui(film.is_some(), |ui| {
+                        let label = match film {
+                            Some(name) => {
+                                format!("Also a copy of the video \"{name}\" with this mix")
+                            }
+                            None => "Also a copy of the video with this mix".into(),
+                        };
+                        ui.checkbox(&mut self.video, label)
+                            .on_hover_text(
+                                "The whole film with the mix as its sound, from its first \
+                                 frame. The picture is copied as it is, not re-encoded",
+                            )
+                            .on_disabled_hover_text("This song has no video");
                     });
                     ui.horizontal(|ui| {
                         let l = ui.label("File type");
@@ -321,6 +404,8 @@ impl Export {
                                 bus_stems: self.bus_stems && buses,
                                 format: self.format(),
                                 folder: self.dir().to_path_buf(),
+                                mix: true,
+                                video: self.video && film.is_some(),
                             });
                         }
                     }

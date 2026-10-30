@@ -87,6 +87,45 @@ mod system {
     }
 
     #[test]
+    fn the_filmstrip_is_kept_on_disk_for_next_time() {
+        let dir = std::env::temp_dir().join(format!("daw-strips-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let finished = |t: &Thumbs| {
+            let until = Instant::now() + Duration::from_secs(30);
+            while t.progress() < 1.0 && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(t.error(), None);
+        };
+        let first = Thumbs::start_cached(&file(), &dir);
+        finished(&first);
+        assert!(!first.from_cache());
+        drop(first);
+        // Written as the first pass ends, on its thread.
+        let until = Instant::now() + Duration::from_secs(10);
+        let kept = || {
+            std::fs::read_dir(&dir).is_ok_and(|d| {
+                d.flatten()
+                    .any(|e| e.path().extension().is_some_and(|x| x == "strip"))
+            })
+        };
+        while !kept() {
+            assert!(Instant::now() < until, "nothing was kept");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let again = Thumbs::start_cached(&file(), &dir);
+        finished(&again);
+        assert!(again.from_cache());
+        assert_eq!(again.info().unwrap().frames(), 24);
+        for n in 0..24 {
+            let (f, exact) = again.get(n).unwrap();
+            assert!(exact, "frame {n}");
+            assert_eq!(counted(&f), n);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_player_follows_the_playhead() {
         let p = Player::new();
         let wait_for = |n: u64| {

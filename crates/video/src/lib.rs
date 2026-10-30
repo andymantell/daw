@@ -18,6 +18,7 @@
 
 use std::fmt;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
@@ -29,6 +30,7 @@ mod system;
 #[path = "none.rs"]
 mod system;
 
+mod cache;
 mod filmstrip;
 pub mod player;
 pub mod thumbs;
@@ -182,6 +184,8 @@ pub enum Error {
     Unreadable(String),
     /// It holds no picture.
     NoPicture,
+    /// A copy with new sound couldn't be written.
+    CantWrap(String),
 }
 
 impl fmt::Display for Error {
@@ -194,6 +198,7 @@ impl fmt::Display for Error {
                  (H.264) with a video tool usually helps"
             ),
             Error::NoPicture => write!(f, "this file has no picture"),
+            Error::CantWrap(why) => write!(f, "the copy of the video couldn't be made: {why}"),
         }
     }
 }
@@ -249,6 +254,45 @@ impl Reader {
 /// What `path` holds, without decoding any of it.
 pub fn probe(path: &Path) -> Result<Info, Error> {
     system::probe(path)
+}
+
+/// The file name ending a copy of `video` with new sound gets: the
+/// same kind of file where the system can write one, so the picture
+/// fits it as it is.
+pub fn wrapped_extension(video: &Path) -> &'static str {
+    let ext = (video.extension())
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if cfg!(windows) {
+        // The system's writer makes MP4 files.
+        return "mp4";
+    }
+    match ext.as_str() {
+        "mp4" | "m4v" => "mp4",
+        "mov" => "mov",
+        "webm" => "webm",
+        "ogv" | "ogg" => "ogv",
+        "avi" => "avi",
+        // Matroska holds nearly any picture.
+        _ => "mkv",
+    }
+}
+
+/// Writes a copy of `video` to `out` with `sound` (a WAV file, which
+/// starts with the film's first frame) in place of its own sound. The
+/// picture is copied as it is, not re-encoded, so it loses nothing and
+/// takes moments; the sound is encoded by the system for the kind of
+/// file (see [`wrapped_extension`]). `out` appears only once complete.
+/// Setting `cancel` stops it.
+pub fn wrap(video: &Path, sound: &Path, out: &Path, cancel: &AtomicBool) -> Result<(), Error> {
+    let ext = out.extension().map(|e| e.to_string_lossy().into_owned());
+    let part = out.with_extension(format!("part.{}", ext.unwrap_or_default()));
+    let r = system::wrap(video, sound, &part, cancel)
+        .and_then(|()| std::fs::rename(&part, out).map_err(|e| Error::CantWrap(e.to_string())));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    r
 }
 
 #[cfg(test)]

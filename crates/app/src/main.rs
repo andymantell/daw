@@ -1007,13 +1007,35 @@ impl App {
             (Frames(0), Frames(mix.end().0 + tail))
         };
         let frames = (to.0 - from.0).max(0) as usize;
-        if frames == 0 {
-            return Err("There is nothing to export yet.".into());
+        let mut parts = Vec::new();
+        if req.video {
+            // The whole film from its first frame: the picture can't be
+            // cut without re-encoding it.
+            let at = self.ctl.status().position().0;
+            let c = (self.video.current(at)).ok_or("There's no video to put the mix into.")?;
+            parts.push(export::Part {
+                name: format!("{} with the mix", export::file_name(&c.name)),
+                graph: graph(&s, &all, &mut plugins)?,
+                from: Frames(c.zero().max(0)),
+                frames: (c.offset + c.len).max(1) as usize,
+                film: Some(c.path.clone()),
+            });
         }
-        let mut parts = vec![export::Part {
-            name: "Mix".into(),
-            graph: mix,
-        }];
+        if req.mix {
+            if frames == 0 {
+                return Err("There is nothing to export yet.".into());
+            }
+            parts.insert(
+                0,
+                export::Part {
+                    name: "Mix".into(),
+                    graph: mix,
+                    from,
+                    frames,
+                    film: None,
+                },
+            );
+        }
         if req.stems {
             // A bus on its own has nothing going into it; buses have
             // stems of their own below.
@@ -1033,6 +1055,9 @@ impl App {
                 parts.push(export::Part {
                     name: format!("{:02} {}", i + 1, export::file_name(&t.name)),
                     graph: graph(&one, &[t], &mut plugins)?,
+                    from,
+                    frames,
+                    film: None,
                 });
             }
         }
@@ -1047,11 +1072,27 @@ impl App {
                 parts.push(export::Part {
                     name: format!("{:02} {}", i + 1, export::file_name(&t.name)),
                     graph: graph(&one, &all, &mut plugins)?,
+                    from,
+                    frames,
+                    film: None,
                 });
             }
         }
-        self.export
-            .start(&req.folder, parts, plugins, req.format, from, frames)
+        self.export.start(&req.folder, parts, plugins, req.format)
+    }
+
+    /// Exports the video at the playhead (or the one selected) with the
+    /// mix as its sound, into a new folder beside the other exports, and
+    /// shows the Export window for its progress.
+    pub(crate) fn export_video(&mut self) {
+        if self.export.busy() {
+            return;
+        }
+        let req = self.export.video_request();
+        match self.start_export(req) {
+            Ok(()) => self.export.open = true,
+            Err(e) => self.message = Some(e),
+        }
     }
 
     fn send_graph(&mut self, g: daw_engine::graph::Graph) {
@@ -1330,6 +1371,9 @@ impl App {
             {
                 c.start = (c.start + by).max(0);
                 self.rebuild();
+            }
+            if let Some(moved) = band.picture {
+                self.picture_moved(moved);
             }
             if let Some(f) = band.seek {
                 self.send(Command::Seek(Frames(f)));
@@ -2334,6 +2378,7 @@ impl eframe::App for App {
                     }
                     ui.separator();
                     self.menu_item(ui, Cmd::Export);
+                    self.menu_item(ui, Cmd::ExportVideo);
                     self.menu_item(ui, Cmd::ImportMidi);
                     self.menu_item(ui, Cmd::ExportMidi);
                     self.menu_item(ui, Cmd::ImportMusicXml);
@@ -2348,7 +2393,7 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
-                    for c in [Cmd::HitPoint, Cmd::HitPoints] {
+                    for c in [Cmd::HitPoint, Cmd::HitPoints, Cmd::TimecodeFromFilm] {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
@@ -2422,6 +2467,15 @@ impl eframe::App for App {
                         Cmd::Metronome,
                         Cmd::CountIn,
                         Cmd::KeepNotes,
+                    ] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [
+                        Cmd::FrameBack,
+                        Cmd::FrameForward,
+                        Cmd::PrevHitPoint,
+                        Cmd::NextHitPoint,
                     ] {
                         self.menu_item(ui, c);
                     }
@@ -2608,7 +2662,9 @@ impl eframe::App for App {
         self.export.set_default_dir(exports);
         let loop_text = format!("bars {} to {}", self.loop_bars.0, self.loop_bars.1);
         let buses = self.tracks.iter().any(|t| t.kind.is_bus());
-        if let Some(req) = self.export.window(&ctx, &loop_text, buses)
+        let at = self.ctl.status().position().0;
+        let film = self.video.current(at).map(|c| c.name.clone());
+        if let Some(req) = self.export.window(&ctx, &loop_text, buses, film.as_deref())
             && let Err(e) = self.start_export(req)
         {
             self.message = Some(e);

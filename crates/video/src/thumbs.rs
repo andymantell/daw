@@ -40,6 +40,8 @@ struct State {
     error: Option<Error>,
     /// A new picture came in since [`Thumbs::changed`] was last asked.
     fresh: bool,
+    /// The first pass's pictures were read from the cache.
+    from_cache: bool,
 }
 
 struct Shared {
@@ -64,6 +66,16 @@ impl Drop for Thumbs {
 impl Thumbs {
     /// Starts decoding `path`'s pictures.
     pub fn start(path: &Path) -> Thumbs {
+        Thumbs::start_in(path, None)
+    }
+
+    /// Starts decoding `path`'s pictures, keeping them in `cache` for
+    /// next time, or taking them from there if they were kept before.
+    pub fn start_cached(path: &Path, cache: &Path) -> Thumbs {
+        Thumbs::start_in(path, Some(cache.to_path_buf()))
+    }
+
+    fn start_in(path: &Path, cache: Option<PathBuf>) -> Thumbs {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
@@ -73,7 +85,7 @@ impl Thumbs {
         std::thread::Builder::new()
             .name("video thumbnails".into())
             .spawn(move || {
-                if let Err(e) = run(&p, &s) {
+                if let Err(e) = run(&p, &s, cache.as_deref()) {
                     let mut st = s.state.lock().unwrap();
                     st.error = Some(e);
                     st.finished = true;
@@ -99,6 +111,11 @@ impl Thumbs {
     /// Why the pictures couldn't be made, if they couldn't.
     pub fn error(&self) -> Option<Error> {
         self.shared.state.lock().unwrap().error.clone()
+    }
+
+    /// Whether the first pass's pictures came from the cache.
+    pub fn from_cache(&self) -> bool {
+        self.shared.state.lock().unwrap().from_cache
     }
 
     /// How far through the first pass it is, from 0 to 1.
@@ -162,7 +179,23 @@ fn number(info: &Info, f: &Frame) -> u64 {
     info.frame_at(f.time + 0.25 / info.fps().max(1e-6))
 }
 
-fn run(path: &Path, s: &Shared) -> Result<(), Error> {
+fn run(path: &Path, s: &Shared, cache: Option<&Path>) -> Result<(), Error> {
+    // Kept from before: no first pass, and the file is only opened when
+    // a frame is asked for.
+    if let Some(strip) = cache.and_then(|d| crate::cache::load(d, path).ok()) {
+        {
+            let mut st = s.state.lock().unwrap();
+            st.info = Some(strip.info);
+            st.every = strip.every;
+            st.kept = strip.kept;
+            st.done = strip.info.frames();
+            st.finished = true;
+            st.from_cache = true;
+            st.fresh = true;
+        }
+        let mut r = None;
+        return asked(&mut r, path, &strip.info, s);
+    }
     let mut r = Reader::open(path, (HEIGHT * 4, HEIGHT))?;
     let info = *r.info();
     let every = info.frames().div_ceil(KEEP).max(1);
@@ -190,12 +223,23 @@ fn run(path: &Path, s: &Shared) -> Result<(), Error> {
             st.fresh = true;
         }
     }
-    {
+    let kept = {
         let mut st = s.state.lock().unwrap();
         st.finished = true;
         st.fresh = true;
+        cache.map(|_| st.kept.clone())
+    };
+    if let (Some(dir), Some(kept)) = (cache, kept) {
+        // A cache that can't be written only means decoding again
+        // next time.
+        let _ = crate::cache::save(dir, path, &crate::cache::Strip { info, every, kept });
     }
-    // Then frames as they are asked for.
+    asked(&mut Some(r), path, &info, s)
+}
+
+/// Makes frames as they are asked for, until stopped, opening the file
+/// when the first is.
+fn asked(r: &mut Option<Reader>, path: &Path, info: &Info, s: &Shared) -> Result<(), Error> {
     loop {
         {
             let mut st = s.state.lock().unwrap();
@@ -206,7 +250,10 @@ fn run(path: &Path, s: &Shared) -> Result<(), Error> {
         if s.stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        serve(&mut r, &info, s)?;
+        if r.is_none() {
+            *r = Some(Reader::open(path, (HEIGHT * 4, HEIGHT))?);
+        }
+        serve(r.as_mut().expect("opened"), info, s)?;
     }
 }
 

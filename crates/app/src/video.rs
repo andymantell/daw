@@ -7,29 +7,51 @@
 //!
 //! Frames are decoded by the system's own media framework (the
 //! `daw-video` crate): small ones for the filmstrip on a thread per
-//! file, as soon as the file comes in, and the one at the playhead for
-//! the pane on a thread of its own.
+//! file, as soon as the file comes in, and kept on disk for next time;
+//! and the one at the playhead for the pane on a thread of its own.
+//!
+//! Scoring to picture (roadmap 3.10) adds, in the pane: the timecode
+//! on the picture, stepping a frame at a time, the hit points (the one
+//! on screen, the next one coming, and a strip to jump to them), and
+//! lining the timecode up with the film; and a copy of the video with
+//! the mix as its sound (see `App::export_video`).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use daw_engine::time::TempoMap;
+use daw_engine::engine::Command;
+use daw_engine::time::{Frames, TempoMap};
+use daw_engine::timecode::{Clock, Rate};
+use daw_project::HitPoint;
 use daw_video::player::Player;
 use daw_video::thumbs::Thumbs;
 use daw_video::{Filmstrip, Frame, Info};
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, Rect, Sense, Stroke, StrokeKind, TextureHandle,
-    TextureOptions, pos2, vec2,
+    self, Align2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind,
+    TextureHandle, TextureOptions, pos2, vec2,
 };
 
+use crate::App;
+use crate::commands::Cmd;
+use crate::hitpoints;
 use crate::timeline::{self, Grid};
 
 /// The filmstrip's height on the timeline.
 pub(crate) const BAND: f32 = 58.0;
 /// How many filmstrip pictures are kept on the graphics card.
 const TEXTURES: usize = 800;
+/// How long a hit point's name stays on the picture once the playhead
+/// reaches it, in seconds, so it can be seen while playing.
+const HIT_SHOWN: f64 = 0.75;
+/// The hit point strip's height at the foot of the pane.
+const HIT_STRIP: f32 = 22.0;
+
+/// Where the filmstrips are kept between runs.
+fn filmstrip_dir() -> PathBuf {
+    crate::cache_dir().with_file_name("filmstrips")
+}
 
 /// A video clip, as the app has it. Positions are in frames at the
 /// app's rate.
@@ -66,6 +88,22 @@ impl VideoClip {
         }
     }
 
+    /// Where the film's first frame falls on the timeline, in frames at
+    /// the app's rate.
+    pub(crate) fn zero(&self) -> i64 {
+        self.start - self.offset
+    }
+
+    /// The first sample of the film's frame `n`.
+    pub(crate) fn frame_start(&self, info: &Info, n: u64, rate: u32) -> i64 {
+        self.zero() + (info.frame_time(n) * rate as f64 - 1e-6).ceil() as i64
+    }
+
+    /// The film's frame at `at`, a position on the timeline.
+    pub(crate) fn frame_at(&self, info: &Info, at: i64, rate: u32) -> u64 {
+        info.frame_at((at - self.zero()) as f64 / rate as f64)
+    }
+
     fn strip(&self, info: Info, rate: f64) -> Filmstrip {
         Filmstrip {
             info,
@@ -94,6 +132,9 @@ pub(crate) struct BandOutcome {
     /// Move the audio clip with this key by this many frames, as its
     /// picture moved.
     pub(crate) moved: Option<(String, i64)>,
+    /// A picture moved: where it was (its film's first frame, its start
+    /// and end) and by how much, so its hit points go with it.
+    pub(crate) picture: Option<(i64, i64, i64, i64)>,
 }
 
 #[derive(Default)]
@@ -114,6 +155,15 @@ pub(crate) struct Videos {
     /// The clip right-clicked.
     menu: Option<String>,
     pub(crate) selected: Option<String>,
+    /// The pane leaves the timecode off the picture.
+    pub(crate) hide_timecode: bool,
+}
+
+/// What the pane asks of the app.
+#[derive(Default)]
+pub(crate) struct PaneOutcome {
+    pub(crate) seek: Option<i64>,
+    pub(crate) run: Option<Cmd>,
 }
 
 /// The number of a decoded frame.
@@ -125,8 +175,44 @@ impl Videos {
     fn thumbs_for(&mut self, path: &Path) -> Arc<Thumbs> {
         self.thumbs
             .entry(path.to_path_buf())
-            .or_insert_with(|| Arc::new(Thumbs::start(path)))
+            .or_insert_with(|| {
+                // Tests leave the user's cache alone.
+                Arc::new(if cfg!(test) {
+                    Thumbs::start(path)
+                } else {
+                    Thumbs::start_cached(path, &filmstrip_dir())
+                })
+            })
             .clone()
+    }
+
+    /// The clip showing at `at`: the last added, where two overlap.
+    pub(crate) fn clip_at(&self, at: i64) -> Option<&VideoClip> {
+        self.clips
+            .iter()
+            .rev()
+            .find(|c| at >= c.start && at < c.end())
+    }
+
+    /// The clip a command about "the video" means: the one selected,
+    /// or else the one at `at`, or else the first.
+    pub(crate) fn current(&self, at: i64) -> Option<&VideoClip> {
+        (self.selected.as_ref())
+            .and_then(|k| self.clips.iter().find(|c| &c.key == k))
+            .or_else(|| self.clip_at(at))
+            .or_else(|| self.clips.first())
+    }
+
+    /// Where `by` frames of the film on from the one at `at` starts, if
+    /// a film is showing at `at` and its length is known.
+    pub(crate) fn step(&self, at: i64, by: i64, rate: u32) -> Option<i64> {
+        let c = self.clip_at(at)?;
+        let info = c.thumbs.info()?;
+        let n = c.frame_at(&info, at, rate) as i64;
+        let first = c.frame_at(&info, c.start, rate) as i64;
+        let last = c.frame_at(&info, c.end() - 1, rate) as i64;
+        let to = (n + by).clamp(first, last.max(first));
+        Some(c.frame_start(&info, to as u64, rate).max(c.start))
     }
 
     /// Starts bringing in `path`'s picture, to start at frame `at`.
@@ -361,8 +447,10 @@ impl Videos {
             && c.start != was
         {
             out.changed = true;
+            let by = c.start - was;
+            out.picture = Some((c.zero() - by, was, c.end() - by, by));
             if let Some(s) = &c.sound {
-                out.moved = Some((s.clone(), c.start - was));
+                out.moved = Some((s.clone(), by));
             }
         }
         if resp.clicked()
@@ -395,6 +483,7 @@ impl Videos {
                         if let Some(s) = &c.sound {
                             out.moved = Some((s.clone(), -c.start));
                         }
+                        out.picture = Some((c.zero(), c.start, c.end(), -c.start));
                         c.start = 0;
                         out.changed = true;
                     }
@@ -535,8 +624,18 @@ impl Videos {
         out
     }
 
-    /// The Video pane: the frame at the playhead.
-    pub(crate) fn pane(&mut self, ui: &mut egui::Ui, playhead: i64, rate: u32) {
+    /// The Video pane's picture: the frame at the playhead, with the
+    /// timecode on it (by `clock`), the hit point it shows and the next
+    /// one, and a strip of the hit points along its foot.
+    pub(crate) fn pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        playhead: i64,
+        rate: u32,
+        clock: &Clock,
+        hits: &[HitPoint],
+    ) -> PaneOutcome {
+        let mut out = PaneOutcome::default();
         let player = self.player.get_or_insert_with(Player::new);
         let clip = self
             .clips
@@ -548,8 +647,16 @@ impl Videos {
         let (frame, count) = player.frame();
         let look = crate::theme::look(ui.ctx());
         let tc = look.c().clone();
-        let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let painter = ui.painter_at(rect);
+        let (all, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        // The hit point strip along the foot, under a film.
+        let (rect, strip) = match clip {
+            Some(_) if all.height() > 3.0 * HIT_STRIP => {
+                let (top, foot) = all.split_top_bottom_at_y(all.bottom() - HIT_STRIP);
+                (top, Some(foot))
+            }
+            _ => (all, None),
+        };
+        let painter = ui.painter_at(all);
         painter.rect_filled(rect, 0.0, Color32::BLACK);
         let say = |text: &str| {
             painter.text(
@@ -571,18 +678,21 @@ impl Videos {
             } else {
                 say("No video at the playhead");
             }
-            return;
+            return out;
         };
+        if let Some(r) = strip {
+            out.seek = hit_strip(ui, &painter, r, c, playhead, hits, &look);
+        }
         if let Some(e) = player.error(&c.path) {
             say(&e.to_string());
-            return;
+            return out;
         }
         let info = player.info();
         // A picture from another file is let go of.
         let Some(f) = frame.filter(|_| info.is_some()) else {
             say("Opening the video…");
             ui.ctx().request_repaint_after(Duration::from_millis(30));
-            return;
+            return out;
         };
         if self.shown.as_ref().is_none_or(|(n, _)| *n != count) {
             let image = egui::ColorImage::from_rgba_unmultiplied(
@@ -602,10 +712,10 @@ impl Videos {
                 }
             }
         }
+        let k = (rect.width() / f.width as f32).min(rect.height() / f.height as f32);
+        let pic =
+            Rect::from_center_size(rect.center(), vec2(f.width as f32 * k, f.height as f32 * k));
         if let Some((_, tex)) = &self.shown {
-            let k = (rect.width() / f.width as f32).min(rect.height() / f.height as f32);
-            let size = vec2(f.width as f32 * k, f.height as f32 * k);
-            let pic = Rect::from_center_size(rect.center(), size);
             painter.image(
                 tex.id(),
                 pic,
@@ -613,33 +723,283 @@ impl Videos {
                 Color32::WHITE,
             );
         }
-        if let (Some(info), Some(at)) = (info, at) {
-            let n = info.frame_at(at);
-            // Not there yet: look again shortly.
-            if number(&info, &f) != n {
-                ui.ctx().request_repaint_after(Duration::from_millis(15));
-            }
-            let text = format!(
+        let (Some(info), Some(at)) = (info, at) else {
+            return out;
+        };
+        let n = info.frame_at(at);
+        // Not there yet: look again shortly.
+        if number(&info, &f) != n {
+            ui.ctx().request_repaint_after(Duration::from_millis(15));
+        }
+        // Labels sit on the picture, or on the pane where the picture
+        // is too small for them.
+        let on = pic.intersect(rect);
+        let boxed = |text: String, font: FontId, pos: Pos2, anchor: Align2, fill: Color32| {
+            let g = painter.layout_no_wrap(text, font, Color32::WHITE);
+            let r = anchor.anchor_size(pos, g.size() + vec2(10.0, 4.0));
+            painter.rect_filled(r, 3.0, fill);
+            painter.galley(r.min + vec2(5.0, 2.0), g, Color32::WHITE);
+        };
+        let shade = Color32::from_black_alpha(170);
+        let small = FontId::monospace(look.small);
+        boxed(
+            format!(
                 "{}   frame {} of {}   {}",
                 c.name,
                 n + 1,
                 info.frames(),
-                clock(at)
+                clock_text(at)
+            ),
+            small.clone(),
+            on.left_top() + vec2(6.0, 6.0),
+            Align2::LEFT_TOP,
+            shade,
+        );
+        if !self.hide_timecode {
+            // Burnt-in style: large, at the foot of the picture.
+            let size = (on.height() * 0.08).clamp(14.0, 40.0);
+            boxed(
+                clock.timecode(playhead, rate).to_string(),
+                FontId::monospace(size),
+                on.center_bottom() - vec2(0.0, 8.0),
+                Align2::CENTER_BOTTOM,
+                shade,
             );
-            let galley =
-                painter.layout_no_wrap(text, FontId::monospace(look.small), Color32::WHITE);
-            let r = Rect::from_min_size(
-                rect.left_bottom() + vec2(8.0, -galley.size().y - 12.0),
-                galley.size() + vec2(8.0, 4.0),
+        }
+        // The hit point just reached, and the next one coming.
+        let held = (HIT_SHOWN * rate as f64) as i64;
+        let frame_len = clock.frame_start(1, rate) - clock.frame_start(0, rate);
+        if let Some(h) =
+            (hits.iter().rev()).find(|h| h.at <= playhead && playhead < h.at + held.max(frame_len))
+        {
+            boxed(
+                format!("◆ {}", h.name),
+                look.font(look.body),
+                on.left_top() + vec2(6.0, 30.0),
+                Align2::LEFT_TOP,
+                tc.accent.gamma_multiply(0.85),
             );
-            painter.rect_filled(r, 3.0, Color32::from_black_alpha(170));
-            painter.galley(r.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+        }
+        if let Some(h) = hits.iter().find(|h| h.at > playhead) {
+            let secs = (h.at - playhead) as f64 / rate as f64;
+            boxed(
+                format!("Next: {} in {secs:.2} s", h.name),
+                small,
+                on.right_top() + vec2(-6.0, 6.0),
+                Align2::RIGHT_TOP,
+                shade,
+            );
+        }
+        out
+    }
+}
+
+/// The strip under the picture: the film's length, its hit points as
+/// diamonds and the playhead. A click goes there, or to the hit point
+/// clicked.
+#[allow(clippy::too_many_arguments)]
+fn hit_strip(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    r: Rect,
+    c: &VideoClip,
+    playhead: i64,
+    hits: &[HitPoint],
+    look: &crate::theme::Look,
+) -> Option<i64> {
+    let tc = look.c();
+    painter.rect_filled(r, 0.0, tc.panel);
+    let inner = r.shrink2(vec2(8.0, 0.0));
+    let len = c.len.max(1) as f32;
+    let x_of = |at: i64| inner.left() + (at - c.start) as f32 / len * inner.width();
+    let at_of = |x: f32| c.start + (((x - inner.left()) / inner.width()) * len) as i64;
+    let mid = r.center().y;
+    painter.line_segment(
+        [pos2(inner.left(), mid), pos2(inner.right(), mid)],
+        Stroke::new(2.0 * look.line, tc.line),
+    );
+    let inside: Vec<&HitPoint> = (hits.iter())
+        .filter(|h| h.at >= c.start && h.at < c.end())
+        .collect();
+    for h in &inside {
+        painter.add(hitpoints::diamond(pos2(x_of(h.at), mid), 5.0, tc.accent));
+    }
+    let px = x_of(playhead);
+    painter.line_segment(
+        [pos2(px, r.top() + 3.0), pos2(px, r.bottom() - 3.0)],
+        Stroke::new(1.5 * look.line, tc.playhead),
+    );
+    let resp = ui
+        .interact(r, ui.scope_id().with("video hit strip"), Sense::click())
+        .on_hover_text("The film's hit points: click one, or anywhere, to go there");
+    let p = resp.interact_pointer_pos().filter(|_| resp.clicked())?;
+    let near = (inside.iter())
+        .map(|h| (h.at, (x_of(h.at) - p.x).abs()))
+        .filter(|(_, d)| *d <= 7.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    Some(near.map_or_else(|| at_of(p.x).clamp(c.start, c.end() - 1), |(at, _)| at))
+}
+
+/// The frame rate in the timecode list matching a film's, keeping the
+/// way of counting chosen where the film's rate allows it (29.97 with or
+/// without drop-frame).
+pub(crate) fn rate_for(info: &Info, now: Rate) -> Option<Rate> {
+    let same = |r: Rate| {
+        let (n, d) = r.fps();
+        n * info.rate.1 as i64 == d * info.rate.0 as i64
+    };
+    if same(now) {
+        return Some(now);
+    }
+    Rate::ALL.into_iter().find(|&r| same(r))
+}
+
+// ---- In the app ----
+
+impl App {
+    /// The Video pane: a row of buttons, then the picture.
+    pub(crate) fn video_pane(&mut self, ui: &mut egui::Ui) {
+        let playhead = self.ctl.status().position().0;
+        let mut run = None;
+        ui.horizontal(|ui| {
+            for (cmd, label, name) in [
+                (Cmd::PrevHitPoint, "⏮◆", "Previous hit point"),
+                (Cmd::FrameBack, "◀", "Back a frame"),
+                (Cmd::FrameForward, "▶", "On a frame"),
+                (Cmd::NextHitPoint, "◆⏭", "Next hit point"),
+            ] {
+                if ui
+                    .button(label)
+                    .accessible_name(name)
+                    .on_hover_text(self.commands.hover(cmd))
+                    .clicked()
+                {
+                    run = Some(cmd);
+                }
+            }
+            ui.separator();
+            let mut on = !self.video.hide_timecode;
+            if ui
+                .checkbox(&mut on, "Timecode")
+                .on_hover_text(self.commands.hover(Cmd::VideoTimecode))
+                .changed()
+            {
+                run = Some(Cmd::VideoTimecode);
+            }
+            // Offered when the timecode doesn't yet start with the film.
+            let film = self.video.current(playhead);
+            let lined_up =
+                film.and_then(|c| Some((c, c.thumbs.info()?)))
+                    .is_none_or(|(c, info)| {
+                        let clock = hitpoints::clock(&self.timecode);
+                        rate_for(&info, clock.rate) == Some(clock.rate) && clock.offset == c.zero()
+                    });
+            if !lined_up
+                && ui
+                    .button(self.commands.name(Cmd::TimecodeFromFilm).to_string())
+                    .on_hover_text(self.commands.hover(Cmd::TimecodeFromFilm))
+                    .clicked()
+            {
+                run = Some(Cmd::TimecodeFromFilm);
+            }
+        });
+        let clock = hitpoints::clock(&self.timecode);
+        let out = self
+            .video
+            .pane(ui, playhead, self.rate, &clock, &self.hit_points);
+        if let Some(at) = out.seek {
+            self.send(Command::Seek(Frames(at)));
+        }
+        if let Some(cmd) = run.or(out.run) {
+            let ctx = ui.ctx().clone();
+            self.run(&ctx, cmd);
+        }
+    }
+
+    /// Moves the playhead `by` frames: the film's frames where one is
+    /// showing, or else the timecode's. Playback stops, as stepping is
+    /// for looking closely.
+    pub(crate) fn step_frame(&mut self, by: i64) {
+        if self.ctl.status().playing() {
+            self.send(Command::Stop);
+        }
+        let at = self.ctl.status().position().0;
+        let to = self.video.step(at, by, self.rate).unwrap_or_else(|| {
+            let c = hitpoints::clock(&self.timecode);
+            c.frame_start(c.frame_at(at, self.rate) + by, self.rate)
+        });
+        self.send(Command::Seek(Frames(to.max(0))));
+    }
+
+    /// Goes to the next hit point after the playhead, or the one before
+    /// it (`forward` false).
+    pub(crate) fn jump_hit_point(&mut self, forward: bool) {
+        let at = self.ctl.status().position().0;
+        let to = if forward {
+            self.hit_points.iter().map(|h| h.at).find(|&h| h > at)
+        } else {
+            self.hit_points.iter().rev().map(|h| h.at).find(|&h| h < at)
+        };
+        if let Some(to) = to {
+            self.send(Command::Seek(Frames(to)));
+        }
+    }
+
+    /// A picture moved by `by` from where its film's first frame was
+    /// `zero` and it ran from `start` to `end`: the hit points on it go
+    /// with it, and so does the timecode if it was lined up with it.
+    pub(crate) fn picture_moved(&mut self, (zero, start, end, by): (i64, i64, i64, i64)) {
+        if self.timecode.offset == zero {
+            self.timecode.offset += by;
+        }
+        for h in self
+            .hit_points
+            .iter_mut()
+            .filter(|h| h.at >= start && h.at < end)
+        {
+            h.at = (h.at + by).max(0);
+        }
+        self.hit_points.sort_by_key(|h| h.at);
+    }
+
+    /// Sets the timecode to the film's frame rate, with its start
+    /// timecode on the film's first frame. Hit points stay with the
+    /// picture.
+    pub(crate) fn timecode_from_film(&mut self) {
+        if !self.may_edit_song() {
+            return;
+        }
+        let at = self.ctl.status().position().0;
+        let Some((zero, info)) =
+            (self.video.current(at)).and_then(|c| Some((c.zero(), c.thumbs.info()?)))
+        else {
+            self.message = Some("There's no video to take the timecode from.".into());
+            return;
+        };
+        let now_rate = hitpoints::clock(&self.timecode).rate;
+        match rate_for(&info, now_rate) {
+            Some(r) => self.timecode.rate = r.id().to_string(),
+            None => {
+                self.message = Some(format!(
+                    "The film runs at {:.3} frames a second, which timecode doesn't count in; \
+                     its start is lined up, at the rate already chosen.",
+                    info.fps()
+                ));
+            }
+        }
+        self.timecode.offset = zero;
+        self.timecode.shown = true;
+        // The film hasn't moved, so neither do its hit points: they only
+        // go on the start of their frame, which is now the film's.
+        let c = hitpoints::clock(&self.timecode);
+        for h in &mut self.hit_points {
+            h.at = c.snap(h.at, self.rate).max(0);
         }
     }
 }
 
 /// Seconds as minutes, seconds and thousandths: 1:02.500.
-fn clock(seconds: f64) -> String {
+fn clock_text(seconds: f64) -> String {
     let ms = (seconds * 1000.0).round().max(0.0) as u64;
     format!("{}:{:02}.{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
 }
@@ -655,8 +1015,8 @@ mod tests {
 
     #[test]
     fn clock_reads_minutes_seconds_and_thousandths() {
-        assert_eq!(clock(62.5), "1:02.500");
-        assert_eq!(clock(0.0), "0:00.000");
+        assert_eq!(clock_text(62.5), "1:02.500");
+        assert_eq!(clock_text(0.0), "0:00.000");
     }
 }
 
@@ -749,6 +1109,112 @@ mod in_the_app {
                 .and_then(|p| p.frame().0)
                 .is_some_and(|f| (f.time - 1.0).abs() < 0.01)
         });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scoring_to_picture_steps_frames_jumps_to_hit_points_and_exports_the_film() {
+        use crate::commands::Cmd;
+
+        let mut h = Harness::builder()
+            .with_size([1400.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| App::new(Vec::new()));
+        h.run();
+        let ctx = h.ctx.clone();
+        let rate = h.state().rate as i64;
+        // A film at bar 2 (two seconds in, at 120 a minute).
+        h.state_mut().video.add(&film(), 2 * rate);
+        until(&mut h, |a| {
+            a.video
+                .clips
+                .first()
+                .is_some_and(|c| c.thumbs.info().is_some())
+        });
+        let start = h.state().video.clips[0].start;
+        assert_eq!(start, 2 * rate);
+        let pos = |h: &Harness<'_, App>| h.state().ctl.status().position().0;
+        let go = |h: &mut Harness<'_, App>, to: i64| {
+            h.state_mut()
+                .send(daw_engine::engine::Command::Seek(daw_engine::time::Frames(
+                    to,
+                )));
+            until(h, |a| a.ctl.status().position().0 == to);
+        };
+        // 12 frames a second: a frame is a twelfth of a second.
+        let frame = |n: i64| start + (n * rate).div_euclid(12) + i64::from((n * rate) % 12 != 0);
+        go(&mut h, start + rate / 24);
+        h.state_mut().run(&ctx, Cmd::FrameForward);
+        until(&mut h, |a| a.ctl.status().position().0 == frame(1));
+        h.state_mut().run(&ctx, Cmd::FrameForward);
+        until(&mut h, |a| a.ctl.status().position().0 == frame(2));
+        h.state_mut().run(&ctx, Cmd::FrameBack);
+        until(&mut h, |a| a.ctl.status().position().0 == frame(1));
+        // Held at the film's first frame.
+        h.state_mut().run(&ctx, Cmd::FrameBack);
+        h.state_mut().run(&ctx, Cmd::FrameBack);
+        until(&mut h, |a| a.ctl.status().position().0 == start);
+
+        // Timecode lined up with the film: its rate, and its start on
+        // the film's first frame.
+        h.state_mut().run(&ctx, Cmd::TimecodeFromFilm);
+        let tc = h.state().timecode.clone();
+        assert_eq!(tc.offset, start);
+        assert!(tc.shown);
+        // 12 fps isn't a timecode rate: the one chosen stays.
+        assert_eq!(tc.rate, "25");
+
+        // Hit points: jump between them.
+        h.state_mut().add_hit_point(frame(6));
+        h.state_mut().add_hit_point(frame(18));
+        assert_eq!(h.state().hit_points.len(), 2);
+        let hits: Vec<i64> = h.state().hit_points.iter().map(|x| x.at).collect();
+        go(&mut h, start);
+        h.state_mut().run(&ctx, Cmd::NextHitPoint);
+        until(&mut h, |a| a.ctl.status().position().0 == hits[0]);
+        h.state_mut().run(&ctx, Cmd::NextHitPoint);
+        until(&mut h, |a| a.ctl.status().position().0 == hits[1]);
+        h.state_mut().run(&ctx, Cmd::PrevHitPoint);
+        until(&mut h, |a| a.ctl.status().position().0 == hits[0]);
+        assert_eq!(pos(&h), hits[0]);
+
+        // Moving the picture takes its hit points and timecode with it.
+        h.state_mut()
+            .picture_moved((start, start, start + 2 * rate, rate));
+        assert_eq!(h.state().timecode.offset, start + rate);
+        assert_eq!(h.state().hit_points[0].at, hits[0] + rate);
+        h.state_mut()
+            .picture_moved((start + rate, start + rate, start + 3 * rate, -rate));
+
+        // The pane draws, with the timecode on the picture, which a
+        // command hides.
+        h.state_mut().run(&ctx, Cmd::Video);
+        h.run();
+        assert!(!h.state().video.hide_timecode);
+        h.state_mut().run(&ctx, Cmd::VideoTimecode);
+        assert!(h.state().video.hide_timecode);
+        h.state_mut().run(&ctx, Cmd::VideoTimecode);
+
+        // The film with the mix, into the project's Exports folder.
+        let dir = std::env::temp_dir().join(format!("daw-scoring-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        h.state_mut().save_in(&ctx, &dir.join("Score")).unwrap();
+        h.run();
+        h.state_mut().run(&ctx, Cmd::ExportVideo);
+        assert!(h.state().export.busy(), "{:?}", h.state().message);
+        until(&mut h, |a| a.export.finished().is_some());
+        let (folder, lines) = h.state().export.finished().unwrap();
+        assert_eq!(lines.len(), 1, "only the film: {lines:?}");
+        let (name, error) = lines[0];
+        assert_eq!(error, None, "{name}");
+        let out = folder.join(name);
+        assert!(name.starts_with("counting with the mix."), "{name}");
+        let mut r = daw_video::Reader::open(&out, (64, 48)).unwrap();
+        assert_eq!(r.info().frames(), 24);
+        assert!(r.next_frame().unwrap().is_some());
+        // Nothing left behind but the film.
+        let files: Vec<_> = std::fs::read_dir(folder).unwrap().flatten().collect();
+        assert_eq!(files.len(), 1, "{files:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

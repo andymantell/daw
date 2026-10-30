@@ -4,6 +4,8 @@
 //! a time. Which files open depends on the decoders installed.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -183,4 +185,203 @@ impl Reader {
             time: time.nseconds() as f64 / 1e9,
         }))
     }
+}
+
+/// The muxer for a copy named `out`, and the sound encoders it takes,
+/// best first. `None` for an encoder means the sound goes in
+/// uncompressed.
+fn container(out: &Path) -> (&'static str, &'static [Option<&'static str>]) {
+    let ext = (out.extension())
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        // AAC if the system has an encoder for it, as players expect;
+        // or else MP3, which nearly all of them play too.
+        "mp4" | "m4v" => (
+            "mp4mux",
+            &[
+                Some("avenc_aac"),
+                Some("fdkaacenc"),
+                Some("voaacenc"),
+                Some("lamemp3enc"),
+                Some("opusenc"),
+            ],
+        ),
+        // Uncompressed, as video editors like.
+        "mov" => ("qtmux", &[None]),
+        "webm" => ("webmmux", &[Some("opusenc")]),
+        "ogv" | "ogg" => ("oggmux", &[Some("opusenc"), Some("flacenc")]),
+        "avi" => ("avimux", &[None]),
+        _ => ("matroskamux", &[Some("flacenc"), None]),
+    }
+}
+
+fn make(name: &str) -> Result<gst::Element, Error> {
+    gst::ElementFactory::make(name)
+        .build()
+        .map_err(|_| Error::CantWrap(format!("the system's media framework has no {name}")))
+}
+
+/// Settings that suit a mix, for the encoders that need them.
+fn tune(enc: &gst::Element) {
+    let name = enc
+        .factory()
+        .map(|f| f.name().to_string())
+        .unwrap_or_default();
+    match name.as_str() {
+        "lamemp3enc" => {
+            enc.set_property_from_str("target", "bitrate");
+            enc.set_property("bitrate", 320i32);
+            enc.set_property("cbr", true);
+        }
+        "opusenc" => enc.set_property("bitrate", 192_000i32),
+        "avenc_aac" | "fdkaacenc" | "voaacenc" if enc.find_property("bitrate").is_some() => {
+            enc.set_property_from_str("bitrate", "256000");
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn wrap(
+    video: &Path,
+    sound: &Path,
+    out: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), Error> {
+    init()?;
+    let failed = |e: &dyn std::fmt::Display| Error::CantWrap(e.to_string());
+    let (mux_name, encoders) = container(out);
+    let mux = make(mux_name)?;
+    let p = gst::Pipeline::new();
+    let film = make("filesrc")?;
+    film.set_property("location", video.to_string_lossy().as_ref());
+    let parse = make("parsebin")?;
+    let sink = make("filesink")?;
+    sink.set_property("location", out.to_string_lossy().as_ref());
+
+    // The sound: the mix, converted and encoded for the container.
+    let wav = make("filesrc")?;
+    wav.set_property("location", sound.to_string_lossy().as_ref());
+    let mut chain = vec![
+        wav,
+        make("wavparse")?,
+        make("audioconvert")?,
+        make("audioresample")?,
+    ];
+    let enc = encoders
+        .iter()
+        .find(|e| e.is_none_or(|n| gst::ElementFactory::find(n).is_some()))
+        .ok_or_else(|| {
+            Error::CantWrap(format!(
+                "the system's media framework has no sound encoder for {mux_name}"
+            ))
+        })?;
+    if let Some(name) = enc {
+        let e = make(name)?;
+        tune(&e);
+        chain.push(e);
+        // MP3 is framed for the container by its parser.
+        if *name == "lamemp3enc" && gst::ElementFactory::find("mpegaudioparse").is_some() {
+            chain.push(make("mpegaudioparse")?);
+        }
+    }
+    chain.push(make("queue")?);
+    p.add_many([&film, &parse, &mux, &sink])
+        .map_err(|e| failed(&e))?;
+    p.add_many(&chain).map_err(|e| failed(&e))?;
+    film.link(&parse).map_err(|e| failed(&e))?;
+    mux.link(&sink).map_err(|e| failed(&e))?;
+    gst::Element::link_many(&chain).map_err(|e| failed(&e))?;
+    // The sound's pad on the muxer: one taking what the chain ends in.
+    let last = chain.last().expect("a chain");
+    let before = &chain[chain.len() - 2];
+    let audio_pad = (before.pad_template("src"))
+        .and_then(|t| mux.compatible_pad_template(&t))
+        .and_then(|t| mux.request_pad(&t, None, None))
+        .ok_or_else(|| Error::CantWrap(format!("{mux_name} takes no sound of this kind")))?;
+    (last.static_pad("src").expect("a queue's output"))
+        .link(&audio_pad)
+        .map_err(|e| failed(&e))?;
+
+    // The picture: its first stream, as it is, into the muxer. Anything
+    // else in the file (its own sound, subtitles) is left behind.
+    let linked = Arc::new(Mutex::new(false));
+    let problem: Arc<Mutex<Option<String>>> = Arc::default();
+    {
+        let (p2, mux2, linked, problem) =
+            (p.downgrade(), mux.clone(), linked.clone(), problem.clone());
+        parse.connect_pad_added(move |_, pad| {
+            let Some(p) = p2.upgrade() else { return };
+            let caps = pad.current_caps().unwrap_or_else(|| pad.query_caps(None));
+            let is_video = caps
+                .structure(0)
+                .is_some_and(|s| s.name().starts_with("video/"));
+            let mut done = linked.lock().unwrap();
+            let into = if is_video && !*done {
+                *done = true;
+                let q = gst::ElementFactory::make("queue").build().ok();
+                q.and_then(|q| {
+                    p.add(&q).ok()?;
+                    q.sync_state_with_parent().ok()?;
+                    let to = mux2.compatible_pad(&q.static_pad("src")?, Some(&caps));
+                    let Some(to) = to else {
+                        *problem.lock().unwrap() = Some(format!(
+                            "{mux_name} can't hold this film's picture ({})",
+                            caps
+                        ));
+                        return None;
+                    };
+                    q.static_pad("src")?.link(&to).ok()?;
+                    q.static_pad("sink")
+                })
+            } else {
+                let f = gst::ElementFactory::make("fakesink")
+                    .property("sync", false)
+                    .property("async", false)
+                    .build()
+                    .ok();
+                f.and_then(|f| {
+                    p.add(&f).ok()?;
+                    f.sync_state_with_parent().ok()?;
+                    f.static_pad("sink")
+                })
+            };
+            if let Some(to) = into {
+                let _ = pad.link(&to);
+            }
+        });
+    }
+    let stop = Stop(p.clone());
+    p.set_state(gst::State::Playing)
+        .map_err(|_| Error::CantWrap(failure(&p).unwrap_or_else(|| "it didn't start".into())))?;
+    let bus = p.bus().ok_or(Error::CantWrap("no bus".into()))?;
+    let result = loop {
+        if cancel.load(Ordering::Relaxed) {
+            break Err(Error::CantWrap("cancelled".into()));
+        }
+        if let Some(why) = problem.lock().unwrap().take() {
+            break Err(Error::CantWrap(why));
+        }
+        let Some(msg) = bus.timed_pop_filtered(
+            gst::ClockTime::from_mseconds(200),
+            &[gst::MessageType::Eos, gst::MessageType::Error],
+        ) else {
+            continue;
+        };
+        match msg.view() {
+            gst::MessageView::Eos(_) => break Ok(()),
+            gst::MessageView::Error(e) => {
+                let why = problem.lock().unwrap().take();
+                break Err(Error::CantWrap(
+                    why.unwrap_or_else(|| e.error().to_string()),
+                ));
+            }
+            _ => {}
+        }
+    };
+    drop(stop);
+    if result.is_ok() && !*linked.lock().unwrap() {
+        return Err(Error::NoPicture);
+    }
+    result
 }

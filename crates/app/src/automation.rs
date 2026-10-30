@@ -11,11 +11,12 @@
 //! lane on the track from the moment play starts, with whatever the
 //! controls are set to, until play stops.
 //!
-//! The engine plays volume, pan, send and built-in effect lanes itself
-//! (see `daw_engine::automation`), so export follows them too. Plugin
-//! parameters are set from here each frame while playing, as a plugin's
-//! own controls have to be told on this thread; they are not followed by
-//! an export.
+//! The engine plays every lane itself (see `daw_engine::automation`):
+//! volume, pan, sends, built-in effect settings and plugin parameters
+//! (handed to the plugin with each block, in this process or in a helper
+//! process), so export follows them all. A plugin's own window is told
+//! the value from here each frame while playing, as it has to be told on
+//! this thread.
 //!
 //! Writing works by watching the controls: a control that moves while
 //! the song plays in a writing mode is being touched. While a lane is
@@ -129,6 +130,9 @@ const PLUGIN_RELEASE: Duration = Duration::from_millis(400);
 const HOLD_EVERY: f64 = 0.25;
 /// Most plugin parameters offered per plugin.
 const MOST_PLUGIN_PARAMS: usize = 64;
+/// How far (0 to 1) a plugin parameter may be from its lane before it
+/// counts as moved by hand.
+const PLUGIN_SLACK: f64 = 1e-3;
 
 /// One setting a lane can be on, as the pane lists it.
 struct Choice {
@@ -289,7 +293,15 @@ fn engine_target(t: &Track, sends: &[(&daw_project::Send, usize)], param: &str) 
                 param: fx_index(s, key)? as u32,
             })
         }
-        LaneTarget::Plugin { .. } | LaneTarget::Unknown => None,
+        LaneTarget::Plugin { effect, id } => {
+            let s = slot(t, effect)?;
+            s.plugin()?;
+            Some(Target::Insert {
+                id: s.id,
+                param: id,
+            })
+        }
+        LaneTarget::Unknown => None,
     }
 }
 
@@ -448,8 +460,8 @@ impl crate::App {
                 .filter_map(|l| Some((l.param.clone(), l.value_at(at)?)))
                 .collect();
             for (param, v) in lanes {
-                // Plugins are driven in `automation_tick`, and show it
-                // themselves.
+                // Plugins' windows are told in `automation_tick`, and
+                // show it themselves.
                 if param.starts_with(Lane::PLUGIN) {
                     continue;
                 }
@@ -506,11 +518,22 @@ impl crate::App {
                 let was = seen.insert(k.clone(), v);
                 let has_lane = t.automation.iter().any(|l| l.param == param);
                 if plugin && has_lane && mode != Mode::Off {
-                    // Driven by this module: moved if not where it was set.
+                    // Shown by this module and set by the engine block by
+                    // block: moved if neither where it was shown nor
+                    // anywhere the lane has been since (a plugin in a
+                    // helper process reports the engine's value).
                     let driven = self.automation.driven.get(&k).copied();
-                    if driven.is_some_and(|d| (d - v).abs() > 1e-6)
-                        && !touched.iter().any(|(a, b, _)| (a, b) == (&k.0, &k.1))
-                    {
+                    let line = (t.automation.iter())
+                        .find(|l| l.param == param)
+                        .and_then(|l| l.value_at(at));
+                    let off_line = match (driven, line) {
+                        (Some(d), Some(l)) => {
+                            v < d.min(l) - PLUGIN_SLACK || v > d.max(l) + PLUGIN_SLACK
+                        }
+                        (Some(d), None) => (d - v).abs() > PLUGIN_SLACK,
+                        (None, _) => false,
+                    };
+                    if off_line && !touched.iter().any(|(a, b, _)| (a, b) == (&k.0, &k.1)) {
                         touched.push((k.0.clone(), k.1.clone(), v));
                     }
                 } else if !has_lane
@@ -603,7 +626,8 @@ impl crate::App {
             changed |= self.end_pass(p, at);
         }
 
-        // Plugins follow their lanes.
+        // Plugins' own windows follow their lanes (the engine sets the
+        // plugins themselves, block by block).
         let mut sets: Vec<(usize, String, u32, f64, String)> = Vec::new();
         for (ti, t) in self.tracks.iter().enumerate() {
             if self.automation.mode(&t.key) == Mode::Off {
@@ -631,7 +655,7 @@ impl crate::App {
         for (ti, effect, id, v, param) in sets {
             let t = &self.tracks[ti];
             if let Some(p) = slot(t, &effect).and_then(FxSlot::plugin) {
-                p.set_param(id, v);
+                p.show_param(id, v);
                 self.automation.driven.insert((t.key.clone(), param), v);
             }
         }
@@ -1216,6 +1240,64 @@ mod tests {
         let key = h.state().tracks[0].key.clone();
         h.state_mut().automation.set_mode(&key, Mode::Off);
         assert!(h.state().session().tracks[0].automation.is_empty());
+    }
+
+    #[test]
+    fn a_plugin_lane_goes_to_the_engine_and_shows_on_the_plugin() {
+        let plugin = crate::freeze::test_plugin::bundle();
+        let class = daw_plugins::scan::scan_here(&plugin)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.is_audio_plugin() && !c.is_instrument())
+            .unwrap();
+        let mut h = harness();
+        let app = h.state_mut();
+        let rate = app.rate;
+        let effect = daw_project::Effect {
+            id: daw_project::new_id(),
+            name: class.name.clone(),
+            class: class.cid.iter().map(|&b| b as u8).collect(),
+            bundle: plugin.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let slot = app.effects.restore(&effect, rate).unwrap();
+        let slot_id = slot.id;
+        let gain = slot.plugin().unwrap().params()[0].id;
+        app.tracks[0].fx.push(slot);
+        let mut lane = Lane::new(format!("{}{}:{gain}", Lane::PLUGIN, effect.id));
+        lane.put(0, 0.5);
+        lane.put(48_000, 0.25);
+        app.tracks[0].automation.push(lane);
+        app.rebuild();
+
+        // The engine gets the lane as the plugin's insert, so playback
+        // and export set the plugin block by block.
+        let s = app.session();
+        assert_eq!(s.tracks[0].automation.len(), 1);
+        assert_eq!(
+            s.tracks[0].automation[0].target,
+            Target::Insert {
+                id: slot_id,
+                param: gain
+            }
+        );
+        // Playing, the plugin's own controls are shown the lane's value.
+        app.send(Command::Seek(Frames(0)));
+        app.send(Command::Play);
+        assert!(until(&mut h, 10, |a| a.ctl.status().position().0 > 1000));
+        let app = h.state();
+        let shown = app.tracks[0].fx[0].plugin().unwrap().param(gain).unwrap();
+        let at = app.ctl.status().position().0;
+        let line = app.tracks[0].automation[0].value_at(at).unwrap();
+        assert!((shown - line).abs() < 0.05, "shown {shown}, lane {line}");
+        // In Touch mode, that is not a touch: no pass starts.
+        let key = app.tracks[0].key.clone();
+        h.state_mut().automation.set_mode(&key, Mode::Touch);
+        for _ in 0..10 {
+            h.step();
+        }
+        assert!(h.state().automation.passes.is_empty());
+        h.state_mut().send(Command::Stop);
     }
 
     #[test]

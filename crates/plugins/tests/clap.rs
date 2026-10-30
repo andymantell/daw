@@ -114,6 +114,26 @@ fn audio_comes_through_delayed_with_its_gain() {
 }
 
 #[test]
+fn a_setting_from_the_engine_is_heard_with_the_block() {
+    for remote in [false, true] {
+        let (plugin, mut fx, _host) = open(&clap(), remote, &Layout::default());
+        block(&mut fx, 0.5, None);
+        // The app's 0 to 1 becomes the plugin's own range.
+        fx.set_param(GAIN_PARAM, 0.25);
+        let out = block(&mut fx, 0.5, None);
+        assert_eq!(out, vec![0.25; BLOCK], "remote {remote}");
+        // And stays until set again.
+        assert_eq!(block(&mut fx, 0.5, None), vec![0.25; BLOCK]);
+        if remote {
+            assert_eq!(plugin.param(GAIN_PARAM), Some(0.25), "the helper shows it");
+        } else {
+            plugin.show_param(GAIN_PARAM, 0.25);
+            assert_eq!(plugin.param(GAIN_PARAM), Some(0.25));
+        }
+    }
+}
+
+#[test]
 fn changes_the_plugin_makes_itself_come_back() {
     for remote in [false, true] {
         let (mut plugin, mut fx, _host) = open(&clap(), remote, &Layout::default());

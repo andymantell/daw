@@ -164,6 +164,44 @@ fn the_engine_compensates_the_plugins_latency() {
 }
 
 #[test]
+fn a_lane_sets_the_plugins_setting_block_by_block() {
+    use daw_engine::automation::{Curve, LaneSpec, Target};
+
+    let module = Arc::new(Module::load(&bundle()).unwrap());
+    let (plugin, fx) = instantiate(module, &PROCESSOR_CID, RATE as f64, BLOCK).unwrap();
+    let gain = plugin.params()[0].id;
+    let data = Arc::new(AudioData {
+        channels: vec![vec![1.0; 4000]],
+        rate: RATE,
+    });
+    let mut s = Session::new(TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON));
+    let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), data)]);
+    t.inserts = vec![InsertSpec {
+        id: 1,
+        bypass: false,
+        latency: plugin.latency(),
+        sidechain: None,
+        ..Default::default()
+    }];
+    // Half gain for the first 2048 frames, then a quarter.
+    t.automation = vec![LaneSpec {
+        target: Target::Insert { id: 1, param: gain },
+        curve: Arc::new(Curve::new(vec![(0, 0.5), (2047, 0.5), (2048, 0.25)])),
+        live: false,
+    }];
+    s.tracks = vec![t];
+    let mut fx: Vec<(u64, Box<dyn Insert>)> = vec![(1, Box::new(fx))];
+    let g = s.compile_with(BLOCK, &mut fx).unwrap();
+    let [l, _] = daw_engine::engine::render_offline(g, Frames(0), 4000, BLOCK);
+    // Mono at centre pan: the track's own law, read off a settled frame.
+    let law = l[1000] / 0.5;
+    assert!((l[1500] / law - 0.5).abs() < 1e-6, "{}", l[1500] / law);
+    assert!((l[3000] / law - 0.25).abs() < 1e-6, "{}", l[3000] / law);
+    // The controller was never told: the lane is the processor's alone.
+    assert_eq!(plugin.param(gain), Some(1.0));
+}
+
+#[test]
 fn processing_does_not_allocate() {
     let module = Arc::new(Module::load(&bundle()).unwrap());
     let (plugin, mut fx) = instantiate(module, &PROCESSOR_CID, RATE as f64, BLOCK).unwrap();

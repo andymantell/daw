@@ -52,6 +52,39 @@ fn ones(fx: &mut impl Insert, blocks: usize) -> Vec<f32> {
 }
 
 #[test]
+fn a_setting_from_the_engine_reaches_the_helper_before_the_block() {
+    let host = spawn();
+    // Offline: told with the block.
+    let (plugin, mut fx) = host
+        .instantiate(&bundle(), &PROCESSOR_CID, RATE, BLOCK, None)
+        .unwrap();
+    let id = plugin.params()[0].id;
+    ones(&mut fx, 1);
+    fx.set_param(id, 0.25);
+    let out = ones(&mut fx, 2);
+    assert!(out.iter().all(|&x| x == 0.25), "{out:?}");
+    // The helper's own copy of the plugin shows the value too.
+    assert_eq!(plugin.param(id), Some(0.25));
+
+    // Live: handed over by the I/O thread, before the next block it
+    // sends.
+    let (plugin, mut fx) = host
+        .instantiate(&bundle(), &PROCESSOR_CID, RATE, BLOCK, Some(BLOCK))
+        .unwrap();
+    fx.set_param(id, 0.5);
+    let mut last = Vec::new();
+    for _ in 0..8 {
+        let mut a = vec![1.0; BLOCK];
+        let mut b = vec![1.0; BLOCK];
+        fx.process(&mut a, &mut b);
+        answered(&fx, BLOCK);
+        last = a;
+    }
+    assert!(last.iter().all(|&x| x == 0.5), "{last:?}");
+    assert_eq!(plugin.param(id), Some(0.5));
+}
+
+#[test]
 fn a_plugin_in_a_helper_processes_audio_and_keeps_its_settings() {
     let host = spawn();
     let (plugin, mut fx) = host

@@ -820,6 +820,7 @@ pub fn instantiate_with(
         buses,
     };
     plugin.rescan_params();
+    processor.infos = plugin.infos.lock().map(|i| i.clone()).unwrap_or_default();
     Ok((plugin, processor))
 }
 
@@ -942,6 +943,18 @@ impl ClapPlugin {
         }
         if let Ok(mut q) = self.edits.lock() {
             let _ = q.push((id, plain));
+        }
+    }
+
+    /// Notes a value (0 to 1) the engine gives the processor block by
+    /// block (an automation lane), so [`param`](Self::param) reads it;
+    /// the plugin hears it with the block, not from here.
+    pub fn show_param(&self, id: u32, value: f64) {
+        let Some(info) = self.info(id) else {
+            return;
+        };
+        if let Ok(mut v) = self.values.lock() {
+            v.insert(id, info.plain(value));
         }
     }
 
@@ -1197,6 +1210,12 @@ impl Drop for ClapPlugin {
 pub struct ClapProcessor {
     core: Arc<Core>,
     edits: Consumer<(u32, f64)>,
+    /// Set by the engine for the next block (automation lanes), as the
+    /// app's 0 to 1, after the UI's edits so they win. Never grows on
+    /// the audio thread.
+    auto: Vec<(u32, f64)>,
+    /// The parameters' ranges, to make the engine's values plain.
+    infos: Vec<Info>,
     ins: Box<InEvents>,
     in_list: clap_input_events,
     outs: Box<OutEvents>,
@@ -1259,6 +1278,8 @@ impl ClapProcessor {
         ClapProcessor {
             core,
             edits,
+            auto: Vec::with_capacity(EDITS),
+            infos: Vec::new(),
             ins,
             in_list,
             outs,
@@ -1310,6 +1331,15 @@ impl ClapProcessor {
                 Err(_) => break,
             }
         }
+        for &(id, v) in &self.auto {
+            if ins.len() == ins.capacity() {
+                break;
+            }
+            if let Some(info) = self.infos.iter().find(|i| i.id == id) {
+                ins.push(param_event(id, info.plain(v)));
+            }
+        }
+        self.auto.clear();
         self.outs.edited = false;
 
         let process = clap_process {
@@ -1382,6 +1412,12 @@ impl Insert for ClapProcessor {
 
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
         self.blocks(left, right, Some(key));
+    }
+
+    fn set_param(&mut self, param: u32, value: f64) {
+        if self.auto.len() < self.auto.capacity() {
+            self.auto.push((param, value));
+        }
     }
 }
 

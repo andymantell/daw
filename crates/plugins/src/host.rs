@@ -533,11 +533,13 @@ impl Host {
                     extra: AtomicU32::new(block as u32),
                 });
                 late = Some(state.clone());
+                let (params_tx, params_rx) = RingBuffer::new(PARAM_SETS);
                 let side = IoSide {
                     instance: instance.clone(),
                     state: state.clone(),
                     input: in_rx,
                     output: out_tx,
+                    params: params_rx,
                     max_block,
                     width,
                 };
@@ -547,6 +549,7 @@ impl Host {
                     state,
                     input: in_tx,
                     output: out_rx,
+                    params: params_tx,
                     width,
                     skip: 0,
                     pad: 0,
@@ -556,6 +559,7 @@ impl Host {
                 instance: instance.clone(),
                 max_block,
                 keyed: width == 4,
+                params: Vec::new(),
             }),
         };
         let plugin = RemotePlugin {
@@ -776,12 +780,17 @@ struct ProcState {
     extra: AtomicU32,
 }
 
+/// Settings the engine can set on a live processor between two blocks.
+const PARAM_SETS: usize = 256;
+
 /// The I/O thread's end of a live processor's queues.
 struct IoSide {
     instance: Arc<Instance>,
     state: Arc<ProcState>,
     input: Consumer<f32>,
     output: Producer<f32>,
+    /// Settings the engine set for the next block (automation lanes).
+    params: Consumer<(u32, f64)>,
     max_block: usize,
     /// Samples per frame in `input`: left and right, then the
     /// sidechain's left and right if it listens to one.
@@ -829,6 +838,14 @@ fn io_main(shared: Weak<Shared>, register: mpsc::Receiver<IoSide>) {
                     kr.push(take());
                 }
             }
+            // Settings the engine set go first, so the block hears them.
+            while let Ok((param, value)) = side.params.pop() {
+                let _ = s.call(&Request::SetParam {
+                    id: side.instance.id,
+                    param,
+                    value,
+                });
+            }
             let reply = s.call(&Request::Process {
                 id: side.instance.id,
                 left: l.clone(),
@@ -859,6 +876,9 @@ pub struct LiveProcessor {
     state: Arc<ProcState>,
     input: Producer<f32>,
     output: Consumer<f32>,
+    /// Settings the engine sets (automation lanes), for the I/O thread
+    /// to hand to the helper before the next block.
+    params: Producer<(u32, f64)>,
     /// Samples per frame going in (see [`IoSide::width`]).
     width: usize,
     /// Frames of late output to throw away, so the delay stays fixed.
@@ -955,11 +975,20 @@ pub struct OfflineProcessor {
     max_block: usize,
     /// It listens to a sidechain.
     keyed: bool,
+    /// Settings the engine set for the next block (automation lanes).
+    params: Vec<(u32, f64)>,
 }
 
 impl OfflineProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len());
+        for (param, value) in self.params.drain(..) {
+            let _ = self.instance.host.call(&Request::SetParam {
+                id: self.instance.id,
+                param,
+                value,
+            });
+        }
         let mut done = 0;
         while done < n {
             let end = (done + self.max_block).min(n);
@@ -1028,6 +1057,19 @@ impl Insert for RemoteProcessor {
         match self {
             RemoteProcessor::Live(p) => p.process(left, right, Some(key)),
             RemoteProcessor::Offline(p) => p.process(left, right, Some(key)),
+        }
+    }
+
+    /// A setting for the next block, from an automation lane: the
+    /// helper is told before the block, so the plugin's window there
+    /// shows it too. A live processor's queue has room for a block's
+    /// worth; more in one block are left out.
+    fn set_param(&mut self, param: u32, value: f64) {
+        match self {
+            RemoteProcessor::Live(p) => {
+                let _ = p.params.push((param, value));
+            }
+            RemoteProcessor::Offline(p) => p.params.push((param, value)),
         }
     }
 }

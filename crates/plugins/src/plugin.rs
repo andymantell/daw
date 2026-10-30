@@ -474,11 +474,18 @@ impl LocalPlugin {
     /// Sets a parameter from the host's own controls: the controller is
     /// told now, the processor with its next block.
     pub fn set_param(&self, id: u32, value: f64) {
-        if let Some(c) = &self.core.controller {
-            unsafe { c.setParamNormalized(id, value) };
-        }
+        self.show_param(id, value);
         if let Ok(mut q) = self.handler.edits.lock() {
             let _ = q.push((id, value));
+        }
+    }
+
+    /// Tells the controller (and so the plugin's window) a value the
+    /// processor is given another way: by the engine, block by block,
+    /// from an automation lane.
+    pub fn show_param(&self, id: u32, value: f64) {
+        if let Some(c) = &self.core.controller {
+            unsafe { c.setParamNormalized(id, value) };
         }
     }
 
@@ -693,6 +700,9 @@ impl BusBufs {
 pub struct LocalProcessor {
     core: Arc<Core>,
     edits: Consumer<(ParamID, ParamValue)>,
+    /// Set by the engine for the next block (automation lanes), after
+    /// the UI's edits so they win. Never grows on the audio thread.
+    auto: Vec<(ParamID, ParamValue)>,
     changes: ComWrapper<ParamChanges>,
     changes_ptr: ComPtr<IParameterChanges>,
     out_changes: ComWrapper<ParamChanges>,
@@ -740,6 +750,7 @@ impl LocalProcessor {
         LocalProcessor {
             core,
             edits,
+            auto: Vec::with_capacity(EDITS),
             changes,
             changes_ptr,
             out_changes,
@@ -775,6 +786,12 @@ impl LocalProcessor {
                 break;
             }
         }
+        for &(id, v) in &self.auto {
+            if !self.changes.add(id, 0, v) {
+                break;
+            }
+        }
+        self.auto.clear();
 
         let mut data = ProcessData {
             processMode: ProcessModes_::kRealtime as i32,
@@ -847,6 +864,12 @@ impl Insert for LocalProcessor {
 
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
         self.blocks(left, right, Some(key));
+    }
+
+    fn set_param(&mut self, param: u32, value: f64) {
+        if self.auto.len() < self.auto.capacity() {
+            self.auto.push((param, value));
+        }
     }
 }
 
@@ -948,6 +971,18 @@ impl Plugin {
         }
     }
 
+    /// Shows a value on the plugin's own controls that the engine gives
+    /// its processor block by block (an automation lane), without
+    /// setting it again. A plugin in a helper is told the value by the
+    /// engine's path and shows it from there.
+    pub fn show_param(&self, id: u32, value: f64) {
+        match self {
+            Plugin::Local(p) => p.show_param(id, value),
+            Plugin::Remote(_) => {}
+            Plugin::Clap(p) => p.show_param(id, value),
+        }
+    }
+
     pub fn save_state(&self) -> Result<PluginState> {
         match self {
             Plugin::Local(p) => p.save_state(),
@@ -1041,6 +1076,14 @@ impl Insert for Processor {
             Processor::Local(p) => p.process_keyed(left, right, key),
             Processor::Remote(p) => p.process_keyed(left, right, key),
             Processor::Clap(p) => p.process_keyed(left, right, key),
+        }
+    }
+
+    fn set_param(&mut self, param: u32, value: f64) {
+        match self {
+            Processor::Local(p) => p.set_param(param, value),
+            Processor::Remote(p) => p.set_param(param, value),
+            Processor::Clap(p) => p.set_param(param, value),
         }
     }
 }

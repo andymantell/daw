@@ -44,6 +44,9 @@ pub struct ClassInfo {
     /// VST 3 sub-categories, e.g. "Fx|Distortion" or "Instrument|Synth".
     pub sub_categories: String,
     pub vendor: String,
+    /// Older classes this one stands in for, as the plugin declares
+    /// (see [`crate::compat`]). Filled in by scanning.
+    pub replaces: Vec<TUID>,
 }
 
 impl ClassInfo {
@@ -121,6 +124,7 @@ impl Module {
                             category: read_cstr(&info.category),
                             sub_categories: read_cstr(&info.subCategories),
                             vendor: if v.is_empty() { vendor.clone() } else { v },
+                            replaces: Vec::new(),
                         });
                     }
                 }
@@ -132,6 +136,7 @@ impl Module {
                         category: read_cstr(&info.category),
                         sub_categories: String::new(),
                         vendor: vendor.clone(),
+                        replaces: Vec::new(),
                     }
                 })
             })

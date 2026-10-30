@@ -7,6 +7,10 @@
 //! [`SCAN_ARG`]); the app only reads what the child printed. Results are
 //! kept in a [`PluginList`] saved as text, and a bundle is scanned again
 //! only when its modification time changes.
+//!
+//! Scanning also notes which older classes each plugin says it stands
+//! in for ([`crate::compat`]), so a project saved with an older version
+//! opens with the newer one ([`PluginList::replacement_for`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -77,9 +81,19 @@ pub fn find_bundles(dirs: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
-/// Loads `bundle` in this process and lists its classes.
+/// Loads `bundle` in this process and lists its classes, with what
+/// each replaces.
 pub fn scan_here(bundle: &Path) -> Result<Vec<ClassInfo>> {
-    Ok(Module::load(bundle)?.classes())
+    let module = Module::load(bundle)?;
+    let replaces = crate::compat::of_module(&module);
+    let mut classes = module.classes();
+    for c in &mut classes {
+        c.replaces = (replaces.iter())
+            .filter(|r| r.new == c.cid)
+            .map(|r| r.old)
+            .collect();
+    }
+    Ok(classes)
 }
 
 fn clean(s: &str) -> String {
@@ -87,19 +101,30 @@ fn clean(s: &str) -> String {
 }
 
 fn class_line(c: &ClassInfo) -> String {
-    format!(
+    let mut line = format!(
         "class\t{}\t{}\t{}\t{}\t{}",
         cid_to_hex(&c.cid),
         clean(&c.name),
         clean(&c.category),
         clean(&c.sub_categories),
         clean(&c.vendor)
-    )
+    );
+    if !c.replaces.is_empty() {
+        let old: Vec<String> = c.replaces.iter().map(cid_to_hex).collect();
+        let _ = write!(line, "\t{}", old.join(","));
+    }
+    line
 }
 
+/// A class line's fields; lists written before classes could replace
+/// others have one field fewer.
 fn parse_class(fields: &[&str]) -> Option<ClassInfo> {
-    let [cid, name, category, sub, vendor] = fields else {
-        return None;
+    let (cid, name, category, sub, vendor, replaces) = match fields {
+        [cid, name, category, sub, vendor] => (cid, name, category, sub, vendor, ""),
+        [cid, name, category, sub, vendor, replaces] => {
+            (cid, name, category, sub, vendor, *replaces)
+        }
+        _ => return None,
     };
     Some(ClassInfo {
         cid: cid_from_hex(cid)?,
@@ -107,6 +132,10 @@ fn parse_class(fields: &[&str]) -> Option<ClassInfo> {
         category: category.to_string(),
         sub_categories: sub.to_string(),
         vendor: vendor.to_string(),
+        replaces: (replaces.split(','))
+            .filter(|s| !s.is_empty())
+            .map(cid_from_hex)
+            .collect::<Option<_>>()?,
     })
 }
 
@@ -271,6 +300,19 @@ impl PluginList {
             .collect();
         out.sort_by_key(|a| (a.class.is_instrument(), a.class.name.to_lowercase()));
         out
+    }
+
+    /// The installed plugin that stands in for class `old` (an older
+    /// version of it, by its own declaration), if there is one and it is
+    /// switched on. A plugin installed as itself is not replaced.
+    pub fn replacement_for(&self, old: &vst3::Steinberg::TUID) -> Option<Available> {
+        let plugins = self.plugins();
+        if plugins.iter().any(|a| a.class.cid == *old) {
+            return None;
+        }
+        plugins
+            .into_iter()
+            .find(|a| a.enabled && a.class.replaces.contains(old))
     }
 
     /// Bundles that failed to scan, with why.

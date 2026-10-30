@@ -15,13 +15,28 @@
 //! [`Plugin`] and [`Processor`] are the two sides of a plugin wherever
 //! it runs: in this process, or in a helper process ([`crate::host`])
 //! that a crash takes down instead of the app.
+//!
+//! **Buses.** A plugin can have more than one audio input and output.
+//! The main ones carry the track's audio; a [`Layout`] switches on, as
+//! well, the first side input (for a sidechain: another track's audio)
+//! and any extra outputs, which are mixed into the track. Each bus is
+//! asked for in stereo (mono where the plugin has it mono); a plugin
+//! that wants otherwise keeps its own arrangement and the host adapts.
+//!
+//! **Restarts.** A plugin whose delay changes while it plays asks the
+//! host to restart it. [`LocalPlugin::poll`] does so on the UI thread
+//! while the audio side plays silence for the moment it takes (a lock
+//! the audio thread only ever tries, never waits on), then reads the new
+//! delay, which the app makes up for by rebuilding its graph. A plugin
+//! whose buses changed, or that asks to be loaded again, is reported
+//! for the app to make again with its settings.
 
 #![allow(non_snake_case)]
 
 use std::ffi::CStr;
 use std::ptr;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use rtrb::{Consumer, RingBuffer};
 use vst3::Steinberg::Vst::*;
@@ -51,6 +66,10 @@ struct Core {
     /// The controller is a separate object we created.
     separate: bool,
     connections: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
+    /// Held by the audio side for each block, and by the UI side while
+    /// it restarts the plugin. The audio side only tries it: when the UI
+    /// side has it, the block is silent.
+    gate: Mutex<()>,
     // Dropped last: the module must outlive its objects.
     _module: Arc<Module>,
 }
@@ -89,6 +108,51 @@ pub struct Param {
     pub steps: i32,
 }
 
+/// One of a plugin's audio buses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Bus {
+    pub name: String,
+    pub channels: u32,
+    /// A side bus (a sidechain input, an extra output) rather than a
+    /// main one.
+    pub aux: bool,
+}
+
+/// A plugin's audio buses, as set up.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Buses {
+    pub inputs: Vec<Bus>,
+    pub outputs: Vec<Bus>,
+}
+
+impl Buses {
+    /// The input a sidechain goes to: the first side input after the
+    /// main one.
+    pub fn sidechain(&self) -> Option<usize> {
+        (self.inputs.iter().enumerate())
+            .skip(1)
+            .find(|(_, b)| b.aux && b.channels > 0)
+            .map(|(i, _)| i)
+    }
+
+    /// The outputs after the main one, by index.
+    pub fn extra_outputs(&self) -> impl Iterator<Item = (usize, &Bus)> {
+        (self.outputs.iter().enumerate())
+            .skip(1)
+            .filter(|(_, b)| b.channels > 0)
+    }
+}
+
+/// Which buses to switch on besides the main input and output.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Layout {
+    /// The sidechain input, if the plugin has one.
+    pub sidechain: bool,
+    /// Extra outputs mixed into the track, by bus index (the main
+    /// output, 0, always is).
+    pub outputs: Vec<u32>,
+}
+
 /// The UI side of a plugin running in this process.
 pub struct LocalPlugin {
     // Declared first so it is dropped first: the editor must be closed
@@ -97,18 +161,31 @@ pub struct LocalPlugin {
     editor: Option<crate::editor_win::EditorWindow>,
     core: Arc<Core>,
     handler: ComWrapper<ComponentHandler>,
+    buses: Buses,
 }
 
 /// Edits queued between the UI and the audio thread.
 const EDITS: usize = 1024;
 
 /// Creates and starts the plugin class `cid` from `module`, ready to
-/// process blocks of up to `max_block` frames at `rate`.
+/// process blocks of up to `max_block` frames at `rate`, with its main
+/// buses only.
 pub fn instantiate(
     module: Arc<Module>,
     cid: &TUID,
     rate: f64,
     max_block: usize,
+) -> Result<(LocalPlugin, LocalProcessor)> {
+    instantiate_with(module, cid, rate, max_block, &Layout::default())
+}
+
+/// As [`instantiate`], also switching on the buses `layout` asks for.
+pub fn instantiate_with(
+    module: Arc<Module>,
+    cid: &TUID,
+    rate: f64,
+    max_block: usize,
+    layout: &Layout,
 ) -> Result<(LocalPlugin, LocalProcessor)> {
     let host = host_app();
     let component: ComPtr<IComponent> = module
@@ -145,7 +222,7 @@ pub fn instantiate(
     let (tx, rx) = RingBuffer::new(EDITS);
     let handler = ComWrapper::new(ComponentHandler {
         edits: Mutex::new(tx),
-        restart_requested: Default::default(),
+        restart: Default::default(),
         edited: Default::default(),
     });
     let mut connections = None;
@@ -166,7 +243,7 @@ pub fn instantiate(
         }
     }
 
-    let buses = |dir: BusDirections| -> Vec<usize> {
+    fn read_buses(component: &ComPtr<IComponent>, dir: BusDirections) -> Vec<Bus> {
         let n =
             unsafe { component.getBusCount(MediaTypes_::kAudio as MediaType, dir as BusDirection) };
         (0..n)
@@ -180,13 +257,19 @@ pub fn instantiate(
                         &mut info,
                     )
                 };
-                info.channelCount.max(0) as usize
+                Bus {
+                    name: read_wstr(&info.name),
+                    channels: info.channelCount.max(0) as u32,
+                    aux: info.busType == BusTypes_::kAux as BusType,
+                }
             })
             .collect()
+    }
+    let before = Buses {
+        inputs: read_buses(&component, BusDirections_::kInput),
+        outputs: read_buses(&component, BusDirections_::kOutput),
     };
-    let inputs = buses(BusDirections_::kInput);
-    let outputs = buses(BusDirections_::kOutput);
-    if outputs.first().is_none_or(|&c| c == 0) {
+    if before.outputs.first().is_none_or(|b| b.channels == 0) {
         return Err("the plugin has no audio output".into());
     }
 
@@ -196,16 +279,18 @@ pub fn instantiate(
         controller,
         separate,
         connections,
+        gate: Mutex::new(()),
         _module: module,
     });
-    let plugin = LocalPlugin {
+    let mut plugin = LocalPlugin {
         #[cfg(windows)]
         editor: None,
         core: core.clone(),
         handler,
+        buses: before,
     };
     plugin.sync_controller();
-    unsafe {
+    let (sidechain, active_out) = unsafe {
         let mut setup = ProcessSetup {
             processMode: ProcessModes_::kRealtime as i32,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
@@ -216,16 +301,57 @@ pub fn instantiate(
             core.processor.setupProcessing(&mut setup),
             "setupProcessing",
         )?;
-        // Main buses only; side-chains get silence.
+        // Stereo wherever the plugin will take it (mono buses stay
+        // mono). A plugin that refuses keeps an arrangement of its own,
+        // read back below; the host mixes whatever it gets to stereo.
+        let want = |list: &[Bus]| -> Vec<SpeakerArrangement> {
+            (list.iter())
+                .map(|b| {
+                    if b.channels == 1 {
+                        SpeakerArr::kMono
+                    } else {
+                        SpeakerArr::kStereo
+                    }
+                })
+                .collect()
+        };
+        let (mut ins, mut outs) = (want(&plugin.buses.inputs), want(&plugin.buses.outputs));
+        core.processor.setBusArrangements(
+            if ins.is_empty() {
+                ptr::null_mut()
+            } else {
+                ins.as_mut_ptr()
+            },
+            ins.len() as i32,
+            outs.as_mut_ptr(),
+            outs.len() as i32,
+        );
+        plugin.buses = Buses {
+            inputs: read_buses(&core.component, BusDirections_::kInput),
+            outputs: read_buses(&core.component, BusDirections_::kOutput),
+        };
+        let sidechain = plugin.buses.sidechain().filter(|_| layout.sidechain);
+        let mut active_in: Vec<usize> = Vec::new();
+        if !plugin.buses.inputs.is_empty() {
+            active_in.push(0);
+        }
+        active_in.extend(sidechain);
+        let mut active_out = vec![0];
+        for &o in &layout.outputs {
+            let o = o as usize;
+            if o > 0 && o < plugin.buses.outputs.len() && !active_out.contains(&o) {
+                active_out.push(o);
+            }
+        }
         for (dir, list) in [
-            (BusDirections_::kInput, &inputs),
-            (BusDirections_::kOutput, &outputs),
+            (BusDirections_::kInput, &active_in),
+            (BusDirections_::kOutput, &active_out),
         ] {
-            if !list.is_empty() {
+            for &i in list {
                 core.component.activateBus(
                     MediaTypes_::kAudio as MediaType,
                     dir as BusDirection,
-                    0,
+                    i as i32,
                     1,
                 );
             }
@@ -233,8 +359,18 @@ pub fn instantiate(
         check(core.component.setActive(1), "setActive")?;
         // Some plugins return kNotImplemented here, which is allowed.
         core.processor.setProcessing(1);
-    }
-    let processor = LocalProcessor::new(core, rx, &inputs, &outputs, max_block);
+        (sidechain, active_out)
+    };
+    let channels = |list: &[Bus]| list.iter().map(|b| b.channels as usize).collect::<Vec<_>>();
+    let mut processor = LocalProcessor::new(
+        core,
+        rx,
+        &channels(&plugin.buses.inputs),
+        &channels(&plugin.buses.outputs),
+        max_block,
+    );
+    processor.key = sidechain;
+    processor.mix = active_out[1..].to_vec();
     Ok((plugin, processor))
 }
 
@@ -244,12 +380,38 @@ impl LocalPlugin {
         unsafe { self.core.processor.getLatencySamples() }
     }
 
-    /// True once after the plugin asked the host to restart it, which
-    /// it does when its latency or parameters change.
-    pub fn take_restart_request(&self) -> bool {
-        self.handler
-            .restart_requested
-            .swap(false, Ordering::Relaxed)
+    /// The restart flags the plugin has raised since last asked (zero
+    /// for none): it raises them when its delay, buses or parameters
+    /// change.
+    pub fn take_restart_flags(&self) -> i32 {
+        self.handler.restart.swap(0, Ordering::Relaxed)
+    }
+
+    /// The plugin's audio buses, as set up.
+    pub fn buses(&self) -> &Buses {
+        &self.buses
+    }
+
+    /// Stops and starts the plugin's processing, as VST 3 asks for once
+    /// its delay has changed, while the audio side plays silence.
+    pub fn reactivate(&self) {
+        let _quiet = self.core.gate.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            self.core.processor.setProcessing(0);
+            self.core.component.setActive(0);
+            self.core.component.setActive(1);
+            self.core.processor.setProcessing(1);
+        }
+    }
+
+    /// The id the plugin now uses for parameter `old` of the class
+    /// `old_cid` it replaces (an older version of itself), if it says.
+    pub fn compatible_param(&self, old_cid: &TUID, old: u32) -> Option<u32> {
+        let c = self.core.controller.as_ref()?;
+        let remap = c.cast::<IRemapParamID>()?;
+        let mut new = 0;
+        (unsafe { remap.getCompatibleParamID(old_cid, old, &mut new) } == kResultTrue)
+            .then_some(new)
     }
 
     /// True once after the user changed something in the plugin's editor.
@@ -391,14 +553,20 @@ impl LocalPlugin {
     }
 
     /// What the plugin has flagged since last asked, and its latency.
+    /// A plugin whose delay changed is restarted here first.
     pub fn poll(&mut self) -> Status {
         #[cfg(windows)]
         if self.editor.as_ref().is_some_and(|e| !e.is_open()) {
             self.editor = None;
         }
+        let flags = self.take_restart_flags();
+        if flags & RestartFlags_::kLatencyChanged != 0 {
+            self.reactivate();
+        }
         Status {
             latency: self.latency(),
-            restart: self.take_restart_request(),
+            restart: flags != 0,
+            reload: flags & (RestartFlags_::kIoChanged | RestartFlags_::kReloadComponent) != 0,
             edited: self.take_edited(),
             editor_open: self.editor_open(),
         }
@@ -486,6 +654,10 @@ pub struct LocalProcessor {
     in_buses: Vec<AudioBusBuffers>,
     out_buses: Vec<AudioBusBuffers>,
     max_block: usize,
+    /// The input bus a sidechain goes to, when switched on.
+    key: Option<usize>,
+    /// Extra output buses mixed into the track.
+    mix: Vec<usize>,
 }
 
 // The raw pointers point into buffers this struct owns and never resizes.
@@ -529,17 +701,19 @@ impl LocalProcessor {
             in_buses,
             out_buses,
             max_block,
+            key: None,
+            mix: Vec::new(),
         }
     }
 
-    fn run(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn run(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len()).min(self.max_block);
-        // Main input: left and right, or their mix for a mono input.
-        if let Some(main) = self.inputs.first_mut() {
-            match main.channels.as_mut_slice() {
+        // Left and right into a bus, or their mix for a mono one.
+        fn fill(bus: &mut BusBufs, left: &[f32], right: &[f32], n: usize) {
+            match bus.channels.as_mut_slice() {
                 [] => {}
                 [m] => {
-                    for ((o, l), r) in m[..n].iter_mut().zip(&*left).zip(&*right) {
+                    for ((o, l), r) in m[..n].iter_mut().zip(left).zip(right) {
                         *o = 0.5 * (l + r);
                     }
                 }
@@ -552,9 +726,19 @@ impl LocalProcessor {
                 }
             }
         }
-        for bus in self.inputs.iter_mut().skip(1) {
-            for c in &mut bus.channels {
-                c[..n].fill(0.0);
+        if let Some(main) = self.inputs.first_mut() {
+            fill(main, left, right, n);
+        }
+        for (i, bus) in self.inputs.iter_mut().enumerate().skip(1) {
+            match key {
+                Some((kl, kr)) if Some(i) == self.key && kl.len() >= n && kr.len() >= n => {
+                    fill(bus, kl, kr, n)
+                }
+                _ => {
+                    for c in &mut bus.channels {
+                        c[..n].fill(0.0);
+                    }
+                }
             }
         }
 
@@ -596,20 +780,60 @@ impl LocalProcessor {
         let r_src = main.get(1).unwrap_or(&main[0]);
         left[..n].copy_from_slice(&main[0][..n]);
         right[..n].copy_from_slice(&r_src[..n]);
+        for &i in &self.mix {
+            let Some(bus) = self.outputs.get(i) else {
+                continue;
+            };
+            let Some(a) = bus.channels.first() else {
+                continue;
+            };
+            let b = bus.channels.get(1).unwrap_or(a);
+            for (o, x) in left[..n].iter_mut().zip(&a[..n]) {
+                *o += x;
+            }
+            for (o, x) in right[..n].iter_mut().zip(&b[..n]) {
+                *o += x;
+            }
+        }
     }
-}
 
-impl Insert for LocalProcessor {
-    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn blocks(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
+        // While the UI side restarts the plugin, the block is silent.
+        let core = self.core.clone();
+        let _running = match core.gate.try_lock() {
+            Ok(g) => g,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                left.fill(0.0);
+                right.fill(0.0);
+                return;
+            }
+        };
         // Blocks longer than the plugin was set up for go in pieces.
         let n = left.len().min(right.len());
         let mut done = 0;
         while done < n {
             let end = (done + self.max_block).min(n);
             let (l, r) = (&mut left[done..end], &mut right[done..end]);
-            self.run(l, r);
+            let k = key.map(|(a, b)| {
+                (
+                    a.get(done..end).unwrap_or(&[]),
+                    b.get(done..end).unwrap_or(&[]),
+                )
+            });
+            self.run(l, r, k);
             done = end;
         }
+    }
+}
+
+impl Insert for LocalProcessor {
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.blocks(left, right, None);
+    }
+
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        self.blocks(left, right, Some(key));
     }
 }
 
@@ -652,6 +876,24 @@ impl Plugin {
     /// True if the plugin runs in a helper process.
     pub fn is_remote(&self) -> bool {
         matches!(self, Plugin::Remote(_))
+    }
+
+    /// The plugin's audio buses, as set up.
+    pub fn buses(&self) -> Buses {
+        match self {
+            Plugin::Local(p) => p.buses().clone(),
+            Plugin::Remote(p) => p.buses().clone(),
+        }
+    }
+
+    /// The id the plugin now uses for parameter `old` of the older
+    /// class `old_cid` it replaces, if it says (for automation saved
+    /// against the older version).
+    pub fn compatible_param(&self, old_cid: &TUID, old: u32) -> Option<u32> {
+        match self {
+            Plugin::Local(p) => p.compatible_param(old_cid, old),
+            Plugin::Remote(p) => p.compatible_param(old_cid, old),
+        }
     }
 
     pub fn params(&self) -> Vec<Param> {
@@ -758,6 +1000,13 @@ impl Insert for Processor {
         match self {
             Processor::Local(p) => p.process(left, right),
             Processor::Remote(p) => p.process(left, right),
+        }
+    }
+
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        match self {
+            Processor::Local(p) => p.process_keyed(left, right, key),
+            Processor::Remote(p) => p.process_keyed(left, right, key),
         }
     }
 }

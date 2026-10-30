@@ -10,7 +10,7 @@
 
 use std::io::{self, Read, Write};
 
-use crate::plugin::{Param, PluginState};
+use crate::plugin::{Bus, Buses, Layout, Param, PluginState};
 
 /// Largest message either side accepts, so a damaged length cannot
 /// make it allocate without limit. Plugin state is the biggest thing
@@ -22,22 +22,25 @@ pub const MAX_MESSAGE: u32 = 256 << 20;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     /// Loads class `cid` from `bundle`, ready for blocks of up to
-    /// `max_block` frames at `rate`.
+    /// `max_block` frames at `rate`, with the buses `layout` asks for.
     Load {
         id: u32,
         bundle: String,
         cid: [u8; 16],
         rate: f64,
         max_block: u32,
+        layout: Layout,
     },
     Unload {
         id: u32,
     },
-    /// One block of stereo audio to run through the plugin.
+    /// One block of stereo audio to run through the plugin, with its
+    /// sidechain if it listens to one.
     Process {
         id: u32,
         left: Vec<f32>,
         right: Vec<f32>,
+        key: Option<(Vec<f32>, Vec<f32>)>,
     },
     SetParam {
         id: u32,
@@ -78,6 +81,13 @@ pub enum Request {
     Programs {
         id: u32,
     },
+    /// The id the plugin uses for parameter `param` of the older class
+    /// `old` it replaces.
+    RemapParam {
+        id: u32,
+        old: [u8; 16],
+        param: u32,
+    },
     Ping,
     Quit,
 }
@@ -87,14 +97,22 @@ pub enum Request {
 pub enum Reply {
     Ok,
     Error(String),
-    Loaded { latency: u32, params: Vec<Param> },
-    Audio { left: Vec<f32>, right: Vec<f32> },
+    Loaded {
+        latency: u32,
+        params: Vec<Param>,
+        buses: Buses,
+    },
+    Audio {
+        left: Vec<f32>,
+        right: Vec<f32>,
+    },
     Value(Option<f64>),
     Text(Option<String>),
     Params(Vec<Param>),
     State(PluginState),
     Status(Status),
     Programs(Vec<ProgramList>),
+    ParamId(Option<u32>),
 }
 
 /// What [`Request::Poll`] reports.
@@ -103,6 +121,9 @@ pub struct Status {
     pub latency: u32,
     /// The plugin asked to be restarted (its latency or parameters changed).
     pub restart: bool,
+    /// Its buses changed, or it asked to be loaded again: the app makes
+    /// it again, with its settings.
+    pub reload: bool,
     /// The user changed something in the plugin's editor.
     pub edited: bool,
     pub editor_open: bool,
@@ -171,6 +192,33 @@ impl W {
     fn state(&mut self, s: &PluginState) {
         self.bytes(&s.component);
         self.opt_bytes(s.controller.as_deref());
+    }
+    fn opt_samples(&mut self, k: &Option<(Vec<f32>, Vec<f32>)>) {
+        match k {
+            Some((l, r)) => {
+                self.bool(true);
+                self.samples(l);
+                self.samples(r);
+            }
+            None => self.bool(false),
+        }
+    }
+    fn layout(&mut self, l: &Layout) {
+        self.bool(l.sidechain);
+        self.u32(l.outputs.len() as u32);
+        for &o in &l.outputs {
+            self.u32(o);
+        }
+    }
+    fn buses(&mut self, b: &Buses) {
+        for list in [&b.inputs, &b.outputs] {
+            self.u32(list.len() as u32);
+            for bus in list {
+                self.str(&bus.name);
+                self.u32(bus.channels);
+                self.bool(bus.aux);
+            }
+        }
     }
     fn params(&mut self, ps: &[Param]) {
         self.u32(ps.len() as u32);
@@ -253,6 +301,40 @@ impl R<'_> {
             controller: self.opt_bytes()?,
         })
     }
+    fn opt_samples(&mut self) -> Res<Option<(Vec<f32>, Vec<f32>)>> {
+        Ok(if self.bool()? {
+            Some((self.samples()?, self.samples()?))
+        } else {
+            None
+        })
+    }
+    fn layout(&mut self) -> Res<Layout> {
+        let sidechain = self.bool()?;
+        let n = self.u32()?;
+        Ok(Layout {
+            sidechain,
+            outputs: (0..n).map(|_| self.u32()).collect::<Res<_>>()?,
+        })
+    }
+    fn buses(&mut self) -> Res<Buses> {
+        let mut list = || -> Res<Vec<Bus>> {
+            let n = self.u32()?;
+            (0..n)
+                .map(|_| {
+                    Ok(Bus {
+                        name: self.str()?,
+                        channels: self.u32()?,
+                        aux: self.bool()?,
+                    })
+                })
+                .collect()
+        };
+        let inputs = list()?;
+        Ok(Buses {
+            inputs,
+            outputs: list()?,
+        })
+    }
     fn params(&mut self) -> Res<Vec<Param>> {
         let n = self.u32()?;
         (0..n)
@@ -290,6 +372,7 @@ impl Request {
                 cid,
                 rate,
                 max_block,
+                layout,
             } => {
                 w.u8(1);
                 w.u32(*id);
@@ -297,16 +380,23 @@ impl Request {
                 w.0.extend_from_slice(cid);
                 w.f64(*rate);
                 w.u32(*max_block);
+                w.layout(layout);
             }
             Request::Unload { id } => {
                 w.u8(2);
                 w.u32(*id);
             }
-            Request::Process { id, left, right } => {
+            Request::Process {
+                id,
+                left,
+                right,
+                key,
+            } => {
                 w.u8(3);
                 w.u32(*id);
                 w.samples(left);
                 w.samples(right);
+                w.opt_samples(key);
             }
             Request::SetParam { id, param, value } => {
                 w.u8(4);
@@ -357,6 +447,12 @@ impl Request {
             }
             Request::Ping => w.u8(14),
             Request::Quit => w.u8(15),
+            Request::RemapParam { id, old, param } => {
+                w.u8(16);
+                w.u32(*id);
+                w.0.extend_from_slice(old);
+                w.u32(*param);
+            }
         }
         w.0
     }
@@ -374,6 +470,7 @@ impl Request {
                     cid,
                     rate: r.f64()?,
                     max_block: r.u32()?,
+                    layout: r.layout()?,
                 }
             }
             2 => Request::Unload { id: r.u32()? },
@@ -381,6 +478,7 @@ impl Request {
                 id: r.u32()?,
                 left: r.samples()?,
                 right: r.samples()?,
+                key: r.opt_samples()?,
             },
             4 => Request::SetParam {
                 id: r.u32()?,
@@ -411,6 +509,11 @@ impl Request {
             13 => Request::Programs { id: r.u32()? },
             14 => Request::Ping,
             15 => Request::Quit,
+            16 => Request::RemapParam {
+                id: r.u32()?,
+                old: r.take(16)?.try_into().unwrap(),
+                param: r.u32()?,
+            },
             t => return Err(format!("unknown request {t}")),
         };
         r.done()?;
@@ -427,10 +530,15 @@ impl Reply {
                 w.u8(1);
                 w.str(e);
             }
-            Reply::Loaded { latency, params } => {
+            Reply::Loaded {
+                latency,
+                params,
+                buses,
+            } => {
                 w.u8(2);
                 w.u32(*latency);
                 w.params(params);
+                w.buses(buses);
             }
             Reply::Audio { left, right } => {
                 w.u8(3);
@@ -463,6 +571,7 @@ impl Reply {
                 w.u8(8);
                 w.u32(s.latency);
                 w.bool(s.restart);
+                w.bool(s.reload);
                 w.bool(s.edited);
                 w.bool(s.editor_open);
             }
@@ -478,6 +587,11 @@ impl Reply {
                     }
                 }
             }
+            Reply::ParamId(p) => {
+                w.u8(10);
+                w.bool(p.is_some());
+                w.u32(p.unwrap_or(0));
+            }
         }
         w.0
     }
@@ -490,6 +604,7 @@ impl Reply {
             2 => Reply::Loaded {
                 latency: r.u32()?,
                 params: r.params()?,
+                buses: r.buses()?,
             },
             3 => Reply::Audio {
                 left: r.samples()?,
@@ -502,6 +617,7 @@ impl Reply {
             8 => Reply::Status(Status {
                 latency: r.u32()?,
                 restart: r.bool()?,
+                reload: r.bool()?,
                 edited: r.bool()?,
                 editor_open: r.bool()?,
             }),
@@ -516,6 +632,11 @@ impl Reply {
                     lists.push(ProgramList { id, name, programs });
                 }
                 Reply::Programs(lists)
+            }
+            10 => {
+                let some = r.bool()?;
+                let id = r.u32()?;
+                Reply::ParamId(some.then_some(id))
             }
             t => return Err(format!("unknown reply {t}")),
         };
@@ -575,12 +696,23 @@ mod tests {
                 cid: [9; 16],
                 rate: 48_000.0,
                 max_block: 512,
+                layout: Layout {
+                    sidechain: true,
+                    outputs: vec![1, 3],
+                },
             },
             Request::Unload { id: 1 },
             Request::Process {
                 id: 1,
                 left: vec![0.5, -0.5],
                 right: vec![1.0, 0.0],
+                key: None,
+            },
+            Request::Process {
+                id: 1,
+                left: vec![0.5],
+                right: vec![1.0],
+                key: Some((vec![0.25], vec![-0.25])),
             },
             Request::SetParam {
                 id: 1,
@@ -606,6 +738,11 @@ mod tests {
             },
             Request::CloseEditor { id: 1 },
             Request::Programs { id: 1 },
+            Request::RemapParam {
+                id: 1,
+                old: [3; 16],
+                param: 9,
+            },
             Request::Ping,
             Request::Quit,
         ];
@@ -618,6 +755,14 @@ mod tests {
             Reply::Loaded {
                 latency: 64,
                 params: vec![param.clone()],
+                buses: Buses {
+                    inputs: vec![Bus {
+                        name: "Side".into(),
+                        channels: 1,
+                        aux: true,
+                    }],
+                    outputs: vec![],
+                },
             },
             Reply::Audio {
                 left: vec![0.1],
@@ -632,9 +777,12 @@ mod tests {
             Reply::Status(Status {
                 latency: 1,
                 restart: true,
+                reload: false,
                 edited: false,
                 editor_open: true,
             }),
+            Reply::ParamId(Some(4)),
+            Reply::ParamId(None),
             Reply::Programs(vec![ProgramList {
                 id: 0,
                 name: "Factory".into(),

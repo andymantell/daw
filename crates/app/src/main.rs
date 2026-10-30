@@ -26,6 +26,7 @@ mod freeze;
 mod fx;
 mod groups;
 mod latency;
+mod lessons;
 mod meters;
 mod mixer;
 mod monitor;
@@ -260,6 +261,11 @@ struct App {
     notes: String,
     tabs: Vec<daw_project::TabBlock>,
     notes_ui: notes::Notes,
+    /// Assignments, as in the project, the Lessons pane, and the
+    /// practice session going on now.
+    assignments: Vec<daw_project::Assignment>,
+    lessons_ui: lessons::Lessons,
+    practice_log: practice::Logger,
     /// Tracks edited together, as in the project, and their window.
     edit_groups: Vec<daw_project::EditGroup>,
     groups_ui: groups::Groups,
@@ -360,6 +366,9 @@ impl App {
             notes: String::new(),
             tabs: Vec::new(),
             notes_ui: notes::Notes::default(),
+            assignments: Vec::new(),
+            lessons_ui: lessons::Lessons::default(),
+            practice_log: practice::Logger::default(),
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
@@ -1998,7 +2007,13 @@ impl eframe::App for App {
                     }
                 });
                 ui.menu_button("Practice", |ui| {
-                    for c in [Cmd::Tuner, Cmd::Meters, Cmd::LessonNotes, Cmd::Comments] {
+                    for c in [
+                        Cmd::Tuner,
+                        Cmd::Meters,
+                        Cmd::LessonNotes,
+                        Cmd::Lessons,
+                        Cmd::Comments,
+                    ] {
                         self.menu_item(ui, c);
                     }
                 });
@@ -2171,6 +2186,7 @@ impl eframe::App for App {
         self.template_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
+        self.log_practice(&ctx);
         self.sync_doc(&ctx, false);
         self.autosave(&ctx);
         self.title(&ctx);

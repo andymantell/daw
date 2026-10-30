@@ -54,6 +54,12 @@ enum Action {
 }
 
 impl Snapshots {
+    /// Opens the window on what changed from snapshot `id` to now.
+    pub(crate) fn compare_with_now(&mut self, id: &str) {
+        self.open = true;
+        self.compare = Some((id.to_string(), None));
+    }
+
     /// The window. `may_edit` is false for commenters, who may look but
     /// not take or restore.
     fn window(

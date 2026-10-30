@@ -67,6 +67,7 @@ pub(crate) enum Cmd {
     Tuner,
     Meters,
     LessonNotes,
+    Lessons,
     Comments,
     AudioDevice,
     Plugins,
@@ -545,6 +546,9 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .words("tab text"),
+    info(Cmd::Lessons, "lessons", "Practice", "Lessons", &[])
+        .hint("Show or hide assignments, the practice log and the lessons so far")
+        .words("assignment homework practice log history progress teacher student"),
     info(Cmd::Comments, "comments", "Practice", "Comments…", &[]).words("pins feedback"),
     info(
         Cmd::AudioDevice,
@@ -640,6 +644,7 @@ impl Cmd {
             Cmd::Mixer
                 | Cmd::MonitorSection
                 | Cmd::TakeLanes
+                | Cmd::Lessons
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -1454,6 +1459,7 @@ impl App {
             Cmd::Dim => self.toggle_room(|c| c.dim = !c.dim),
             Cmd::Mono => self.toggle_room(|c| c.mono = !c.mono),
             Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
+            Cmd::Lessons => self.workspace.toggle(Pane::Lessons),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),

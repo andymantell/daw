@@ -31,6 +31,8 @@ pub struct Project {
     pub notes: String,
     /// Tab blocks pinned to sections, oldest first.
     pub tabs: Vec<TabBlock>,
+    /// Things to practise by a date, oldest first.
+    pub assignments: Vec<Assignment>,
     /// Pinned comments and their replies, oldest first.
     pub comments: Vec<Comment>,
     /// Tracks edited together, in the order made.
@@ -56,6 +58,7 @@ impl Default for Project {
             markers: Vec::new(),
             notes: String::new(),
             tabs: Vec::new(),
+            assignments: Vec::new(),
             comments: Vec::new(),
             edit_groups: Vec::new(),
             control_groups: Vec::new(),
@@ -763,5 +766,28 @@ pub struct TabBlock {
     /// Who wrote it: the member's public key, as hex, or empty.
     pub author: String,
     /// When it was written, in milliseconds since 1970, for ordering.
+    pub created: i64,
+}
+
+/// Something to practise by a date: "bars 9–16 at 90 bpm by next week".
+/// Progress on it is worked out from the practice log, so both teacher
+/// and student see the same.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Assignment {
+    pub id: String,
+    /// Bars, counted from 1: from the start of the first to the start
+    /// of the second, as the loop has them.
+    pub bars: (i64, i64),
+    /// The tempo to reach, in beats per minute.
+    pub bpm: f64,
+    /// When it is due, in milliseconds since 1970, or 0 for no date.
+    pub due: i64,
+    /// Anything else to say about it.
+    pub note: String,
+    /// The lesson it was set in, if any.
+    pub lesson: Option<String>,
+    /// Who set it: the member's public key, as hex, or empty.
+    pub author: String,
+    /// When it was set, in milliseconds since 1970, for ordering.
     pub created: i64,
 }

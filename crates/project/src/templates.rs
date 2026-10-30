@@ -31,10 +31,12 @@ pub struct Template {
 }
 
 impl Project {
-    /// This project as a template: without its audio or comments.
+    /// This project as a template: without its audio, comments or
+    /// assignments.
     pub fn as_template(&self) -> Project {
         let mut p = self.clone();
         p.comments.clear();
+        p.assignments.clear();
         for t in &mut p.tracks {
             t.clips.clear();
             t.frozen = None;

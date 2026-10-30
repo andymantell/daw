@@ -21,7 +21,8 @@
 //! Changes merged in from elsewhere are checked
 //! ([`ProjectDoc::check`]): the owner may change anything, editors
 //! anything but the members and the project's own details, commenters
-//! only their own comments, and anyone their own name. Changes from
+//! only their own comments, any member their own practice log, and
+//! anyone their own name. Changes from
 //! anyone else are refused until the owner lets them in. Signatures
 //! prove who a run of the app belongs to, not each change: a live
 //! session's link, which is checked against members' keys, covers that.
@@ -47,8 +48,10 @@ pub const MAX_NAME: usize = 40;
 const META: &str = "meta";
 const MEMBERS: &str = "members";
 const PEERS: &str = "peers";
-/// Where comments live: the only place commenters may write.
+/// Where comments live: commenters may write their own there.
 const COMMENTS: &str = "comments";
+/// The practice log: each member writes only under their own key.
+const PRACTICE_LOG: &str = "practice_log";
 
 /// This install: a secret that never leaves the computer, and the name
 /// others see.
@@ -391,6 +394,7 @@ pub(crate) fn check_new(before: &LoroDoc, after: &LoroDoc) -> Check {
                 [MEMBERS, k] => k == key,
                 [MEMBERS, k, "name"] => k == key,
                 [MEMBERS, ..] | [META, ..] => false,
+                [PRACTICE_LOG, k, ..] => role.is_some() && k == key,
                 [COMMENTS, c, ..] => match role {
                     Some(Role::Editor) => true,
                     Some(Role::Commenter) => own_comment(c),
@@ -779,6 +783,37 @@ mod tests {
         theirs.set(&p);
         assert!(mine.merge(&theirs.to_bytes()).is_err());
         assert!(mine.get().tabs.is_empty());
+    }
+
+    fn session(who: &str, id: &str) -> crate::PracticeSession {
+        crate::PracticeSession {
+            id: id.into(),
+            who: who.into(),
+            started: 1_000,
+            seconds: 120.0,
+            bars: Some((9, 17)),
+            loops: 6,
+            top_speed: 75.0,
+            top_bpm: 90.0,
+        }
+    }
+
+    #[test]
+    fn commenters_keep_their_own_practice_log() {
+        let (_, mut mine, _, mut theirs) = shared();
+        let pat = pat_key(&theirs);
+        mine.set_role(&pat, Some(Role::Commenter)).unwrap();
+        theirs.merge(&mine.to_bytes()).unwrap();
+        theirs.log_practice(&session(&pat, "s1"));
+        theirs.mark_done(&pat, "a1", Some(5_000));
+        mine.merge(&theirs.to_bytes()).unwrap();
+        assert_eq!(mine.practice_log(), vec![session(&pat, "s1")]);
+        assert_eq!(mine.done_marks().len(), 1);
+
+        // Someone else's log is out of bounds.
+        let me = pat_key(&mine);
+        theirs.log_practice(&session(&me, "s2"));
+        assert!(!mine.check(&theirs.to_bytes()).unwrap().ok());
     }
 
     #[test]

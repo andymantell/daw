@@ -191,6 +191,7 @@ impl App {
             reference_hz: self.tuner.a4 as f64,
             notes: self.notes.clone(),
             tabs: self.tabs.clone(),
+            assignments: self.assignments.clone(),
             markers: (self.markers.iter())
                 .map(|m| daw_project::Marker {
                     id: m.id.clone(),
@@ -382,6 +383,7 @@ impl App {
         self.tuner.a4 = p.reference_hz as f32;
         self.notes = p.notes.clone();
         self.tabs = p.tabs.clone();
+        self.assignments = p.assignments.clone();
         self.comments = p.comments.clone();
         self.edit_groups = p.edit_groups.clone();
         self.groups = p.control_groups.clone();
@@ -571,6 +573,7 @@ impl App {
         let Some(folder) = self.proj.folder.clone() else {
             return Err("the project has no folder yet".into());
         };
+        self.flush_practice();
         self.sync_doc(ctx, true);
         // Audio from outside the folder comes in.
         let takes = takes_dir();
@@ -847,6 +850,7 @@ impl App {
         self.apply(p);
         self.proj.committed = self.project();
         self.proj.doc.set_quietly(&self.proj.committed);
+        self.practice_log = Default::default();
         self.apply_practice();
         self.proj.dirty = false;
     }
@@ -889,6 +893,7 @@ impl App {
                 self.proj = proj;
                 self.sign_in();
                 self.apply(self.proj.doc.get());
+                self.practice_log = Default::default();
                 self.apply_practice();
                 self.watch_folder();
                 self.merge_bundle_after_open(ctx);

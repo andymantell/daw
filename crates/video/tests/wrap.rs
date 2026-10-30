@@ -112,11 +112,23 @@ fn check(video: &Path, name: &str) {
 
 #[test]
 fn the_mix_goes_into_a_copy_of_the_video() {
-    // What the system here decodes: Windows the MP4, Linux the Ogg.
-    if cfg!(windows) {
-        check(&fixture("counting.mp4"), "mp4");
-    } else {
+    if daw_video::CAN_WRAP {
         check(&fixture("counting.ogv"), "ogv");
+    } else {
+        // Not offered yet: it says so, and leaves nothing behind.
+        let d = dir("not-yet");
+        let mix = d.join("mix.wav");
+        tone(&mix);
+        let out = d.join("with mix.mp4");
+        let e = wrap(
+            &fixture("counting.mp4"),
+            &mix,
+            &out,
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(e, Err(daw_video::Error::CantWrap(_))), "{e:?}");
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
 

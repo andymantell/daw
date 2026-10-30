@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode"] }
+# Reads the mix to wrap into a copy of a video.
+hound = "3.5.1"
 
 # Each system's own media framework decodes, so we ship no codec code
 # (roadmap 3.9, research/VIDEO_SCORING.md).
@@ -28,8 +30,3 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
 ] }
 windows-core = "0.62"
-# Reads the mix to wrap into a copy of a video.
-hound = "3.5.1"
-
-[dev-dependencies]
-hound = "3.5.1"

@@ -1198,7 +1198,11 @@ mod in_the_app {
         assert!(h.state().video.hide_timecode);
         h.state_mut().run(&ctx, Cmd::VideoTimecode);
 
-        // The film with the mix, into the project's Exports folder.
+        // The film with the mix, into the project's Exports folder,
+        // where the system can make one.
+        if !daw_video::CAN_WRAP {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("daw-scoring-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         h.state_mut().save_in(&ctx, &dir.join("Score")).unwrap();

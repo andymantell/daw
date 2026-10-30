@@ -256,6 +256,11 @@ pub fn probe(path: &Path) -> Result<Info, Error> {
     system::probe(path)
 }
 
+/// Whether this system can make a copy of a video with new sound
+/// ([`wrap`]). Not yet on Windows, whose copies come out a few frames
+/// off, nor on macOS.
+pub const CAN_WRAP: bool = cfg!(target_os = "linux");
+
 /// The file name ending a copy of `video` with new sound gets: the
 /// same kind of file where the system can write one, so the picture
 /// fits it as it is.

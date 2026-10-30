@@ -342,7 +342,23 @@ fn next_chunk(
     Ok(out)
 }
 
+/// Not offered yet: the copies [`wrap_mp4`] writes have their picture
+/// shifted by two frames and damaged until the next key frame (seen on
+/// CI with the MP4 fixture), so scoring to them would be off. It is kept
+/// as the starting point for the fix.
 pub(crate) fn wrap(
+    _video: &Path,
+    _sound: &Path,
+    _out: &Path,
+    _cancel: &AtomicBool,
+) -> Result<(), Error> {
+    Err(Error::CantWrap(
+        "making a copy of a video isn't ready on Windows yet".into(),
+    ))
+}
+
+#[allow(dead_code)]
+pub(crate) fn wrap_mp4(
     video: &Path,
     sound: &Path,
     out: &Path,

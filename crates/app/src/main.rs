@@ -47,6 +47,7 @@ mod patterns;
 mod people;
 mod perf;
 mod practice;
+mod presets;
 mod process;
 mod project;
 mod recording;
@@ -396,6 +397,7 @@ struct App {
     snapshot_ui: snapshots::Snapshots,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
+    preset_ui: presets::Presets,
     /// The start screen, and the recent projects it lists.
     start: start::Start,
     /// Named commands, their keys, and their windows.
@@ -533,6 +535,7 @@ impl App {
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
             template_ui: templates::Templates::default(),
+            preset_ui: presets::Presets::default(),
             start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
             proj: project::Proj::new(),
@@ -1450,6 +1453,9 @@ impl App {
         match out.track {
             Some((i, timeline::TrackAsk::Freeze)) => self.toggle_freeze(ui.ctx(), i),
             Some((i, timeline::TrackAsk::RenderInPlace)) => self.render_in_place(i),
+            Some((i, timeline::TrackAsk::SavePreset)) => {
+                self.ask_save_preset(Some(i), daw_project::PresetKind::Track)
+            }
             None => {}
         }
         if out.undo {
@@ -2282,6 +2288,8 @@ impl eframe::App for App {
                 self.open_dropped(&ctx, p);
             } else if daw_collab::bundle::is_bundle(&p) {
                 self.import_bundle(p);
+            } else if presets::is_preset(&p) {
+                self.import_dropped_preset(&p);
             } else if midifile::is_midi(&p) {
                 self.import_midi(&p);
             } else {
@@ -2371,6 +2379,15 @@ impl eframe::App for App {
                         Cmd::Save,
                         Cmd::SaveAs,
                         Cmd::SaveAsTemplate,
+                    ] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [
+                        Cmd::Presets,
+                        Cmd::SaveTrackPreset,
+                        Cmd::SaveChainPreset,
+                        Cmd::ImportPreset,
                     ] {
                         self.menu_item(ui, c);
                     }
@@ -2749,6 +2766,7 @@ impl eframe::App for App {
         self.remote_tick(&ctx);
         self.agent_tick(&ctx);
         self.template_windows(&ctx);
+        self.preset_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.log_practice(&ctx);

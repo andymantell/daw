@@ -129,7 +129,7 @@ fn describe(p: &daw_project::Project) -> String {
 }
 
 /// A name that can be a file's: not empty, none of / \ : * ? " < > |.
-fn file_name_ok(name: &str) -> bool {
+pub(crate) fn file_name_ok(name: &str) -> bool {
     !name.is_empty()
         && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
         && !name.starts_with('.')

@@ -33,10 +33,19 @@ pub const EXT: &str = "dawbundle";
 /// memory.
 const MAX_DOC: u64 = 1 << 30;
 
+/// A preset's name, kind and tags, in a bundle that holds a preset
+/// (`<name>/preset.txt`, before the document). A project bundle has none.
+pub const META_FILE: &str = "preset.txt";
+
+/// Far beyond any real preset's description.
+const MAX_META: u64 = 1 << 16;
+
 /// What a bundle holds, apart from its audio.
 pub struct Bundle {
     pub name: String,
     pub doc: Vec<u8>,
+    /// What [`META_FILE`] holds, if the bundle has one.
+    pub meta: Option<Vec<u8>>,
 }
 
 /// Whether `path` is named like a bundle.
@@ -54,6 +63,18 @@ pub fn write(
     doc: &[u8],
     folder: &ProjectFolder,
     assets: &[String],
+) -> Result<(), String> {
+    write_with(dest, name, doc, folder, assets, None)
+}
+
+/// As [`write`], with a preset's [`META_FILE`] first if `meta` is given.
+pub fn write_with(
+    dest: &Path,
+    name: &str,
+    doc: &[u8],
+    folder: &ProjectFolder,
+    assets: &[String],
+    meta: Option<&[u8]>,
 ) -> Result<(), String> {
     let mut assets: Vec<&String> = (assets.iter())
         .filter(|a| is_asset_name(a) && folder.has_asset(a))
@@ -76,6 +97,9 @@ pub fn write(
             h.set_entry_type(tar::EntryType::Regular);
             tar.append_data(&mut h, path, data)
         };
+        if let Some(m) = meta {
+            add(format!("{root}/{META_FILE}"), m.len() as u64, &mut &m[..])?;
+        }
         add(
             format!("{root}/{DOC_FILE}"),
             doc.len() as u64,
@@ -117,6 +141,7 @@ fn read(path: &Path, into: Option<&ProjectFolder>) -> Result<Bundle, String> {
     let entries = tar.entries().map_err(|e| bad(&e.to_string()))?;
     let mut root: Option<String> = None;
     let mut doc: Option<Vec<u8>> = None;
+    let mut meta: Option<Vec<u8>> = None;
     for entry in entries {
         let mut entry = entry.map_err(|e| bad(&e.to_string()))?;
         let kind = entry.header().entry_type();
@@ -157,6 +182,17 @@ fn read(path: &Path, into: Option<&ProjectFolder>) -> Result<Bundle, String> {
                     break;
                 }
             }
+            [META_FILE] if meta.is_none() => {
+                let len = entry.header().size().map_err(|e| bad(&e.to_string()))?;
+                if len > MAX_META {
+                    return Err(bad("the preset's description is far too big"));
+                }
+                let mut m = Vec::with_capacity(len as usize);
+                entry
+                    .read_to_end(&mut m)
+                    .map_err(|_| bad("the preset's description is cut short"))?;
+                meta = Some(m);
+            }
             [ASSETS, asset] if is_asset_name(asset) => {
                 if let Some(folder) = into {
                     folder.receive_asset(asset, &mut entry)?;
@@ -166,7 +202,7 @@ fn read(path: &Path, into: Option<&ProjectFolder>) -> Result<Bundle, String> {
         }
     }
     match (root, doc) {
-        (Some(name), Some(doc)) => Ok(Bundle { name, doc }),
+        (Some(name), Some(doc)) => Ok(Bundle { name, doc, meta }),
         _ => Err(bad("no project document")),
     }
 }

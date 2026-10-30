@@ -55,6 +55,42 @@ electronic kit with a five-piece pad set.
   many other free instruments, so supporting it gives users a large pool
   of kits.
 
+## Learning once, shipping by default
+
+Follow-up request (2026-10-30): a small tool that learns the owner's kit
+mapping, with the result built into the app by default, so nothing has to
+be trained again on a new computer.
+
+- **Where the mapping lives.** The note number for each pad is stored in
+  the kit module's own settings, not on the computer (the module's manual
+  sets notes per pad in its setup menu). So a profile learned once
+  describes that module wherever it is plugged in; a new computer only
+  needs the profile file, not a new learning session.
+- **Profile file.** The learn tool writes a plain text data file: kit
+  name, the MIDI port name it was learned from, channel, and for each
+  pad and zone the note number, plus the hi-hat pedal controller number
+  and its closed-to-open range and any choke message seen. Profiles are
+  stored with the app's user settings (not inside a project), can be
+  exported and imported as files, and the bundled set lives in the
+  repository so it is part of every build.
+- **Bundling the owner's kit.** Once the owner runs the tool on their
+  kit, the resulting file is committed as the first bundled profile. If
+  their pads still carry the factory notes, that profile is also the
+  default for every other owner of the same module; the file records
+  whether the notes were factory or changed, as far as the owner can
+  tell. *(The maker's official default table was not found in this pass,
+  so the learned file is the best source we have.)*
+- **Recognising a kit.** The app can match a bundled profile to a
+  connected kit by its MIDI port name and offer it with one click; a
+  learned profile also stores that name. Port names come from the
+  operating system and can differ between platforms, so the match is a
+  suggestion, not a rule.
+- **Order of work.** The tool needs only MIDI input, which exists (3.1),
+  so it can be built now as a small, separate item: a window under the
+  MIDI settings that prompts for each pad and zone, shows what arrived,
+  and saves the profile. The instrument itself (samples, zones, hi-hat
+  modelling) stays a late Phase 3 item and reads the same profiles.
+
 ## Design notes
 
 - Kit profiles and drum maps are the same data as the drum staff's drum

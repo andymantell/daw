@@ -386,6 +386,16 @@ pub struct Effects {
     /// The plugin being checked now, or where the last check's report
     /// went (or why it failed).
     check_status: Option<Result<String, String>>,
+    /// Asked for from the effects window, for the app to act on.
+    pub(crate) chain_ask: Option<ChainAsk>,
+}
+
+/// What the effects window asks the app for about presets.
+pub(crate) enum ChainAsk {
+    /// Save the track's chain as a preset.
+    Save,
+    /// Open the presets, to load one.
+    Load,
 }
 
 /// A room picked for a convolution reverb.
@@ -426,6 +436,7 @@ impl Effects {
             show_credits: false,
             check: None,
             check_status: None,
+            chain_ask: None,
         }
     }
 
@@ -1617,6 +1628,22 @@ impl Effects {
                         .accessible_name("Add effect");
                     if ui.button("Plugins…").clicked() {
                         self.show_manager = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Save as preset…")
+                        .on_hover_text("Keep this chain to put on other tracks and projects")
+                        .clicked()
+                    {
+                        self.chain_ask = Some(ChainAsk::Save);
+                    }
+                    if ui
+                        .button("Presets…")
+                        .on_hover_text("Put a saved chain or track preset on this track")
+                        .clicked()
+                    {
+                        self.chain_ask = Some(ChainAsk::Load);
                     }
                 });
                 if let Some(line) = frozen {

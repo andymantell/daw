@@ -712,6 +712,8 @@ pub enum TrackAsk {
     /// Freeze it, or unfreeze it.
     Freeze,
     RenderInPlace,
+    /// Save it as a track preset.
+    SavePreset,
 }
 
 /// What the app should do after the timeline is drawn.
@@ -3711,6 +3713,14 @@ impl Timeline {
                         .clicked()
                     {
                         out.track = Some((l, TrackAsk::Freeze));
+                        ui.close();
+                    }
+                    if ui
+                        .button("Save track as preset…")
+                        .on_hover_text("Keep its instrument, effects, sends and settings to use again")
+                        .clicked()
+                    {
+                        out.track = Some((l, TrackAsk::SavePreset));
                         ui.close();
                     }
                     ui.separator();

@@ -26,6 +26,10 @@ pub(crate) enum Cmd {
     Save,
     SaveAs,
     SaveAsTemplate,
+    Presets,
+    SaveTrackPreset,
+    SaveChainPreset,
+    ImportPreset,
     ExportBundle,
     ImportBundle,
     Snapshots,
@@ -304,6 +308,36 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Keep this project's tracks, effects, sections and notes to start from")
     .words("layout set-up"),
+    info(Cmd::Presets, "presets", "File", "Presets…", &[])
+        .hint("Track and effect chain presets, to add as a track or put on one")
+        .words("tone sound library chain load"),
+    info(
+        Cmd::SaveTrackPreset,
+        "save-track-preset",
+        "File",
+        "Save track as preset…",
+        &[],
+    )
+    .hint("Keep a track's instrument, effects, amp, sends and settings to use again")
+    .words("tone sound library"),
+    info(
+        Cmd::SaveChainPreset,
+        "save-chain-preset",
+        "File",
+        "Save effect chain as preset…",
+        &[],
+    )
+    .hint("Keep a track's effects to put on other tracks")
+    .words("tone sound library fx"),
+    info(
+        Cmd::ImportPreset,
+        "import-preset",
+        "File",
+        "Import preset…",
+        &[],
+    )
+    .hint("Take in a preset someone sent you")
+    .words("tone receive share"),
     info(
         Cmd::ExportBundle,
         "export-bundle",
@@ -2145,6 +2179,7 @@ impl App {
                 daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
             }
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
+            Cmd::SaveTrackPreset | Cmd::SaveChainPreset => !self.tracks.is_empty(),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
@@ -2197,6 +2232,10 @@ impl App {
             Cmd::NewProject => self.then(ctx, After::New),
             Cmd::NewFromTemplate => self.choose_template(),
             Cmd::SaveAsTemplate => self.template_ui.saving = Some(String::new()),
+            Cmd::Presets => self.open_presets(),
+            Cmd::SaveTrackPreset => self.ask_save_preset(None, daw_project::PresetKind::Track),
+            Cmd::SaveChainPreset => self.ask_save_preset(None, daw_project::PresetKind::Chain),
+            Cmd::ImportPreset => self.pick_preset_to_import(),
             Cmd::OpenProject => {
                 self.proj.dialog = Some(Dialog::Open {
                     found: find_projects(),

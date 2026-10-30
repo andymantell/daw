@@ -160,6 +160,37 @@ clock and timecode (Phase 8), audio to notes (Phase 7), chord tracks
 (Phase 7), clip launching (Phase 6) and control-surface support
 (Phase 7).
 
+## What users ask for
+
+A second pass, also on 30 October 2026, read what users ask for rather
+than what vendors ship: the top requests on two vendors' public
+feature-request forums, a user wishlist thread, four "what my DAW is
+missing" articles, one page each of review cons for two DAWs, three
+sources on blind musicians' needs and two on teachers' needs. Several
+other forums could not be reached (login walls, blocks or human checks).
+It is a day's sample, not a survey.
+
+Most of the loudest requests are already built or planned: Linux, crash-
+safe plugins, control by AI or script, audio that follows tempo, song
+sections, track presets, a clip launcher and network tempo sync. These
+were not on the roadmap or in the tables above:
+
+| Wish | Worth it |
+| --- | --- |
+| A simpler mode for beginners that hides advanced features (the most common complaint in the review cons read) | **High**: students |
+| Guided audio setup, without driver trouble or latency surprises | **High** |
+| Accessibility across the whole app, not just the timeline: no mouse needed, controls that stay put, accessible plugins, and ways to hear EQ, pan and automation | **High** |
+| A fretboard view of notes, scales, modes and arpeggios | Medium: guitar lessons |
+| Recording at a slower speed without changing the song's tempo | Medium: practising hard passages |
+| Plugin windows: tabs, following the selected track, renaming, CPU per plugin, a list of plugins a project uses | Medium |
+| Stop the mouse wheel moving faders by accident | Low |
+| A polarity button on each input | Low |
+| Jump to the next attack in audio | Low |
+| A seamless loop export | Low |
+| Choosing which C is middle C, and custom note names | Low |
+| Pinning tracks at the top; undo that keeps the selection; search in settings | Low |
+| A phone app as a remote; media bins; a plain-language export summary | Low |
+
 ## Next step
 
 The owner decides which gaps join the roadmap. Until then this page is

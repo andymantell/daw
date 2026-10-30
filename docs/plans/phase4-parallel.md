@@ -73,9 +73,11 @@ until then.
 
 ## From the user wish-list research
 
-A survey of what users ask for in the big DAWs is running alongside this
-plan. Its findings will be added here as a further set, or folded into
-the items above where they overlap.
+The survey is in [research/FEATURE_GAPS.md](../research/FEATURE_GAPS.md)
+under "What users ask for". Most requests overlap items already here
+(A1, A3, A4, A7, B2). Its three **High** wishes are suggested for the
+owner to choose from, not yet started: a simpler mode for beginners,
+guided audio setup, and accessibility across the whole app.
 
 ## Still waiting on the owner
 

@@ -17,6 +17,7 @@
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
+mod automation;
 mod commands;
 mod comments;
 mod comping;
@@ -124,6 +125,8 @@ struct Track {
     sends: Vec<daw_project::Send>,
     /// The control group it belongs to, by key.
     group: Option<String>,
+    /// Automation lanes, with positions at the app's rate.
+    automation: Vec<daw_project::Lane>,
 }
 
 impl Track {
@@ -160,6 +163,7 @@ impl Track {
             output: None,
             sends: Vec::new(),
             group: None,
+            automation: Vec::new(),
         }
     }
 
@@ -344,6 +348,8 @@ struct App {
     /// The Fix timing window.
     timing: timing::Timing,
     takes_ui: comping::TakesPane,
+    /// Automation lanes: their pane, modes and the passes being written.
+    automation: automation::Automation,
     /// Pinned comments, as in the project, and their panel.
     comments: Vec<daw_project::Comment>,
     comment_ui: comments::Comments,
@@ -463,6 +469,7 @@ impl App {
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
             takes_ui: comping::TakesPane::default(),
+            automation: automation::Automation::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
@@ -763,6 +770,7 @@ impl App {
                     .map(|f| daw_engine::graph::InsertSpec { bypass: true, ..f })
                     .collect();
                 self.route(t, &mut spec);
+                spec.automation = self.lane_specs(t);
                 s.tracks.push(spec);
                 continue;
             }
@@ -784,6 +792,7 @@ impl App {
             spec.notes_live = t.kind.plays_notes() && (t.arm || t.monitor);
             spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
             self.route(t, &mut spec);
+            spec.automation = self.lane_specs(t);
             s.tracks.push(spec);
         }
         s
@@ -2093,6 +2102,8 @@ impl eframe::App for App {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.command_keys(&ctx);
+        // Controls with a lane show the lane's value while it is drawn.
+        self.show_automation();
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -2423,6 +2434,7 @@ impl eframe::App for App {
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.log_practice(&ctx);
+        self.automation_tick(&ctx);
         self.sync_doc(&ctx, false);
         self.autosave(&ctx);
         self.title(&ctx);

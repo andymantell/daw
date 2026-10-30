@@ -585,6 +585,7 @@ impl Effect {
             shared: self.shared.clone(),
             target: [0.0; MAX_PARAMS],
             now: [0.0; MAX_PARAMS],
+            auto: [None; MAX_PARAMS],
             smooth: 1.0 - (-(CHUNK as f64) / (SMOOTH_SECONDS * rate)).exp(),
             dsp,
             settled: false,
@@ -635,6 +636,9 @@ pub struct Processor {
     /// The settings as last read, and as smoothed towards them.
     target: [f64; MAX_PARAMS],
     now: [f64; MAX_PARAMS],
+    /// Settings an automation lane set for the next block, in place of
+    /// the controls'; cleared once the block is done.
+    auto: [Option<f64>; MAX_PARAMS],
     /// How far `now` moves towards `target` each chunk.
     smooth: f64,
     dsp: Box<dyn Dsp>,
@@ -650,7 +654,10 @@ impl Processor {
 
     fn read(&mut self) {
         for i in 0..self.params.len() {
-            let v = f32::from_bits(self.shared.values[i].load(Ordering::Relaxed)) as f64;
+            let v = match self.auto[i] {
+                Some(v) => self.params[i].clamp(v),
+                None => f32::from_bits(self.shared.values[i].load(Ordering::Relaxed)) as f64,
+            };
             if v != self.target[i] {
                 self.target[i] = v;
                 self.settled = false;
@@ -706,6 +713,13 @@ impl Insert for Processor {
         self.shared
             .reduction
             .store(self.dsp.reduction_db().to_bits(), Ordering::Relaxed);
+        self.auto = [None; MAX_PARAMS];
+    }
+
+    fn set_param(&mut self, param: u32, value: f64) {
+        if let Some(slot) = self.auto.get_mut(param as usize) {
+            *slot = Some(value);
+        }
     }
 
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
@@ -732,6 +746,7 @@ impl Insert for Processor {
         self.shared
             .reduction
             .store(self.dsp.reduction_db().to_bits(), Ordering::Relaxed);
+        self.auto = [None; MAX_PARAMS];
     }
 
     fn as_split(&mut self) -> Option<&mut dyn Split> {

@@ -44,10 +44,10 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Articulation, Assignment, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve,
-    EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, HitPoint, Marker,
-    MeterChange, Note, NoteClip, Practice, Project, Send, TabBlock, Technique, TempoChange,
-    TimecodeSetup, Track, TrackKind, TrainerSettings, is_asset_name,
+    Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
+    CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, HitPoint,
+    Lane, Marker, MeterChange, Note, NoteClip, Practice, Project, Send, TabBlock, Technique,
+    TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -937,6 +937,26 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         }
     }
 
+    // Lanes: one entry per setting, each its points as one list, so two
+    // people writing different settings keep both. Tracks never
+    // automated gain no entries.
+    if !plain("automation", t.automation.is_empty()) {
+        let lanes = w.fixed(m, "automation");
+        let keep: HashSet<&str> = t.automation.iter().map(|l| l.param.as_str()).collect();
+        for id in keys(&lanes) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&lanes, &id);
+            }
+        }
+        for l in &t.automation {
+            let lm = w.child(&lanes, &l.param);
+            let points: Vec<LoroValue> = (l.points.iter())
+                .map(|p| LoroValue::List(vec![p.at.into(), p.value.into()].into()))
+                .collect();
+            w.put(&lm, "points", LoroValue::List(points.into()));
+        }
+    }
+
     let clips = w.fixed(m, "clips");
     let keep: HashSet<&str> = t.clips.iter().map(|c| c.id.as_str()).collect();
     for id in keys(&clips) {
@@ -1406,8 +1426,22 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         output: string(t, "output").filter(|s| !s.is_empty()),
         sends: Vec::new(),
         group: string(t, "group").filter(|s| !s.is_empty()),
+        automation: Vec::new(),
     };
     (track.comps, track.comp) = read_comps(t);
+    if let Some(LoroValue::Map(lanes)) = t.get("automation") {
+        let mut params: Vec<&str> = lanes.keys().map(|k| k.as_str()).collect();
+        params.sort_unstable();
+        for param in params {
+            let Some(LoroValue::Map(lm)) = lanes.get(param) else {
+                continue;
+            };
+            track.automation.push(Lane {
+                param: param.to_string(),
+                points: read_points(lm),
+            });
+        }
+    }
     if let Some(LoroValue::Map(sends)) = t.get("sends") {
         for (to, sm) in sends.iter() {
             let LoroValue::Map(sm) = sm else { continue };
@@ -1542,6 +1576,30 @@ fn read_envelope(c: &LoroMapValue) -> Vec<GainPoint> {
         })
         .collect();
     points.sort_by_key(|p| p.at);
+    points
+}
+
+/// A lane's points, in order; anything odd is left out.
+fn read_points(lm: &LoroMapValue) -> Vec<AutoPoint> {
+    let Some(LoroValue::List(l)) = lm.get("points") else {
+        return Vec::new();
+    };
+    let mut points: Vec<AutoPoint> = (l.iter())
+        .filter_map(|p| match p {
+            LoroValue::List(p) => match &p[..] {
+                [LoroValue::I64(at), LoroValue::Double(value)] if *at >= 0 && value.is_finite() => {
+                    Some(AutoPoint {
+                        at: *at,
+                        value: *value,
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    points.sort_by_key(|p| p.at);
+    points.dedup_by_key(|p| p.at);
     points
 }
 
@@ -1919,6 +1977,45 @@ mod tests {
     }
 
     #[test]
+    fn automation_lanes_round_trip_and_merge_lane_by_lane() {
+        let mut p = Project::default();
+        let mut t = Track::new("g".into(), "Guitar".into());
+        let mut gain = Lane::new(Lane::GAIN);
+        gain.put(4800, -6.0);
+        gain.put(0, 0.0);
+        let mut fx = Lane::new("fx:e1:threshold");
+        fx.put(100, -20.0);
+        t.automation = vec![gain.clone(), fx.clone()];
+        p.tracks = vec![t];
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let back = doc.get();
+        // Lanes come back in a fixed order, points in time order.
+        assert_eq!(back.tracks[0].automation, vec![fx.clone(), gain.clone()]);
+
+        // Two people writing different lanes keep both.
+        let mut other = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap();
+        let before = doc.version();
+        let mut mine = back.clone();
+        mine.tracks[0].automation[1].put(9600, 0.0);
+        doc.set(&mine);
+        let mut theirs = back.clone();
+        theirs.tracks[0].automation[0].put(200, -30.0);
+        other.set(&theirs);
+        doc.merge(&other.updates_since(&before).unwrap()).unwrap();
+        let merged = doc.get();
+        assert_eq!(merged.tracks[0].automation[0].points.len(), 2);
+        assert_eq!(merged.tracks[0].automation[1].points.len(), 3);
+
+        // Taking a lane off reads back gone.
+        mine = merged;
+        mine.tracks[0].automation.remove(0);
+        doc.set(&mine);
+        assert_eq!(doc.get().tracks[0].automation.len(), 1);
+        assert_eq!(doc.get().tracks[0].automation[0].param, Lane::GAIN);
+    }
+
+    #[test]
     fn plain_tracks_add_no_routing_entries() {
         let p = Project {
             tracks: vec![Track::new("t1".into(), "Guitar".into())],
@@ -1932,7 +2029,7 @@ mod tests {
         let Some(LoroValue::Map(t)) = t.get("t1") else {
             panic!()
         };
-        for k in ["kind", "parent", "output", "group", "sends"] {
+        for k in ["kind", "parent", "output", "group", "sends", "automation"] {
             assert!(t.get(k).is_none(), "{k}");
         }
         let LoroValue::Map(root) = doc.doc.get_deep_value() else {

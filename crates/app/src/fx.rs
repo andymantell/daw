@@ -189,10 +189,18 @@ impl FxSlot {
     }
 
     /// The plugin behind this effect, if it is one.
-    fn plugin(&self) -> Option<&Plugin> {
+    pub(crate) fn plugin(&self) -> Option<&Plugin> {
         match &self.kind {
             SlotKind::Plugin { plugin, .. } => Some(plugin),
             SlotKind::Builtin(_) => None,
+        }
+    }
+
+    /// The built-in effect's settings, for one that comes with the app.
+    pub(crate) fn builtin(&self) -> Option<&daw_effects::Effect> {
+        match &self.kind {
+            SlotKind::Builtin(b) => Some(b),
+            SlotKind::Plugin { .. } => None,
         }
     }
 

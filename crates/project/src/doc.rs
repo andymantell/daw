@@ -1546,11 +1546,13 @@ mod tests {
 
     #[test]
     fn headphone_mixes_are_kept_without_tracks_that_are_gone() {
-        let mut p = Project::default();
-        p.tracks = vec![
-            Track::new("g".into(), "Guitar".into()),
-            Track::new("v".into(), "Voice".into()),
-        ];
+        let mut p = Project {
+            tracks: vec![
+                Track::new("g".into(), "Guitar".into()),
+                Track::new("v".into(), "Voice".into()),
+            ],
+            ..Project::default()
+        };
         let mut student = CueMix::new("c1".into(), "Student".into());
         student.gain_db = -3.0;
         student.click_db = None;

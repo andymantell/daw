@@ -34,6 +34,7 @@
 #![allow(non_snake_case)]
 
 use std::ffi::CStr;
+use std::path::Path;
 use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, TryLockError};
@@ -46,8 +47,9 @@ use vst3::{ComPtr, ComWrapper};
 use daw_engine::graph::Insert;
 
 use crate::com::{ComponentHandler, MemStream, ParamChanges, host_app, read_wstr};
+use crate::clap::{ClapModule, ClapPlugin, ClapProcessor};
 use crate::host::{RemotePlugin, RemoteProcessor};
-use crate::module::{Module, Result};
+use crate::module::{ClassInfo, Module, Result};
 use crate::proto::{ProgramList, Status};
 
 fn check(r: tresult, what: &str) -> Result<()> {
@@ -627,16 +629,62 @@ pub struct PluginState {
 }
 
 /// One bus's buffers, allocated up front.
-struct BusBufs {
-    channels: Vec<Vec<f32>>,
-    ptrs: Vec<*mut f32>,
+pub(crate) struct BusBufs {
+    pub(crate) channels: Vec<Vec<f32>>,
+    pub(crate) ptrs: Vec<*mut f32>,
 }
 
 impl BusBufs {
-    fn new(channels: usize, max_block: usize) -> BusBufs {
+    pub(crate) fn new(channels: usize, max_block: usize) -> BusBufs {
         let mut channels: Vec<Vec<f32>> = (0..channels).map(|_| vec![0.0; max_block]).collect();
         let ptrs = channels.iter_mut().map(|c| c.as_mut_ptr()).collect();
         BusBufs { channels, ptrs }
+    }
+
+    /// Left and right into the bus's first `n` frames, or their mix for
+    /// a mono bus; channels past the second are silent.
+    pub(crate) fn fill(&mut self, left: &[f32], right: &[f32], n: usize) {
+        match self.channels.as_mut_slice() {
+            [] => {}
+            [m] => {
+                for ((o, l), r) in m[..n].iter_mut().zip(left).zip(right) {
+                    *o = 0.5 * (l + r);
+                }
+            }
+            [a, b, rest @ ..] => {
+                a[..n].copy_from_slice(&left[..n]);
+                b[..n].copy_from_slice(&right[..n]);
+                for c in rest {
+                    c[..n].fill(0.0);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn silence(&mut self, n: usize) {
+        for c in &mut self.channels {
+            c[..n].fill(0.0);
+        }
+    }
+
+    /// The bus's first `n` frames into left and right (a mono bus into
+    /// both), replacing what is there or, with `add`, mixed in.
+    pub(crate) fn out(&self, left: &mut [f32], right: &mut [f32], n: usize, add: bool) {
+        let Some(a) = self.channels.first() else {
+            return;
+        };
+        let b = self.channels.get(1).unwrap_or(a);
+        if add {
+            for (o, x) in left[..n].iter_mut().zip(&a[..n]) {
+                *o += x;
+            }
+            for (o, x) in right[..n].iter_mut().zip(&b[..n]) {
+                *o += x;
+            }
+        } else {
+            left[..n].copy_from_slice(&a[..n]);
+            right[..n].copy_from_slice(&b[..n]);
+        }
     }
 }
 
@@ -708,37 +756,15 @@ impl LocalProcessor {
 
     fn run(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len()).min(self.max_block);
-        // Left and right into a bus, or their mix for a mono one.
-        fn fill(bus: &mut BusBufs, left: &[f32], right: &[f32], n: usize) {
-            match bus.channels.as_mut_slice() {
-                [] => {}
-                [m] => {
-                    for ((o, l), r) in m[..n].iter_mut().zip(left).zip(right) {
-                        *o = 0.5 * (l + r);
-                    }
-                }
-                [a, b, rest @ ..] => {
-                    a[..n].copy_from_slice(&left[..n]);
-                    b[..n].copy_from_slice(&right[..n]);
-                    for c in rest {
-                        c[..n].fill(0.0);
-                    }
-                }
-            }
-        }
         if let Some(main) = self.inputs.first_mut() {
-            fill(main, left, right, n);
+            main.fill(left, right, n);
         }
         for (i, bus) in self.inputs.iter_mut().enumerate().skip(1) {
             match key {
                 Some((kl, kr)) if Some(i) == self.key && kl.len() >= n && kr.len() >= n => {
-                    fill(bus, kl, kr, n)
+                    bus.fill(kl, kr, n)
                 }
-                _ => {
-                    for c in &mut bus.channels {
-                        c[..n].fill(0.0);
-                    }
-                }
+                _ => bus.silence(n),
             }
         }
 
@@ -776,23 +802,10 @@ impl LocalProcessor {
             // Leave the audio as it was: a failing effect is skipped.
             return;
         }
-        let main = &self.outputs[0].channels;
-        let r_src = main.get(1).unwrap_or(&main[0]);
-        left[..n].copy_from_slice(&main[0][..n]);
-        right[..n].copy_from_slice(&r_src[..n]);
+        self.outputs[0].out(left, right, n, false);
         for &i in &self.mix {
-            let Some(bus) = self.outputs.get(i) else {
-                continue;
-            };
-            let Some(a) = bus.channels.first() else {
-                continue;
-            };
-            let b = bus.channels.get(1).unwrap_or(a);
-            for (o, x) in left[..n].iter_mut().zip(&a[..n]) {
-                *o += x;
-            }
-            for (o, x) in right[..n].iter_mut().zip(&b[..n]) {
-                *o += x;
+            if let Some(bus) = self.outputs.get(i) {
+                bus.out(left, right, n, true);
             }
         }
     }
@@ -843,6 +856,8 @@ impl Insert for LocalProcessor {
 pub enum Plugin {
     Local(LocalPlugin),
     Remote(RemotePlugin),
+    /// A plugin in the CLAP format, in this process.
+    Clap(ClapPlugin),
 }
 
 impl Plugin {
@@ -852,6 +867,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.latency(),
             Plugin::Remote(p) => p.latency(),
+            Plugin::Clap(p) => p.latency(),
         }
     }
 
@@ -860,6 +876,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.poll(),
             Plugin::Remote(p) => p.poll(),
+            Plugin::Clap(p) => p.poll(),
         }
     }
 
@@ -868,7 +885,7 @@ impl Plugin {
     /// way (it takes the app with it instead).
     pub fn failure(&self) -> Option<String> {
         match self {
-            Plugin::Local(_) => None,
+            Plugin::Local(_) | Plugin::Clap(_) => None,
             Plugin::Remote(p) => p.failure(),
         }
     }
@@ -883,6 +900,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.buses().clone(),
             Plugin::Remote(p) => p.buses().clone(),
+            Plugin::Clap(p) => p.buses().clone(),
         }
     }
 
@@ -893,6 +911,8 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.compatible_param(old_cid, old),
             Plugin::Remote(p) => p.compatible_param(old_cid, old),
+            // CLAP has no way to say this.
+            Plugin::Clap(_) => None,
         }
     }
 
@@ -900,6 +920,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.params(),
             Plugin::Remote(p) => p.params(),
+            Plugin::Clap(p) => p.params(),
         }
     }
 
@@ -907,6 +928,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.param(id),
             Plugin::Remote(p) => p.param(id),
+            Plugin::Clap(p) => p.param(id),
         }
     }
 
@@ -914,6 +936,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.param_text(id, value),
             Plugin::Remote(p) => p.param_text(id, value),
+            Plugin::Clap(p) => p.param_text(id, value),
         }
     }
 
@@ -921,6 +944,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.set_param(id, value),
             Plugin::Remote(p) => p.set_param(id, value),
+            Plugin::Clap(p) => p.set_param(id, value),
         }
     }
 
@@ -928,6 +952,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.save_state(),
             Plugin::Remote(p) => p.save_state(),
+            Plugin::Clap(p) => p.save_state(),
         }
     }
 
@@ -935,6 +960,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.load_state(state),
             Plugin::Remote(p) => p.load_state(state),
+            Plugin::Clap(p) => p.load_state(state),
         }
     }
 
@@ -942,6 +968,8 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.programs(),
             Plugin::Remote(p) => p.programs(),
+            // A CLAP plugin's own presets are not looked for yet.
+            Plugin::Clap(_) => Vec::new(),
         }
     }
 
@@ -970,6 +998,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.open_editor(title),
             Plugin::Remote(p) => p.open_editor(title),
+            Plugin::Clap(p) => p.open_editor(title),
         }
     }
 
@@ -977,6 +1006,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.editor_open(),
             Plugin::Remote(p) => p.editor_open(),
+            Plugin::Clap(p) => p.editor_open(),
         }
     }
 
@@ -984,6 +1014,7 @@ impl Plugin {
         match self {
             Plugin::Local(p) => p.close_editor(),
             Plugin::Remote(p) => p.close_editor(),
+            Plugin::Clap(p) => p.close_editor(),
         }
     }
 }
@@ -993,6 +1024,7 @@ impl Plugin {
 pub enum Processor {
     Local(LocalProcessor),
     Remote(RemoteProcessor),
+    Clap(ClapProcessor),
 }
 
 impl Insert for Processor {
@@ -1000,6 +1032,7 @@ impl Insert for Processor {
         match self {
             Processor::Local(p) => p.process(left, right),
             Processor::Remote(p) => p.process(left, right),
+            Processor::Clap(p) => p.process(left, right),
         }
     }
 
@@ -1007,6 +1040,56 @@ impl Insert for Processor {
         match self {
             Processor::Local(p) => p.process_keyed(left, right, key),
             Processor::Remote(p) => p.process_keyed(left, right, key),
+            Processor::Clap(p) => p.process_keyed(left, right, key),
         }
+    }
+}
+
+/// A loaded plugin file, in either format.
+#[derive(Clone)]
+pub enum Library {
+    Vst3(Arc<Module>),
+    Clap(Arc<ClapModule>),
+}
+
+impl Library {
+    /// Loads the plugin file at `path`: a CLAP plugin if its extension
+    /// says so, otherwise a VST 3 bundle.
+    pub fn load(path: &Path) -> Result<Library> {
+        Ok(if crate::clap::is_clap(path) {
+            Library::Clap(Arc::new(ClapModule::load(path)?))
+        } else {
+            Library::Vst3(Arc::new(Module::load(path)?))
+        })
+    }
+
+    /// The classes (plugins and helpers) the file offers.
+    pub fn classes(&self) -> Vec<ClassInfo> {
+        match self {
+            Library::Vst3(m) => m.classes(),
+            Library::Clap(m) => m.classes(),
+        }
+    }
+
+    /// Makes and starts class `cid`, in this process, ready to process
+    /// blocks of up to `max_block` frames at `rate`, with the buses
+    /// `layout` asks for.
+    pub fn instantiate(
+        &self,
+        cid: &TUID,
+        rate: f64,
+        max_block: usize,
+        layout: &Layout,
+    ) -> Result<(Plugin, Processor)> {
+        Ok(match self {
+            Library::Vst3(m) => {
+                let (p, x) = instantiate_with(m.clone(), cid, rate, max_block, layout)?;
+                (Plugin::Local(p), Processor::Local(x))
+            }
+            Library::Clap(m) => {
+                let (p, x) = crate::clap::instantiate_with(m.clone(), cid, rate, max_block, layout)?;
+                (Plugin::Clap(p), Processor::Clap(x))
+            }
+        })
     }
 }

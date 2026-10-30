@@ -21,7 +21,7 @@ use daw_engine::graph::{Insert, InsertSpec};
 use daw_plugins::presets::{self, Preset};
 use daw_plugins::proto::ProgramList;
 use daw_plugins::scan::{self, Available, PluginList};
-use daw_plugins::{Host, Layout, Module, Plugin, PluginState, Processor, Sandbox};
+use daw_plugins::{Host, Layout, Library, Plugin, PluginState, Processor, Sandbox};
 use eframe::egui::{self, RichText};
 
 /// One effect in a track's chain.
@@ -316,7 +316,7 @@ pub struct Effects {
     /// processor can be set up to run one such block behind.
     pub block: usize,
     /// Modules loaded so far, kept loaded for the life of the app.
-    modules: HashMap<PathBuf, Arc<Module>>,
+    modules: HashMap<PathBuf, Library>,
     /// Effects made but not yet in a graph, by insert id.
     pub pending: Vec<(u64, Box<dyn Insert>)>,
     next_id: u64,
@@ -555,11 +555,11 @@ impl Effects {
         std::fs::rename(tmp, &self.list_path)
     }
 
-    fn module(&mut self, bundle: &Path) -> Result<Arc<Module>, String> {
+    fn module(&mut self, bundle: &Path) -> Result<Library, String> {
         if let Some(m) = self.modules.get(bundle) {
             return Ok(m.clone());
         }
-        let m = Arc::new(Module::load(bundle)?);
+        let m = Library::load(bundle)?;
         self.modules.insert(bundle.to_owned(), m.clone());
         Ok(m)
     }
@@ -598,14 +598,7 @@ impl Effects {
         match sandbox {
             Sandbox::InApp => {
                 let module = self.module(bundle)?;
-                let (p, x) = daw_plugins::instantiate_with(
-                    module,
-                    cid,
-                    rate as f64,
-                    daw_audio_io::MAX_BLOCK,
-                    layout,
-                )?;
-                Ok((Plugin::Local(p), Processor::Local(x)))
+                module.instantiate(cid, rate as f64, daw_audio_io::MAX_BLOCK, layout)
             }
             Sandbox::Shared | Sandbox::Own => {
                 let host = match sandbox {
@@ -1062,7 +1055,7 @@ impl Effects {
                 });
                 ui.label(
                     RichText::new(format!(
-                        "VST 3 folders: {}",
+                        "Plugin folders (VST 3 and CLAP): {}",
                         scan::default_dirs()
                             .iter()
                             .map(|d| d.display().to_string())
@@ -1075,7 +1068,7 @@ impl Effects {
                 ui.separator();
                 let plugins = self.list.plugins();
                 if plugins.is_empty() && self.scan.is_none() {
-                    ui.label("No VST 3 plugins found.");
+                    ui.label("No VST 3 or CLAP plugins found.");
                 }
                 let mut toggles = Vec::new();
                 let mut sandboxes = Vec::new();
@@ -1099,11 +1092,15 @@ impl Effects {
                                         .on_hover_text(p.bundle.display().to_string());
                                     ui.label(RichText::new(&p.class.vendor).weak());
                                     ui.label(
-                                        RichText::new(if p.class.is_instrument() {
-                                            "Instrument"
-                                        } else {
-                                            "Effect"
-                                        })
+                                        RichText::new(format!(
+                                            "{} · {}",
+                                            if p.class.is_instrument() {
+                                                "Instrument"
+                                            } else {
+                                                "Effect"
+                                            },
+                                            p.format()
+                                        ))
                                         .weak(),
                                     );
                                     let mut sb = p.sandbox;

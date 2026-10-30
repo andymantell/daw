@@ -36,10 +36,8 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use daw_engine::graph::Insert;
 
-use crate::module::{Module, Result};
-use crate::plugin::{
-    Buses, Layout, LocalPlugin, LocalProcessor, Param, PluginState, instantiate_with,
-};
+use crate::module::Result;
+use crate::plugin::{Buses, Layout, Library, Param, Plugin, PluginState, Processor};
 use crate::proto::{ProgramList, Reply, Request, Status, read_frame, write_frame};
 
 /// The argument that makes the app run as a plugin helper.
@@ -90,13 +88,13 @@ impl Sandbox {
 
 /// One plugin the helper holds.
 struct Held {
-    plugin: LocalPlugin,
-    processor: LocalProcessor,
+    plugin: Plugin,
+    processor: Processor,
 }
 
 #[derive(Default)]
 struct Helper {
-    modules: HashMap<PathBuf, Arc<Module>>,
+    modules: HashMap<PathBuf, Library>,
     plugins: HashMap<u32, Held>,
 }
 
@@ -120,9 +118,8 @@ impl Helper {
                 let bundle = PathBuf::from(bundle);
                 let module = match self.modules.get(&bundle) {
                     Some(m) => m.clone(),
-                    None => match Module::load(&bundle) {
+                    None => match Library::load(&bundle) {
                         Ok(m) => {
-                            let m = Arc::new(m);
                             self.modules.insert(bundle, m.clone());
                             m
                         }
@@ -130,12 +127,12 @@ impl Helper {
                     },
                 };
                 let tuid = cid.map(|b| b as _);
-                match instantiate_with(module, &tuid, rate, max_block as usize, &layout) {
+                match module.instantiate(&tuid, rate, max_block as usize, &layout) {
                     Ok((plugin, processor)) => {
                         let reply = Reply::Loaded {
                             latency: plugin.latency(),
                             params: plugin.params(),
-                            buses: plugin.buses().clone(),
+                            buses: plugin.buses(),
                         };
                         self.plugins.insert(id, Held { plugin, processor });
                         reply

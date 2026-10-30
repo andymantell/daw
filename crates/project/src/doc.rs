@@ -977,6 +977,14 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
                 e.sidechain.clone().map_or(LoroValue::Null, LoroValue::from),
             );
         }
+        if e.container.is_some() || em.get("container").is_some() {
+            w.put(
+                &em,
+                "container",
+                e.container.clone().map_or(LoroValue::Null, LoroValue::from),
+            );
+            w.put(&em, "branch", e.branch as i64);
+        }
         if !e.outputs.is_empty() || em.get("outputs").is_some() {
             let outs: Vec<LoroValue> = e.outputs.iter().map(|&o| (o as i64).into()).collect();
             w.put(&em, "outputs", LoroValue::List(outs.into()));
@@ -1266,6 +1274,11 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 builtin: string(e, "builtin").unwrap_or_default(),
                 response: string(e, "response").unwrap_or_default(),
                 sidechain: string(e, "sidechain").filter(|s| !s.is_empty()),
+                container: string(e, "container").filter(|s| !s.is_empty()),
+                branch: match e.get("branch") {
+                    Some(LoroValue::I64(b)) => u32::try_from(*b).unwrap_or(0),
+                    _ => 0,
+                },
                 outputs: match e.get("outputs") {
                     Some(LoroValue::List(l)) => (l.iter())
                         .filter_map(|v| match v {
@@ -1799,5 +1812,67 @@ mod tests {
         gone.edit_groups.clear();
         a.set(&gone);
         assert!(a.get().edit_groups.is_empty());
+    }
+
+    #[test]
+    fn effects_in_containers_round_trip_and_merge_chains_filled_at_once() {
+        let mut p = Project::default();
+        let mut t = Track::new("g".into(), "Guitar".into());
+        t.effects = vec![
+            Effect {
+                id: "split".into(),
+                builtin: "band-split".into(),
+                params: vec![("bands".into(), 0.0)],
+                ..Effect::default()
+            },
+            Effect {
+                id: "low".into(),
+                builtin: "compressor".into(),
+                container: Some("split".into()),
+                ..Effect::default()
+            },
+        ];
+        p.tracks = vec![t];
+        let mut a = ProjectDoc::new(1);
+        a.set(&p);
+        assert_eq!(a.get().tracks[0].effects, p.tracks[0].effects);
+
+        // Two people each put an effect in a different band at once.
+        let mut b = ProjectDoc::from_bytes(&a.to_bytes(), 2).unwrap();
+        let mut pa = a.get();
+        pa.tracks[0].effects.push(Effect {
+            id: "high".into(),
+            builtin: "delay".into(),
+            container: Some("split".into()),
+            branch: 1,
+            ..Effect::default()
+        });
+        a.set(&pa);
+        let mut pb = b.get();
+        pb.tracks[0].effects.push(Effect {
+            id: "low2".into(),
+            builtin: "eq".into(),
+            container: Some("split".into()),
+            ..Effect::default()
+        });
+        b.set(&pb);
+        let (va, vb) = (a.version(), b.version());
+        let to_b = a.updates_since(&vb).unwrap();
+        let to_a = b.updates_since(&va).unwrap();
+        a.merge(&to_a).unwrap();
+        b.merge(&to_b).unwrap();
+        assert_eq!(a.get(), b.get());
+        let fx = &a.get().tracks[0].effects;
+        assert_eq!(fx.len(), 4);
+        let high = fx.iter().find(|e| e.id == "high").unwrap();
+        assert_eq!((high.container.as_deref(), high.branch), (Some("split"), 1));
+
+        // Taking an effect out of its container puts it back on the
+        // track's own chain.
+        let mut out = a.get();
+        out.tracks[0].effects[1].container = None;
+        a.set(&out);
+        let low = &a.get().tracks[0].effects[1];
+        assert_eq!((low.container.as_deref(), low.branch), (None, 0));
     }
 }

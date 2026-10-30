@@ -464,6 +464,9 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                 if plugin_changed || b.params != e.params {
                     out.push(format!("Changed the settings of “{}”", e.name));
                 }
+                if (&b.container, b.branch) != (&e.container, e.branch) {
+                    out.push(format!("Moved “{}” to another chain", e.name));
+                }
             }
         }
     }

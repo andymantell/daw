@@ -10,6 +10,8 @@
 //! have them mixed in; a newer version of a plugin opens projects saved
 //! with an older one where it says it can; plugin windows can be capped
 //! in number; and the plugins can be checked for the compatibility list.
+//! Effects can sit in containers (3.5) that split the audio into chains
+//! of effects, shown nested under the container in the effects window.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
-use daw_engine::graph::{Insert, InsertSpec};
+use daw_engine::graph::{Insert, InsertSpec, Place};
 use daw_plugins::presets::{self, Preset};
 use daw_plugins::proto::ProgramList;
 use daw_plugins::scan::{self, Available, PluginList};
@@ -38,6 +40,9 @@ pub struct FxSlot {
     pub sidechain: Option<String>,
     /// A plugin's extra outputs mixed into the track, by bus index.
     pub outputs: Vec<u32>,
+    /// The container it sits in, by its key, and which of its chains;
+    /// `None` for the track's own chain.
+    pub place: Option<(String, u32)>,
     /// Something to say about it in the effects window: that a newer
     /// version of the plugin stands in for the one saved.
     pub note: Option<String>,
@@ -99,6 +104,8 @@ impl FxSlot {
             bypass: self.bypass,
             sidechain: self.sidechain.clone(),
             outputs: self.outputs.clone(),
+            container: self.place.as_ref().map(|p| p.0.clone()),
+            branch: self.place.as_ref().map_or(0, |p| p.1),
             ..Default::default()
         };
         match &self.kind {
@@ -221,13 +228,32 @@ impl FxSlot {
         }
     }
 
+    /// Its slot for the engine. Where it sits is filled in by
+    /// [`specs`], which knows the other slots.
     pub fn spec(&self) -> InsertSpec {
         InsertSpec {
             id: self.id,
             bypass: self.bypass,
             latency: self.latency,
             sidechain: None,
-            ..Default::default()
+            branches: self.chains() as u8,
+            place: None,
+        }
+    }
+
+    /// For a container, how many chains it has; 0 for an effect.
+    pub fn chains(&self) -> usize {
+        match &self.kind {
+            SlotKind::Builtin(b) => b.chains(),
+            SlotKind::Plugin { .. } => 0,
+        }
+    }
+
+    /// What its chain `branch` is called, for a container.
+    fn chain_name(&self, branch: usize) -> String {
+        match self.builtin_kind() {
+            Some(k) => k.chain_name(branch, self.chains()),
+            None => format!("Chain {}", branch + 1),
         }
     }
 
@@ -656,6 +682,7 @@ impl Effects {
             bypass: false,
             sidechain: None,
             outputs: Vec::new(),
+            place: None,
             note: None,
             needs_reload: false,
             opened: 0,
@@ -690,6 +717,7 @@ impl Effects {
             bypass: false,
             sidechain: None,
             outputs: layout.outputs.clone(),
+            place: None,
             note: None,
             needs_reload: false,
             opened: 0,
@@ -738,6 +766,7 @@ impl Effects {
             slot.key = e.id.clone();
             slot.bypass = e.bypass;
             slot.sidechain = e.sidechain.clone();
+            slot.place = place_of(e);
             slot.show_params = false;
             if !e.name.is_empty() {
                 slot.name = e.name.clone();
@@ -779,6 +808,7 @@ impl Effects {
         slot.key = e.id.clone();
         slot.bypass = e.bypass;
         slot.sidechain = e.sidechain.clone();
+        slot.place = place_of(e);
         slot.note = note;
         if let Some(s) = &e.state {
             slot.load(&PluginState {
@@ -1213,6 +1243,9 @@ impl Effects {
         let mut changed = false;
         let mut remove = None;
         let mut swap = None;
+        let mut moved: Option<(usize, Option<(String, u32)>)> = None;
+        let mut add: Option<(Pick, Option<(String, u32)>)> = None;
+        let chains_before: Vec<usize> = slots.iter().map(FxSlot::chains).collect();
         let mut restart = None;
         // Plugins whose side buses changed, to make again.
         let mut relayout = Vec::new();
@@ -1233,9 +1266,56 @@ impl Effects {
                     });
                     ui.separator();
                 }
-                let n = slots.len();
-                for (i, s) in slots.iter_mut().enumerate() {
+                // Every container's chains, to move an effect into.
+                let targets: Vec<(String, u32, String)> = (slots.iter())
+                    .flat_map(|c| {
+                        (0..c.chains()).map(move |b| {
+                            (
+                                c.key.clone(),
+                                b as u32,
+                                format!("{}: {}", c.name, c.chain_name(b)),
+                            )
+                        })
+                    })
+                    .collect();
+                let effects: Vec<Available> = self
+                    .list
+                    .plugins()
+                    .into_iter()
+                    .filter(|p| p.enabled && !p.class.is_instrument())
+                    .collect();
+                for row in tree(slots) {
+                    let (i, depth, idle) = match row {
+                        Row::Chain { of, branch, depth } => {
+                            let name = slots[of].chain_name(branch);
+                            let key = slots[of].key.clone();
+                            ui.horizontal(|ui| {
+                                ui.add_space(depth as f32 * 16.0);
+                                ui.label(RichText::new(&name).italics());
+                                ui.menu_button("Add…", |ui| {
+                                    if let Some(p) = add_list(ui, &mut self.filter, &effects) {
+                                        add = Some((p, Some((key.clone(), branch as u32))));
+                                        ui.close();
+                                    }
+                                })
+                                .response
+                                .accessible_name(format!("Add an effect to {name}"));
+                            });
+                            continue;
+                        }
+                        Row::Fx { i, depth, idle } => (i, depth, idle),
+                    };
+                    let sib = siblings(slots, i);
+                    let at = sib.iter().position(|&j| j == i).unwrap_or(0);
+                    let up = at.checked_sub(1).map(|p| sib[p]);
+                    let down = sib.get(at + 1).copied();
+                    // It and what's inside it: it can't move into those.
+                    let mine: Vec<String> = (with_contents(slots, i).into_iter())
+                        .map(|j| slots[j].key.clone())
+                        .collect();
+                    let s = &mut slots[i];
                     ui.horizontal(|ui| {
+                        ui.add_space(depth as f32 * 16.0);
                         let mut on = !s.bypass;
                         if ui
                             .toggle_value(&mut on, "On")
@@ -1247,6 +1327,12 @@ impl Effects {
                         }
                         ui.label(RichText::new(&s.name).strong())
                             .on_hover_text(format!("Runs {}", s.runs()));
+                        if idle {
+                            ui.label(RichText::new("not playing").weak()).on_hover_text(
+                                "Its container has no chain of this number now; move it \
+                                 or add the chain back",
+                            );
+                        }
                         if s.latency > 0 {
                             ui.label(RichText::new(format!("{} smp", s.latency)).weak())
                                 .on_hover_text(
@@ -1291,11 +1377,44 @@ impl Effects {
                             .response
                             .accessible_name(format!("Presets for {}", s.name));
                         }
-                        if ui.add_enabled(i > 0, egui::Button::new("▲")).clicked() {
-                            swap = Some((i - 1, i));
+                        ui.menu_button("Move", |ui| {
+                            if ui
+                                .add_enabled(
+                                    s.place.is_some(),
+                                    egui::Button::new("To the track's own chain"),
+                                )
+                                .clicked()
+                            {
+                                moved = Some((i, None));
+                                ui.close();
+                            }
+                            for (key, branch, label) in &targets {
+                                if mine.contains(key) {
+                                    continue;
+                                }
+                                let here = s.place.as_ref() == Some(&(key.clone(), *branch));
+                                if ui
+                                    .add_enabled(!here, egui::Button::new(format!("Into {label}")))
+                                    .clicked()
+                                {
+                                    moved = Some((i, Some((key.clone(), *branch))));
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                        .accessible_name(format!("Move {}", s.name));
+                        if ui
+                            .add_enabled(up.is_some(), egui::Button::new("▲"))
+                            .clicked()
+                        {
+                            swap = up.map(|u| (u, i));
                         }
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("▼")).clicked() {
-                            swap = Some((i, i + 1));
+                        if ui
+                            .add_enabled(down.is_some(), egui::Button::new("▼"))
+                            .clicked()
+                        {
+                            swap = down.map(|d| (i, d));
                         }
                         if ui.button("✖").on_hover_text("Remove").clicked() {
                             remove = Some(i);
@@ -1332,72 +1451,17 @@ impl Effects {
                     }
                     ui.separator();
                 }
-                let effects: Vec<Available> = self
-                    .list
-                    .plugins()
-                    .into_iter()
-                    .filter(|p| p.enabled && !p.class.is_instrument())
-                    .collect();
                 ui.horizontal(|ui| {
-                    let mut pick = None;
-                    let mut pick_builtin = None;
                     egui::ComboBox::from_id_salt("add-fx")
                         .selected_text("Add effect…")
                         .width(220.0)
                         .show_ui(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.filter).hint_text("Search"),
-                            );
-                            let f = self.filter.to_lowercase();
-                            let fits =
-                                |name: &str| f.is_empty() || name.to_lowercase().contains(&f);
-                            ui.label(RichText::new("Built in").small().weak());
-                            for k in daw_effects::Kind::ALL
-                                .into_iter()
-                                .filter(|k| fits(k.name()))
-                            {
-                                if ui
-                                    .selectable_label(false, k.name())
-                                    .on_hover_text(k.about())
-                                    .clicked()
-                                {
-                                    pick_builtin = Some(k);
-                                }
-                            }
-                            ui.separator();
-                            ui.label(RichText::new("Plugins").small().weak());
-                            for p in effects.iter().filter(|p| fits(&p.class.name)) {
-                                if ui
-                                    .selectable_label(false, &p.class.name)
-                                    .on_hover_text(&p.class.vendor)
-                                    .clicked()
-                                {
-                                    pick = Some(p.clone());
-                                }
-                            }
-                            if effects.is_empty() {
-                                ui.label(
-                                    RichText::new("No plugins found. See Settings → Plugins.")
-                                        .small()
-                                        .weak(),
-                                );
+                            if let Some(p) = add_list(ui, &mut self.filter, &effects) {
+                                add = Some((p, None));
                             }
                         })
                         .response
                         .accessible_name("Add effect");
-                    if let Some(k) = pick_builtin {
-                        slots.push(self.create_builtin(k, rate));
-                        changed = true;
-                    }
-                    if let Some(p) = pick {
-                        match self.create(&p, rate) {
-                            Ok(slot) => {
-                                slots.push(slot);
-                                changed = true;
-                            }
-                            Err(e) => *message = Some(format!("{}: {e}", p.class.name)),
-                        }
-                    }
                     if ui.button("Plugins…").clicked() {
                         self.show_manager = true;
                     }
@@ -1438,6 +1502,34 @@ impl Effects {
             slots.swap(a, b);
             changed = true;
         }
+        if let Some((i, place)) = moved {
+            slots[i].place = place;
+            changed = true;
+        }
+        if let Some((pick, place)) = add {
+            let made = match pick {
+                Pick::Builtin(k) => Ok(self.create_builtin(k, rate)),
+                Pick::Plugin(p) => self
+                    .create(&p, rate)
+                    .map_err(|e| format!("{}: {e}", p.class.name)),
+            };
+            match made {
+                Ok(mut slot) => {
+                    slot.place = place;
+                    slots.push(slot);
+                    changed = true;
+                }
+                Err(e) => *message = Some(e),
+            }
+        }
+        // A container's number of chains changed: the engine's tree did.
+        if slots
+            .iter()
+            .map(FxSlot::chains)
+            .ne(chains_before.iter().copied())
+        {
+            changed = true;
+        }
         relayout.extend(restart);
         relayout.dedup();
         for i in relayout {
@@ -1447,8 +1539,13 @@ impl Effects {
             }
         }
         if let Some(i) = remove {
-            // The audio side is dropped with the graph it was in.
-            slots.remove(i);
+            // The audio side is dropped with the graph it was in. A
+            // container goes with what's inside it.
+            let mut gone = with_contents(slots, i);
+            gone.sort_unstable();
+            for j in gone.into_iter().rev() {
+                slots.remove(j);
+            }
             changed = true;
         }
         if !open {
@@ -1456,6 +1553,190 @@ impl Effects {
         }
         changed
     }
+}
+
+/// Where a saved effect sits.
+fn place_of(e: &daw_project::Effect) -> Option<(String, u32)> {
+    e.container.clone().map(|c| (c, e.branch))
+}
+
+/// The engine's slots for a track's effects, in order, with the
+/// containers they sit in by insert id.
+pub fn specs(slots: &[FxSlot]) -> Vec<InsertSpec> {
+    (slots.iter())
+        .map(|s| InsertSpec {
+            place: s.place.as_ref().and_then(|(key, branch)| {
+                let c = slots.iter().find(|c| &c.key == key)?;
+                Some(Place {
+                    container: c.id,
+                    branch: (*branch).min(u8::MAX as u32) as u8,
+                })
+            }),
+            ..s.spec()
+        })
+        .collect()
+}
+
+/// One line of the effects window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Row {
+    /// The effect at this index, nested `depth` deep. `idle` when it
+    /// doesn't play: its container has no chain of that number.
+    Fx { i: usize, depth: usize, idle: bool },
+    /// The heading of chain `branch` of the container at `of`.
+    Chain {
+        of: usize,
+        branch: usize,
+        depth: usize,
+    },
+}
+
+/// Whether the slot at `i` sits in the track's own chain: it names no
+/// container, or one that isn't there.
+fn on_top(slots: &[FxSlot], i: usize) -> bool {
+    match &slots[i].place {
+        None => true,
+        Some((key, _)) => !slots.iter().any(|c| &c.key == key && c.chains() > 0),
+    }
+}
+
+/// The effects window's lines: the track's chain, with each
+/// container's chains nested under it, as the engine plays them.
+pub fn tree(slots: &[FxSlot]) -> Vec<Row> {
+    fn walk(slots: &[FxSlot], ks: &[usize], depth: usize, seen: &mut [bool], rows: &mut Vec<Row>) {
+        for &i in ks {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            rows.push(Row::Fx {
+                i,
+                depth,
+                idle: false,
+            });
+            let count = slots[i].chains();
+            if count == 0 {
+                continue;
+            }
+            let key = &slots[i].key;
+            let inside = |b: Option<usize>| -> Vec<usize> {
+                (0..slots.len())
+                    .filter(|&j| {
+                        slots[j].place.as_ref().is_some_and(|(k, n)| {
+                            k == key && b.map_or(*n as usize >= count, |b| *n as usize == b)
+                        })
+                    })
+                    .collect()
+            };
+            for b in 0..count {
+                rows.push(Row::Chain {
+                    of: i,
+                    branch: b,
+                    depth: depth + 1,
+                });
+                walk(slots, &inside(Some(b)), depth + 2, seen, rows);
+            }
+            for j in inside(None) {
+                if !std::mem::replace(&mut seen[j], true) {
+                    rows.push(Row::Fx {
+                        i: j,
+                        depth: depth + 1,
+                        idle: true,
+                    });
+                }
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    let mut seen = vec![false; slots.len()];
+    let top: Vec<usize> = (0..slots.len()).filter(|&i| on_top(slots, i)).collect();
+    walk(slots, &top, 0, &mut seen, &mut rows);
+    // Anything left (containers inside each other in a loop) is shown
+    // so it can be moved or removed; it doesn't play.
+    for (i, seen) in seen.iter().enumerate() {
+        if !seen {
+            rows.push(Row::Fx {
+                i,
+                depth: 0,
+                idle: true,
+            });
+        }
+    }
+    rows
+}
+
+/// The slots in the same chain as `i`, in order.
+fn siblings(slots: &[FxSlot], i: usize) -> Vec<usize> {
+    if on_top(slots, i) {
+        (0..slots.len()).filter(|&j| on_top(slots, j)).collect()
+    } else {
+        (0..slots.len())
+            .filter(|&j| slots[j].place == slots[i].place)
+            .collect()
+    }
+}
+
+/// The slot at `i` and everything inside it, if it is a container.
+fn with_contents(slots: &[FxSlot], i: usize) -> Vec<usize> {
+    let mut out = vec![i];
+    let mut k = 0;
+    while k < out.len() {
+        let key = slots[out[k]].key.clone();
+        for (j, s) in slots.iter().enumerate() {
+            if !out.contains(&j) && s.place.as_ref().is_some_and(|(c, _)| *c == key) {
+                out.push(j);
+            }
+        }
+        k += 1;
+    }
+    out
+}
+
+/// What can be added from an "Add effect" list.
+enum Pick {
+    Builtin(daw_effects::Kind),
+    Plugin(Available),
+}
+
+/// The built-in effects, containers and plugins, filtered by `filter`.
+fn add_list(ui: &mut egui::Ui, filter: &mut String, effects: &[Available]) -> Option<Pick> {
+    let mut pick = None;
+    ui.add(egui::TextEdit::singleline(filter).hint_text("Search"));
+    let f = filter.to_lowercase();
+    let fits = |name: &str| f.is_empty() || name.to_lowercase().contains(&f);
+    for (heading, containers) in [("Built in", false), ("Containers", true)] {
+        ui.label(RichText::new(heading).small().weak());
+        for k in daw_effects::Kind::ALL
+            .into_iter()
+            .filter(|k| k.is_container() == containers && fits(k.name()))
+        {
+            if ui
+                .selectable_label(false, k.name())
+                .on_hover_text(k.about())
+                .clicked()
+            {
+                pick = Some(Pick::Builtin(k));
+            }
+        }
+        ui.separator();
+    }
+    ui.label(RichText::new("Plugins").small().weak());
+    for p in effects.iter().filter(|p| fits(&p.class.name)) {
+        if ui
+            .selectable_label(false, &p.class.name)
+            .on_hover_text(&p.class.vendor)
+            .clicked()
+        {
+            pick = Some(Pick::Plugin(p.clone()));
+        }
+    }
+    if effects.is_empty() {
+        ui.label(
+            RichText::new("No plugins found. See Settings → Plugins.")
+                .small()
+                .weak(),
+        );
+    }
+    pick
 }
 
 /// The plugin check's report: how to use it, then the table.
@@ -1767,6 +2048,9 @@ fn builtin_params(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option
                     ui.label(p.name);
                     pick = cabinet_picker(ui, id, b);
                     ui.end_row();
+                    continue;
+                }
+                if !b.shown(p.key) {
                     continue;
                 }
                 let mut v = b.get(i);
@@ -2134,6 +2418,74 @@ mod tests {
         assert_eq!(builtin(h.state(), 0).get(12), -6.0);
         let again = peak(&render(h.state_mut(), frames));
         assert!((again - wet).abs() < 1e-4);
+    }
+
+    #[test]
+    fn effects_go_into_a_container_play_there_and_come_back_with_the_project() {
+        let dir = scratch("container");
+        let mut h = harness();
+        let rate = h.state().rate;
+        h.state_mut().add_file(&tone(&dir, rate));
+        until(&mut h, |a| !a.tracks.is_empty());
+        let frames = rate as usize;
+
+        // A container from the list, then an effect added to its first
+        // chain from the chain's own list.
+        h.state_mut().effects.open_track = Some(0);
+        // Searched for, as it is far down the list.
+        h.state_mut().effects.filter = "parallel".into();
+        h.run();
+        h.get_by_label("Add effect").click();
+        h.run();
+        h.get_by_label("Parallel chains").click();
+        h.run();
+        h.state_mut().effects.filter.clear();
+        assert_eq!(h.state().tracks[0].fx[0].chains(), 2);
+        // Two empty chains: the sound twice over.
+        let two = peak(&render(h.state_mut(), frames));
+        h.get_by_label("Add an effect to Chain 1").click();
+        h.run();
+        h.get_by_label("EQ").click();
+        h.run();
+        let fx = &h.state().tracks[0].fx;
+        assert_eq!(fx.len(), 2);
+        assert_eq!(fx[1].place, Some((fx[0].key.clone(), 0)));
+        let rows = super::tree(fx);
+        assert_eq!(rows.len(), 4, "container, chain 1, EQ, chain 2: {rows:?}");
+
+        // Heard: two chains of the same sound, one through an EQ turned
+        // down 6 dB, the other empty.
+        builtin(h.state(), 1).set(12, -6.0);
+        h.run();
+        let both = peak(&render(h.state_mut(), frames));
+        assert!((both / two - 0.75).abs() < 0.01, "{two} {both}");
+
+        // One chain: the empty one is gone, and the EQ alone is heard.
+        builtin(h.state(), 0).set(0, 0.0);
+        h.run();
+        assert_eq!(h.state().tracks[0].fx[0].chains(), 1);
+        let one = peak(&render(h.state_mut(), frames));
+        assert!((one / two - 0.25).abs() < 0.01, "{two} {one}");
+
+        // Saved and reopened in its place.
+        let song = dir.join("Song");
+        let ctx = h.ctx.clone();
+        h.state_mut().save_in(&ctx, &song).unwrap();
+        h.run();
+        drop(h);
+        let mut h = harness();
+        h.state_mut().open_project(song.clone());
+        until(&mut h, |a| !a.proj.loading());
+        h.run();
+        let fx = &h.state().tracks[0].fx;
+        assert_eq!(fx.len(), 2);
+        assert_eq!(fx[1].place, Some((fx[0].key.clone(), 0)));
+        let again = peak(&render(h.state_mut(), frames));
+        assert!((again - one).abs() < 1e-3, "{one} {again}");
+
+        // Removing the container takes what's inside with it.
+        assert_eq!(super::with_contents(&h.state().tracks[0].fx, 0), [0, 1]);
+        assert_eq!(super::with_contents(&h.state().tracks[0].fx, 1), [1]);
     }
 
     #[test]

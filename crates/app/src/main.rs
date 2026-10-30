@@ -659,11 +659,9 @@ impl App {
                     t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
                 // Its plugins that are here stay in the graph, bypassed,
                 // for when the frozen audio stops fitting.
-                spec.inserts = (t.fx.iter())
-                    .map(|f| daw_engine::graph::InsertSpec {
-                        bypass: true,
-                        ..f.spec()
-                    })
+                spec.inserts = fx::specs(&t.fx)
+                    .into_iter()
+                    .map(|f| daw_engine::graph::InsertSpec { bypass: true, ..f })
                     .collect();
                 self.route(t, &mut spec);
                 s.tracks.push(spec);
@@ -689,7 +687,7 @@ impl App {
             spec.arm = t.arm;
             // With direct monitoring the interface plays the input.
             spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
-            spec.inserts = t.fx.iter().map(FxSlot::spec).collect();
+            spec.inserts = fx::specs(&t.fx);
             self.route(t, &mut spec);
             s.tracks.push(spec);
         }

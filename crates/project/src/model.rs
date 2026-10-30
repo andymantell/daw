@@ -165,6 +165,9 @@ pub struct Track {
     pub sends: Vec<Send>,
     /// The control group whose fader and mute act on it.
     pub group: Option<String>,
+    /// Automation lanes (roadmap 2.6): a line each for the settings that
+    /// change as the song plays, in the order added.
+    pub automation: Vec<Lane>,
 }
 
 impl Track {
@@ -189,6 +192,7 @@ impl Track {
             output: None,
             sends: Vec::new(),
             group: None,
+            automation: Vec::new(),
         }
     }
 
@@ -303,6 +307,164 @@ impl Track {
                 .collect(),
         }
     }
+}
+
+/// An automation lane: how one setting of a track changes over the
+/// song, as points joined by straight lines, held level before the
+/// first and after the last. Which setting is named by `param` (see
+/// [`Lane::GAIN`] and the other prefixes). A lane with no points leaves
+/// the setting as the track has it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lane {
+    /// Which setting: `gain`, `pan`, `send:<bus id>`, `fx:<effect
+    /// id>:<setting key>` for a built-in effect (in the setting's own
+    /// unit) or `plugin:<effect id>:<parameter id>` for a plugin (0 to
+    /// 1, as the plugin counts it). Never change one.
+    pub param: String,
+    /// In time order.
+    pub points: Vec<AutoPoint>,
+}
+
+impl Lane {
+    /// The track's volume, in dB.
+    pub const GAIN: &'static str = "gain";
+    /// The track's pan, −1 to +1.
+    pub const PAN: &'static str = "pan";
+    /// A send's level, in dB: `send:` and the bus's id.
+    pub const SEND: &'static str = "send:";
+    /// A built-in effect's setting: `fx:`, the effect's id, `:` and the
+    /// setting's key.
+    pub const FX: &'static str = "fx:";
+    /// A plugin's parameter: `plugin:`, the effect's id, `:` and the
+    /// parameter's id.
+    pub const PLUGIN: &'static str = "plugin:";
+
+    pub fn new(param: impl Into<String>) -> Lane {
+        Lane {
+            param: param.into(),
+            points: Vec::new(),
+        }
+    }
+
+    /// The lane's setting, taken apart: a send's bus, or an effect's id
+    /// and its setting, if it names one.
+    pub fn target(&self) -> LaneTarget<'_> {
+        let p = self.param.as_str();
+        if p == Lane::GAIN {
+            LaneTarget::Gain
+        } else if p == Lane::PAN {
+            LaneTarget::Pan
+        } else if let Some(bus) = p.strip_prefix(Lane::SEND) {
+            LaneTarget::Send(bus)
+        } else if let Some(rest) = p.strip_prefix(Lane::FX)
+            && let Some((effect, key)) = rest.split_once(':')
+        {
+            LaneTarget::Fx { effect, key }
+        } else if let Some(rest) = p.strip_prefix(Lane::PLUGIN)
+            && let Some((effect, id)) = rest.split_once(':')
+            && let Ok(id) = id.parse()
+        {
+            LaneTarget::Plugin { effect, id }
+        } else {
+            LaneTarget::Unknown
+        }
+    }
+
+    /// The effect the lane belongs to, if it belongs to one.
+    pub fn effect(&self) -> Option<&str> {
+        match self.target() {
+            LaneTarget::Fx { effect, .. } | LaneTarget::Plugin { effect, .. } => Some(effect),
+            _ => None,
+        }
+    }
+
+    /// The value at `at`: on the line between the points either side,
+    /// or the nearest point's beyond the ends. `None` with no points.
+    pub fn value_at(&self, at: i64) -> Option<f64> {
+        let p = &self.points;
+        let first = p.first()?;
+        if at <= first.at {
+            return Some(first.value);
+        }
+        let last = p.last()?;
+        if at >= last.at {
+            return Some(last.value);
+        }
+        let i = p.partition_point(|q| q.at <= at);
+        let (a, b) = (&p[i - 1], &p[i]);
+        if b.at == a.at {
+            return Some(b.value);
+        }
+        let k = (at - a.at) as f64 / (b.at - a.at) as f64;
+        Some(a.value + (b.value - a.value) * k)
+    }
+
+    /// Puts a point in, keeping time order; a point already at `at` is
+    /// replaced. Returns where it went.
+    pub fn put(&mut self, at: i64, value: f64) -> usize {
+        let i = self.points.partition_point(|q| q.at < at);
+        if self.points.get(i).is_some_and(|q| q.at == at) {
+            self.points[i].value = value;
+        } else {
+            self.points.insert(i, AutoPoint { at, value });
+        }
+        i
+    }
+
+    /// Replaces the points in `[from, to]` with `written`, as a pass of
+    /// writing does: points on the way are gone, and the new ones take
+    /// their place. The lane's value just outside the pass is kept by
+    /// points at its ends, so the pass changes nothing beyond it.
+    pub fn write(&mut self, from: i64, to: i64, written: &[AutoPoint]) {
+        let (from, to) = (from.min(to), from.max(to));
+        let before = self.value_at(from);
+        let after = self.value_at(to);
+        self.points.retain(|p| p.at < from || p.at > to);
+        if let Some(v) = before
+            && written.first().is_none_or(|p| p.at > from)
+        {
+            self.put(from, v);
+        }
+        if let Some(v) = after
+            && written.last().is_none_or(|p| p.at < to)
+        {
+            self.put(to, v);
+        }
+        for p in written {
+            if p.at >= from && p.at <= to {
+                self.put(p.at, p.value);
+            }
+        }
+    }
+}
+
+/// What a [`Lane`] sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneTarget<'a> {
+    Gain,
+    Pan,
+    /// A send, by the bus's id.
+    Send(&'a str),
+    /// A built-in effect's setting.
+    Fx {
+        effect: &'a str,
+        key: &'a str,
+    },
+    /// A plugin's parameter.
+    Plugin {
+        effect: &'a str,
+        id: u32,
+    },
+    /// A setting this version doesn't know.
+    Unknown,
+}
+
+/// A point on an automation lane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AutoPoint {
+    /// A frame on the timeline, at the project's rate.
+    pub at: i64,
+    pub value: f64,
 }
 
 /// A copy of a track's audio sent to a bus (an effect return, say),
@@ -1257,5 +1419,98 @@ mod tests {
             assert_eq!(Articulation::from_name(a.name()), Some(a));
         }
         assert_eq!(Technique::from_name("made up"), None);
+    }
+
+    fn lane(points: &[(i64, f64)]) -> Lane {
+        let mut l = Lane::new(Lane::GAIN);
+        for &(at, v) in points {
+            l.put(at, v);
+        }
+        l
+    }
+
+    #[test]
+    fn a_lane_reads_between_its_points_and_holds_its_ends() {
+        let l = lane(&[(100, 0.0), (0, -12.0), (200, 6.0)]);
+        assert_eq!(l.value_at(-5), Some(-12.0));
+        assert_eq!(l.value_at(50), Some(-6.0));
+        assert_eq!(l.value_at(150), Some(3.0));
+        assert_eq!(l.value_at(900), Some(6.0));
+        assert_eq!(Lane::new(Lane::PAN).value_at(0), None);
+    }
+
+    #[test]
+    fn putting_a_point_at_a_taken_frame_replaces_it() {
+        let mut l = lane(&[(10, 1.0)]);
+        assert_eq!(l.put(10, 2.0), 0);
+        assert_eq!(l.points, vec![AutoPoint { at: 10, value: 2.0 }]);
+    }
+
+    #[test]
+    fn a_pass_of_writing_replaces_only_what_it_passed() {
+        let mut l = lane(&[(0, 0.0), (1000, -10.0), (2000, 0.0)]);
+        let written = [
+            AutoPoint {
+                at: 500,
+                value: -3.0,
+            },
+            AutoPoint {
+                at: 1500,
+                value: -4.0,
+            },
+        ];
+        l.write(400, 1600, &written);
+        // Held at its old value just outside the pass, the pass's own
+        // points inside, and the old point on the way gone.
+        assert_eq!(l.value_at(0), Some(0.0));
+        assert_eq!(l.value_at(400), Some(-4.0));
+        assert_eq!(l.value_at(500), Some(-3.0));
+        assert_eq!(l.value_at(1500), Some(-4.0));
+        assert_eq!(l.value_at(1600), Some(-4.0));
+        assert_eq!(l.value_at(2000), Some(0.0));
+        assert!(!l.points.iter().any(|p| p.at == 1000));
+
+        // Writing over an empty lane just takes the points.
+        let mut e = Lane::new(Lane::PAN);
+        e.write(0, 100, &written[..1]);
+        assert_eq!(
+            e.points,
+            vec![AutoPoint {
+                at: 500,
+                value: -3.0
+            }][..0]
+                .to_vec()
+        );
+        e.write(400, 600, &written[..1]);
+        assert_eq!(
+            e.points,
+            vec![AutoPoint {
+                at: 500,
+                value: -3.0
+            }]
+        );
+    }
+
+    #[test]
+    fn lane_names_take_apart() {
+        assert_eq!(Lane::new("gain").target(), LaneTarget::Gain);
+        assert_eq!(Lane::new("send:abc").target(), LaneTarget::Send("abc"));
+        assert_eq!(
+            Lane::new("fx:e1:threshold").target(),
+            LaneTarget::Fx {
+                effect: "e1",
+                key: "threshold"
+            }
+        );
+        assert_eq!(
+            Lane::new("plugin:e2:17").target(),
+            LaneTarget::Plugin {
+                effect: "e2",
+                id: 17
+            }
+        );
+        assert_eq!(Lane::new("plugin:e2:x").target(), LaneTarget::Unknown);
+        assert_eq!(Lane::new("fx:e1:threshold").effect(), Some("e1"));
+        assert_eq!(Lane::new("pan").effect(), None);
     }
 }

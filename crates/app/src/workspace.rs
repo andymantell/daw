@@ -30,9 +30,10 @@ pub(crate) enum Pane {
     Takes,
     Monitor,
     NotesEditor,
+    Automation,
 }
 
-pub(crate) const PANES: [Pane; 9] = [
+pub(crate) const PANES: [Pane; 10] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -42,6 +43,7 @@ pub(crate) const PANES: [Pane; 9] = [
     Pane::Takes,
     Pane::Monitor,
     Pane::NotesEditor,
+    Pane::Automation,
 ];
 
 impl Pane {
@@ -57,6 +59,7 @@ impl Pane {
             Pane::Takes => "takes",
             Pane::Monitor => "monitor",
             Pane::NotesEditor => "notes-editor",
+            Pane::Automation => "automation",
         }
     }
 
@@ -75,6 +78,7 @@ impl Pane {
             Pane::Takes => "Take lanes",
             Pane::Monitor => "Monitor section",
             Pane::NotesEditor => "Note editor",
+            Pane::Automation => "Automation",
         }
     }
 
@@ -377,7 +381,7 @@ impl Layout {
         let side_panes = [Pane::Notes, Pane::Lessons, Pane::Comments, Pane::Tuner];
         let (target, side) = match p {
             Pane::Timeline => return,
-            Pane::Mixer | Pane::Takes | Pane::Monitor | Pane::NotesEditor => {
+            Pane::Mixer | Pane::Takes | Pane::Monitor | Pane::NotesEditor | Pane::Automation => {
                 (Pane::Timeline, Side::Below)
             }
             // Below the side panes open now, so all can be seen.
@@ -1536,6 +1540,7 @@ impl crate::App {
             Cmd::MonitorSection,
             Cmd::TakeLanes,
             Cmd::NotesEditor,
+            Cmd::AutomationLanes,
             Cmd::Comments,
             Cmd::LessonNotes,
             Cmd::Lessons,
@@ -1545,6 +1550,7 @@ impl crate::App {
                 Cmd::Mixer => self.workspace.layout.is_open(Pane::Mixer),
                 Cmd::MonitorSection => self.workspace.layout.is_open(Pane::Monitor),
                 Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
+                Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
                 Cmd::Comments => self.comment_ui.open,
                 Cmd::LessonNotes => self.notes_ui.open,
                 Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
@@ -1701,6 +1707,7 @@ impl Host for crate::App {
             }
             Pane::Comments => self.comments_panel(ui),
             Pane::Takes => self.takes_pane(ui),
+            Pane::Automation => self.automation_pane(ui),
             Pane::Notes => self.notes_pane(ui),
             Pane::Lessons => self.lessons_pane(ui),
             Pane::NotesEditor => self.notes_editor_pane(ui),

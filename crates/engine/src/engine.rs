@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::automation::Target;
 use crate::graph::{Graph, GroupSpec, InputBlock, Level, MAX_TRACKS, Mix, Rate};
 use crate::meter::Tap;
 use crate::metronome::{self, Metronome, Voice};
@@ -67,6 +68,13 @@ pub enum Command {
         send: usize,
         gain_db: f32,
         mute: bool,
+    },
+    /// A lane is being written (its control plays, not its line), or
+    /// plays again, without a new graph.
+    SetAutoLive {
+        track: usize,
+        target: Target,
+        live: bool,
     },
     SetMetronome(Metronome),
     /// Records armed tracks whenever playing (after any count-in).
@@ -689,6 +697,7 @@ impl Engine {
                         g.adopt_edges(old);
                         g.adopt_cue_lines(old);
                     }
+                    g.settle_at(self.pos);
                     if let Some(old) = self.graph.replace(g) {
                         // The queue has room for every graph in flight;
                         // if it is somehow full, leaking beats freeing here.
@@ -715,6 +724,15 @@ impl Engine {
                 } => {
                     if let Some(g) = &mut self.graph {
                         g.set_send(track, send, gain_db, mute);
+                    }
+                }
+                Command::SetAutoLive {
+                    track,
+                    target,
+                    live,
+                } => {
+                    if let Some(g) = &mut self.graph {
+                        g.set_auto_live(track, target, live);
                     }
                 }
                 Command::SetMetronome(m) => self.metronome = m,

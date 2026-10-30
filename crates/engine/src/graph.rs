@@ -29,6 +29,7 @@
 
 use std::sync::Arc;
 
+use crate::automation::{LaneSpec, Target};
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
@@ -185,6 +186,15 @@ pub trait Insert: Send {
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
         let _ = key;
         self.process(left, right);
+    }
+
+    /// Sets setting `param` for the next block from an automation lane,
+    /// instead of the value the effect's own controls hold. Called just
+    /// before [`process`](Self::process), once a block, while the lane
+    /// plays; a block without a call plays the controls again. An effect
+    /// with no settings to set this way ignores it.
+    fn set_param(&mut self, param: u32, value: f64) {
+        let _ = (param, value);
     }
 
     /// For an effect container: how it splits the audio among its
@@ -388,6 +398,8 @@ pub struct TrackSpec {
     pub group: Option<usize>,
     /// Its level in each headphone mix (see [`crate::monitor`]).
     pub cues: [CueSend; MAX_CUES],
+    /// Automation lanes: settings that follow a line as the song plays.
+    pub automation: Vec<LaneSpec>,
 }
 
 impl TrackSpec {
@@ -407,6 +419,7 @@ impl TrackSpec {
             sends: Vec::new(),
             group: None,
             cues: [CueSend::default(); MAX_CUES],
+            automation: Vec::new(),
         }
     }
 }
@@ -652,6 +665,13 @@ pub(crate) struct TrackNode {
     pub cues: [CueSend; MAX_CUES],
     pub cue_last: [(f32, f32); MAX_CUES],
     pub cue_line: CueLine,
+    pub automation: Vec<LaneSpec>,
+    /// The volume and pan the lanes ask for this block, if they do.
+    pub auto_gain: Option<f32>,
+    pub auto_pan: Option<f32>,
+    /// Edges out of this track (its output and sends), as indices into
+    /// `Graph::edges`.
+    pub outgoing: Vec<usize>,
 }
 
 pub(crate) struct InsertNode {
@@ -687,6 +707,8 @@ pub(crate) struct Edge {
     /// gain reached at the end of the last block.
     pub gain: f32,
     pub last: f32,
+    /// Muted (sends only): a lane on the send's level leaves it silent.
+    pub mute: bool,
     /// A ring buffer of `delay` frames per channel, or empty for none.
     pub line: [Vec<f32>; 2],
     pub at: usize,
@@ -737,14 +759,49 @@ impl TrackNode {
             return (0.0, 0.0);
         }
         let g = if volume {
-            db_to_gain(self.mix.gain_db + group.map_or(0.0, |g| g.gain_db))
+            let own = self.auto_gain.unwrap_or(self.mix.gain_db);
+            db_to_gain(own + group.map_or(0.0, |g| g.gain_db))
         } else {
             1.0
         };
-        let (l, r) = pan_gains(self.mix.pan, self.stereo);
+        let (l, r) = pan_gains(self.auto_pan.unwrap_or(self.mix.pan), self.stereo);
         (g * l, g * r)
     }
+
+    /// Reads the lanes at `at` into the volume, pan and the effects, and
+    /// gives each send's level, to set on its edge.
+    fn read_lanes(&mut self, at: i64, sends: &mut [(usize, f32)], count: &mut usize) {
+        self.auto_gain = None;
+        self.auto_pan = None;
+        *count = 0;
+        for lane in &self.automation {
+            if lane.live {
+                continue;
+            }
+            let Some(v) = lane.curve.at(at) else { continue };
+            match lane.target {
+                Target::Gain => self.auto_gain = Some(v),
+                Target::Pan => self.auto_pan = Some(v.clamp(-1.0, 1.0)),
+                Target::Send(k) => {
+                    if *count < sends.len() {
+                        sends[*count] = (k, v);
+                        *count += 1;
+                    }
+                }
+                Target::Insert { id, param } => {
+                    if let Some(i) = self.inserts.iter_mut().find(|i| i.id == id)
+                        && let Some(fx) = &mut i.effect
+                    {
+                        fx.set_param(param, v as f64);
+                    }
+                }
+            }
+        }
+    }
 }
+
+/// The most send lanes one track reads a block.
+const MAX_SEND_LANES: usize = 16;
 
 /// Adds the clips' audio for frames `[pos, pos + l.len())` into `l` and
 /// `r`. Returns how many frames of streamed audio were missing.
@@ -1278,6 +1335,10 @@ impl Session {
                 cues: t.cues,
                 cue_last: [(0.0, 0.0); MAX_CUES],
                 cue_line: CueLine::default(),
+                automation: t.automation.clone(),
+                auto_gain: None,
+                auto_pan: None,
+                outgoing: Vec::new(),
             });
         }
 
@@ -1323,6 +1384,10 @@ impl Session {
             for (to, carry, pre_fader, gain, w) in routes {
                 let delay = (longest - w) as usize;
                 let e = edges.len();
+                let mute = match carry {
+                    Carry::Send(k) => t.sends[k].mute,
+                    _ => false,
+                };
                 edges.push(Edge {
                     from: i,
                     to,
@@ -1330,9 +1395,13 @@ impl Session {
                     pre_fader,
                     gain,
                     last: gain,
+                    mute,
                     line: [vec![0.0; delay], vec![0.0; delay]],
                     at: 0,
                 });
+                if !matches!(carry, Carry::Sidechain(_)) {
+                    tracks[i].outgoing.push(e);
+                }
                 match to {
                     None => to_master.push(e),
                     Some(j) => {
@@ -1374,13 +1443,7 @@ impl Session {
             max_block,
         };
         g.refresh_solo();
-        // Start each track at its settled gains, so a new graph does not
-        // fade in.
-        for i in 0..n {
-            let t = &mut g.tracks[i];
-            t.last = t.target(g.any_solo, &g.groups, true);
-            t.cue_last = std::array::from_fn(|k| t.cues[k].gains(t.stereo));
-        }
+        g.settle_at(0);
         Ok(g)
     }
 }
@@ -1432,6 +1495,42 @@ impl Graph {
             .find(|e| e.from == track && e.carry == Carry::Send(send))
         {
             e.gain = gain;
+            e.mute = mute;
+        }
+    }
+
+    /// Starts each track at the gains it has at `pos`, lanes read, so
+    /// the graph does not fade in when it starts playing there.
+    pub(crate) fn settle_at(&mut self, pos: i64) {
+        let any_solo = self.any_solo;
+        for ti in 0..self.tracks.len() {
+            let t = &mut self.tracks[ti];
+            if !t.automation.is_empty() {
+                let mut sends = [(0usize, 0f32); MAX_SEND_LANES];
+                let mut count = 0;
+                t.read_lanes(pos, &mut sends, &mut count);
+                for &(k, db) in &sends[..count] {
+                    for &e in &t.outgoing {
+                        let e = &mut self.edges[e];
+                        if e.carry == Carry::Send(k) {
+                            e.gain = if e.mute { 0.0 } else { db_to_gain(db) };
+                            e.last = e.gain;
+                        }
+                    }
+                }
+            }
+            t.last = t.target(any_solo, &self.groups, true);
+            t.cue_last = std::array::from_fn(|k| t.cues[k].gains(t.stereo));
+        }
+    }
+
+    /// Marks a lane as being written (its control plays, not its line)
+    /// or played again, without a new graph.
+    pub(crate) fn set_auto_live(&mut self, track: usize, target: Target, live: bool) {
+        if let Some(t) = self.tracks.get_mut(track) {
+            for l in t.automation.iter_mut().filter(|l| l.target == target) {
+                l.live = live;
+            }
         }
     }
 
@@ -1594,6 +1693,21 @@ impl Graph {
 
             if t.widen {
                 sr.copy_from_slice(sl);
+            }
+            // The lanes at the block's end: the fader ramps to it over
+            // the block, which is the line itself when it is straight.
+            if !t.automation.is_empty() {
+                let mut sends = [(0usize, 0f32); MAX_SEND_LANES];
+                let mut count = 0;
+                t.read_lanes(pos + n as i64, &mut sends, &mut count);
+                for &(k, db) in &sends[..count] {
+                    for &e in &t.outgoing {
+                        let e = &mut self.edges[e];
+                        if e.carry == Carry::Send(k) {
+                            e.gain = if e.mute { 0.0 } else { db_to_gain(db) };
+                        }
+                    }
+                }
             }
             let mut keys = chain::Keys {
                 edges: &mut self.edges,

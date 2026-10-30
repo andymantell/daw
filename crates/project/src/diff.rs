@@ -435,6 +435,18 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
     if before.sends != after.sends {
         out.push(format!("Sends changed ({})", after.sends.len()));
     }
+    if before.automation != after.automation {
+        let n = after
+            .automation
+            .iter()
+            .filter(|l| !l.points.is_empty())
+            .count();
+        out.push(match n {
+            0 => "Automation cleared".into(),
+            1 => "Automation changed (1 lane)".into(),
+            n => format!("Automation changed ({n} lanes)"),
+        });
+    }
 
     // Clips.
     let was: HashMap<&str, &Clip> = before.clips.iter().map(|c| (c.id.as_str(), c)).collect();

@@ -66,6 +66,7 @@ pub(crate) enum Cmd {
     Dim,
     Mono,
     TakeLanes,
+    AutomationLanes,
     FullSize,
     /// Recalls saved layout n, counted from 0.
     Layout(u8),
@@ -545,6 +546,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         .hint("Show or hide each take of a track, to comp from")
         .words("comp comping takes loop recording swipe best"),
     info(
+        Cmd::AutomationLanes,
+        "automation-lanes",
+        "View",
+        "Automation",
+        &[],
+    )
+    .hint("Show or hide a track's automation lanes: settings that follow a line as the song plays")
+    .words("lanes volume pan fader read touch latch write envelope"),
+    info(
         Cmd::FullSize,
         "full-size",
         "View",
@@ -757,6 +767,7 @@ impl Cmd {
                 | Cmd::TakeLanes
                 | Cmd::Lessons
                 | Cmd::NotesEditor
+                | Cmd::AutomationLanes
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -1595,6 +1606,7 @@ impl App {
             }
             Cmd::ImportMidi => self.pick_midi_file(ctx),
             Cmd::ExportMidi => self.export_midi_file(),
+            Cmd::AutomationLanes => self.workspace.toggle(Pane::Automation),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),

@@ -26,10 +26,11 @@ pub use lessons::{
     AssignmentProgress, DoneMark, Lesson, MAX_LESSON_TITLE, PracticeSession, progress,
 };
 pub use model::{
-    Articulation, Assignment, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
-    CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen, FrozenClip,
-    GainPoint, HitPoint, Marker, MeterChange, Note, NoteClip, PPQ, Practice, Project, Send,
-    TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings,
+    Articulation, Assignment, AutoPoint, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup,
+    CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade, Frozen,
+    FrozenClip, GainPoint, HitPoint, Lane, LaneTarget, Marker, MeterChange, Note, NoteClip, PPQ,
+    Practice, Project, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
+    TrainerSettings,
 };
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{

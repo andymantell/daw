@@ -237,6 +237,9 @@ impl App {
     }
 
     pub(crate) fn track_value(&self, t: &Track) -> daw_project::Track {
+        // The project is written at the app's rate, so this is 1 (kept
+        // so lanes scale like clips should the rates ever differ).
+        let p_k = 1.0;
         let mut clips: Vec<daw_project::Clip> = (t.clips.iter())
             .map(|c| daw_project::Clip {
                 id: c.key.clone(),
@@ -298,6 +301,17 @@ impl App {
             output: t.output.clone(),
             sends: t.sends.clone(),
             group: t.group.clone(),
+            automation: (t.automation.iter())
+                .map(|l| daw_project::Lane {
+                    param: l.param.clone(),
+                    points: (l.points.iter())
+                        .map(|p| daw_project::AutoPoint {
+                            at: (p.at as f64 * p_k).round() as i64,
+                            value: p.value,
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
     }
 
@@ -485,6 +499,17 @@ impl App {
                 }
                 (slot, None) => *slot = None,
             }
+            t.automation = (pt.automation.iter())
+                .map(|l| daw_project::Lane {
+                    param: l.param.clone(),
+                    points: (l.points.iter())
+                        .map(|p| daw_project::AutoPoint {
+                            at: scale(p.at).max(0),
+                            value: p.value,
+                        })
+                        .collect(),
+                })
+                .collect();
             t.mix = Mix {
                 gain_db: pt.gain_db as f32,
                 pan: pt.pan as f32,

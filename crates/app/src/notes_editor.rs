@@ -11,11 +11,19 @@
 //! right click removes one note. Quantise moves the selected notes (or
 //! all of them) towards the grid by the strength given, with swing
 //! delaying every second grid line; Transpose moves them in pitch.
+//!
+//! The lane below the grid shows the notes' velocities, or their chance
+//! of playing, or a line: one of the clip's controllers (the mod wheel,
+//! the pedal, the pitch wheel…), or the expression of the one note
+//! selected (its pitch, pressure or timbre as it sounds). Click a line
+//! to add a point, drag a point to move it, right-click it to remove
+//! it. With a key set, rows off its scale are shaded; in scale mode
+//! drawn and moved notes stay on the scale.
 
 use std::collections::HashSet;
 
 use daw_engine::time::{Frames, TempoMap, Ticks};
-use daw_project::{Note, NoteClip, PPQ};
+use daw_project::{Controller, Lane, Note, NoteClip, PPQ, Scale};
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2,
 };
@@ -59,7 +67,7 @@ impl Grid {
 
     /// The grid's step in ticks, at the time signature in force at
     /// `at` (a bar's length depends on it).
-    fn ticks(self, map: &TempoMap, at: i64) -> i64 {
+    pub(crate) fn ticks(self, map: &TempoMap, at: i64) -> i64 {
         let sig = map.signature_at(Ticks(at));
         match self {
             Grid::Bar => sig.bar_ticks(),
@@ -105,6 +113,51 @@ pub fn quantise_tick(map: &TempoMap, grid: Grid, t: i64, strength: f64, swing: f
         .min_by(|a, b| (a - t as f64).abs().total_cmp(&(b - t as f64).abs()))
         .unwrap_or(t as f64);
     (t as f64 + (target - t as f64) * strength.clamp(0.0, 1.0)).round() as i64
+}
+
+/// What the lane below the grid shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneView {
+    Velocity,
+    Chance,
+    /// One of the clip's controller lanes.
+    Controller(Controller),
+    /// One kind of the selected note's expression ([`Note::PITCH`] and
+    /// the others).
+    Expression(&'static str),
+}
+
+impl LaneView {
+    pub fn label(self) -> String {
+        match self {
+            LaneView::Velocity => "Velocity".into(),
+            LaneView::Chance => "Chance".into(),
+            LaneView::Controller(c) => c.label(),
+            LaneView::Expression(Note::PITCH) => "Note pitch".into(),
+            LaneView::Expression(Note::PRESSURE) => "Note pressure".into(),
+            LaneView::Expression(_) => "Note timbre".into(),
+        }
+    }
+
+    /// A line's lowest and highest values.
+    fn range(self) -> (f64, f64) {
+        match self {
+            LaneView::Controller(c) => {
+                let (lo, hi, _) = c.range();
+                (lo, hi)
+            }
+            LaneView::Expression(Note::PITCH) => (-12.0, 12.0),
+            _ => (0.0, 1.0),
+        }
+    }
+
+    fn text(self, v: f64) -> String {
+        match self {
+            LaneView::Expression(Note::PITCH) => format!("{v:+.2} semitones"),
+            LaneView::Expression(_) => format!("{:.0}%", v * 100.0),
+            _ => format!("{v:.0}"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -156,6 +209,16 @@ pub struct Editor {
     boxing: Option<BoxSelect>,
     /// Scroll to show the clip when it is next drawn.
     show_clip: bool,
+    /// What the lane below shows, and the point of its line being
+    /// dragged.
+    pub lane: LaneView,
+    line_drag: Option<usize>,
+    /// The note pitch line's range, kept while a point is dragged.
+    pitch_range: f64,
+    /// The key the clip is in, and whether notes are kept on it; set by
+    /// the pane before each draw.
+    pub scale: Option<Scale>,
+    pub scale_mode: bool,
 }
 
 impl Default for Editor {
@@ -176,13 +239,18 @@ impl Default for Editor {
             drag: None,
             boxing: None,
             show_clip: false,
+            lane: LaneView::Velocity,
+            line_drag: None,
+            pitch_range: 2.0,
+            scale: None,
+            scale_mode: false,
         }
     }
 }
 
 /// The keyboard's width, in points, and the velocity lane's height.
 const KEYS: f32 = 44.0;
-const VELOCITY: f32 = 64.0;
+const VELOCITY: f32 = 80.0;
 const RULER: f32 = 18.0;
 
 /// The shortest a note can be made by dragging.
@@ -308,6 +376,72 @@ impl Editor {
                 }
             }
             ui.separator();
+            ui.label("Lane");
+            let mut views = vec![LaneView::Velocity, LaneView::Chance];
+            views.extend(Controller::COMMON.map(LaneView::Controller));
+            views.extend(
+                (clip.controllers.iter())
+                    .filter_map(|l| Controller::from_param(&l.param))
+                    .map(LaneView::Controller)
+                    .filter(|v| !views_has(&Controller::COMMON, *v)),
+            );
+            views.extend(Note::EXPRESSIONS.map(LaneView::Expression));
+            egui::ComboBox::from_id_salt("notes-lane")
+                .selected_text(self.lane.label())
+                .width(170.0)
+                .show_ui(ui, |ui| {
+                    for v in views {
+                        let used = match v {
+                            LaneView::Controller(c) => clip
+                                .controllers
+                                .iter()
+                                .any(|l| l.param == c.param() && !l.points.is_empty()),
+                            _ => false,
+                        };
+                        let text = if used {
+                            format!("{} •", v.label())
+                        } else {
+                            v.label()
+                        };
+                        ui.selectable_value(&mut self.lane, v, text);
+                    }
+                    ui.menu_button("Other controller", |ui| {
+                        for n in 0..120u8 {
+                            let v = LaneView::Controller(Controller::Cc(n));
+                            ui.selectable_value(&mut self.lane, v, v.label());
+                        }
+                    });
+                })
+                .response
+                .accessible_name("Lane below the notes");
+            if let LaneView::Expression(kind) = self.lane
+                && self.selected.len() == 1
+            {
+                let (centre, depth) = match kind {
+                    Note::PITCH => (0.0, 0.3),
+                    Note::PRESSURE => (0.7, 0.3),
+                    _ => (0.5, 0.4),
+                };
+                if ui
+                    .button("Wobble")
+                    .on_hover_text(
+                        "Fill the note's line with a wobble, two a beat: vibrato on its pitch",
+                    )
+                    .clicked()
+                    && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
+                {
+                    n.expression_mut(kind).points =
+                        daw_project::noteops::wobble(n.len, 2.0, centre, depth);
+                    changed = true;
+                }
+                if ui.button("Clear line").clicked()
+                    && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
+                {
+                    n.expression.retain(|l| l.param != kind);
+                    changed = true;
+                }
+            }
+            ui.separator();
             if ui.button("Select all").clicked() {
                 self.selected = clip.notes.iter().map(|n| n.id.clone()).collect();
             }
@@ -417,8 +551,31 @@ impl Editor {
             let y = y_of(pitch as f32);
             let r = Rect::from_x_y_ranges(grid_rect.x_range(), y..=y + row_h);
             let black = matches!(pitch % 12, 1 | 3 | 6 | 8 | 10);
-            if black {
-                painter.rect_filled(r.intersect(grid_rect), 0.0, tc.shadow.gamma_multiply(0.35));
+            match self.scale {
+                // Off the key's scale: shaded; its root: marked.
+                Some(sc) if !sc.contains(pitch as u8) => {
+                    painter.rect_filled(
+                        r.intersect(grid_rect),
+                        0.0,
+                        tc.shadow.gamma_multiply(0.75),
+                    );
+                }
+                Some(sc) if pitch as u8 % 12 == sc.root => {
+                    painter.rect_filled(
+                        r.intersect(grid_rect),
+                        0.0,
+                        tc.accent.gamma_multiply(0.08),
+                    );
+                }
+                Some(_) => {}
+                None if black => {
+                    painter.rect_filled(
+                        r.intersect(grid_rect),
+                        0.0,
+                        tc.shadow.gamma_multiply(0.35),
+                    );
+                }
+                None => {}
             }
             if pitch % 12 == 0 {
                 painter.line_segment(
@@ -502,7 +659,18 @@ impl Editor {
         painter.text(
             pos2(rect.left() + 4.0, vel_rect.top() + 4.0),
             Align2::LEFT_TOP,
-            "Velocity",
+            match self.lane {
+                LaneView::Velocity => "Velocity".to_string(),
+                LaneView::Chance => "Chance".to_string(),
+                LaneView::Controller(Controller::Cc(n)) => format!("CC {n}"),
+                LaneView::Controller(Controller::PitchBend) => "Bend".to_string(),
+                LaneView::Controller(Controller::Pressure) => "Press.".to_string(),
+                LaneView::Expression(k) => {
+                    let mut k = k.to_string();
+                    k[..1].make_ascii_uppercase();
+                    k
+                }
+            },
             look.font(look.small),
             tc.text_dim,
         );
@@ -514,12 +682,22 @@ impl Editor {
             let y = y_of(n.pitch as f32);
             Rect::from_x_y_ranges(x0..=x1, y + 1.0..=y + row_h - 1.0)
         };
+        let bars = matches!(self.lane, LaneView::Velocity | LaneView::Chance);
+        let chance = self.lane == LaneView::Chance;
         let vel_rect_of = |n: &Note| -> Rect {
             let x0 = x_of(origin + n.start);
-            let h = (vel_rect.height() - 6.0) * n.velocity as f32 / 127.0;
+            let k = if chance {
+                n.chance as f32
+            } else {
+                n.velocity as f32 / 127.0
+            };
+            let h = (vel_rect.height() - 6.0) * k;
             Rect::from_x_y_ranges(x0..=x0 + 6.0, vel_rect.bottom() - h..=vel_rect.bottom())
         };
         let hit = |pos: Pos2| -> Option<(String, Zone)> {
+            if vel_rect.contains(pos) && !bars {
+                return None;
+            }
             if vel_rect.contains(pos) {
                 // Selected notes first, so their bars can be dragged
                 // through others.
@@ -624,7 +802,11 @@ impl Editor {
                         let delta_t = delta_t.max(-lowest);
                         for o in &d.originals {
                             if let Some(n) = clip.notes.iter_mut().find(|n| n.id == o.id) {
-                                let pitch = (o.pitch as i32 + dp).clamp(0, 127) as u8;
+                                let mut pitch = (o.pitch as i32 + dp).clamp(0, 127) as u8;
+                                if let Some(sc) = self.scale.filter(|_| self.scale_mode && dp != 0)
+                                {
+                                    pitch = sc.nearest(pitch);
+                                }
                                 let start = o.start + delta_t;
                                 if (n.start, n.pitch) != (start, pitch) {
                                     n.start = start;
@@ -648,6 +830,19 @@ impl Editor {
                             self.draw_len = len;
                             d.moved = true;
                             changed = true;
+                        }
+                    }
+                    Zone::Velocity if chance => {
+                        let dk = ((d.from_y - p.y) / (vel_rect.height() - 6.0)) as f64;
+                        for o in &d.originals {
+                            if let Some(n) = clip.notes.iter_mut().find(|n| n.id == o.id) {
+                                let c = ((o.chance + dk) * 100.0).round().clamp(0.0, 100.0) / 100.0;
+                                if n.chance != c {
+                                    n.chance = c;
+                                    d.moved = true;
+                                    changed = true;
+                                }
+                            }
                         }
                     }
                     Zone::Velocity => {
@@ -708,8 +903,11 @@ impl Editor {
                     }
                 }
                 None if grid_rect.contains(p) => {
-                    // Draw a note here.
-                    let pitch = pitch_of(p.y).clamp(0, 127) as u8;
+                    // Draw a note here, on the scale in scale mode.
+                    let mut pitch = pitch_of(p.y).clamp(0, 127) as u8;
+                    if let Some(sc) = self.scale.filter(|_| self.scale_mode) {
+                        pitch = sc.nearest(pitch);
+                    }
                     let start = floor_snap(tick_of(p.x), modifiers) - origin;
                     if start >= 0 {
                         let n =
@@ -774,10 +972,133 @@ impl Editor {
                     Color32::WHITE,
                 );
             }
-            let v = vel_rect_of(n);
-            vel_painter.rect_filled(v, 1.0, fill);
-            if selected {
-                vel_painter.rect_stroke(v, 1.0, Stroke::new(1.5, tc.text), StrokeKind::Outside);
+            if bars {
+                let v = vel_rect_of(n);
+                vel_painter.rect_filled(v, 1.0, fill);
+                if selected {
+                    vel_painter.rect_stroke(v, 1.0, Stroke::new(1.5, tc.text), StrokeKind::Outside);
+                }
+            }
+            if n.expression.iter().any(|l| !l.points.is_empty()) && r.width() > 6.0 {
+                // A mark on notes that change as they sound.
+                grid_painter.line_segment(
+                    [
+                        r.left_top() + vec2(2.0, 2.0),
+                        r.right_top() + vec2(-2.0, 2.0),
+                    ],
+                    Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.7)),
+                );
+            }
+        }
+        // A line in the lane: a controller of the clip, or the selected
+        // note's expression.
+        if !bars {
+            let (snap_on, grid) = (self.snap && !modifiers.alt, self.grid);
+            let snap_line = move |t: i64| if snap_on { snap(map, grid, t) } else { t };
+            let view = self.lane;
+            let geo = LineGeo {
+                rect: vel_rect,
+                range: view.range(),
+                x_of: &x_of,
+                tick_of: &tick_of,
+                snap: &snap_line,
+            };
+            match view {
+                LaneView::Controller(c) => {
+                    let param = c.param();
+                    let at = clip.controllers.iter().position(|l| l.param == param);
+                    let mut lane =
+                        at.map_or_else(|| Lane::new(param), |i| clip.controllers[i].clone());
+                    let (_, _, rest) = c.range();
+                    let span = (clip.offset, clip.offset + clip.len);
+                    let moved = edit_line(
+                        ui,
+                        &resp,
+                        &mut lane,
+                        &geo,
+                        origin,
+                        span,
+                        rest,
+                        &mut self.line_drag,
+                        &vel_painter,
+                        |v| view.text(v),
+                    );
+                    if moved {
+                        changed = true;
+                        match at {
+                            Some(i) => clip.controllers[i] = lane,
+                            None => clip.controllers.push(lane),
+                        }
+                        clip.controllers.retain(|l| !l.points.is_empty());
+                    }
+                }
+                LaneView::Expression(kind) => {
+                    let one = (self.selected.len() == 1)
+                        .then(|| self.selected.iter().next().cloned())
+                        .flatten()
+                        .and_then(|id| clip.notes.iter().position(|n| n.id == id));
+                    match one {
+                        Some(i) => {
+                            let n = &clip.notes[i];
+                            let mut lane = n
+                                .expression
+                                .iter()
+                                .find(|l| l.param == kind)
+                                .cloned()
+                                .unwrap_or_else(|| Lane::new(kind));
+                            let rest = if kind == Note::PITCH {
+                                0.0
+                            } else if kind == Note::TIMBRE {
+                                0.5
+                            } else {
+                                1.0
+                            };
+                            let base = origin + n.start;
+                            // Pitch: two semitones either way, more when
+                            // the line goes further, so vibrato shows.
+                            let range = if kind == Note::PITCH && self.line_drag.is_none() {
+                                let most =
+                                    lane.points.iter().fold(2.0f64, |m, p| m.max(p.value.abs()));
+                                let r = if most <= 2.0 { 2.0 } else { 12.0 };
+                                self.pitch_range = r;
+                                (-r, r)
+                            } else if kind == Note::PITCH {
+                                (-self.pitch_range, self.pitch_range)
+                            } else {
+                                view.range()
+                            };
+                            let geo = LineGeo { range, ..geo };
+                            let moved = edit_line(
+                                ui,
+                                &resp,
+                                &mut lane,
+                                &geo,
+                                base,
+                                (0, n.len),
+                                rest,
+                                &mut self.line_drag,
+                                &vel_painter,
+                                |v| view.text(v),
+                            );
+                            if moved {
+                                changed = true;
+                                let n = &mut clip.notes[i];
+                                *n.expression_mut(kind) = lane;
+                                n.expression.retain(|l| !l.points.is_empty());
+                            }
+                        }
+                        None => {
+                            vel_painter.text(
+                                vel_rect.center(),
+                                Align2::CENTER_CENTER,
+                                "Select one note to shape it as it sounds",
+                                look.font(look.small),
+                                tc.text_dim,
+                            );
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         // The playhead.
@@ -798,6 +1119,135 @@ impl Editor {
         }
         changed
     }
+}
+
+fn views_has(common: &[Controller], v: LaneView) -> bool {
+    matches!(v, LaneView::Controller(c) if common.contains(&c))
+}
+
+/// Where a line lane is drawn, and how ticks and points meet.
+struct LineGeo<'a> {
+    rect: Rect,
+    /// The values at the bottom and the top.
+    range: (f64, f64),
+    x_of: &'a dyn Fn(i64) -> f32,
+    tick_of: &'a dyn Fn(f32) -> i64,
+    snap: &'a dyn Fn(i64) -> i64,
+}
+
+impl LineGeo<'_> {
+    fn y_of(&self, v: f64) -> f32 {
+        let (lo, hi) = self.range;
+        let k = ((v - lo) / (hi - lo)).clamp(0.0, 1.0) as f32;
+        self.rect.bottom() - 3.0 - k * (self.rect.height() - 6.0)
+    }
+
+    fn value_of(&self, y: f32) -> f64 {
+        let (lo, hi) = self.range;
+        let k = ((self.rect.bottom() - 3.0 - y) / (self.rect.height() - 6.0)).clamp(0.0, 1.0);
+        lo + (hi - lo) * k as f64
+    }
+}
+
+/// Draws and edits a line lane whose points are at `base + at` ticks on
+/// the timeline, kept within `span` (in the points' own ticks); `rest`
+/// is the value shown where it has no points. Returns whether the line
+/// changed.
+#[allow(clippy::too_many_arguments)]
+fn edit_line(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    lane: &mut Lane,
+    g: &LineGeo<'_>,
+    base: i64,
+    span: (i64, i64),
+    rest: f64,
+    dragging: &mut Option<usize>,
+    painter: &egui::Painter,
+    text: impl Fn(f64) -> String,
+) -> bool {
+    let look = theme::look(ui.ctx());
+    let tc = look.c();
+    let mut changed = false;
+    let pos_of = |p: &daw_project::AutoPoint| pos2((g.x_of)(base + p.at), g.y_of(p.value));
+    let near = |lane: &Lane, pos: Pos2| -> Option<usize> {
+        (lane.points.iter()).position(|p| pos_of(p).distance(pos) <= 6.0)
+    };
+    let at_of = |x: f32| ((g.snap)((g.tick_of)(x)) - base).clamp(span.0, span.1);
+    let press = ui
+        .input(|i| i.pointer.press_origin())
+        .filter(|p| g.rect.contains(*p));
+    if resp.drag_started()
+        && let Some(p) = press
+    {
+        *dragging = Some(match near(lane, p) {
+            Some(i) => i,
+            None => {
+                changed = true;
+                lane.put(at_of(p.x), g.value_of(p.y))
+            }
+        });
+    }
+    if let Some(i) = *dragging
+        && i < lane.points.len()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        let (at, value) = (at_of(p.x), g.value_of(p.y));
+        let old = lane.points[i];
+        if (old.at, old.value) != (at, value) {
+            lane.points.remove(i);
+            *dragging = Some(lane.put(at, value));
+            changed = true;
+        }
+        painter.text(
+            p + vec2(8.0, -8.0),
+            Align2::LEFT_BOTTOM,
+            text(value),
+            look.font(look.small),
+            tc.text,
+        );
+    }
+    if resp.drag_stopped() {
+        *dragging = None;
+    }
+    if resp.clicked()
+        && let Some(p) = resp.interact_pointer_pos().filter(|p| g.rect.contains(*p))
+        && near(lane, p).is_none()
+    {
+        lane.put(at_of(p.x), g.value_of(p.y));
+        changed = true;
+    }
+    if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos().filter(|p| g.rect.contains(*p))
+        && let Some(i) = near(lane, p)
+    {
+        lane.points.remove(i);
+        changed = true;
+    }
+    // The line, level before the first point and after the last.
+    let (x0, x1) = ((g.x_of)(base + span.0), (g.x_of)(base + span.1));
+    if lane.points.is_empty() {
+        let y = g.y_of(rest);
+        painter.line_segment(
+            [pos2(x0, y), pos2(x1, y)],
+            Stroke::new(1.0, tc.text_dim.gamma_multiply(0.5)),
+        );
+    } else {
+        let mut line: Vec<Pos2> = Vec::with_capacity(lane.points.len() + 2);
+        line.push(pos2(x0, g.y_of(lane.points[0].value)));
+        line.extend(lane.points.iter().map(pos_of));
+        line.push(pos2(x1, g.y_of(lane.points[lane.points.len() - 1].value)));
+        painter.add(egui::Shape::line(line, Stroke::new(1.5, tc.accent)));
+        for p in &lane.points {
+            painter.circle_filled(pos_of(p), 3.0, tc.accent);
+        }
+    }
+    if let Some(h) = resp.hover_pos().filter(|p| g.rect.contains(*p))
+        && near(lane, h).is_some()
+    {
+        ui.ctx().set_cursor_icon(CursorIcon::Grab);
+    }
+    changed
 }
 
 impl crate::App {
@@ -851,6 +1301,11 @@ impl crate::App {
             );
             return;
         }
+        if self.notes_editor.clip.is_some() && self.note_tools_bar(ui) {
+            return;
+        }
+        self.notes_editor.scale = self.editing_scale();
+        self.notes_editor.scale_mode = self.note_tools.scale_mode;
         let map = self.tempo_map();
         let playhead = self.ctl.status().position().0;
         let playing = self.ctl.status().playing();

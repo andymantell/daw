@@ -43,6 +43,17 @@ pub enum Kind {
     KeyPressure { pitch: u8, value: u8 },
     /// A program (sound) chosen, 0 to 127.
     Program(u8),
+    /// One sounding note's expression moved (roadmap 3.1): the note by
+    /// its `id` and pitch, as its note-on gave them. The value is in
+    /// the kind's own unit (see [`Expression`]). A MIDI output gets
+    /// pressure as key pressure and nothing for the others, which MIDI
+    /// 1.0 has no message for.
+    NoteExpression {
+        id: u32,
+        pitch: u8,
+        kind: Expression,
+        value: f32,
+    },
     /// Every note stops at once (the transport stopped, say), with
     /// controllers left as they are.
     AllNotesOff,
@@ -102,7 +113,17 @@ impl Event {
             Kind::Pressure(v) => [0xd0 | ch, v & 0x7f, 0],
             Kind::KeyPressure { pitch, value } => [0xa0 | ch, pitch & 0x7f, value & 0x7f],
             Kind::Program(p) => [0xc0 | ch, p & 0x7f, 0],
-            Kind::AllNotesOff => return None,
+            Kind::NoteExpression {
+                pitch,
+                kind: Expression::Pressure,
+                value,
+                ..
+            } => [
+                0xa0 | ch,
+                pitch & 0x7f,
+                (value.clamp(0.0, 1.0) * 127.0).round() as u8,
+            ],
+            Kind::NoteExpression { .. } | Kind::AllNotesOff => return None,
         })
     }
 
@@ -200,10 +221,32 @@ impl Event {
                 pitch: shift(pitch),
                 value,
             },
+            Kind::NoteExpression {
+                id,
+                pitch,
+                kind,
+                value,
+            } => Kind::NoteExpression {
+                id,
+                pitch: shift(pitch),
+                kind,
+                value,
+            },
             k => k,
         };
         Event { kind, ..self }
     }
+}
+
+/// What a [`Kind::NoteExpression`] changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Expression {
+    /// The note's pitch, in semitones from its own.
+    Tuning,
+    /// How hard the key is pressed, 0 to 1.
+    Pressure,
+    /// Brightness, 0 to 1, 0.5 as the sound is set.
+    Timbre,
 }
 
 /// A note event from a MIDI device, on its way to the engine: which
@@ -296,6 +339,26 @@ mod tests {
         assert!(matches!(e.kind, Kind::NoteOn { pitch: 125, .. }));
         let e = Event::note_on(0, 0, 60, 1, 0).transposed(-12);
         assert!(matches!(e.kind, Kind::NoteOn { pitch: 48, .. }));
+    }
+
+    #[test]
+    fn note_pressure_goes_out_as_key_pressure() {
+        let e = |kind| Event {
+            frame: 0,
+            channel: 2,
+            kind: Kind::NoteExpression {
+                id: 1,
+                pitch: 60,
+                kind,
+                value: 1.0,
+            },
+        };
+        assert_eq!(e(Expression::Pressure).to_midi(), Some([0xa2, 60, 127]));
+        assert_eq!(e(Expression::Tuning).to_midi(), None);
+        assert!(matches!(
+            e(Expression::Timbre).transposed(2).kind,
+            Kind::NoteExpression { pitch: 62, .. }
+        ));
     }
 
     #[test]

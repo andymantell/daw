@@ -36,6 +36,7 @@ mod midi;
 mod midifile;
 mod mixer;
 mod monitor;
+mod note_tools;
 mod notes;
 mod notes_editor;
 mod people;
@@ -183,26 +184,19 @@ impl Track {
         t
     }
 
-    /// The track's notes as the engine plays them.
-    fn note_specs(&self) -> Vec<daw_engine::graph::NoteSpec> {
+    /// The track's notes as the engine plays them, with their
+    /// expression, and its controller lanes.
+    fn note_specs(
+        &self,
+    ) -> (
+        Vec<daw_engine::graph::NoteSpec>,
+        Vec<daw_engine::graph::ExprSpec>,
+        Vec<daw_engine::graph::ControlSpec>,
+    ) {
         if !self.kind.plays_notes() {
-            return Vec::new();
+            return Default::default();
         }
-        let placed = daw_project::Track {
-            note_clips: self.note_clips.clone(),
-            ..daw_project::Track::new(String::new(), String::new())
-        }
-        .placed_notes();
-        placed
-            .iter()
-            .map(|n| daw_engine::graph::NoteSpec {
-                start: daw_engine::time::Ticks(n.start),
-                len: daw_engine::time::Ticks(n.len),
-                pitch: n.pitch,
-                velocity: n.velocity,
-                channel: n.channel,
-            })
-            .collect()
+        note_tools::specs(&self.note_clips)
     }
 }
 
@@ -334,6 +328,12 @@ struct App {
     timecode: daw_project::TimecodeSetup,
     hit_points: Vec<daw_project::HitPoint>,
     hits_ui: hitpoints::HitPointsWindow,
+    /// The song's key and scale, its groove templates and its MIDI
+    /// learn ties, as in the project, and the note tools' settings.
+    scale: Option<daw_project::Scale>,
+    grooves: Vec<daw_project::Groove>,
+    midi_maps: Vec<daw_project::MidiMap>,
+    note_tools: note_tools::NoteTools,
     timeline: timeline::Timeline,
     perf: perf::Perf,
     /// Lesson notes and tab blocks, as in the project, and their window.
@@ -459,6 +459,10 @@ impl App {
             markers: Vec::new(),
             timecode: daw_project::TimecodeSetup::default(),
             hit_points: Vec::new(),
+            scale: None,
+            grooves: Vec::new(),
+            midi_maps: Vec::new(),
+            note_tools: note_tools::NoteTools::default(),
             hits_ui: hitpoints::HitPointsWindow::default(),
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
@@ -802,7 +806,10 @@ impl App {
             // With direct monitoring the interface plays the input.
             spec.monitor = t.monitor && !self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
             spec.inserts = fx::specs(&t.fx);
-            spec.notes = t.note_specs().into();
+            let (notes, expression, controls) = t.note_specs();
+            spec.notes = notes.into();
+            spec.expression = expression.into();
+            spec.controls = controls;
             spec.instrument = t.instrument.as_ref().map(instrument::Slot::spec);
             spec.notes_live = t.kind.plays_notes() && (t.arm || t.monitor);
             spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
@@ -2174,6 +2181,24 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                 });
+                ui.menu_button("Notes", |ui| {
+                    for c in [
+                        Cmd::QuantiseNotes,
+                        Cmd::HumaniseNotes,
+                        Cmd::LegatoNotes,
+                        Cmd::FitNotesToScale,
+                        Cmd::ScaleMode,
+                        Cmd::SelectNotes,
+                    ] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::GrooveFromNotes, Cmd::GrooveFromAudio, Cmd::ApplyGroove] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    self.menu_item(ui, Cmd::MidiLearn);
+                });
                 ui.menu_button("Transport", |ui| {
                     for c in [
                         Cmd::PlayStop,
@@ -2442,6 +2467,8 @@ impl eframe::App for App {
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
         self.hit_points_window(&ctx);
+        self.select_notes_window(&ctx);
+        self.midi_learn_window(&ctx);
         self.groups_window(&ctx);
         self.timing_window(&ctx);
         self.remote_tick(&ctx);

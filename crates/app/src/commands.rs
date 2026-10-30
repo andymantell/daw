@@ -81,6 +81,16 @@ pub(crate) enum Cmd {
     NotesEditor,
     AddInstrumentTrack,
     KeepNotes,
+    QuantiseNotes,
+    HumaniseNotes,
+    LegatoNotes,
+    FitNotesToScale,
+    ScaleMode,
+    SelectNotes,
+    GrooveFromNotes,
+    GrooveFromAudio,
+    ApplyGroove,
+    MidiLearn,
     ImportMidi,
     ExportMidi,
     AudioDevice,
@@ -282,6 +292,66 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Draw, move and shape the notes of the selected note clip")
     .words("piano roll midi notes velocity quantise"),
+    info(
+        Cmd::QuantiseNotes,
+        "quantise-notes",
+        "Notes",
+        "Quantise notes",
+        &[key(NONE, Key::Q)],
+    )
+    .hint("Move the note editor's selected notes (or all) towards the grid, by its strength and swing")
+    .words("quantize grid timing"),
+    info(
+        Cmd::HumaniseNotes,
+        "humanise-notes",
+        "Notes",
+        "Humanise notes",
+        &[],
+    )
+    .hint("Move the note editor's selected notes (or all) a little, at random, in time, velocity and length")
+    .words("humanize random feel loosen"),
+    info(Cmd::LegatoNotes, "legato-notes", "Notes", "Legato", &[])
+        .hint("Make each of the note editor's selected notes (or all) last until the next starts")
+        .words("join length tie"),
+    info(
+        Cmd::FitNotesToScale,
+        "fit-notes-to-scale",
+        "Notes",
+        "Fit notes to the scale",
+        &[],
+    )
+    .hint("Move notes off the key's scale to the nearest note on it")
+    .words("key correct wrong notes"),
+    info(Cmd::ScaleMode, "scale-mode", "Notes", "Scale mode", &[])
+        .hint("Keep drawn and moved notes on the key's scale")
+        .words("key snap pitch"),
+    info(Cmd::SelectNotes, "select-notes", "Notes", "Select notes…", &[])
+        .hint("Choose notes by time, pitch, velocity, chance or length, or the ones off the scale")
+        .words("filter find choose range"),
+    info(
+        Cmd::GrooveFromNotes,
+        "groove-from-notes",
+        "Notes",
+        "Make a groove from these notes",
+        &[],
+    )
+    .hint("Take the timing and accents of the note editor's selected notes (or all) as a groove")
+    .words("template feel swing extract"),
+    info(
+        Cmd::GrooveFromAudio,
+        "groove-from-audio",
+        "Notes",
+        "Make a groove from the selected audio",
+        &[],
+    )
+    .hint("Take the timing and accents of the selected audio clips as a groove")
+    .words("template feel swing extract drums"),
+    info(Cmd::ApplyGroove, "apply-groove", "Notes", "Apply groove", &[])
+        .hint("Move the note editor's selected notes (or all) towards the groove chosen")
+        .words("template feel swing quantise"),
+    info(Cmd::MidiLearn, "midi-learn", "Notes", "MIDI learn…", &[])
+        .hint("Tie a knob, fader or pedal on a MIDI device to a setting")
+        .words("controller map knob fader assign"),
     info(
         Cmd::KeepNotes,
         "keep-notes",
@@ -1596,6 +1666,18 @@ impl App {
             Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
             Cmd::Lessons => self.workspace.toggle(Pane::Lessons),
             Cmd::NotesEditor => self.workspace.toggle(Pane::NotesEditor),
+            Cmd::QuantiseNotes
+            | Cmd::HumaniseNotes
+            | Cmd::LegatoNotes
+            | Cmd::FitNotesToScale
+            | Cmd::ScaleMode
+            | Cmd::SelectNotes
+            | Cmd::GrooveFromNotes
+            | Cmd::GrooveFromAudio
+            | Cmd::ApplyGroove
+            | Cmd::MidiLearn => {
+                self.run_note_tool(cmd);
+            }
             Cmd::AddInstrumentTrack => {
                 let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
                 let t = crate::Track::instrument(format!("Instrument {n}"));

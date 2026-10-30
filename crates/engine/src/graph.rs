@@ -33,7 +33,7 @@ use crate::automation::{LaneSpec, Target};
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::metronome::Clicks;
-use crate::midi::{Event, Instrument, MAX_EVENTS};
+use crate::midi::{Event, Expression, Instrument, Kind, MAX_EVENTS};
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
@@ -355,6 +355,54 @@ pub struct NoteSpec {
     pub pitch: u8,
     pub velocity: u8,
     pub channel: u8,
+    /// Its expression: the range of [`TrackSpec::expression`] that is
+    /// this note's, empty for most notes.
+    pub expr: (u32, u32),
+}
+
+/// A point on a note's expression line, on the timeline: from it on,
+/// the note's `kind` of expression is `value` (see
+/// [`Kind::NoteExpression`]). A note's points are in time order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExprSpec {
+    pub at: Ticks,
+    pub kind: Expression,
+    pub value: f32,
+}
+
+/// What a controller lane moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    /// A MIDI controller by number, values 0 to 127.
+    Cc(u8),
+    /// The pitch wheel, −8192 to 8191.
+    PitchBend,
+    /// Pressure on the whole keyboard, 0 to 127.
+    Pressure,
+}
+
+impl Control {
+    fn kind(self, v: i32) -> Kind {
+        match self {
+            Control::Cc(number) => Kind::Control {
+                number: number & 0x7f,
+                value: v.clamp(0, 127) as u8,
+            },
+            Control::PitchBend => Kind::PitchBend(v.clamp(-8192, 8191) as i16),
+            Control::Pressure => Kind::Pressure(v.clamp(0, 127) as u8),
+        }
+    }
+}
+
+/// A controller lane on an instrument track (roadmap 3.1): the values
+/// a controller takes as the song plays, each from its tick on, in time
+/// order. On starting to play, and after a jump, the value in force is
+/// sent first, so the instrument is where the lane says.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ControlSpec {
+    pub channel: u8,
+    pub control: Control,
+    pub points: Arc<[(Ticks, i32)]>,
 }
 
 /// An instrument on a track: the slot the engine hands the block's
@@ -375,6 +423,10 @@ pub struct TrackSpec {
     /// Notes the track plays, through its instrument and to its MIDI
     /// output, in any order.
     pub notes: Arc<[NoteSpec]>,
+    /// The notes' expression points, each note's run in time order.
+    pub expression: Arc<[ExprSpec]>,
+    /// Controller lanes, played with the notes.
+    pub controls: Vec<ControlSpec>,
     pub instrument: Option<InstrumentSpec>,
     /// Live notes from MIDI devices play through the instrument (and go
     /// to the MIDI output) as they arrive.
@@ -407,6 +459,8 @@ impl TrackSpec {
         TrackSpec {
             clips,
             notes: Arc::new([]),
+            expression: Arc::new([]),
+            controls: Vec::new(),
             instrument: None,
             notes_live: false,
             midi_out: None,
@@ -603,6 +657,22 @@ pub(crate) struct NoteNode {
     pub pitch: u8,
     pub velocity: u8,
     pub channel: u8,
+    /// Its expression points, as a range of the track's `exprs`.
+    pub expr: (usize, usize),
+}
+
+/// A note's expression point, in timeline frames.
+pub(crate) struct ExprNode {
+    pub at: i64,
+    pub kind: Expression,
+    pub value: f32,
+}
+
+/// A controller lane, in timeline frames.
+pub(crate) struct ControlNode {
+    pub channel: u8,
+    pub control: Control,
+    pub points: Vec<(i64, i32)>,
 }
 
 pub(crate) struct InstrumentNode {
@@ -621,6 +691,8 @@ pub(crate) struct TrackNode {
     pub clips: Vec<ClipNode>,
     /// Sorted by start.
     pub notes: Vec<NoteNode>,
+    pub exprs: Vec<ExprNode>,
+    pub controls: Vec<ControlNode>,
     pub instrument: Option<InstrumentNode>,
     pub notes_live: bool,
     pub midi_out: Option<usize>,
@@ -974,6 +1046,8 @@ fn mix_chunk(
 #[allow(clippy::too_many_arguments)]
 fn schedule_notes(
     notes: &[NoteNode],
+    exprs: &[ExprNode],
+    controls: &[ControlNode],
     sounding: &mut Vec<usize>,
     at: &mut Option<i64>,
     looping: Option<(i64, i64)>,
@@ -982,7 +1056,7 @@ fn schedule_notes(
     n: usize,
     events: &mut Vec<Event>,
 ) {
-    if notes.is_empty() && sounding.is_empty() {
+    if notes.is_empty() && sounding.is_empty() && controls.is_empty() {
         return;
     }
     let speed = if speed > 0.0 { speed } else { 1.0 };
@@ -1026,11 +1100,51 @@ fn schedule_notes(
         if at.is_some_and(|a| a != start) {
             stop_all(sounding, frame_of(start), &mut push);
         }
+        // Controllers: after a jump, or on starting, the value in force
+        // here; then the points in the stretch.
+        let jumped = at.is_none_or(|a| a != start);
+        for c in controls {
+            let first = c.points.partition_point(|p| p.0 < start);
+            if jumped && first > 0 && c.points.get(first).is_none_or(|p| p.0 != start) {
+                let v = c.points[first - 1].1;
+                push(Event {
+                    frame: frame_of(start),
+                    channel: c.channel,
+                    kind: c.control.kind(v),
+                });
+            }
+            for &(t, v) in c.points[first..].iter().take_while(|p| p.0 < end) {
+                push(Event {
+                    frame: frame_of(t),
+                    channel: c.channel,
+                    kind: c.control.kind(v),
+                });
+            }
+        }
+        // A note's expression points in [from, to).
+        let express = |i: usize, from: i64, to: i64, push: &mut dyn FnMut(Event)| {
+            let nn = &notes[i];
+            let points = &exprs[nn.expr.0..nn.expr.1];
+            let first = points.partition_point(|p| p.at < from);
+            for p in points[first..].iter().take_while(|p| p.at < to) {
+                push(Event {
+                    frame: frame_of(p.at),
+                    channel: nn.channel,
+                    kind: Kind::NoteExpression {
+                        id: i as u32,
+                        pitch: nn.pitch,
+                        kind: p.kind,
+                        value: p.value,
+                    },
+                });
+            }
+        };
         // Notes ending in this stretch.
         let mut k = 0;
         while k < sounding.len() {
             let i = sounding[k];
             let nn = &notes[i];
+            express(i, start, end.min(nn.end), &mut push);
             if nn.end < end {
                 push(Event::note_off(
                     frame_of(nn.end.max(start)),
@@ -1056,6 +1170,7 @@ fn schedule_notes(
                 nn.velocity,
                 i as u32,
             ));
+            express(i, nn.start, end.min(nn.end), &mut push);
             if nn.end < end {
                 push(Event::note_off(
                     frame_of(nn.end),
@@ -1255,21 +1370,47 @@ impl Session {
                 });
             }
             clips.sort_by_key(|c| c.start);
+            let mut exprs: Vec<ExprNode> = Vec::new();
             let mut notes: Vec<NoteNode> = (t.notes.iter())
                 .filter(|n| n.len.0 > 0 && n.pitch <= 127)
                 .map(|n| {
                     let start = self.tempo.frames_at(n.start).0;
                     let end = self.tempo.frames_at(Ticks(n.start.0 + n.len.0)).0;
+                    let from = exprs.len();
+                    let (a, b) = (n.expr.0 as usize, n.expr.1 as usize);
+                    if let Some(points) = t.expression.get(a..b) {
+                        exprs.extend(points.iter().map(|p| ExprNode {
+                            at: self.tempo.frames_at(p.at).0,
+                            kind: p.kind,
+                            value: p.value,
+                        }));
+                        exprs[from..].sort_by_key(|p| p.at);
+                    }
                     NoteNode {
                         start,
                         end: end.max(start + 1),
                         pitch: n.pitch,
                         velocity: n.velocity.clamp(1, 127),
                         channel: n.channel & 15,
+                        expr: (from, exprs.len()),
                     }
                 })
                 .collect();
             notes.sort_by_key(|n| (n.start, n.pitch));
+            let controls: Vec<ControlNode> = (t.controls.iter())
+                .filter(|c| !c.points.is_empty())
+                .map(|c| {
+                    let mut points: Vec<(i64, i32)> = (c.points.iter())
+                        .map(|&(at, v)| (self.tempo.frames_at(at).0, v))
+                        .collect();
+                    points.sort_by_key(|p| p.0);
+                    ControlNode {
+                        channel: c.channel & 15,
+                        control: c.control,
+                        points,
+                    }
+                })
+                .collect();
             let instrument = t.instrument.map(|i| InstrumentNode {
                 id: i.id,
                 inst: new_instruments
@@ -1311,6 +1452,8 @@ impl Session {
             tracks.push(TrackNode {
                 clips,
                 notes,
+                exprs,
+                controls,
                 instrument,
                 notes_live: t.notes_live,
                 midi_out: t.midi_out,
@@ -1646,6 +1789,8 @@ impl Graph {
                 };
                 schedule_notes(
                     &t.notes,
+                    &t.exprs,
+                    &t.controls,
                     &mut t.sounding,
                     &mut t.notes_at,
                     looping,

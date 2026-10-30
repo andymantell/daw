@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use daw_engine::midi::{Event, LiveEvent, OutEvent};
+use daw_engine::midi::{Event, Kind, LiveEvent, OutEvent};
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use rtrb::{Consumer, Producer};
 
@@ -202,11 +202,13 @@ fn output_main(
                         counts.sent.fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                None => {
+                None if e.event.kind == Kind::AllNotesOff => {
                     for bytes in Event::to_midi_all() {
                         let _ = out.send(&bytes);
                     }
                 }
+                // No MIDI 1.0 message for it (a note's tuning, say).
+                None => {}
             }
         }
         if !any {

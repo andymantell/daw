@@ -235,7 +235,7 @@ impl Default for NoteTools {
 }
 
 /// The "Select notes" ranges, each on or off.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Ranges {
     /// Bars, from 1, inclusive.
     pub bars: Option<(i64, i64)>,
@@ -247,19 +247,6 @@ pub struct Ranges {
     pub length: Option<(f64, f64)>,
     /// Only notes outside the clip's scale.
     pub off_scale: bool,
-}
-
-impl Default for Ranges {
-    fn default() -> Ranges {
-        Ranges {
-            bars: None,
-            pitch: None,
-            velocity: None,
-            chance: None,
-            length: None,
-            off_scale: false,
-        }
-    }
 }
 
 impl Ranges {
@@ -339,9 +326,19 @@ impl App {
     }
 
     pub(crate) fn quantise_notes(&mut self) -> bool {
-        let editor = std::mem::take(&mut self.notes_editor);
-        let changed = self.with_notes(|c, _, map| editor.quantise(c, map));
-        self.notes_editor = editor;
+        let map = self.tempo_map();
+        let Some(key) = self.notes_editor.clip.clone() else {
+            self.message = Some("Open a note clip in the note editor first.".into());
+            return false;
+        };
+        let editor = &self.notes_editor;
+        let changed = (self.tracks.iter_mut())
+            .flat_map(|t| t.note_clips.iter_mut())
+            .find(|c| c.id == key)
+            .is_some_and(|c| editor.quantise(c, &map));
+        if changed {
+            self.rebuild();
+        }
         changed
     }
 
@@ -434,7 +431,11 @@ impl App {
         let mut hits = Vec::new();
         let mut first: Option<(i64, String)> = None;
         for t in &self.tracks {
-            for c in t.clips.iter().filter(|c| self.timeline.selected.contains(&c.id)) {
+            for c in t
+                .clips
+                .iter()
+                .filter(|c| self.timeline.selected.contains(&c.id))
+            {
                 let samples = match c.source.read_mono(c.source.frames) {
                     Ok(s) => s,
                     Err(e) => {
@@ -517,8 +518,10 @@ impl App {
                 let param = self.note_tools.learn_param.clone();
                 // One control, one setting: a control tied before is
                 // tied afresh.
-                self.midi_maps
-                    .retain(|m| (m.channel, m.cc) != (channel, number) && (&m.track, &m.param) != (&track, &param));
+                self.midi_maps.retain(|m| {
+                    (m.channel, m.cc) != (channel, number)
+                        && (&m.track, &m.param) != (&track, &param)
+                });
                 self.midi_maps.push(MidiMap {
                     id: daw_project::new_id(),
                     channel,
@@ -526,7 +529,10 @@ impl App {
                     track,
                     param,
                 });
-                self.message = Some(format!("Tied controller {number} (channel {}).", channel + 1));
+                self.message = Some(format!(
+                    "Tied controller {number} (channel {}).",
+                    channel + 1
+                ));
                 changed = true;
                 continue;
             }
@@ -578,53 +584,83 @@ impl App {
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label("Choose the note editor's notes by what they are. Each range ticked must hold.");
+                ui.label(
+                    "Choose the note editor's notes by what they are. Each range ticked must hold.",
+                );
                 let r = &mut self.note_tools.ranges;
-                egui::Grid::new("select-notes").num_columns(4).show(ui, |ui| {
-                    fn row<T: egui::emath::Numeric>(
-                        ui: &mut egui::Ui,
-                        name: &str,
-                        v: &mut Option<(T, T)>,
-                        default: (T, T),
-                        range: std::ops::RangeInclusive<T>,
-                        speed: f64,
-                    ) {
-                        let mut on = v.is_some();
-                        ui.checkbox(&mut on, name);
-                        if on && v.is_none() {
-                            *v = Some(default);
-                        }
-                        if !on {
-                            *v = None;
-                        }
-                        let (mut a, mut b) = v.unwrap_or(default);
-                        ui.add_enabled(
-                            on,
-                            egui::DragValue::new(&mut a).range(range.clone()).speed(speed),
-                        )
-                        .accessible_name(format!("{name} from"));
-                        ui.label("to");
-                        ui.add_enabled(on, egui::DragValue::new(&mut b).range(range).speed(speed))
+                egui::Grid::new("select-notes")
+                    .num_columns(4)
+                    .show(ui, |ui| {
+                        fn row<T: egui::emath::Numeric>(
+                            ui: &mut egui::Ui,
+                            name: &str,
+                            v: &mut Option<(T, T)>,
+                            default: (T, T),
+                            range: std::ops::RangeInclusive<T>,
+                            speed: f64,
+                        ) {
+                            let mut on = v.is_some();
+                            ui.checkbox(&mut on, name);
+                            if on && v.is_none() {
+                                *v = Some(default);
+                            }
+                            if !on {
+                                *v = None;
+                            }
+                            let (mut a, mut b) = v.unwrap_or(default);
+                            ui.add_enabled(
+                                on,
+                                egui::DragValue::new(&mut a)
+                                    .range(range.clone())
+                                    .speed(speed),
+                            )
+                            .accessible_name(format!("{name} from"));
+                            ui.label("to");
+                            ui.add_enabled(
+                                on,
+                                egui::DragValue::new(&mut b).range(range).speed(speed),
+                            )
                             .accessible_name(format!("{name} to"));
-                        if on {
-                            *v = Some((a, b));
+                            if on {
+                                *v = Some((a, b));
+                            }
+                            ui.end_row();
                         }
-                        ui.end_row();
-                    }
-                    row(ui, "Bars", &mut r.bars, (1, 4), 1..=9999, 0.1);
-                    row(ui, "Pitch", &mut r.pitch, (48, 72), 0..=127, 0.2);
-                    row(ui, "Velocity", &mut r.velocity, (1, 64), 1..=127, 0.5);
-                    row(ui, "Chance (%)", &mut r.chance, (0.0, 99.0), 0.0..=100.0, 0.5);
-                    row(ui, "Length (sixteenths)", &mut r.length, (0.0, 1.0), 0.0..=256.0, 0.05);
-                });
+                        row(ui, "Bars", &mut r.bars, (1, 4), 1..=9999, 0.1);
+                        row(ui, "Pitch", &mut r.pitch, (48, 72), 0..=127, 0.2);
+                        row(ui, "Velocity", &mut r.velocity, (1, 64), 1..=127, 0.5);
+                        row(
+                            ui,
+                            "Chance (%)",
+                            &mut r.chance,
+                            (0.0, 99.0),
+                            0.0..=100.0,
+                            0.5,
+                        );
+                        row(
+                            ui,
+                            "Length (sixteenths)",
+                            &mut r.length,
+                            (0.0, 1.0),
+                            0.0..=256.0,
+                            0.05,
+                        );
+                    });
                 if let Some((a, b)) = r.pitch {
                     ui.label(
-                        RichText::new(format!("Pitch {} to {}", Note::pitch_name(a), Note::pitch_name(b)))
-                            .weak(),
+                        RichText::new(format!(
+                            "Pitch {} to {}",
+                            Note::pitch_name(a),
+                            Note::pitch_name(b)
+                        ))
+                        .weak(),
                     );
                 }
-                ui.add_enabled(has_scale, egui::Checkbox::new(&mut r.off_scale, "Only notes off the scale"))
-                    .on_disabled_hover_text("Set a key and scale for the song or the clip first");
+                ui.add_enabled(
+                    has_scale,
+                    egui::Checkbox::new(&mut r.off_scale, "Only notes off the scale"),
+                )
+                .on_disabled_hover_text("Set a key and scale for the song or the clip first");
                 ui.horizontal(|ui| {
                     let m = &mut self.note_tools.select_mode;
                     ui.radio_value(m, SelectMode::Replace, "New selection");
@@ -669,7 +705,9 @@ impl App {
                     for (i, m) in self.midi_maps.iter().enumerate() {
                         ui.label(format!("Controller {} (channel {})", m.cc, m.channel + 1));
                         let what = match self.tracks.iter().find(|t| t.key == m.track) {
-                            Some(t) => format!("{}: {}", t.name, automation::name_of(t, &buses, &m.param)),
+                            Some(t) => {
+                                format!("{}: {}", t.name, automation::name_of(t, &buses, &m.param))
+                            }
                             None => "a track that is gone".into(),
                         };
                         ui.label(what);
@@ -685,7 +723,10 @@ impl App {
                 });
                 ui.separator();
                 let t = &mut self.note_tools;
-                if t.learn_track.as_ref().is_none_or(|k| !self.tracks.iter().any(|x| &x.key == k)) {
+                if t.learn_track
+                    .as_ref()
+                    .is_none_or(|k| !self.tracks.iter().any(|x| &x.key == k))
+                {
                     t.learn_track = self.tracks.first().map(|x| x.key.clone());
                 }
                 let Some(ti) = (t.learn_track.as_ref())
@@ -700,7 +741,11 @@ impl App {
                         .selected_text(self.tracks[ti].name.as_str())
                         .show_ui(ui, |ui| {
                             for x in &self.tracks {
-                                ui.selectable_value(&mut t.learn_track, Some(x.key.clone()), x.name.as_str());
+                                ui.selectable_value(
+                                    &mut t.learn_track,
+                                    Some(x.key.clone()),
+                                    x.name.as_str(),
+                                );
                             }
                         })
                         .response
@@ -716,7 +761,11 @@ impl App {
                         .selected_text(current)
                         .show_ui(ui, |ui| {
                             for c in &choices {
-                                ui.selectable_value(&mut t.learn_param, c.param.clone(), c.name.as_str());
+                                ui.selectable_value(
+                                    &mut t.learn_param,
+                                    c.param.clone(),
+                                    c.name.as_str(),
+                                );
                             }
                         })
                         .response
@@ -763,7 +812,8 @@ impl App {
                     if ui.selectable_label(shown.is_none(), "None").clicked() {
                         pick = Some(None);
                     }
-                    if own.is_some() && song.is_some() && ui.button("Use the song's key").clicked() {
+                    if own.is_some() && song.is_some() && ui.button("Use the song's key").clicked()
+                    {
                         pick = Some(Some(None));
                     }
                     for root in 0..12u8 {
@@ -833,11 +883,19 @@ impl App {
             {
                 run = Some(crate::commands::Cmd::HumaniseNotes);
             }
-            ui.add(egui::DragValue::new(&mut h.timing).range(0..=PPQ / 4).suffix(" ticks"))
-                .accessible_name("Humanise timing")
-                .on_hover_text("At most this far early or late (960 ticks a beat)");
-            ui.add(egui::DragValue::new(&mut h.velocity).range(0..=64).prefix("vel ±"))
-                .accessible_name("Humanise velocity");
+            ui.add(
+                egui::DragValue::new(&mut h.timing)
+                    .range(0..=PPQ / 4)
+                    .suffix(" ticks"),
+            )
+            .accessible_name("Humanise timing")
+            .on_hover_text("At most this far early or late (960 ticks a beat)");
+            ui.add(
+                egui::DragValue::new(&mut h.velocity)
+                    .range(0..=64)
+                    .prefix("vel ±"),
+            )
+            .accessible_name("Humanise velocity");
             ui.add(
                 egui::DragValue::new(&mut h.length_pct)
                     .range(0.0..=50.0)
@@ -862,7 +920,11 @@ impl App {
             .accessible_name("Legato gap")
             .on_hover_text("Room left before the next note; below 0 overlaps them");
             ui.separator();
-            if ui.button("Select…").on_hover_text("Choose notes by time, pitch, velocity, chance or length").clicked() {
+            if ui
+                .button("Select…")
+                .on_hover_text("Choose notes by time, pitch, velocity, chance or length")
+                .clicked()
+            {
                 run = Some(crate::commands::Cmd::SelectNotes);
             }
             ui.separator();
@@ -998,5 +1060,235 @@ mod tests {
             &controls[0].points[..],
             &[(Ticks(PPQ * 4), 127), (Ticks(PPQ * 6 + 1), 0)]
         );
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    use std::time::{Duration, Instant};
+
+    use daw_audio_io::SilentInput;
+    use daw_engine::midi::Event;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable as _;
+
+    use super::*;
+    use crate::commands::Cmd;
+    use crate::workspace::Pane;
+    use crate::{App, Audio};
+
+    fn harness() -> Harness<'static, App> {
+        let mut h = Harness::builder()
+            .with_size([1600.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| App::new(Vec::new()));
+        let app = h.state_mut();
+        let eng = app.replace_engine();
+        app.audio = Audio::Silent(
+            daw_audio_io::start_silent_with(app.rate, 256, eng, SilentInput::None),
+            String::new(),
+        );
+        h.run();
+        h
+    }
+
+    /// An instrument track with a two-bar clip of eighth notes, open in
+    /// the note editor.
+    fn with_clip(h: &mut Harness<'_, App>) {
+        let app = h.state_mut();
+        let mut t = crate::Track::instrument("Keys".into());
+        let mut c = NoteClip::new("clip1".into(), "Riff".into(), 0, PPQ * 8);
+        for i in 0..16 {
+            c.notes.push(Note::new(
+                i * PPQ / 2,
+                PPQ / 4,
+                [60, 61, 64, 66][i as usize % 4],
+                90,
+            ));
+        }
+        t.note_clips.push(c);
+        if let Some(i) = &t.instrument {
+            app.pending_instruments.push((i.id, i.make(app.rate)));
+        }
+        app.tracks.push(t);
+        app.notes_editor.edit("clip1");
+        app.workspace.open(Pane::NotesEditor);
+        app.rebuild();
+        h.run();
+    }
+
+    fn notes(h: &Harness<'_, App>) -> Vec<Note> {
+        h.state().tracks[0].note_clips[0].notes.clone()
+    }
+
+    #[test]
+    fn the_note_tools_work_as_commands_on_the_selection_or_all() {
+        let mut h = harness();
+        with_clip(&mut h);
+        let ctx = h.ctx.clone();
+        // Legato: each lasts to the next.
+        h.state_mut().run(&ctx, Cmd::LegatoNotes);
+        assert!(notes(&h)[..15].iter().all(|n| n.len == PPQ / 2));
+        // Fit to scale needs a key; then the sharps go.
+        h.state_mut().run(&ctx, Cmd::FitNotesToScale);
+        assert!(h.state().message.as_deref().unwrap_or("").contains("key"));
+        h.state_mut().scale = Some(Scale::new(0, ScaleKind::Major));
+        h.state_mut().run(&ctx, Cmd::FitNotesToScale);
+        assert!(notes(&h).iter().all(|n| matches!(n.pitch, 60 | 64 | 65)));
+        // Select notes: only E, then humanise moves only them.
+        {
+            let app = h.state_mut();
+            app.note_tools.ranges.pitch = Some((64, 64));
+            assert_eq!(app.select_notes(), 4);
+            app.note_tools.humanise = Humanise {
+                timing: 20,
+                velocity: 10,
+                length_pct: 0.0,
+            };
+        }
+        let before = notes(&h);
+        h.state_mut().run(&ctx, Cmd::HumaniseNotes);
+        let after = notes(&h);
+        for n in &after {
+            let b = before.iter().find(|b| b.id == n.id).unwrap();
+            if n.pitch != 64 {
+                assert_eq!((n.start, n.velocity), (b.start, b.velocity));
+            } else {
+                assert!((n.start - b.start).abs() <= 20);
+            }
+        }
+        assert!(after.iter().zip(&before).any(|(a, b)| a != b));
+        // Quantise (Q) puts them back on the grid.
+        h.state_mut().notes_editor.selected.clear();
+        h.state_mut().run(&ctx, Cmd::QuantiseNotes);
+        assert!(notes(&h).iter().all(|n| n.start % (PPQ / 4) == 0));
+        h.run();
+    }
+
+    #[test]
+    fn a_groove_from_notes_moves_another_clip_and_survives_the_project() {
+        let mut h = harness();
+        with_clip(&mut h);
+        let ctx = h.ctx.clone();
+        // Swing the clip by hand: every second eighth late.
+        {
+            let app = h.state_mut();
+            app.notes_editor.grid = crate::notes_editor::Grid::Eighth;
+            let c = &mut app.tracks[0].note_clips[0];
+            for (i, n) in c.notes.iter_mut().enumerate() {
+                if i % 2 == 1 {
+                    n.start += 100;
+                }
+            }
+        }
+        h.state_mut().run(&ctx, Cmd::GrooveFromNotes);
+        assert_eq!(h.state().grooves.len(), 1);
+        let g = h.state().grooves[0].clone();
+        assert_eq!((g.step, g.steps.len()), (PPQ / 2, 8));
+        assert_eq!(g.steps[1].offset, 100);
+        // A straight clip takes it.
+        {
+            let app = h.state_mut();
+            let mut c = NoteClip::new("clip2".into(), "Straight".into(), PPQ * 8, PPQ * 4);
+            c.notes = (0..8)
+                .map(|i| Note::new(i * PPQ / 2, PPQ / 4, 60, 90))
+                .collect();
+            app.tracks[0].note_clips.push(c);
+            app.notes_editor.edit("clip2");
+        }
+        h.state_mut().run(&ctx, Cmd::ApplyGroove);
+        let c2 = &h.state().tracks[0].note_clips[1];
+        assert_eq!(c2.notes[1].start, PPQ / 2 + 100);
+        // Kept in the project.
+        let p = h.state().project();
+        assert_eq!(p.grooves, h.state().grooves);
+        h.run();
+    }
+
+    #[test]
+    fn midi_learn_ties_a_control_and_moving_it_sets_the_volume() {
+        let mut h = harness();
+        with_clip(&mut h);
+        let ctx = h.ctx.clone();
+        h.state_mut().run(&ctx, Cmd::MidiLearn);
+        h.run();
+        h.get_by_label("Learn").click();
+        // A spinner shows while learning, so step rather than settle.
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(h.state().note_tools.learning);
+        let cc = |value: u8| Captured {
+            port: 0,
+            event: Event {
+                frame: 0,
+                channel: 3,
+                kind: Kind::Control { number: 21, value },
+            },
+            at: 0,
+            playing: false,
+            recording: false,
+        };
+        let app = h.state_mut();
+        assert!(app.midi_learn(&[cc(0)]));
+        assert_eq!(app.midi_maps.len(), 1);
+        assert_eq!((app.midi_maps[0].channel, app.midi_maps[0].cc), (3, 21));
+        assert_eq!(app.midi_maps[0].param, Lane::GAIN);
+        // Full up is the top of the fader; the bottom, its bottom.
+        app.midi_learn(&[cc(127)]);
+        assert!((app.tracks[0].mix.gain_db - 12.0).abs() < 1e-3);
+        app.midi_learn(&[cc(0)]);
+        assert!((app.tracks[0].mix.gain_db + 60.0).abs() < 1e-3);
+        // Another channel's controller 21 is someone else's.
+        app.midi_learn(&[Captured {
+            event: Event {
+                channel: 4,
+                ..cc(127).event
+            },
+            ..cc(127)
+        }]);
+        assert!((app.tracks[0].mix.gain_db + 60.0).abs() < 1e-3);
+        assert_eq!(app.project().midi_maps, app.midi_maps);
+    }
+
+    #[test]
+    fn a_controller_lane_drawn_in_the_editor_reaches_the_engine() {
+        let mut h = harness();
+        with_clip(&mut h);
+        h.state_mut().notes_editor.lane =
+            crate::notes_editor::LaneView::Controller(Controller::Cc(1));
+        // The editor full size, so the lane has room.
+        h.state_mut().workspace.full = Some(Pane::NotesEditor);
+        h.run();
+        // Click in the lane below the grid: a point.
+        let grid = h.get_by_label("Note editor grid").rect();
+        let at = egui::pos2(grid.left() + 44.0 + 100.0, grid.bottom() - 20.0);
+        h.input_mut().events.push(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run();
+        let c = &h.state().tracks[0].note_clips[0];
+        assert_eq!(c.controllers.len(), 1, "a lane was made");
+        assert_eq!(c.controllers[0].param, "cc:1");
+        assert_eq!(c.controllers[0].points.len(), 1);
+        let v = c.controllers[0].points[0].value;
+        assert!(v > 5.0 && v < 60.0, "low in the lane: {v}");
+        // The engine is given it.
+        let (_, _, controls) = h.state().tracks[0].note_specs();
+        assert_eq!(controls.len(), 1);
+        assert_eq!(controls[0].control, Control::Cc(1));
+        // Notes in scale mode stay on the scale when drawn.
+        let end = Instant::now() + Duration::from_millis(10);
+        while Instant::now() < end {
+            h.step();
+        }
     }
 }

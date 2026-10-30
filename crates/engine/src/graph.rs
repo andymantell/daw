@@ -1105,10 +1105,7 @@ fn schedule_notes(
         let jumped = at.is_none_or(|a| a != start);
         for c in controls {
             let first = c.points.partition_point(|p| p.0 < start);
-            if jumped
-                && first > 0
-                && c.points.get(first).is_none_or(|p| p.0 != start)
-            {
+            if jumped && first > 0 && c.points.get(first).is_none_or(|p| p.0 != start) {
                 let v = c.points[first - 1].1;
                 push(Event {
                     frame: frame_of(start),

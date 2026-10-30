@@ -69,11 +69,7 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     if before.grooves.len() != after.grooves.len() {
         say(
             "Song",
-            format!(
-                "Grooves {} → {}",
-                before.grooves.len(),
-                after.grooves.len()
-            ),
+            format!("Grooves {} → {}", before.grooves.len(), after.grooves.len()),
         );
     }
     // Tempo and time signature changes later in the song.

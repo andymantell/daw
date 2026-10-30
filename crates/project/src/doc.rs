@@ -47,8 +47,8 @@ use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
     GrooveStep, HitPoint, Lane, Marker, MeterChange, MidiMap, Note, NoteClip, Practice, Project,
-    Scale, Send, TabBlock, Technique,
-    TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, is_asset_name,
+    Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
+    TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -373,7 +373,9 @@ impl ProjectDoc {
                 w.put(&m, "step", g.step);
                 let steps: Vec<LoroValue> = (g.steps.iter())
                     .map(|s| {
-                        LoroValue::List(vec![s.offset.into(), s.accent.into(), s.played.into()].into())
+                        LoroValue::List(
+                            vec![s.offset.into(), s.accent.into(), s.played.into()].into(),
+                        )
                     })
                     .collect();
                 w.put(&m, "steps", LoroValue::List(steps.into()));
@@ -2423,7 +2425,8 @@ mod tests {
         clip.scale = Some(Scale::new(2, ScaleKind::Dorian));
         clip.controller_mut(Controller::Cc(1)).put(0, 0.0);
         clip.controller_mut(Controller::Cc(1)).put(PPQ, 127.0);
-        clip.controller_mut(Controller::PitchBend).put(PPQ / 2, -4096.0);
+        clip.controller_mut(Controller::PitchBend)
+            .put(PPQ / 2, -4096.0);
         let mut n = Note::new(0, PPQ, 60, 100);
         n.expression_mut(Note::PITCH).put(0, 0.0);
         n.expression_mut(Note::PITCH).put(PPQ / 2, 1.0);

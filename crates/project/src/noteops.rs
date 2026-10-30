@@ -75,8 +75,8 @@ pub fn humanise(
         let velocity = (n.velocity as f64 + rng.wobble() * h.velocity as f64)
             .round()
             .clamp(1.0, 127.0) as u8;
-        let len = ((n.len as f64 * (1.0 + rng.wobble() * h.length_pct / 100.0)).round() as i64)
-            .max(1);
+        let len =
+            ((n.len as f64 * (1.0 + rng.wobble() * h.length_pct / 100.0)).round() as i64).max(1);
         if (start, velocity, len) != (n.start, n.velocity, n.len) {
             (n.start, n.velocity, n.len) = (start, velocity, len);
             changed = true;
@@ -244,6 +244,26 @@ pub fn apply_groove(
     changed
 }
 
+/// A wobbling line for a note's expression, `len` ticks long: a sine
+/// of `per_beat` cycles a beat about `centre`, `depth` either side,
+/// with eight points a cycle. Pitch vibrato, say, or a pulsing timbre.
+pub fn wobble(len: i64, per_beat: f64, centre: f64, depth: f64) -> Vec<crate::AutoPoint> {
+    let cycle = (crate::PPQ as f64 / per_beat.max(0.01)).max(8.0);
+    let step = (cycle / 8.0).max(1.0);
+    let mut out = Vec::new();
+    let mut t = 0.0;
+    while t < len as f64 {
+        let v = centre + depth * (t / cycle * std::f64::consts::TAU).sin();
+        out.push(crate::AutoPoint {
+            at: t.round() as i64,
+            value: v,
+        });
+        t += step;
+    }
+    out.dedup_by_key(|p| p.at);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,8 +302,13 @@ mod tests {
         let mut again = make();
         humanise(&mut again, &all, h, &mut Random::new(7));
         assert_eq!(
-            a.iter().map(|n| (n.start, n.velocity, n.len)).collect::<Vec<_>>(),
-            again.iter().map(|n| (n.start, n.velocity, n.len)).collect::<Vec<_>>()
+            a.iter()
+                .map(|n| (n.start, n.velocity, n.len))
+                .collect::<Vec<_>>(),
+            again
+                .iter()
+                .map(|n| (n.start, n.velocity, n.len))
+                .collect::<Vec<_>>()
         );
         // Never before the content start.
         let mut first = vec![Note::new(0, PPQ, 60, 100)];
@@ -363,9 +388,17 @@ mod tests {
     #[test]
     fn fitting_to_a_scale_moves_only_the_wrong_notes() {
         let mut notes = vec![Note::new(0, 1, 61, 100), Note::new(0, 1, 64, 100)];
-        assert!(fit_to_scale(&mut notes, &all, Scale::new(0, ScaleKind::Major)));
+        assert!(fit_to_scale(
+            &mut notes,
+            &all,
+            Scale::new(0, ScaleKind::Major)
+        ));
         assert_eq!((notes[0].pitch, notes[1].pitch), (60, 64));
-        assert!(!fit_to_scale(&mut notes, &all, Scale::new(0, ScaleKind::Major)));
+        assert!(!fit_to_scale(
+            &mut notes,
+            &all,
+            Scale::new(0, ScaleKind::Major)
+        ));
     }
 
     #[test]
@@ -422,5 +455,14 @@ mod tests {
         let mut notes = vec![Note::new(PPQ + 7, 10, 60, 50)];
         apply_groove(&mut notes, &all, &g, 0, &bars, 1.0, 1.0);
         assert_eq!((notes[0].start, notes[0].velocity), (PPQ, 50));
+    }
+
+    #[test]
+    fn a_wobble_swings_about_its_centre() {
+        let w = wobble(PPQ * 2, 2.0, 0.0, 0.5);
+        assert_eq!(w.len(), 32, "eight points a cycle, four cycles");
+        assert_eq!(w[0].value, 0.0);
+        assert!((w[2].value - 0.5).abs() < 1e-9, "the top a quarter in");
+        assert!(w.iter().all(|p| p.value.abs() <= 0.5 + 1e-9 && p.at < PPQ * 2));
     }
 }

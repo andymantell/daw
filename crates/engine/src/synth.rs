@@ -303,7 +303,10 @@ impl SimpleSynth {
                 value,
             } => {
                 for v in (self.voices.iter_mut()).filter(|v| {
-                    v.stage != Stage::Off && v.id == id && v.pitch == pitch && v.channel == e.channel
+                    v.stage != Stage::Off
+                        && v.id == id
+                        && v.pitch == pitch
+                        && v.channel == e.channel
                 }) {
                     match kind {
                         Expression::Tuning => v.tune = value.clamp(-48.0, 48.0),

@@ -196,7 +196,11 @@ mod tests {
     #[test]
     fn notes_move_to_the_nearest_in_the_scale() {
         let c = Scale::new(0, ScaleKind::Major);
-        assert_eq!(c.nearest(61), 60, "C# goes down to C: equally near, lower wins");
+        assert_eq!(
+            c.nearest(61),
+            60,
+            "C# goes down to C: equally near, lower wins"
+        );
         assert_eq!(c.nearest(66), 65, "F# to F");
         assert_eq!(c.nearest(64), 64);
         let pent = Scale::new(9, ScaleKind::MinorPentatonic); // A C D E G

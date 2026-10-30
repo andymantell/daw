@@ -7,7 +7,9 @@
 use std::sync::{Arc, Mutex};
 
 use daw_engine::engine::{self, Command};
-use daw_engine::graph::{Control, ControlSpec, ExprSpec, InstrumentSpec, NoteSpec, Session, TrackSpec};
+use daw_engine::graph::{
+    Control, ControlSpec, ExprSpec, InstrumentSpec, NoteSpec, Session, TrackSpec,
+};
 use daw_engine::midi::{Captured, Event, Expression, Instrument, Kind, LiveEvent};
 use daw_engine::synth::{SimpleSynth, SynthParams};
 use daw_engine::time::{Frames, PPQ, Tempo, TempoMap, Ticks, TimeSignature};
@@ -411,10 +413,7 @@ fn controller_lanes_play_and_catch_up_after_a_jump() {
     assert_eq!(ctl, vec![(0, cc(64)), (BEAT / 2, cc(127))]);
     // Round a loop over beats 2 to 3: caught up again each time round.
     let got = play_all(&s, BEAT, (BEAT * 2) as usize, Some((BEAT, 2 * BEAT)), None);
-    let firsts = got
-        .iter()
-        .filter(|(_, k)| *k == cc(64))
-        .count();
+    let firsts = got.iter().filter(|(_, k)| *k == cc(64)).count();
     assert_eq!(firsts, 2, "{got:?}");
 }
 

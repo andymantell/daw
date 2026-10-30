@@ -51,8 +51,14 @@ impl Project {
         p.rate = rate;
         for t in &mut p.tracks {
             t.id = new_id();
+            // Effects in containers follow their container's new id.
+            let mut ids = HashMap::new();
             for e in &mut t.effects {
-                e.id = new_id();
+                let id = new_id();
+                ids.insert(std::mem::replace(&mut e.id, id.clone()), id);
+            }
+            for e in &mut t.effects {
+                e.container = e.container.as_ref().and_then(|c| ids.get(c).cloned());
             }
         }
         for c in &mut p.tempo_changes {
@@ -256,6 +262,30 @@ mod tests {
             a.tracks[0].effects[0].state, t.tracks[0].effects[0].state,
             "plugin settings come along"
         );
+    }
+
+    #[test]
+    fn effects_in_a_container_follow_its_new_id() {
+        let mut p = set_up();
+        p.tracks[0].effects = vec![
+            Effect {
+                id: "c".into(),
+                builtin: "parallel".into(),
+                ..Effect::default()
+            },
+            Effect {
+                id: "e".into(),
+                builtin: "delay".into(),
+                container: Some("c".into()),
+                branch: 1,
+                ..Effect::default()
+            },
+        ];
+        let a = p.as_template().from_template(48_000);
+        let fx = &a.tracks[0].effects;
+        assert_ne!(fx[0].id, "c");
+        assert_eq!(fx[1].container.as_ref(), Some(&fx[0].id));
+        assert_eq!(fx[1].branch, 1);
     }
 
     #[test]

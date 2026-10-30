@@ -611,6 +611,12 @@ pub struct Effect {
     /// A plugin's extra outputs mixed into the track, by the plugin's
     /// bus index (its main output, 0, always is). Empty for most.
     pub outputs: Vec<u32>,
+    /// The effect container it sits in, by the container's id on the
+    /// same track; `None` for the track's own chain. Effects in one of a
+    /// container's chains play in the order of the track's list.
+    pub container: Option<String>,
+    /// Which of the container's chains, from 0.
+    pub branch: u32,
 }
 
 impl Effect {

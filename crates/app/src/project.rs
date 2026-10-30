@@ -514,6 +514,7 @@ impl App {
                         let before = s.layout();
                         s.sidechain = pe.sidechain.clone();
                         s.outputs = pe.outputs.clone();
+                        s.place = pe.container.clone().map(|c| (c, pe.branch));
                         // A plugin's side buses are switched on as it
                         // starts, so a change makes it again.
                         if s.is_plugin()

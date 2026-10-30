@@ -121,6 +121,8 @@ pub(crate) struct Container {
     /// The crossovers in use, low to high, in Hz.
     cross: [f64; 3],
     bands: [Bands; 2],
+    /// No settings taken yet: the first are reached at once.
+    fresh: bool,
 }
 
 /// One channel's band filters.
@@ -145,6 +147,7 @@ impl Container {
             glide: 1.0 - (-1.0 / (0.01 * rate)).exp() as f32,
             cross: [0.0; 3],
             bands: [Bands::default(); 2],
+            fresh: true,
         }
     }
 
@@ -324,6 +327,9 @@ impl Dsp for Container {
                 self.target[0] = level(v[0]);
                 self.target[1] = level(v[1]);
             }
+        }
+        if std::mem::take(&mut self.fresh) {
+            self.now = self.target;
         }
     }
 

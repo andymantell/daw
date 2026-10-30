@@ -1155,6 +1155,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "daw-notation"
+version = "0.0.0"
+dependencies = [
+ "roxmltree",
+ "ttf-parser",
+]
+
+[[package]]
 name = "daw-plugins"
 version = "0.0.0"
 dependencies = [

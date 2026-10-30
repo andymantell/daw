@@ -65,6 +65,22 @@ fn clap_named(name: &'static str, feature: Option<&'static str>) -> PathBuf {
     root
 }
 
+/// Reads a library Cargo just built. Another test process's `cargo
+/// build` of the same name, even one with nothing to do, may replace the
+/// file in place (removes it, then links it again), so for a moment it
+/// may be missing: try again then.
+fn read_built(path: &Path) -> Vec<u8> {
+    for _ in 0..100 {
+        match std::fs::read(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            r => return r.unwrap(),
+        }
+    }
+    std::fs::read(path).unwrap()
+}
+
 /// The folder inside a `.vst3` bundle that holds its binary.
 fn binary_dir(bundle: &Path) -> PathBuf {
     let sub = if cfg!(windows) {
@@ -172,7 +188,7 @@ fn build(name: &'static str, feature: Option<&'static str>) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     let from = target.join(profile).join(lib);
     let to = dir.join(file);
-    let new = std::fs::read(&from).unwrap();
+    let new = read_built(&from);
     if std::fs::read(&to).ok().as_deref() != Some(new.as_slice()) {
         let part = dir.join(format!("{}.part", std::process::id()));
         std::fs::write(&part, &new).unwrap();

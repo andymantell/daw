@@ -1645,6 +1645,8 @@ mod tests {
         h.state_mut().run(&ctx, Cmd::AddInstrument(4));
         h.run();
         assert!(h.query_by_label("Make notes that play the loop").is_some());
+        // Each slice has its own settings.
+        assert!(h.query_all_by_label_contains("Backwards").next().is_some());
         h.get_by_label("Make notes that play the loop").click();
         h.run();
         let t = &h.state().tracks[0];

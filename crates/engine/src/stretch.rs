@@ -29,6 +29,7 @@
 //! Which stretcher to ship is still open (spike 0.6 listening); another
 //! library would sit behind the same three calls.
 
+use std::collections::VecDeque;
 use std::f32::consts::PI;
 use std::sync::Arc;
 
@@ -41,16 +42,29 @@ pub trait Feed {
     fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]);
 }
 
+impl<F: Feed + ?Sized> Feed for &mut F {
+    fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
+        (**self).read(start, l, r)
+    }
+}
+
 /// Analysis frame length: about 43 ms at 48 kHz.
 pub const FRAME: usize = 2048;
 /// Synthesis hop.
 const HOP: usize = 512;
 const TAPS: usize = 32;
 const PHASES: usize = 256;
+/// Frame centres remembered: enough to cover the stretched signal held
+/// for a block of any likely size.
+const CENTRES: usize = 64;
 
-/// Slowest and fastest speeds, and the widest transpose, supported.
+/// Slowest and fastest practice speeds, and the widest transpose,
+/// offered.
 pub const SPEED_RANGE: (f64, f64) = (0.5, 1.5);
 pub const SEMITONES: f64 = 12.0;
+/// The speeds the stretcher itself takes: wider, for a clip following a
+/// tempo far from its own (see [`crate::warp`]).
+pub const FULL_SPEED_RANGE: (f64, f64) = (0.25, 4.0);
 
 fn princarg(x: f32) -> f32 {
     x - 2.0 * PI * (x / (2.0 * PI)).round()
@@ -114,6 +128,16 @@ pub struct Stretcher {
     /// Analysis position in the input.
     t: f64,
     speed: f64,
+    /// The speed the last frame was made at: what the output between it
+    /// and the one before plays at, whatever `speed` has since been set
+    /// to.
+    hop_speed: f64,
+    /// Where recent frames were centred: in the stretched signal, counted
+    /// from the start (`s_base` is where `st[0]` is in that count), and
+    /// in the input. Between two centres the input position is linear,
+    /// so [`position`](Self::position) is exact. Capacity [`CENTRES`].
+    centres: VecDeque<(f64, f64)>,
+    s_base: f64,
     ratio: f64,
     kernel: Vec<f32>,
     max_block: usize,
@@ -150,6 +174,9 @@ impl Stretcher {
             rpos: 0.0,
             t: 0.0,
             speed: 1.0,
+            hop_speed: 1.0,
+            centres: VecDeque::with_capacity(CENTRES),
+            s_base: 0.0,
             ratio: 1.0,
             kernel: vec![0.0; PHASES * TAPS],
             max_block: max_block.max(1),
@@ -159,11 +186,11 @@ impl Stretcher {
         s
     }
 
-    /// Sets speed (1 is normal; [`SPEED_RANGE`]) and transpose in
-    /// semitones (±[`SEMITONES`], fractions for cents). Takes effect from
-    /// the next frame; doesn't allocate.
+    /// Sets speed (1 is normal; within [`FULL_SPEED_RANGE`]) and transpose
+    /// in semitones (±[`SEMITONES`], fractions for cents). Takes effect
+    /// from the next frame made; doesn't allocate.
     pub fn set(&mut self, speed: f64, semitones: f64) {
-        self.speed = speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
+        self.speed = speed.clamp(FULL_SPEED_RANGE.0, FULL_SPEED_RANGE.1);
         let ratio = 2f64.powf(semitones.clamp(-SEMITONES, SEMITONES) / 12.0);
         if ratio != self.ratio {
             self.ratio = ratio;
@@ -183,16 +210,43 @@ impl Stretcher {
         // back so output 0 still lines up with u0.
         self.rpos = TAPS as f64 / 2.0 + (FRAME - HOP) as f64;
         self.t = u0 - (FRAME / 2 - HOP) as f64 * self.speed / self.ratio;
+        self.hop_speed = self.speed;
+        self.centres.clear();
+        self.s_base = 0.0;
         self.first = true;
         self.prev_flux = 0.0;
         self.cooldown = 0.0;
     }
 
+    /// The transpose set, in semitones.
+    pub fn semitones(&self) -> f64 {
+        12.0 * self.ratio.log2()
+    }
+
     /// Input position the next output frame plays.
     pub fn position(&self) -> f64 {
-        // Each frame is centred on its analysis position, so stretched
-        // sample `j` came from input `t − (st_len − j + FRAME/2) × step`.
-        self.t - (self.st_len as f64 - self.rpos + (FRAME / 2) as f64) * self.speed / self.ratio
+        // Each frame is centred on its analysis position; between two
+        // centres the input position runs evenly, and beyond the ones
+        // remembered it runs at the last speed used.
+        let s = self.s_base + self.rpos;
+        let step = self.hop_speed / self.ratio;
+        let n = self.centres.len();
+        if n == 0 {
+            // Nothing made yet: back from where the next frame's centre
+            // will be.
+            return self.t - ((self.st_len + FRAME / 2) as f64 - self.rpos) * step;
+        }
+        let i = self.centres.partition_point(|&(at, _)| at <= s);
+        if i == 0 {
+            let (at, c) = self.centres[0];
+            return c - (at - s) * step;
+        }
+        if i == n {
+            let (at, c) = self.centres[n - 1];
+            return c + (s - at) * step;
+        }
+        let ((a_at, a), (b_at, b)) = (self.centres[i - 1], self.centres[i]);
+        a + (s - a_at) * (b - a) / (b_at - a_at)
     }
 
     /// Blackman-windowed sinc, low-passed below the new Nyquist when
@@ -332,22 +386,62 @@ impl Stretcher {
             c.ola.copy_within(HOP.., 0);
             c.ola[FRAME - HOP..].fill(0.0);
         }
+        if self.centres.len() == CENTRES {
+            self.centres.pop_front();
+        }
+        self.centres
+            .push_back((self.s_base + (self.st_len + FRAME / 2) as f64, self.t));
         self.st_len += HOP;
 
         // Stretch by speed over pitch; the resampler then reads it back
         // faster by the pitch ratio.
+        self.hop_speed = self.speed;
         self.t += self.speed / self.ratio * HOP as f64;
     }
 
     /// Fills `l` and `r` (at most `max_block` frames) at the current
     /// settings, reading input from `feed`.
     pub fn process(&mut self, feed: &mut impl Feed, l: &mut [f32], r: &mut [f32]) {
+        self.drive(feed, None, l, r)
+    }
+
+    /// Fills `l` and `r` (at most `max_block` frames) so that output
+    /// frame `o` of them plays input `at(o)`, exactly at each frame
+    /// centre and evenly between: for audio that follows a warp. `at` is
+    /// asked about frames past the end of the block too, since frames
+    /// are made ahead of the output. The transpose set stays.
+    pub fn process_along(
+        &mut self,
+        feed: &mut impl Feed,
+        at: &dyn Fn(f64) -> f64,
+        l: &mut [f32],
+        r: &mut [f32],
+    ) {
+        self.drive(feed, Some(at), l, r)
+    }
+
+    fn drive(
+        &mut self,
+        feed: &mut impl Feed,
+        at: Option<&dyn Fn(f64) -> f64>,
+        l: &mut [f32],
+        r: &mut [f32],
+    ) {
         let n = l.len().min(r.len()).min(self.max_block);
         let half = TAPS / 2;
         let exact = self.ratio == 1.0;
         for o in 0..n {
             let i = self.rpos as usize;
             while i + half >= self.st_len {
+                if let Some(at) = at {
+                    // The frame about to be made is centred this far
+                    // ahead of output `o`.
+                    let oc = o as f64 + ((self.st_len + FRAME / 2) as f64 - self.rpos) / self.ratio;
+                    let c = at(oc);
+                    let speed = (c - self.t) / HOP as f64 * self.ratio;
+                    self.speed = speed.clamp(FULL_SPEED_RANGE.0, FULL_SPEED_RANGE.1);
+                    self.t = c;
+                }
                 self.synth_frame(feed);
             }
             let frac = self.rpos - i as f64;
@@ -374,6 +468,7 @@ impl Stretcher {
             }
             self.st_len -= drop;
             self.rpos -= drop as f64;
+            self.s_base += drop as f64;
         }
     }
 }

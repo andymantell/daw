@@ -56,6 +56,9 @@ pub struct Project {
     pub midi_maps: Vec<MidiMap>,
     /// Drum patterns that note clips play (roadmap 3.3), by name.
     pub patterns: Vec<crate::Pattern>,
+    /// Video clips, shown above the tracks, in the order added. Their
+    /// sound is an ordinary audio clip on a track of its own.
+    pub videos: Vec<VideoClip>,
 }
 
 impl Default for Project {
@@ -84,6 +87,7 @@ impl Default for Project {
             grooves: Vec::new(),
             midi_maps: Vec::new(),
             patterns: Vec::new(),
+            videos: Vec::new(),
         }
     }
 }
@@ -751,6 +755,22 @@ impl Clip {
             .map(|b| format!("{b:02x}"))
             .collect()
     }
+}
+
+/// A video file's picture on the timeline (roadmap 3.9). Positions are
+/// in frames at the project's rate, as for audio clips.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VideoClip {
+    pub id: String,
+    /// The video file's name in the project's assets folder.
+    pub asset: String,
+    /// What the file was called when it came in, for showing.
+    pub name: String,
+    /// Where it starts on the timeline.
+    pub start: i64,
+    /// How far into the video it starts, and how long it plays.
+    pub offset: i64,
+    pub len: i64,
 }
 
 /// A comp: which take plays where, chosen from a track's takes

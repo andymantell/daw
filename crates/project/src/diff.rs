@@ -414,6 +414,24 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     for c in (before.cue_mixes.iter()).filter(|c| !now.contains(c.id.as_str())) {
         say("Headphones", format!("Removed the mix “{}”", c.name));
     }
+    // Video clips.
+    let was: HashMap<&str, _> = (before.videos.iter()).map(|v| (v.id.as_str(), v)).collect();
+    let now: HashSet<&str> = after.videos.iter().map(|v| v.id.as_str()).collect();
+    for v in &after.videos {
+        match was.get(v.id.as_str()) {
+            None => say("Video", format!("Added “{}”", v.name)),
+            Some(o) if (o.start - v.start).abs() > SLACK => {
+                say("Video", format!("Moved “{}”", v.name))
+            }
+            Some(o) if (o.offset, o.len) != (v.offset, v.len) => {
+                say("Video", format!("Trimmed “{}”", v.name))
+            }
+            Some(_) => {}
+        }
+    }
+    for v in (before.videos.iter()).filter(|v| !now.contains(v.id.as_str())) {
+        say("Video", format!("Removed “{}”", v.name));
+    }
     out
 }
 

@@ -133,18 +133,18 @@ fn table(kind: &[u8], body: &[u8], t: &mut Track) {
             }
         }
         b"stts" => {
-            for e in rest.chunks_exact(8).take(count) {
+            for e in rest.as_chunks::<8>().0.iter().take(count) {
                 t.durations.push((be32(e), be32(&e[4..])));
                 t.samples += be32(e);
             }
         }
         b"ctts" => {
-            for e in rest.chunks_exact(8).take(count) {
+            for e in rest.as_chunks::<8>().0.iter().take(count) {
                 t.offsets.push((be32(e), be32(&e[4..]) as i32));
             }
         }
         b"stss" => {
-            for e in rest.chunks_exact(4).take(count) {
+            for e in rest.as_chunks::<4>().0.iter().take(count) {
                 t.sync.push(be32(e));
             }
         }

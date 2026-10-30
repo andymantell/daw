@@ -198,20 +198,29 @@ pub struct Convolution {
     started: bool,
     /// The loaded response's room, which the room setting doesn't change.
     fixed: Option<usize>,
+    /// How many responses the room setting chooses from.
+    count: usize,
 }
 
 impl Convolution {
     /// With the rooms made here, and `loaded` (a response at `rate`)
     /// used instead of them if given.
     pub fn new(rate: f64, loaded: Option<[Vec<f32>; 2]>) -> Convolution {
+        let made = (0..ROOMS.len()).map(|r| response(r, rate)).collect();
+        Convolution::with(rate, made, loaded)
+    }
+
+    /// With the responses `made` (chosen by the first setting), and
+    /// `loaded` used instead of them if given.
+    pub fn with(rate: f64, made: Vec<[Vec<f32>; 2]>, loaded: Option<[Vec<f32>; 2]>) -> Convolution {
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(2 * BLOCK);
         let ifft = planner.plan_fft_inverse(2 * BLOCK);
-        let made = (0..ROOMS.len()).map(|r| response(r, rate));
-        let rooms: Vec<Room> = (made.chain(loaded))
+        let count = made.len().max(1);
+        let rooms: Vec<Room> = (made.into_iter().chain(loaded))
             .map(|h| Room::new(&h, fft.as_ref()))
             .collect();
-        let fixed = (rooms.len() > ROOMS.len()).then_some(ROOMS.len());
+        let fixed = (rooms.len() > count).then_some(count);
         let most = rooms
             .iter()
             .map(|r| r.parts[0].len())
@@ -243,6 +252,7 @@ impl Convolution {
             wet: 0.0,
             started: false,
             fixed,
+            count,
         }
     }
 
@@ -319,7 +329,7 @@ impl Convolution {
 
 impl Dsp for Convolution {
     fn update(&mut self, v: &[f64]) {
-        self.want = self.fixed.unwrap_or((v[0] as usize).min(ROOMS.len() - 1));
+        self.want = self.fixed.unwrap_or((v[0] as usize).min(self.count - 1));
         if !self.started {
             self.room = self.want;
             self.started = true;

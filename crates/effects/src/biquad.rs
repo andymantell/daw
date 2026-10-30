@@ -143,6 +143,13 @@ impl Default for Biquad {
 }
 
 impl Biquad {
+    pub fn new(c: Coefs) -> Biquad {
+        Biquad {
+            c,
+            ..Default::default()
+        }
+    }
+
     #[inline]
     pub fn run(&mut self, x: f32) -> f32 {
         let x = x as f64;

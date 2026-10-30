@@ -161,7 +161,7 @@ pub fn check(exe: &Path, bundle: &Path, class: &ClassInfo) -> Report {
     report.loads = Outcome::Pass(describe(&buses, plugin.latency(), plugin.params().len()));
     report.plays = match play(&mut fx, false) {
         Ok(_) if host.failure().is_some() => Outcome::Fail(host.failure().unwrap_or_default()),
-        Ok(peak) if peak == 0.0 => Outcome::Pass("silent with a tone in".into()),
+        Ok(0.0) => Outcome::Pass("silent with a tone in".into()),
         Ok(_) => Outcome::Pass(String::new()),
         Err(e) => Outcome::Fail(e),
     };

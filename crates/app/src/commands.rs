@@ -100,6 +100,14 @@ pub(crate) enum Cmd {
     AudioDevice,
     Plugins,
     PerformanceCheck,
+    DrumKits,
+    LearnKit,
+    KitNext,
+    KitSkip,
+    KitBack,
+    KitCancel,
+    ImportKit,
+    ExportKit,
     KeyCommands,
     Theme,
     NextTheme,
@@ -802,6 +810,71 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .words("dsp cpu load"),
+    info(Cmd::DrumKits, "drum-kits", "Settings", "Drum kits…", &[])
+        .hint("Which note each pad of an electronic drum kit sends")
+        .words("electronic e-kit pads map midi notes profile"),
+    info(
+        Cmd::LearnKit,
+        "learn-kit",
+        "Settings",
+        "Learn a drum kit…",
+        &[],
+    )
+    .hint("Hit each pad of an electronic kit when asked, to learn its notes")
+    .words("electronic e-kit pads map midi notes profile wizard"),
+    info(
+        Cmd::KitNext,
+        "kit-next",
+        "Settings",
+        "Drum kit: next step",
+        &[],
+    )
+    .hint("Keep what was heard and go on (saves at the last step)")
+    .words("learn kit"),
+    info(
+        Cmd::KitSkip,
+        "kit-skip",
+        "Settings",
+        "Drum kit: skip this pad",
+        &[],
+    )
+    .hint("Go on without this pad or zone: it isn't on the kit")
+    .words("learn kit"),
+    info(
+        Cmd::KitBack,
+        "kit-back",
+        "Settings",
+        "Drum kit: back a step",
+        &[],
+    )
+    .hint("Learn the step before again")
+    .words("learn kit"),
+    info(
+        Cmd::KitCancel,
+        "kit-cancel",
+        "Settings",
+        "Drum kit: stop learning",
+        &[],
+    )
+    .words("learn kit cancel"),
+    info(
+        Cmd::ImportKit,
+        "import-kit",
+        "Settings",
+        "Import drum kit…",
+        &[],
+    )
+    .hint("Add a drum kit profile from a file")
+    .words("electronic e-kit pads map profile"),
+    info(
+        Cmd::ExportKit,
+        "export-kit",
+        "Settings",
+        "Export drum kit…",
+        &[],
+    )
+    .hint("Save the chosen drum kit profile as a file, to share it")
+    .words("electronic e-kit pads map profile"),
     info(
         Cmd::KeyCommands,
         "key-commands",
@@ -1617,6 +1690,7 @@ impl App {
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
+            Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
         }
     }
@@ -1767,6 +1841,14 @@ impl App {
             Cmd::AudioDevice => self.show_devices = true,
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
+            Cmd::DrumKits
+            | Cmd::LearnKit
+            | Cmd::KitNext
+            | Cmd::KitSkip
+            | Cmd::KitBack
+            | Cmd::KitCancel
+            | Cmd::ImportKit
+            | Cmd::ExportKit => self.kit_command(cmd),
             Cmd::KeyCommands => self.commands.editor.open = true,
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,

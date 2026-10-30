@@ -12,6 +12,7 @@ mod diff;
 mod doc;
 mod folder;
 mod identity;
+pub mod kit;
 mod lessons;
 pub mod midifile;
 mod model;

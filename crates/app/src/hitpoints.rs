@@ -23,7 +23,7 @@ use crate::tempo::Changes;
 use crate::theme::Look;
 
 /// The line under the toolbar that holds the timecode and hit points.
-pub(crate) const STRIP: f32 = 20.0;
+pub(crate) const STRIP: f32 = 30.0;
 
 /// The tempos the fit tool offers, at most.
 const FITS: usize = 6;
@@ -447,19 +447,19 @@ impl HitPointsWindow {
             .open(&mut open)
             .default_pos([360.0, 140.0])
             .default_width(560.0)
+            .default_height(660.0)
+            .vscroll(true)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(may_edit, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(620.0)
-                        .show(ui, |ui| {
-                            let was = setup.clone();
-                            self.timecode_part(ui, setup, rate, playhead, &mut asks);
-                            follow_picture(&was, setup, hits, rate);
-                            ui.separator();
-                            self.hits_part(ui, setup, hits, time, &mut asks);
-                            ui.separator();
-                            self.fit_part(ui, setup, hits, time, &mut asks);
-                        });
+                    ui.scope(|ui| {
+                        let was = setup.clone();
+                        self.timecode_part(ui, setup, rate, playhead, &mut asks);
+                        follow_picture(&was, setup, hits, rate);
+                        ui.separator();
+                        self.hits_part(ui, setup, hits, time, &mut asks);
+                        ui.separator();
+                        self.fit_part(ui, setup, hits, time, &mut asks);
+                    });
                 });
             });
         self.open = open;
@@ -849,7 +849,7 @@ pub(crate) fn draw_strip(
         if x < r.left() - 120.0 || x > r.right() + 6.0 {
             continue;
         }
-        let y = r.top() + 6.0;
+        let y = r.top() + 8.0;
         painter.add(diamond(pos2(x, y), 5.0, c.accent));
         let g = painter.layout_no_wrap(h.name.clone(), look.font(look.small), c.text);
         let lr = Rect::from_min_size(

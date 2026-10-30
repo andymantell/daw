@@ -11,7 +11,9 @@
 //! to group, whose tracks are a map from track id to `true` so two
 //! people adding tracks at once keep both. A
 //! track is a map of its settings, a `clips`
-//! map from id to clip, an `fx` map from id to effect and the effect
+//! map from id to clip, a `note_clips` map from id to note clip (each
+//! with a `notes` map from id to note), an `instrument` map, an `fx`
+//! map from id to effect and the effect
 //! order in the movable list `fx_order`, and its frozen audio, if any, as
 //! one `frozen` value (so two renders saved at once never mix). Every
 //! other field is its own map entry,
@@ -42,10 +44,10 @@ use loro::{
 
 use crate::identity::Me;
 use crate::{
-    Assignment, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve, EditGroup,
-    Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, HitPoint, Marker, MeterChange,
-    Practice, Project, Send, TabBlock, TempoChange, TimecodeSetup, Track, TrackKind,
-    TrainerSettings, is_asset_name,
+    Articulation, Assignment, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve,
+    EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, HitPoint, Marker,
+    MeterChange, Note, NoteClip, Practice, Project, Send, TabBlock, Technique, TempoChange,
+    TimecodeSetup, Track, TrackKind, TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -988,58 +990,20 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     }
     for e in &t.effects {
         let em = w.child(&fx, &e.id);
-        w.put(&em, "name", e.name.as_str());
-        w.put(&em, "class", e.class.clone());
-        w.put(&em, "bundle", e.bundle.as_str());
-        w.put(&em, "bypass", e.bypass);
-        if !e.builtin.is_empty() {
-            w.put(&em, "builtin", e.builtin.as_str());
-            // One entry per setting, so two people changing different
-            // settings at once keep both.
-            let pm = w.child(&em, "params");
-            let keep: HashSet<&str> = e.params.iter().map(|(k, _)| k.as_str()).collect();
-            for k in keys(&pm) {
-                if !keep.contains(k.as_str()) {
-                    w.delete(&pm, &k);
-                }
-            }
-            for (k, v) in &e.params {
-                w.put(&pm, k, *v);
-            }
-            if !e.response.is_empty() || em.get("response").is_some() {
-                w.put(&em, "response", e.response.as_str());
-            }
-        }
-        if e.sidechain.is_some() || em.get("sidechain").is_some() {
-            w.put(
-                &em,
-                "sidechain",
-                e.sidechain.clone().map_or(LoroValue::Null, LoroValue::from),
-            );
-        }
-        if e.container.is_some() || em.get("container").is_some() {
-            w.put(
-                &em,
-                "container",
-                e.container.clone().map_or(LoroValue::Null, LoroValue::from),
-            );
-            w.put(&em, "branch", e.branch as i64);
-        }
-        if !e.outputs.is_empty() || em.get("outputs").is_some() {
-            let outs: Vec<LoroValue> = e.outputs.iter().map(|&o| (o as i64).into()).collect();
-            w.put(&em, "outputs", LoroValue::List(outs.into()));
-        }
-        if let Some(s) = &e.state {
-            w.put(&em, "component", s.component.clone());
-            w.put(
-                &em,
-                "controller",
-                s.controller
-                    .clone()
-                    .map_or(LoroValue::Null, LoroValue::from),
-            );
-        }
+        write_effect(w, &em, e);
     }
+    // The instrument: one map, like an effect's. Tracks that never had
+    // one gain no entry.
+    match &t.instrument {
+        Some(inst) => {
+            let im = w.child(m, "instrument");
+            w.put(&im, "id", inst.id.as_str());
+            write_effect(w, &im, inst);
+        }
+        None if m.get("instrument").is_some() => w.delete(m, "instrument"),
+        None => {}
+    }
+    write_note_clips(w, m, t);
     write_comps(w, m, t);
     match &t.frozen {
         Some(f) => {
@@ -1060,6 +1024,199 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     };
     let ids: Vec<String> = t.effects.iter().map(|e| e.id.clone()).collect();
     w.order(&order_list, &ids);
+}
+
+/// Writes an effect's (or instrument's) fields into its map.
+fn write_effect(w: &mut Writer, em: &LoroMap, e: &Effect) {
+    w.put(em, "name", e.name.as_str());
+    w.put(em, "class", e.class.clone());
+    w.put(em, "bundle", e.bundle.as_str());
+    w.put(em, "bypass", e.bypass);
+    if !e.builtin.is_empty() {
+        w.put(em, "builtin", e.builtin.as_str());
+        // One entry per setting, so two people changing different
+        // settings at once keep both.
+        let pm = w.child(em, "params");
+        let keep: HashSet<&str> = e.params.iter().map(|(k, _)| k.as_str()).collect();
+        for k in keys(&pm) {
+            if !keep.contains(k.as_str()) {
+                w.delete(&pm, &k);
+            }
+        }
+        for (k, v) in &e.params {
+            w.put(&pm, k, *v);
+        }
+        if !e.response.is_empty() || em.get("response").is_some() {
+            w.put(em, "response", e.response.as_str());
+        }
+    }
+    if e.sidechain.is_some() || em.get("sidechain").is_some() {
+        w.put(
+            em,
+            "sidechain",
+            e.sidechain.clone().map_or(LoroValue::Null, LoroValue::from),
+        );
+    }
+    if e.container.is_some() || em.get("container").is_some() {
+        w.put(
+            em,
+            "container",
+            e.container.clone().map_or(LoroValue::Null, LoroValue::from),
+        );
+        w.put(em, "branch", e.branch as i64);
+    }
+    if !e.outputs.is_empty() || em.get("outputs").is_some() {
+        let outs: Vec<LoroValue> = e.outputs.iter().map(|&o| (o as i64).into()).collect();
+        w.put(em, "outputs", LoroValue::List(outs.into()));
+    }
+    if let Some(s) = &e.state {
+        w.put(em, "component", s.component.clone());
+        w.put(
+            em,
+            "controller",
+            s.controller
+                .clone()
+                .map_or(LoroValue::Null, LoroValue::from),
+        );
+    }
+}
+
+/// A track's note clips: a `note_clips` map from id to clip, each a map
+/// of its settings and a `notes` map from note id to note, one entry per
+/// field, so two people editing different notes of one clip keep both.
+/// Tracks without notes gain no entries.
+fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
+    if t.note_clips.is_empty() && m.get("note_clips").is_none() {
+        return;
+    }
+    let clips = w.fixed(m, "note_clips");
+    let keep: HashSet<&str> = t.note_clips.iter().map(|c| c.id.as_str()).collect();
+    for id in keys(&clips) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&clips, &id);
+        }
+    }
+    for c in &t.note_clips {
+        let cm = w.child(&clips, &c.id);
+        w.put(&cm, "name", c.name.as_str());
+        w.put(&cm, "start", c.start);
+        w.put(&cm, "len", c.len);
+        w.put(&cm, "offset", c.offset);
+        w.put(&cm, "muted", c.muted);
+        if c.take.is_some() || cm.get("take").is_some() {
+            w.put(
+                &cm,
+                "take",
+                c.take.map_or(LoroValue::Null, |t| LoroValue::I64(t as i64)),
+            );
+        }
+        let notes = w.fixed(&cm, "notes");
+        let keep: HashSet<&str> = c.notes.iter().map(|n| n.id.as_str()).collect();
+        for id in keys(&notes) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&notes, &id);
+            }
+        }
+        for n in &c.notes {
+            let nm = w.child(&notes, &n.id);
+            w.put(&nm, "start", n.start);
+            w.put(&nm, "len", n.len);
+            w.put(&nm, "pitch", n.pitch as i64);
+            w.put(&nm, "velocity", n.velocity as i64);
+            // Plain notes, as most are, gain no entries for the rest.
+            let plain = |k: &str, unset: bool| unset && nm.get(k).is_none();
+            if !plain("channel", n.channel == 0) {
+                w.put(&nm, "channel", n.channel as i64);
+            }
+            for (k, v) in [("string", n.string), ("fret", n.fret)] {
+                if !plain(k, v.is_none()) {
+                    w.put(
+                        &nm,
+                        k,
+                        v.map_or(LoroValue::Null, |v| LoroValue::I64(v as i64)),
+                    );
+                }
+            }
+            if !plain("bend", n.bend == 0.0) {
+                w.put(&nm, "bend", n.bend);
+            }
+            if !plain("techniques", n.techniques.is_empty()) {
+                let list: Vec<LoroValue> = (n.techniques.iter()).map(|t| t.name().into()).collect();
+                w.put(&nm, "techniques", LoroValue::List(list.into()));
+            }
+            if !plain("articulation", n.articulation.is_none()) {
+                w.put(
+                    &nm,
+                    "articulation",
+                    n.articulation.map_or(LoroValue::Null, |a| a.name().into()),
+                );
+            }
+            if !plain("chance", n.chance == 1.0) {
+                w.put(&nm, "chance", n.chance);
+            }
+        }
+    }
+}
+
+/// A track's note clips, in time order, each with its notes in order.
+fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
+    let Some(LoroValue::Map(clips)) = t.get("note_clips") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (cid, c) in clips.iter() {
+        let LoroValue::Map(c) = c else { continue };
+        let mut clip = NoteClip::new(
+            cid.to_string(),
+            string(c, "name").unwrap_or_default(),
+            int(c, "start").unwrap_or(0).max(0),
+            int(c, "len").unwrap_or(1),
+        );
+        clip.offset = int(c, "offset").unwrap_or(0).max(0);
+        clip.muted = boolean(c, "muted").unwrap_or(false);
+        clip.take = int(c, "take").and_then(|v| u32::try_from(v).ok());
+        if let Some(LoroValue::Map(notes)) = c.get("notes") {
+            for (nid, n) in notes.iter() {
+                let LoroValue::Map(n) = n else { continue };
+                let Some(pitch) = int(n, "pitch").and_then(|p| u8::try_from(p).ok()) else {
+                    continue;
+                };
+                if pitch > 127 {
+                    continue;
+                }
+                let mut note = Note::new(
+                    int(n, "start").unwrap_or(0).max(0),
+                    int(n, "len").unwrap_or(1),
+                    pitch,
+                    int(n, "velocity").unwrap_or(100).clamp(1, 127) as u8,
+                );
+                note.id = nid.to_string();
+                note.channel = int(n, "channel").unwrap_or(0).clamp(0, 15) as u8;
+                note.string = int(n, "string").and_then(|v| u8::try_from(v).ok());
+                note.fret = int(n, "fret").and_then(|v| u8::try_from(v).ok());
+                note.bend = float(n, "bend").filter(|b| b.is_finite()).unwrap_or(0.0);
+                if let Some(LoroValue::List(l)) = n.get("techniques") {
+                    note.techniques = (l.iter())
+                        .filter_map(|v| match v {
+                            LoroValue::String(s) => Technique::from_name(s),
+                            _ => None,
+                        })
+                        .collect();
+                }
+                note.articulation =
+                    string(n, "articulation").and_then(|a| Articulation::from_name(&a));
+                note.chance = float(n, "chance")
+                    .filter(|c| c.is_finite())
+                    .unwrap_or(1.0)
+                    .clamp(0.0, 1.0);
+                clip.notes.push(note);
+            }
+        }
+        clip.sort_notes();
+        out.push(clip);
+    }
+    out.sort_by(|a, b| (a.start, a.id.as_str()).cmp(&(b.start, b.id.as_str())));
+    out
 }
 
 /// A track's comps: a `comps` map from id to its name and parts, each
@@ -1237,6 +1394,8 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         mute: boolean(t, "mute").unwrap_or(false),
         solo: boolean(t, "solo").unwrap_or(false),
         clips: Vec::new(),
+        note_clips: Vec::new(),
+        instrument: None,
         effects: Vec::new(),
         frozen: t.get("frozen").and_then(read_frozen),
         freeze: boolean(t, "freeze").unwrap_or(false),
@@ -1305,48 +1464,58 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
             let Some(LoroValue::Map(e)) = fx.get(&eid) else {
                 continue;
             };
-            let state = binary(e, "component").map(|component| EffectState {
-                component,
-                controller: binary(e, "controller"),
-            });
-            track.effects.push(Effect {
-                id: eid,
-                name: string(e, "name").unwrap_or_default(),
-                class: binary(e, "class").unwrap_or_default(),
-                bundle: string(e, "bundle").unwrap_or_default(),
-                bypass: boolean(e, "bypass").unwrap_or(false),
-                state,
-                builtin: string(e, "builtin").unwrap_or_default(),
-                response: string(e, "response").unwrap_or_default(),
-                sidechain: string(e, "sidechain").filter(|s| !s.is_empty()),
-                container: string(e, "container").filter(|s| !s.is_empty()),
-                branch: match e.get("branch") {
-                    Some(LoroValue::I64(b)) => u32::try_from(*b).unwrap_or(0),
-                    _ => 0,
-                },
-                outputs: match e.get("outputs") {
-                    Some(LoroValue::List(l)) => (l.iter())
-                        .filter_map(|v| match v {
-                            LoroValue::I64(o) => u32::try_from(*o).ok(),
-                            _ => None,
-                        })
-                        .collect(),
-                    _ => Vec::new(),
-                },
-                params: match e.get("params") {
-                    Some(LoroValue::Map(pm)) => {
-                        let mut v: Vec<(String, f64)> = (pm.keys())
-                            .filter_map(|k| Some((k.to_string(), float(pm, k)?)))
-                            .collect();
-                        v.sort_by(|a, b| a.0.cmp(&b.0));
-                        v
-                    }
-                    _ => Vec::new(),
-                },
-            });
+            track.effects.push(read_effect(eid, e));
         }
     }
+    if let Some(LoroValue::Map(im)) = t.get("instrument") {
+        let id = string(im, "id").unwrap_or_else(|| "instrument".to_string());
+        track.instrument = Some(read_effect(id, im));
+    }
+    track.note_clips = read_note_clips(t);
     track
+}
+
+/// An effect (or instrument) from its map.
+fn read_effect(id: String, e: &LoroMapValue) -> Effect {
+    let state = binary(e, "component").map(|component| EffectState {
+        component,
+        controller: binary(e, "controller"),
+    });
+    Effect {
+        id,
+        name: string(e, "name").unwrap_or_default(),
+        class: binary(e, "class").unwrap_or_default(),
+        bundle: string(e, "bundle").unwrap_or_default(),
+        bypass: boolean(e, "bypass").unwrap_or(false),
+        state,
+        builtin: string(e, "builtin").unwrap_or_default(),
+        response: string(e, "response").unwrap_or_default(),
+        sidechain: string(e, "sidechain").filter(|s| !s.is_empty()),
+        container: string(e, "container").filter(|s| !s.is_empty()),
+        branch: match e.get("branch") {
+            Some(LoroValue::I64(b)) => u32::try_from(*b).unwrap_or(0),
+            _ => 0,
+        },
+        outputs: match e.get("outputs") {
+            Some(LoroValue::List(l)) => (l.iter())
+                .filter_map(|v| match v {
+                    LoroValue::I64(o) => u32::try_from(*o).ok(),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        params: match e.get("params") {
+            Some(LoroValue::Map(pm)) => {
+                let mut v: Vec<(String, f64)> = (pm.keys())
+                    .filter_map(|k| Some((k.to_string(), float(pm, k)?)))
+                    .collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            }
+            _ => Vec::new(),
+        },
+    }
 }
 
 fn read_fade(c: &LoroMapValue, k: &str) -> Fade {
@@ -1599,6 +1768,7 @@ fn binary(m: &LoroMapValue, k: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Articulation, Note, NoteClip, PPQ, Technique};
     use crate::{ControlGroup, Send, Track, TrackKind};
 
     #[test]
@@ -1961,5 +2131,128 @@ mod tests {
         a.set(&out);
         let low = &a.get().tracks[0].effects[1];
         assert_eq!((low.container.as_deref(), low.branch), (None, 0));
+    }
+
+    #[test]
+    fn note_clips_and_the_instrument_round_trip() {
+        let mut p = Project::default();
+        let mut t = Track::new("k".into(), "Keys".into());
+        t.kind = TrackKind::Instrument;
+        let mut clip = NoteClip::new("nc1".into(), "Riff".into(), PPQ * 4, PPQ * 8);
+        clip.offset = PPQ;
+        clip.take = Some(2);
+        let mut a = Note::new(PPQ, PPQ / 2, 64, 90);
+        a.id = "n1".into();
+        a.string = Some(3);
+        a.fret = Some(9);
+        a.bend = 1.0;
+        a.techniques = vec![Technique::Vibrato, Technique::PalmMute];
+        a.channel = 2;
+        let mut b = Note::new(0, PPQ, 36, 127);
+        b.id = "n2".into();
+        b.articulation = Some(Articulation::Flam);
+        b.chance = 0.5;
+        clip.notes = vec![a.clone(), b.clone()];
+        t.note_clips.push(clip);
+        t.instrument = Some(Effect {
+            id: "inst".into(),
+            name: "Simple synth".into(),
+            builtin: "synth".into(),
+            params: vec![("wave".into(), 1.0)],
+            ..Effect::default()
+        });
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        assert!(doc.set(&p));
+        let back = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap().get();
+        assert_eq!(back.tracks[0].kind, TrackKind::Instrument);
+        let clip = &back.tracks[0].note_clips[0];
+        assert_eq!(
+            (clip.start, clip.len, clip.offset, clip.take),
+            (PPQ * 4, PPQ * 8, PPQ, Some(2))
+        );
+        // Notes come back in time order.
+        assert_eq!(clip.notes, vec![b, a]);
+        assert_eq!(back.tracks[0].instrument, p.tracks[0].instrument);
+        // Writing the same again changes nothing.
+        assert!(!doc.set(&back));
+        // Deleting one note leaves the other.
+        let mut q = back.clone();
+        q.tracks[0].note_clips[0].notes.remove(0);
+        q.tracks[0].instrument = None;
+        assert!(doc.set(&q));
+        let back = doc.get();
+        assert_eq!(back.tracks[0].note_clips[0].notes.len(), 1);
+        assert_eq!(back.tracks[0].note_clips[0].notes[0].id, "n1");
+        assert_eq!(back.tracks[0].instrument, None);
+    }
+
+    #[test]
+    fn plain_tracks_and_notes_add_no_note_entries() {
+        let mut p = Project::default();
+        let mut t = Track::new("k".into(), "Keys".into());
+        let mut clip = NoteClip::new("nc1".into(), "Riff".into(), 0, PPQ);
+        let mut n = Note::new(0, PPQ, 60, 100);
+        n.id = "n1".into();
+        clip.notes.push(n);
+        t.note_clips.push(clip);
+        p.tracks.push(t);
+        p.tracks.push(Track::new("g".into(), "Guitar".into()));
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let tracks = doc.doc.get_map("tracks").get_deep_value();
+        let LoroValue::Map(tracks) = tracks else {
+            panic!()
+        };
+        let LoroValue::Map(g) = tracks.get("g").unwrap() else {
+            panic!()
+        };
+        assert!(g.get("note_clips").is_none());
+        assert!(g.get("instrument").is_none());
+        let LoroValue::Map(k) = tracks.get("k").unwrap() else {
+            panic!()
+        };
+        let LoroValue::Map(clips) = k.get("note_clips").unwrap() else {
+            panic!()
+        };
+        let LoroValue::Map(c) = clips.get("nc1").unwrap() else {
+            panic!()
+        };
+        let LoroValue::Map(notes) = c.get("notes").unwrap() else {
+            panic!()
+        };
+        let LoroValue::Map(n) = notes.get("n1").unwrap() else {
+            panic!()
+        };
+        let mut keys: Vec<&str> = n.keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, ["len", "pitch", "start", "velocity"]);
+    }
+
+    #[test]
+    fn two_people_editing_one_note_clip_keep_both_notes() {
+        let mut p = Project::default();
+        let mut t = Track::new("k".into(), "Keys".into());
+        t.note_clips
+            .push(NoteClip::new("nc1".into(), "Riff".into(), 0, PPQ * 4));
+        p.tracks.push(t);
+        let mut a = ProjectDoc::new(1);
+        a.set(&p);
+        let mut b = ProjectDoc::from_bytes(&a.to_bytes(), 2).unwrap();
+        let mut pa = a.get();
+        let mut na = Note::new(0, PPQ, 60, 100);
+        na.id = "na".into();
+        pa.tracks[0].note_clips[0].notes.push(na);
+        a.set(&pa);
+        let mut pb = b.get();
+        let mut nb = Note::new(PPQ, PPQ, 64, 100);
+        nb.id = "nb".into();
+        pb.tracks[0].note_clips[0].notes.push(nb);
+        b.set(&pb);
+        a.merge(&b.to_bytes()).unwrap();
+        let ids: Vec<String> = (a.get().tracks[0].note_clips[0].notes.iter())
+            .map(|n| n.id.clone())
+            .collect();
+        assert_eq!(ids, ["na", "nb"]);
     }
 }

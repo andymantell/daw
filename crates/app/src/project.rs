@@ -286,6 +286,8 @@ impl App {
             mute: t.mix.mute,
             solo: t.mix.solo,
             clips,
+            note_clips: t.note_clips.clone(),
+            instrument: t.instrument.clone(),
             effects,
             frozen: t.frozen.clone(),
             freeze: t.freeze,
@@ -470,6 +472,8 @@ impl App {
             t.sends = pt.sends.clone();
             t.group = pt.group.clone();
             t.freeze = pt.freeze;
+            t.note_clips = pt.note_clips.clone();
+            t.instrument = pt.instrument.clone();
             t.mix = Mix {
                 gain_db: pt.gain_db as f32,
                 pan: pt.pan as f32,

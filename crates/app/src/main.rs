@@ -90,6 +90,11 @@ struct Track {
     /// Silenced to play the part yourself. Kept apart from `mix.mute`,
     /// which belongs to the mix.
     practice_mute: bool,
+    /// Note clips and the instrument, as the document has them (roadmap
+    /// 3.1). Kept through a round trip; played once the engine has
+    /// instrument tracks.
+    note_clips: Vec<daw_project::NoteClip>,
+    instrument: Option<daw_project::Effect>,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
     /// The track rendered through its effects, as the document has it.
@@ -134,6 +139,8 @@ impl Track {
             arm: false,
             monitor: false,
             practice_mute: false,
+            note_clips: Vec::new(),
+            instrument: None,
             fx: Vec::new(),
             frozen: None,
             frozen_audio: None,

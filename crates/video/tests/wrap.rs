@@ -112,7 +112,11 @@ fn check(video: &Path, name: &str) {
 
 #[test]
 fn the_mix_goes_into_a_copy_of_the_video() {
-    if daw_video::CAN_WRAP {
+    if cfg!(windows) {
+        // The system's writer makes MP4 files, and reads them.
+        check(&fixture("counting.mp4"), "mp4");
+        check(&fixture("counting-bframes.mp4"), "bframes");
+    } else if daw_video::CAN_WRAP {
         check(&fixture("counting.ogv"), "ogv");
     } else {
         // Not offered yet: it says so, and leaves nothing behind.

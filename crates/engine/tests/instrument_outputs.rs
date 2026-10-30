@@ -94,15 +94,7 @@ fn delay(id: u64, frames: usize) -> (InsertSpec, (u64, Box<dyn Insert>)) {
 /// An instrument track with one note on beat 1 (the second beat).
 fn drums() -> TrackSpec {
     let mut t = TrackSpec::new(Vec::new());
-    t.notes = vec![NoteSpec {
-        start: Ticks(PPQ),
-        len: Ticks(PPQ / 2),
-        pitch: 36,
-        velocity: 100,
-        channel: 0,
-        expr: (0, 0),
-    }]
-    .into();
+    t.notes = vec![NoteSpec::new(Ticks(PPQ), Ticks(PPQ / 2), 36, 100, 0)].into();
     t.instrument = Some(InstrumentSpec { id: 1, latency: 0 });
     t
 }

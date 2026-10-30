@@ -95,7 +95,9 @@ pub fn write(
     };
     let mut error = None;
     let mut peak = 0.0f32;
-    let block = graph.max_block();
+    // Automation lanes are read once a block: blocks as short as a
+    // device's usual ones follow them as closely as playback does.
+    let block = graph.max_block().min(LANE_BLOCK);
     render_with(graph, from, frames, block, |l, r| {
         for x in l.iter().chain(r) {
             peak = peak.max(x.abs());
@@ -134,6 +136,9 @@ impl Written {
 }
 
 type Out = BufWriter<File>;
+
+/// The longest block a file is rendered in.
+pub const LANE_BLOCK: usize = 256;
 
 /// One kind of file being written, a block of stereo audio at a time.
 trait Encode {

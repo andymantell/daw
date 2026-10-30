@@ -1241,6 +1241,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "daw-instruments"
+version = "0.0.0"
+dependencies = [
+ "daw-effects",
+ "daw-engine",
+]
+
+[[package]]
 name = "daw-notation"
 version = "0.0.0"
 dependencies = [

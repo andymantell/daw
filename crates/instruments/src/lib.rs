@@ -398,7 +398,7 @@ impl Builtin {
             (!k.starts_with("slice")).then(|| k.to_string())
         });
         for (i, f) in slices.into_iter().enumerate() {
-            self.params.set(slicer::at::SLICES + i, f as f64);
+            (self.params).set(slicer::slice_at(i, slicer::slice::START), f as f64);
         }
     }
 

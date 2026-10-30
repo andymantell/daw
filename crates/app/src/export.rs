@@ -308,7 +308,7 @@ impl Export {
                         )
                         .on_disabled_hover_text("This song has no buses");
                     });
-                    ui.add_enabled_ui(film.is_some(), |ui| {
+                    ui.add_enabled_ui(film.is_some() && daw_video::CAN_WRAP, |ui| {
                         let label = match film {
                             Some(name) => {
                                 format!("Also a copy of the video \"{name}\" with this mix")
@@ -320,7 +320,11 @@ impl Export {
                                 "The whole film with the mix as its sound, from its first \
                                  frame. The picture is copied as it is, not re-encoded",
                             )
-                            .on_disabled_hover_text("This song has no video");
+                            .on_disabled_hover_text(if daw_video::CAN_WRAP {
+                                "This song has no video"
+                            } else {
+                                "Not on this system yet"
+                            });
                     });
                     ui.horizontal(|ui| {
                         let l = ui.label("File type");
@@ -406,7 +410,7 @@ impl Export {
                                 format: self.format(),
                                 folder: self.dir().to_path_buf(),
                                 mix: true,
-                                video: self.video && film.is_some(),
+                                video: self.video && film.is_some() && daw_video::CAN_WRAP,
                             });
                         }
                     }

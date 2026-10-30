@@ -1994,7 +1994,9 @@ impl App {
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
-            Cmd::ExportVideo => !self.video.clips.is_empty() && !self.export.busy(),
+            Cmd::ExportVideo => {
+                daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
+            }
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),

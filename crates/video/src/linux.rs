@@ -222,6 +222,73 @@ fn make(name: &str) -> Result<gst::Element, Error> {
         .map_err(|_| Error::CantWrap(format!("the system's media framework has no {name}")))
 }
 
+/// How many sample frames go in each buffer of the mix: a tenth of a
+/// second at 48 kHz.
+const CHUNK: usize = 4800;
+
+/// The mix, read from its WAV file here rather than by the framework
+/// (whose WAV reader isn't in its base set): a source for the pipeline,
+/// and the work of feeding it, to run on a thread of its own.
+#[allow(clippy::type_complexity)]
+fn sound_source(
+    sound: &Path,
+) -> Result<(gst::Element, Box<dyn FnOnce() -> Result<(), Error> + Send>), Error> {
+    let bad = |e: hound::Error| Error::CantWrap(format!("the mix couldn't be read: {e}"));
+    let mut wav = hound::WavReader::open(sound).map_err(bad)?;
+    let spec = wav.spec();
+    let float = spec.sample_format == hound::SampleFormat::Float;
+    let caps = gst::Caps::builder("audio/x-raw")
+        .field("format", if float { "F32LE" } else { "S32LE" })
+        .field("layout", "interleaved")
+        .field("rate", spec.sample_rate as i32)
+        .field("channels", spec.channels as i32)
+        .build();
+    let src = gstreamer_app::AppSrc::builder()
+        .caps(&caps)
+        .format(gst::Format::Time)
+        .block(true)
+        .max_bytes(1 << 20)
+        .build();
+    let element = src.clone().upcast::<gst::Element>();
+    let feed = move || -> Result<(), Error> {
+        let channels = spec.channels.max(1) as usize;
+        let rate = spec.sample_rate.max(1) as u64;
+        // Whole numbers are moved to the top of 32 bits.
+        let shift = 32u32.saturating_sub(spec.bits_per_sample as u32);
+        let mut done = 0u64;
+        loop {
+            let mut bytes = Vec::with_capacity(CHUNK * channels * 4);
+            if float {
+                for s in wav.samples::<f32>().take(CHUNK * channels) {
+                    bytes.extend_from_slice(&s.map_err(bad)?.to_le_bytes());
+                }
+            } else {
+                for s in wav.samples::<i32>().take(CHUNK * channels) {
+                    bytes.extend_from_slice(&(s.map_err(bad)? << shift).to_le_bytes());
+                }
+            }
+            if bytes.is_empty() {
+                let _ = src.end_of_stream();
+                return Ok(());
+            }
+            let frames = (bytes.len() / 4 / channels) as u64;
+            let mut buffer = gst::Buffer::from_mut_slice(bytes);
+            {
+                let b = buffer.get_mut().expect("a new buffer");
+                let at = |n: u64| gst::ClockTime::from_nseconds(n * 1_000_000_000 / rate);
+                b.set_pts(at(done));
+                b.set_duration(at(done + frames) - at(done));
+            }
+            done += frames;
+            // Refused once the pipeline has stopped: nothing more to do.
+            if src.push_buffer(buffer).is_err() {
+                return Ok(());
+            }
+        }
+    };
+    Ok((element, Box::new(feed)))
+}
+
 /// Settings that suit a mix, for the encoders that need them.
 fn tune(enc: &gst::Element) {
     let name = enc
@@ -266,14 +333,8 @@ pub(crate) fn wrap(
     sink.set_property("location", out.to_string_lossy().as_ref());
 
     // The sound: the mix, converted and encoded for the container.
-    let wav = make("filesrc")?;
-    wav.set_property("location", sound.to_string_lossy().as_ref());
-    let mut chain = vec![
-        wav,
-        make("wavparse")?,
-        make("audioconvert")?,
-        make("audioresample")?,
-    ];
+    let (src, feed) = sound_source(sound)?;
+    let mut chain = vec![src, make("audioconvert")?, make("audioresample")?];
     let enc = encoders
         .iter()
         .find(|e| e.is_none_or(|n| gst::ElementFactory::find(n).is_some()))
@@ -380,6 +441,10 @@ pub(crate) fn wrap(
     // A file with no picture lets the sound go, to end.
     parse.connect_no_more_pads(move |_| release2());
     let stop = Stop(p.clone());
+    let feeding = std::thread::Builder::new()
+        .name("video copy sound".into())
+        .spawn(feed)
+        .map_err(|e| failed(&e))?;
     p.set_state(gst::State::Playing)
         .map_err(|_| Error::CantWrap(failure(&p).unwrap_or_else(|| "it didn't start".into())))?;
     let bus = p.bus().ok_or(Error::CantWrap("no bus".into()))?;
@@ -411,7 +476,10 @@ pub(crate) fn wrap(
             _ => {}
         }
     };
+    // Stopping the pipeline lets the feeder go if it is waiting.
     drop(stop);
+    let fed = feeding.join().unwrap_or(Ok(()));
+    let result = result.and(fed);
     if result.is_ok() && !*linked.lock().unwrap() {
         return Err(Error::NoPicture);
     }

@@ -98,7 +98,7 @@ impl App {
         let n = added.len();
         for t in added {
             if let Some(i) = &t.instrument {
-                self.pending_instruments.push((i.id, i.make(self.rate)));
+                i.make_into(self.rate, &mut self.pending_instruments);
             }
             self.tracks.push(t);
         }

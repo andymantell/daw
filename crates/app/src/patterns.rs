@@ -616,8 +616,7 @@ impl crate::App {
                     + 1;
                 let mut t = crate::Track::instrument(format!("{} {n}", Kind::DrumMachine.name()));
                 let slot = crate::instrument::Slot::new(Kind::DrumMachine);
-                self.pending_instruments
-                    .push((slot.id, slot.make(self.rate)));
+                slot.make_into(self.rate, &mut self.pending_instruments);
                 t.instrument = Some(slot);
                 self.tracks.push(t);
                 self.tracks.len() - 1

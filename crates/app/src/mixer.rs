@@ -85,7 +85,7 @@ impl App {
                 {
                     let t = Track::instrument("Instrument 1".into());
                     if let Some(i) = &t.instrument {
-                        self.pending_instruments.push((i.id, i.make(self.rate)));
+                        i.make_into(self.rate, &mut self.pending_instruments);
                     }
                     self.tracks.push(t);
                     self.rebuild();
@@ -362,7 +362,7 @@ impl App {
                 let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
                 let t = Track::instrument(format!("Instrument {n}"));
                 if let Some(i) = &t.instrument {
-                    self.pending_instruments.push((i.id, i.make(self.rate)));
+                    i.make_into(self.rate, &mut self.pending_instruments);
                 }
                 self.tracks.push(t);
                 rebuild = true;

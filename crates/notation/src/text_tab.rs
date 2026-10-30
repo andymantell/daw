@@ -100,8 +100,12 @@ fn bar_text(bar: &crate::score::Bar, strings: usize) -> BarText {
         let col = cols.last_mut().expect("pushed");
         col.3 = col.3.min(event.duration.ticks());
         for note in &event.notes {
-            let (Some(s), Some(fret)) = (note.string, note.fret) else { continue };
-            let Some(cell) = col.1.get_mut(usize::from(s.max(1) - 1)) else { continue };
+            let (Some(s), Some(fret)) = (note.string, note.fret) else {
+                continue;
+            };
+            let Some(cell) = col.1.get_mut(usize::from(s.max(1) - 1)) else {
+                continue;
+            };
             *cell = token(note, fret);
             if note.has(&Technique::PalmMute) {
                 col.2 = "PM".into();
@@ -116,7 +120,13 @@ fn bar_text(bar: &crate::score::Bar, strings: usize) -> BarText {
         // Longer notes get more dashes after them.
         let sixteenths = (*shortest / (TICKS_PER_QUARTER / 4)).clamp(1, 16) as usize;
         let room = 1 + sixteenths.ilog2() as usize;
-        let w = cells.iter().map(|c| c.chars().count()).max().unwrap_or(1).max(mark.len()).max(1);
+        let w = cells
+            .iter()
+            .map(|c| c.chars().count())
+            .max()
+            .unwrap_or(1)
+            .max(mark.len())
+            .max(1);
         for (line, cell) in lines.iter_mut().zip(cells) {
             line.push_str(cell);
             line.push_str(&"-".repeat(w - cell.chars().count() + room));
@@ -130,7 +140,10 @@ fn bar_text(bar: &crate::score::Bar, strings: usize) -> BarText {
         }
         label.push_str("        ");
     }
-    BarText { label, strings: lines }
+    BarText {
+        label,
+        strings: lines,
+    }
 }
 
 fn token(note: &crate::score::Note, fret: u8) -> String {
@@ -188,7 +201,14 @@ mod tests {
                         Event::chord(1, q, vec![Note::at(28, 4, 0).with(Technique::PalmMute)]),
                         Event::chord(1, q, vec![Note::at(33, 4, 5).with(Technique::HammerOn)]),
                         Event::chord(1, q, vec![Note::at(35, 4, 7)]),
-                        Event::chord(1, q, vec![Note::at(45, 2, 7).with(Technique::Bend { semitones: 2.0, release: true })]),
+                        Event::chord(
+                            1,
+                            q,
+                            vec![Note::at(45, 2, 7).with(Technique::Bend {
+                                semitones: 2.0,
+                                release: true
+                            })]
+                        ),
                     ],
                     ..Bar::default()
                 };

@@ -319,7 +319,7 @@ fn transition(prev: &Candidate, next: &Candidate) -> f32 {
         .iter()
         .filter(|s| !next.strings.contains(s))
         .count();
-    movement + 4.0 * broken as f32
+    movement + 10.0 * broken as f32
 }
 
 #[cfg(test)]

@@ -881,7 +881,7 @@ impl<'a> Builder<'a> {
                     self.glyph(p.x - 0.1 * sp, y, glyph);
                 }
             }
-            self.stems(&heads, 3.5);
+            self.stems(&heads, 3.5, Some(top + 2.0 * sp));
         }
     }
 
@@ -940,7 +940,8 @@ impl<'a> Builder<'a> {
     }
 
     /// Stems, flags, beams and tuplet numbers for one voice's notes.
-    fn stems(&mut self, notes: &[StemNote], length: f32) {
+    /// With a `middle` line, stems of notes beyond the staff reach it.
+    fn stems(&mut self, notes: &[StemNote], length: f32, middle: Option<f32>) {
         let sp = self.sp;
         let mut i = 0;
         while i < notes.len() {
@@ -964,7 +965,7 @@ impl<'a> Builder<'a> {
             if group.len() == 1 || group[0].duration.value.beams() == 0 {
                 let n = &group[0];
                 if n.duration.value != NoteValue::Whole {
-                    let end = n.near + dir * length * sp;
+                    let end = stem_end(n.near, dir, length * sp, middle);
                     self.line(n.x, n.far, n.x, end, STEM_W * sp);
                     let beams = n.duration.value.beams();
                     if beams > 0 {
@@ -982,7 +983,10 @@ impl<'a> Builder<'a> {
             } else {
                 // A straight beam from the first stem end to the last, kept
                 // shallow and clear of every note.
-                let ends: Vec<f32> = group.iter().map(|n| n.near + dir * length * sp).collect();
+                let ends: Vec<f32> = group
+                    .iter()
+                    .map(|n| stem_end(n.near, dir, length * sp, middle))
+                    .collect();
                 let (x1, x2) = (group[0].x, group[group.len() - 1].x);
                 let mut rise = (ends[ends.len() - 1] - ends[0]).clamp(-sp, sp);
                 if (x2 - x1).abs() < 1.0 {
@@ -1045,7 +1049,7 @@ impl<'a> Builder<'a> {
                     let edge = group
                         .iter()
                         .take(n)
-                        .map(|g| g.near + dir * length * sp)
+                        .map(|g| stem_end(g.near, dir, length * sp, middle))
                         .fold(
                             if up { f32::INFINITY } else { f32::NEG_INFINITY },
                             |a, b| {
@@ -1201,7 +1205,7 @@ impl<'a> Builder<'a> {
                     tremolo: roll,
                 });
             }
-            self.stems(&heads, 3.5);
+            self.stems(&heads, 3.5, Some(top + 2.0 * sp));
         }
     }
 
@@ -1292,13 +1296,24 @@ impl<'a> Builder<'a> {
                     continue;
                 }
                 if let Some(dir) = e.strum {
-                    let glyph = if dir == Strum::Up {
-                        g::STRUM_UP
-                    } else {
-                        g::STRUM_DOWN
-                    };
-                    let s = (height / (2.11 * sp)).max(0.5);
-                    self.glyph_scaled(p.x - 1.4 * sp, bottom, glyph, s);
+                    // A line the height of the chord's strings with the
+                    // strum glyph as its arrowhead.
+                    let strings: Vec<f32> = e
+                        .notes
+                        .iter()
+                        .filter_map(|n| n.string)
+                        .map(string_y)
+                        .collect();
+                    let hi = strings.iter().copied().fold(top, f32::max);
+                    let lo = strings.iter().copied().fold(bottom, f32::min);
+                    let ax = p.x - 1.1 * sp;
+                    let tip_down = dir == Strum::Down;
+                    let (from, to) = if tip_down { (lo, hi) } else { (hi, lo) };
+                    self.line(ax, from, ax, to, 0.12 * sp);
+                    self.arrow(
+                        (ax, to + if tip_down { 0.1 * sp } else { -0.1 * sp }),
+                        !tip_down,
+                    );
                 }
                 let tied_in: Vec<u8> = k
                     .checked_sub(1)
@@ -1338,7 +1353,7 @@ impl<'a> Builder<'a> {
                     });
                     let half_w = 0.45 * sp * (if fret >= 10 { 2.0 } else { 1.0 });
                     // Legato marks to the next note on the same string.
-                    let next = placed[k + 1..].iter().find_map(|q| {
+                    let next = placed.get(k + 1).and_then(|q| {
                         part.bars[q.bar].events[q.event]
                             .notes
                             .iter()
@@ -1461,7 +1476,7 @@ impl<'a> Builder<'a> {
                 }
             }
             if setup.show_rhythm && v == voice_ids.first().unwrap_or(&1) {
-                self.stems(&stems, 2.8);
+                self.stems(&stems, 2.8, None);
             }
         }
     }
@@ -1490,6 +1505,15 @@ struct StemNote {
     /// Beat group: notes beam together only within one.
     group: (usize, u32),
     tremolo: bool,
+}
+
+fn stem_end(near: f32, dir: f32, length: f32, middle: Option<f32>) -> f32 {
+    let end = near + dir * length;
+    match middle {
+        Some(m) if dir < 0.0 => end.min(m),
+        Some(m) => end.max(m),
+        None => end,
+    }
 }
 
 fn tab_height(part: &Part, sp: f32) -> f32 {
@@ -1714,7 +1738,7 @@ fn plan_bar(part: &Part, bar: &Bar, time: TimeSig, key: i8, sp: f32) -> BarPlan 
                     w += 0.5 * sp;
                 }
                 if ev.strum.is_some() {
-                    w += 1.2 * sp;
+                    w += 1.8 * sp;
                 }
                 if ev
                     .notes

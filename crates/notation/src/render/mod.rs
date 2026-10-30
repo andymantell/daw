@@ -161,9 +161,19 @@ impl OutlineBuilder for Builder {
 }
 
 /// The box cleared behind knocked-out text: (x, y, width, height).
-pub(crate) fn knockout_box(left: f32, width: f32, baseline: f32, size: f32) -> (f32, f32, f32, f32) {
+pub(crate) fn knockout_box(
+    left: f32,
+    width: f32,
+    baseline: f32,
+    size: f32,
+) -> (f32, f32, f32, f32) {
     let pad = 0.12 * size;
-    (left - pad, baseline - 0.8 * size, width + 2.0 * pad, 0.95 * size)
+    (
+        left - pad,
+        baseline - 0.8 * size,
+        width + 2.0 * pad,
+        0.95 * size,
+    )
 }
 
 /// A circle as four cubic curves.
@@ -186,8 +196,9 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) const MUSIC: &[u8] = include_bytes!("../../../app/fonts/bravura/Bravura.otf");
-    pub(crate) const TEXT: &[u8] =
-        include_bytes!("../../../app/fonts/ibm-plex-sans-condensed/IBMPlexSansCondensed-Regular.ttf");
+    pub(crate) const TEXT: &[u8] = include_bytes!(
+        "../../../app/fonts/ibm-plex-sans-condensed/IBMPlexSansCondensed-Regular.ttf"
+    );
 
     #[test]
     fn the_bundled_music_font_has_every_glyph() {
@@ -202,7 +213,9 @@ pub(crate) mod tests {
                 Seg::Close => None,
             })
             .collect();
-        let (lo, hi) = ys.iter().fold((f32::MAX, f32::MIN), |(a, b), &y| (a.min(y), b.max(y)));
+        let (lo, hi) = ys
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &y| (a.min(y), b.max(y)));
         assert!((hi - lo - 5.0).abs() < 0.3, "notehead height {}", hi - lo);
         assert!(fonts.text_width("12", 10.0) > 5.0);
     }

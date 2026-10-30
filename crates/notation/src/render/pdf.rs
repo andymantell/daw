@@ -11,7 +11,9 @@ use crate::layout::{Item, Page};
 pub fn pages_to_pdf(pages: &[Page], fonts: &Fonts<'_>) -> Vec<u8> {
     let mut objects: Vec<String> = Vec::new();
     // 1: catalog, 2: page tree, then a page and its contents per page.
-    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    let kids: Vec<String> = (0..pages.len())
+        .map(|i| format!("{} 0 R", 3 + 2 * i))
+        .collect();
     objects.push("<< /Type /Catalog /Pages 2 0 R >>".into());
     objects.push(format!(
         "<< /Type /Pages /Kids [{}] /Count {} >>",
@@ -58,7 +60,12 @@ fn page_content(page: &Page, fonts: &Fonts<'_>) -> String {
     let _ = writeln!(s, "1 0 0 -1 0 {:.2} cm 0 g 0 G 1 J", page.height);
     for item in &page.items {
         match item {
-            Item::Line { from, to, width, dashed } => {
+            Item::Line {
+                from,
+                to,
+                width,
+                dashed,
+            } => {
                 let dash = if *dashed {
                     format!("[{:.2} {:.2}] 0 d", width * 8.0, width * 6.0)
                 } else {
@@ -71,10 +78,18 @@ fn page_content(page: &Page, fonts: &Fonts<'_>) -> String {
                 );
             }
             Item::Glyph { at, glyph, size } => fill(&mut s, &fonts.glyph(*glyph, *at, *size)),
-            Item::Text { at, text, size, anchor, bold, knockout } => {
+            Item::Text {
+                at,
+                text,
+                size,
+                anchor,
+                bold,
+                knockout,
+            } => {
                 let (segs, left) = fonts.text(text, *at, *size, *anchor);
                 if *knockout {
-                    let (x, y, w, h) = knockout_box(left, fonts.text_width(text, *size), at.1, *size);
+                    let (x, y, w, h) =
+                        knockout_box(left, fonts.text_width(text, *size), at.1, *size);
                     let _ = writeln!(s, "1 g {x:.2} {y:.2} {w:.2} {h:.2} re f 0 g");
                 }
                 if *bold {
@@ -84,7 +99,13 @@ fn page_content(page: &Page, fonts: &Fonts<'_>) -> String {
                     fill(&mut s, &segs);
                 }
             }
-            Item::Curve { from, c1, c2, to, width } => {
+            Item::Curve {
+                from,
+                c1,
+                c2,
+                to,
+                width,
+            } => {
                 let _ = writeln!(
                     s,
                     "{width:.2} w [] 0 d {:.2} {:.2} m {:.2} {:.2} {:.2} {:.2} {:.2} {:.2} c S",
@@ -97,7 +118,11 @@ fn page_content(page: &Page, fonts: &Fonts<'_>) -> String {
                 }
                 s.push_str("h f\n");
             }
-            Item::Circle { centre, radius, fill: filled } => {
+            Item::Circle {
+                centre,
+                radius,
+                fill: filled,
+            } => {
                 path(&mut s, &circle(*centre, *radius));
                 if *filled {
                     s.push_str("f\n");
@@ -142,11 +167,17 @@ mod tests {
     #[test]
     fn pages_become_a_pdf_with_a_valid_cross_reference() {
         let fonts = Fonts::new(MUSIC, TEXT).expect("fonts");
-        let pages = layout(&crate::layout::tests::tab_score(60), &LayoutOptions::default());
+        let pages = layout(
+            &crate::layout::tests::tab_score(60),
+            &LayoutOptions::default(),
+        );
         let pdf = pages_to_pdf(&pages, &fonts);
         // The binary marker in the header is the only non-ASCII; blank it so
         // byte offsets match string offsets.
-        let ascii: Vec<u8> = pdf.iter().map(|&b| if b.is_ascii() { b } else { b'?' }).collect();
+        let ascii: Vec<u8> = pdf
+            .iter()
+            .map(|&b| if b.is_ascii() { b } else { b'?' })
+            .collect();
         let text = String::from_utf8(ascii).expect("ascii");
         assert!(text.starts_with("%PDF-1.4"));
         assert!(text.trim_end().ends_with("%%EOF"));
@@ -161,7 +192,11 @@ mod tests {
         let table = &text[xref_at..];
         for (i, line) in table.lines().skip(3).take(2 * pages.len() + 2).enumerate() {
             let off: usize = line[..10].parse().expect("offset");
-            assert!(text[off..].starts_with(&format!("{} 0 obj", i + 1)), "object {}", i + 1);
+            assert!(
+                text[off..].starts_with(&format!("{} 0 obj", i + 1)),
+                "object {}",
+                i + 1
+            );
         }
     }
 }

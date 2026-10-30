@@ -15,12 +15,24 @@ pub fn page_to_svg(page: &Page, fonts: &Fonts<'_>) -> String {
         w = page.width,
         h = page.height
     );
-    let _ = write!(s, r##"<rect width="100%" height="100%" fill="#fff"/><g fill="#000" stroke="#000">"##);
+    let _ = write!(
+        s,
+        r##"<rect width="100%" height="100%" fill="#fff"/><g fill="#000" stroke="#000">"##
+    );
     for item in &page.items {
         match item {
-            Item::Line { from, to, width, dashed } => {
+            Item::Line {
+                from,
+                to,
+                width,
+                dashed,
+            } => {
                 let dash = if *dashed {
-                    format!(r#" stroke-dasharray="{:.2} {:.2}""#, width * 8.0, width * 6.0)
+                    format!(
+                        r#" stroke-dasharray="{:.2} {:.2}""#,
+                        width * 8.0,
+                        width * 6.0
+                    )
                 } else {
                     String::new()
                 };
@@ -31,10 +43,18 @@ pub fn page_to_svg(page: &Page, fonts: &Fonts<'_>) -> String {
                 );
             }
             Item::Glyph { at, glyph, size } => fill(&mut s, &fonts.glyph(*glyph, *at, *size)),
-            Item::Text { at, text, size, anchor, bold, knockout } => {
+            Item::Text {
+                at,
+                text,
+                size,
+                anchor,
+                bold,
+                knockout,
+            } => {
                 let (segs, left) = fonts.text(text, *at, *size, *anchor);
                 if *knockout {
-                    let (x, y, w, h) = knockout_box(left, fonts.text_width(text, *size), at.1, *size);
+                    let (x, y, w, h) =
+                        knockout_box(left, fonts.text_width(text, *size), at.1, *size);
                     let _ = write!(
                         s,
                         r##"<rect x="{x:.2}" y="{y:.2}" width="{w:.2}" height="{h:.2}" fill="#fff" stroke="none"/>"##
@@ -48,7 +68,13 @@ pub fn page_to_svg(page: &Page, fonts: &Fonts<'_>) -> String {
                     fill(&mut s, &segs);
                 }
             }
-            Item::Curve { from, c1, c2, to, width } => {
+            Item::Curve {
+                from,
+                c1,
+                c2,
+                to,
+                width,
+            } => {
                 let _ = write!(
                     s,
                     r#"<path fill="none" stroke-width="{width:.2}" d="M{:.2} {:.2}C{:.2} {:.2} {:.2} {:.2} {:.2} {:.2}"/>"#,
@@ -62,7 +88,11 @@ pub fn page_to_svg(page: &Page, fonts: &Fonts<'_>) -> String {
                 }
                 s.push_str("\"/>");
             }
-            Item::Circle { centre, radius, fill: filled } => {
+            Item::Circle {
+                centre,
+                radius,
+                fill: filled,
+            } => {
                 if *filled {
                     fill(&mut s, &circle(*centre, *radius));
                 } else {
@@ -114,7 +144,10 @@ mod tests {
     #[test]
     fn pages_become_svg() {
         let fonts = Fonts::new(MUSIC, TEXT).expect("fonts");
-        let pages = layout(&crate::layout::tests::tab_score(4), &LayoutOptions::default());
+        let pages = layout(
+            &crate::layout::tests::tab_score(4),
+            &LayoutOptions::default(),
+        );
         let svg = page_to_svg(&pages[0], &fonts);
         assert!(svg.starts_with("<svg"));
         assert!(svg.trim_end().ends_with("</svg>"));

@@ -18,8 +18,8 @@ use roxmltree::{Document, Node};
 use crate::drums::{DrumMap, Notehead};
 use crate::layout::spell;
 use crate::score::{
-    Bar, ChordDiagram, ChordSymbol, Clef, Duration, Event, Note, NoteValue, Part, PartKind,
-    Score, Strum, TICKS_PER_QUARTER, TabSetup, Technique, TimeSig, Tuplet,
+    Bar, ChordDiagram, ChordSymbol, Clef, Duration, Event, Note, NoteValue, Part, PartKind, Score,
+    Strum, TICKS_PER_QUARTER, TabSetup, Technique, TimeSig, Tuplet,
 };
 use crate::tuning::Tuning;
 
@@ -79,11 +79,19 @@ pub fn write(score: &Score) -> String {
     s.push_str("<!DOCTYPE score-partwise PUBLIC \"-//Recordare//DTD MusicXML 4.0 Partwise//EN\" \"http://www.musicxml.org/dtds/partwise.dtd\">\n");
     s.push_str("<score-partwise version=\"4.0\">\n");
     if !score.title.is_empty() {
-        let _ = writeln!(s, "  <work><work-title>{}</work-title></work>", esc(&score.title));
+        let _ = writeln!(
+            s,
+            "  <work><work-title>{}</work-title></work>",
+            esc(&score.title)
+        );
     }
     s.push_str("  <identification>\n");
     if !score.composer.is_empty() {
-        let _ = writeln!(s, "    <creator type=\"composer\">{}</creator>", esc(&score.composer));
+        let _ = writeln!(
+            s,
+            "    <creator type=\"composer\">{}</creator>",
+            esc(&score.composer)
+        );
     }
     s.push_str("    <encoding><software>daw-notation</software><encoding-date>2026-01-01</encoding-date></encoding>\n");
     s.push_str("  </identification>\n  <part-list>\n");
@@ -93,7 +101,9 @@ pub fn write(score: &Score) -> String {
         let _ = writeln!(s, "      <part-name>{}</part-name>", esc(&part.name));
         if let PartKind::Drums(map) = &part.kind {
             for key in used_keys(part) {
-                let name = map.entry(key).map_or_else(|| format!("Note {key}"), |e| e.name.clone());
+                let name = map
+                    .entry(key)
+                    .map_or_else(|| format!("Note {key}"), |e| e.name.clone());
                 let _ = writeln!(
                     s,
                     "      <score-instrument id=\"{id}-I{key}\"><instrument-name>{}</instrument-name></score-instrument>",
@@ -168,7 +178,11 @@ fn write_part(s: &mut String, part: &Part, id: &str) {
                 "      <direction placement=\"above\"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>{tempo}</per-minute></metronome></direction-type><sound tempo=\"{tempo}\"/></direction>"
             );
         }
-        let staves: &[Option<u8>] = if two_staves { &[Some(1), Some(2)] } else { &[None] };
+        let staves: &[Option<u8>] = if two_staves {
+            &[Some(1), Some(2)]
+        } else {
+            &[None]
+        };
         let mut voices: Vec<u8> = bar.events.iter().map(|e| e.voice).collect();
         voices.sort_unstable();
         voices.dedup();
@@ -179,11 +193,19 @@ fn write_part(s: &mut String, part: &Part, id: &str) {
                     let _ = writeln!(s, "      <backup><duration>{len}</duration></backup>");
                 }
                 write_voice(s, part, bar, b, v, staff, id, last_len.is_none());
-                last_len = Some(bar.events.iter().filter(|e| e.voice == v).map(|e| e.duration.ticks()).sum());
+                last_len = Some(
+                    bar.events
+                        .iter()
+                        .filter(|e| e.voice == v)
+                        .map(|e| e.duration.ticks())
+                        .sum(),
+                );
             }
         }
         if b + 1 == part.bars.len() {
-            s.push_str("      <barline location=\"right\"><bar-style>light-heavy</bar-style></barline>\n");
+            s.push_str(
+                "      <barline location=\"right\"><bar-style>light-heavy</bar-style></barline>\n",
+            );
         }
         s.push_str("    </measure>\n");
     }
@@ -193,7 +215,11 @@ fn write_part(s: &mut String, part: &Part, id: &str) {
 fn write_clefs(s: &mut String, part: &Part, two_staves: bool) {
     match &part.kind {
         PartKind::Tab(setup) => {
-            let (sign, line) = if setup.tuning.is_bass() { ("F", 4) } else { ("G", 2) };
+            let (sign, line) = if setup.tuning.is_bass() {
+                ("F", 4)
+            } else {
+                ("G", 2)
+            };
             let tab_staff = if two_staves {
                 s.push_str("        <staves>2</staves>\n");
                 let _ = writeln!(
@@ -204,13 +230,24 @@ fn write_clefs(s: &mut String, part: &Part, two_staves: bool) {
             } else {
                 ""
             };
-            let _ = writeln!(s, "        <clef{tab_staff}><sign>TAB</sign><line>5</line></clef>");
+            let _ = writeln!(
+                s,
+                "        <clef{tab_staff}><sign>TAB</sign><line>5</line></clef>"
+            );
             let _ = writeln!(s, "        <staff-details{tab_staff}>");
-            let _ = writeln!(s, "          <staff-lines>{}</staff-lines>", setup.tuning.string_count());
+            let _ = writeln!(
+                s,
+                "          <staff-lines>{}</staff-lines>",
+                setup.tuning.string_count()
+            );
             // Staff lines count from the bottom, so line 1 is the lowest string.
             for (line, &pitch) in setup.tuning.strings.iter().rev().enumerate() {
                 let (step, alter) = spell(i32::from(pitch), 0);
-                let alter = if alter != 0 { format!("<tuning-alter>{alter}</tuning-alter>") } else { String::new() };
+                let alter = if alter != 0 {
+                    format!("<tuning-alter>{alter}</tuning-alter>")
+                } else {
+                    String::new()
+                };
                 let _ = writeln!(
                     s,
                     "          <staff-tuning line=\"{}\"><tuning-step>{}</tuning-step>{alter}<tuning-octave>{}</tuning-octave></staff-tuning>",
@@ -236,23 +273,44 @@ fn write_clefs(s: &mut String, part: &Part, two_staves: bool) {
             } else {
                 String::new()
             };
-            let _ = writeln!(s, "        <clef><sign>{sign}</sign><line>{line}</line>{change}</clef>");
+            let _ = writeln!(
+                s,
+                "        <clef><sign>{sign}</sign><line>{line}</line>{change}</clef>"
+            );
         }
         PartKind::Drums(_) => s.push_str("        <clef><sign>percussion</sign></clef>\n"),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_voice(s: &mut String, part: &Part, bar: &Bar, b: usize, v: u8, staff: Option<u8>, id: &str, harmonies: bool) {
+fn write_voice(
+    s: &mut String,
+    part: &Part,
+    bar: &Bar,
+    b: usize,
+    v: u8,
+    staff: Option<u8>,
+    id: &str,
+    harmonies: bool,
+) {
     let tab = matches!(part.kind, PartKind::Tab(_)) && staff != Some(1);
     let voice_no = match staff {
         Some(2) => v + 4,
         _ => v,
     };
     let mut tick = 0;
-    let mut chords: Vec<&ChordSymbol> = if harmonies { bar.chords.iter().collect() } else { Vec::new() };
+    let mut chords: Vec<&ChordSymbol> = if harmonies {
+        bar.chords.iter().collect()
+    } else {
+        Vec::new()
+    };
     chords.sort_by_key(|c| c.tick);
-    let events: Vec<(usize, &Event)> = bar.events.iter().enumerate().filter(|(_, e)| e.voice == v).collect();
+    let events: Vec<(usize, &Event)> = bar
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.voice == v)
+        .collect();
     // Notes that end a tie, hammer-on, pull-off or slide.
     let prev_of = |k: usize| -> Option<&Event> {
         if k > 0 {
@@ -280,11 +338,21 @@ fn write_voice(s: &mut String, part: &Part, bar: &Bar, b: usize, v: u8, staff: O
         }
         for (n, note) in e.notes.iter().enumerate() {
             // Grace notes before the first note of a chord for flams and drags.
-            let graces = if note.has(&Technique::Drag) { 2 } else if note.has(&Technique::Flam) { 1 } else { 0 };
+            let graces = if note.has(&Technique::Drag) {
+                2
+            } else if note.has(&Technique::Flam) {
+                1
+            } else {
+                0
+            };
             for _ in 0..graces {
                 s.push_str("      <note><grace slash=\"yes\"/>");
                 write_pitch(s, part, note.pitch);
-                let _ = write!(s, "{}<voice>{voice_no}</voice><type>eighth</type>", instrument(part, id, note.pitch));
+                let _ = write!(
+                    s,
+                    "{}<voice>{voice_no}</voice><type>eighth</type>",
+                    instrument(part, id, note.pitch)
+                );
                 if let Some(st) = staff {
                     let _ = write!(s, "<staff>{st}</staff>");
                 }
@@ -296,7 +364,8 @@ fn write_voice(s: &mut String, part: &Part, bar: &Bar, b: usize, v: u8, staff: O
             }
             write_pitch(s, part, note.pitch);
             let _ = write!(s, "<duration>{len}</duration>");
-            let tie_stop = prev.is_some_and(|p| p.notes.iter().any(|m| m.tie && m.pitch == note.pitch));
+            let tie_stop =
+                prev.is_some_and(|p| p.notes.iter().any(|m| m.tie && m.pitch == note.pitch));
             if tie_stop {
                 s.push_str("<tie type=\"stop\"/>");
             }
@@ -306,7 +375,7 @@ fn write_voice(s: &mut String, part: &Part, bar: &Bar, b: usize, v: u8, staff: O
             s.push_str(&instrument(part, id, note.pitch));
             let _ = write!(s, "<voice>{voice_no}</voice>");
             write_type(s, e.duration);
-                if matches!(part.kind, PartKind::Drums(_)) {
+            if matches!(part.kind, PartKind::Drums(_)) {
                 let _ = write!(s, "<stem>{}</stem>", if v % 2 == 1 { "up" } else { "down" });
             }
             let head = notehead(part, note);
@@ -367,7 +436,11 @@ fn write_pitch(s: &mut String, part: &Part, pitch: u8) {
         }
         _ => {
             let (step, alter) = spell(i32::from(pitch), 0);
-            let alter = if alter != 0 { format!("<alter>{alter}</alter>") } else { String::new() };
+            let alter = if alter != 0 {
+                format!("<alter>{alter}</alter>")
+            } else {
+                String::new()
+            };
             let _ = write!(
                 s,
                 "<pitch><step>{}</step>{alter}<octave>{}</octave></pitch>",
@@ -409,8 +482,12 @@ fn write_notations(
         notations.push_str("<tied type=\"start\"/>");
     }
     let prev_on_string = |t: &Technique| {
-        prev.and_then(|p| p.notes.iter().find(|m| m.string.is_some() && m.string == note.string))
-            .is_some_and(|m| m.has(t))
+        prev.and_then(|p| {
+            p.notes
+                .iter()
+                .find(|m| m.string.is_some() && m.string == note.string)
+        })
+        .is_some_and(|m| m.has(t))
     };
     if prev_on_string(&Technique::Slide) {
         notations.push_str("<slide type=\"stop\"/>");
@@ -424,7 +501,10 @@ fn write_notations(
             let _ = write!(technical, "<string>{st}</string><fret>{f}</fret>");
         }
     }
-    for (t, name, text) in [(Technique::HammerOn, "hammer-on", "H"), (Technique::PullOff, "pull-off", "P")] {
+    for (t, name, text) in [
+        (Technique::HammerOn, "hammer-on", "H"),
+        (Technique::PullOff, "pull-off", "P"),
+    ] {
         if prev_on_string(&t) {
             let _ = write!(technical, "<{name} type=\"stop\"/>");
         }
@@ -435,13 +515,21 @@ fn write_notations(
     for t in &note.techniques {
         match t {
             Technique::Bend { semitones, release } => {
-                let _ = write!(technical, "<bend><bend-alter>{semitones}</bend-alter></bend>");
+                let _ = write!(
+                    technical,
+                    "<bend><bend-alter>{semitones}</bend-alter></bend>"
+                );
                 if *release {
-                    let _ = write!(technical, "<bend><bend-alter>-{semitones}</bend-alter><release/></bend>");
+                    let _ = write!(
+                        technical,
+                        "<bend><bend-alter>-{semitones}</bend-alter><release/></bend>"
+                    );
                 }
             }
             Technique::NaturalHarmonic => technical.push_str("<harmonic><natural/></harmonic>"),
-            Technique::ArtificialHarmonic => technical.push_str("<harmonic><artificial/></harmonic>"),
+            Technique::ArtificialHarmonic => {
+                technical.push_str("<harmonic><artificial/></harmonic>")
+            }
             Technique::Tap => technical.push_str("<tap/>"),
             Technique::Open => technical.push_str("<open/>"),
             Technique::Closed => technical.push_str("<stopped/>"),
@@ -482,7 +570,11 @@ fn write_notations(
 fn write_harmony(s: &mut String, c: &ChordSymbol, offset: u32) {
     let mut chars = c.name.chars();
     let Some(root @ 'A'..='G') = chars.next() else {
-        let _ = writeln!(s, "      <harmony><root><root-step>C</root-step></root><kind text=\"{}\">none</kind></harmony>", esc(&c.name));
+        let _ = writeln!(
+            s,
+            "      <harmony><root><root-step>C</root-step></root><kind text=\"{}\">none</kind></harmony>",
+            esc(&c.name)
+        );
         return;
     };
     let rest: String = chars.collect();
@@ -491,20 +583,31 @@ fn write_harmony(s: &mut String, c: &ChordSymbol, offset: u32) {
         Some('b') => (-1, &rest[1..]),
         _ => (0, rest.as_str()),
     };
-    let kind = CHORD_KINDS.iter().find(|(t, _)| *t == suffix).map_or("other", |(_, k)| k);
+    let kind = CHORD_KINDS
+        .iter()
+        .find(|(t, _)| *t == suffix)
+        .map_or("other", |(_, k)| k);
     let _ = write!(s, "      <harmony><root><root-step>{root}</root-step>");
     if alter != 0 {
         let _ = write!(s, "<root-alter>{alter}</root-alter>");
     }
     let _ = write!(s, "</root><kind text=\"{}\">{kind}</kind>", esc(suffix));
     if let Some(d) = &c.diagram {
-        let _ = write!(s, "<frame><frame-strings>{}</frame-strings><frame-frets>4</frame-frets>", d.frets.len());
+        let _ = write!(
+            s,
+            "<frame><frame-strings>{}</frame-strings><frame-frets>4</frame-frets>",
+            d.frets.len()
+        );
         if d.first_fret > 1 {
             let _ = write!(s, "<first-fret>{}</first-fret>", d.first_fret);
         }
         for (i, f) in d.frets.iter().enumerate() {
             if let Some(f) = f {
-                let _ = write!(s, "<frame-note><string>{}</string><fret>{f}</fret></frame-note>", i + 1);
+                let _ = write!(
+                    s,
+                    "<frame-note><string>{}</string><fret>{f}</fret></frame-note>",
+                    i + 1
+                );
             }
         }
         s.push_str("</frame>");
@@ -550,7 +653,10 @@ pub fn read(xml: &str) -> Result<Score, ReadError> {
     let doc = Document::parse_with_options(xml, opts).map_err(|e| ReadError(e.to_string()))?;
     let root = doc.root_element();
     if !root.has_tag_name("score-partwise") {
-        return Err(ReadError(format!("<{}> is not a partwise score", root.tag_name().name())));
+        return Err(ReadError(format!(
+            "<{}> is not a partwise score",
+            root.tag_name().name()
+        )));
     }
     let title = child(root, "work")
         .and_then(|w| text_of(w, "work-title"))
@@ -558,7 +664,10 @@ pub fn read(xml: &str) -> Result<Score, ReadError> {
         .unwrap_or("")
         .to_owned();
     let composer = child(root, "identification")
-        .and_then(|i| i.children().find(|c| c.has_tag_name("creator") && c.attribute("type") == Some("composer")))
+        .and_then(|i| {
+            i.children()
+                .find(|c| c.has_tag_name("creator") && c.attribute("type") == Some("composer"))
+        })
         .and_then(|c| c.text())
         .unwrap_or("")
         .trim()
@@ -571,7 +680,8 @@ pub fn read(xml: &str) -> Result<Score, ReadError> {
             let id = sp.attribute("id").unwrap_or("").to_owned();
             names.insert(id, text_of(sp, "part-name").unwrap_or("").to_owned());
             for mi in sp.children().filter(|c| c.has_tag_name("midi-instrument")) {
-                if let (Some(iid), Some(u)) = (mi.attribute("id"), num::<u8>(mi, "midi-unpitched")) {
+                if let (Some(iid), Some(u)) = (mi.attribute("id"), num::<u8>(mi, "midi-unpitched"))
+                {
                     instruments.insert(iid.to_owned(), u.saturating_sub(1));
                 }
             }
@@ -581,12 +691,24 @@ pub fn read(xml: &str) -> Result<Score, ReadError> {
     let mut parts = Vec::new();
     for p in root.children().filter(|c| c.has_tag_name("part")) {
         let id = p.attribute("id").unwrap_or("");
-        parts.push(read_part(p, names.get(id).cloned().unwrap_or_default(), &instruments)?);
+        parts.push(read_part(
+            p,
+            names.get(id).cloned().unwrap_or_default(),
+            &instruments,
+        )?);
     }
-    Ok(Score { title, composer, parts })
+    Ok(Score {
+        title,
+        composer,
+        parts,
+    })
 }
 
-fn read_part(p: Node<'_, '_>, name: String, instruments: &HashMap<String, u8>) -> Result<Part, ReadError> {
+fn read_part(
+    p: Node<'_, '_>,
+    name: String,
+    instruments: &HashMap<String, u8>,
+) -> Result<Part, ReadError> {
     let mut st = PartState {
         divisions: 1,
         clef_sign: None,
@@ -626,11 +748,15 @@ fn read_part(p: Node<'_, '_>, name: String, instruments: &HashMap<String, u8>) -
                         bar.tempo = Some(t);
                     }
                 }
-                "backup" => cursor = cursor.saturating_sub(ticks(num(el, "duration").unwrap_or(0), st.divisions)),
+                "backup" => {
+                    cursor =
+                        cursor.saturating_sub(ticks(num(el, "duration").unwrap_or(0), st.divisions))
+                }
                 "forward" => cursor += ticks(num(el, "duration").unwrap_or(0), st.divisions),
                 "harmony" => {
                     let offset = num::<i64>(el, "offset").unwrap_or(0);
-                    let at = (i64::from(cursor) + i64::from(ticks_i(offset, st.divisions))).max(0) as u32;
+                    let at = (i64::from(cursor) + i64::from(ticks_i(offset, st.divisions))).max(0)
+                        as u32;
                     if let Some(c) = read_harmony(el, at) {
                         bar.chords.push(c);
                     }
@@ -656,7 +782,14 @@ fn read_part(p: Node<'_, '_>, name: String, instruments: &HashMap<String, u8>) -
                     let voice = ((num::<u8>(el, "voice").unwrap_or(1).max(1) - 1) % 4) + 1;
                     let start = if is_chord { last_start } else { cursor };
                     let duration = read_duration(el, len);
-                    let note = read_note(el, &st, instruments, &map, kind.as_ref(), std::mem::take(&mut graces));
+                    let note = read_note(
+                        el,
+                        &st,
+                        instruments,
+                        &map,
+                        kind.as_ref(),
+                        std::mem::take(&mut graces),
+                    );
                     if is_chord {
                         if let Some(e) = bar.events.iter_mut().rev().find(|e| e.voice == voice) {
                             if let Some(n) = note {
@@ -667,12 +800,20 @@ fn read_part(p: Node<'_, '_>, name: String, instruments: &HashMap<String, u8>) -
                     }
                     let r = reach.entry(voice).or_insert(0);
                     if start > *r {
-                        bar.events.push(Event::rest(voice, Duration::from_ticks(start - *r)));
+                        bar.events
+                            .push(Event::rest(voice, Duration::from_ticks(start - *r)));
                     }
                     *r = start + duration.ticks();
-                    let strum = el.descendants().find(|d| d.has_tag_name("arpeggiate")).map(|a| {
-                        if a.attribute("direction") == Some("down") { Strum::Up } else { Strum::Down }
-                    });
+                    let strum = el
+                        .descendants()
+                        .find(|d| d.has_tag_name("arpeggiate"))
+                        .map(|a| {
+                            if a.attribute("direction") == Some("down") {
+                                Strum::Up
+                            } else {
+                                Strum::Down
+                            }
+                        });
                     bar.events.push(Event {
                         voice,
                         duration,
@@ -715,7 +856,10 @@ fn read_attributes(el: Node<'_, '_>, st: &mut PartState, bar: &mut Bar) {
         st.staves = n;
     }
     for clef in el.children().filter(|c| c.has_tag_name("clef")) {
-        let number: u8 = clef.attribute("number").and_then(|n| n.parse().ok()).unwrap_or(1);
+        let number: u8 = clef
+            .attribute("number")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(1);
         let sign = text_of(clef, "sign").unwrap_or("G");
         if sign == "TAB" {
             st.tab_staff = Some(number);
@@ -725,13 +869,19 @@ fn read_attributes(el: Node<'_, '_>, st: &mut PartState, bar: &mut Bar) {
         }
     }
     if let Some(t) = child(el, "transpose") {
-        st.transpose = num::<i32>(t, "chromatic").unwrap_or(0) + 12 * num::<i32>(t, "octave-change").unwrap_or(0);
+        st.transpose = num::<i32>(t, "chromatic").unwrap_or(0)
+            + 12 * num::<i32>(t, "octave-change").unwrap_or(0);
     }
     for sd in el.children().filter(|c| c.has_tag_name("staff-details")) {
         let mut tuning = Vec::new();
         for t in sd.children().filter(|c| c.has_tag_name("staff-tuning")) {
-            let line: u8 = t.attribute("line").and_then(|l| l.parse().ok()).unwrap_or(1);
-            let step = text_of(t, "tuning-step").and_then(|s| STEPS.iter().position(|&x| x == s)).unwrap_or(0);
+            let line: u8 = t
+                .attribute("line")
+                .and_then(|l| l.parse().ok())
+                .unwrap_or(1);
+            let step = text_of(t, "tuning-step")
+                .and_then(|s| STEPS.iter().position(|&x| x == s))
+                .unwrap_or(0);
             let alter: f32 = num(t, "tuning-alter").unwrap_or(0.0);
             let octave: i32 = num(t, "tuning-octave").unwrap_or(3);
             let pitch = (octave + 1) * 12 + STEP_SEMITONES[step] + alter.round() as i32;
@@ -741,7 +891,11 @@ fn read_attributes(el: Node<'_, '_>, st: &mut PartState, bar: &mut Bar) {
             tuning.sort_by_key(|&(l, _)| std::cmp::Reverse(l));
             st.tuning = tuning;
             if st.tab_staff.is_none() {
-                st.tab_staff = Some(sd.attribute("number").and_then(|n| n.parse().ok()).unwrap_or(1));
+                st.tab_staff = Some(
+                    sd.attribute("number")
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(1),
+                );
             }
         }
         if let Some(c) = num(sd, "capo") {
@@ -766,9 +920,13 @@ fn part_kind(st: &PartState, map: &DrumMap) -> PartKind {
     }
     match (st.clef_sign.as_deref(), st.clef_change) {
         (Some("percussion"), _) => PartKind::Drums(map.clone()),
-        (Some("F"), -1) => PartKind::Staff { clef: Clef::Bass8vb },
+        (Some("F"), -1) => PartKind::Staff {
+            clef: Clef::Bass8vb,
+        },
         (Some("F"), _) => PartKind::Staff { clef: Clef::Bass },
-        (Some("G"), -1) => PartKind::Staff { clef: Clef::Treble8vb },
+        (Some("G"), -1) => PartKind::Staff {
+            clef: Clef::Treble8vb,
+        },
         _ => PartKind::Staff { clef: Clef::Treble },
     }
 }
@@ -777,14 +935,22 @@ fn read_duration(el: Node<'_, '_>, len: u32) -> Duration {
     let Some(value) = text_of(el, "type").and_then(NoteValue::from_name) else {
         return Duration::from_ticks(len);
     };
-    let dots = el.children().filter(|c| c.has_tag_name("dot")).count().min(3) as u8;
+    let dots = el
+        .children()
+        .filter(|c| c.has_tag_name("dot"))
+        .count()
+        .min(3) as u8;
     let tuplet = child(el, "time-modification").and_then(|t| {
         Some(Tuplet {
             actual: num(t, "actual-notes")?,
             normal: num(t, "normal-notes")?,
         })
     });
-    Duration { value, dots, tuplet }
+    Duration {
+        value,
+        dots,
+        tuplet,
+    }
 }
 
 fn read_note(
@@ -799,7 +965,9 @@ fn read_note(
         return None;
     }
     let head = child(el, "notehead");
-    let head_kind = head.and_then(|h| h.text()).map_or(Notehead::Normal, |t| Notehead::from_musicxml(t.trim()));
+    let head_kind = head
+        .and_then(|h| h.text())
+        .map_or(Notehead::Normal, |t| Notehead::from_musicxml(t.trim()));
     let pitch = if let Some(p) = child(el, "pitch") {
         let step = text_of(p, "step").and_then(|s| STEPS.iter().position(|&x| x == s))?;
         let alter: f32 = num(p, "alter").unwrap_or(0.0);
@@ -812,17 +980,24 @@ fn read_note(
         match from_instrument {
             Some(k) => i32::from(k),
             None => {
-                let step = text_of(u, "display-step").and_then(|s| STEPS.iter().position(|&x| x == s)).unwrap_or(0);
+                let step = text_of(u, "display-step")
+                    .and_then(|s| STEPS.iter().position(|&x| x == s))
+                    .unwrap_or(0);
                 let octave: i32 = num(u, "display-octave").unwrap_or(4);
                 let place = octave * 7 + step as i32 - (4 * 7 + 2);
-                i32::from(map.key_at(place.clamp(-20, 20) as i8, head_kind).unwrap_or(38))
+                i32::from(
+                    map.key_at(place.clamp(-20, 20) as i8, head_kind)
+                        .unwrap_or(38),
+                )
             }
         }
     } else {
         return None;
     };
     let mut note = Note::new(pitch.clamp(0, 127) as u8);
-    note.tie = el.children().any(|c| c.has_tag_name("tie") && c.attribute("type") == Some("start"));
+    note.tie = el
+        .children()
+        .any(|c| c.has_tag_name("tie") && c.attribute("type") == Some("start"));
     let drums = matches!(kind, Some(PartKind::Drums(_)));
     if head_kind == Notehead::X && !drums {
         note.techniques.push(Technique::Dead);
@@ -838,18 +1013,28 @@ fn read_note(
     for n in el.children().filter(|c| c.has_tag_name("notations")) {
         for t in n.children().filter(Node::is_element) {
             match t.tag_name().name() {
-                "slide" | "glissando" if t.attribute("type") == Some("start") => note.techniques.push(Technique::Slide),
+                "slide" | "glissando" if t.attribute("type") == Some("start") => {
+                    note.techniques.push(Technique::Slide)
+                }
                 "technical" => read_technical(t, &mut note),
                 "ornaments" => {
-                    if t.children().any(|o| o.has_tag_name("wavy-line") && o.attribute("type") == Some("start")) {
+                    if t.children().any(|o| {
+                        o.has_tag_name("wavy-line") && o.attribute("type") == Some("start")
+                    }) {
                         note.techniques.push(Technique::Vibrato);
                     }
                     if t.children().any(|o| o.has_tag_name("tremolo")) {
-                        note.techniques.push(if drums { Technique::Roll } else { Technique::TremoloPicking });
+                        note.techniques.push(if drums {
+                            Technique::Roll
+                        } else {
+                            Technique::TremoloPicking
+                        });
                     }
                 }
                 "articulations" => {
-                    if t.children().any(|a| a.has_tag_name("accent") || a.has_tag_name("strong-accent")) {
+                    if t.children()
+                        .any(|a| a.has_tag_name("accent") || a.has_tag_name("strong-accent"))
+                    {
                         note.techniques.push(Technique::Accent);
                     }
                 }
@@ -893,7 +1078,10 @@ fn read_technical(t: Node<'_, '_>, note: &mut Note) {
             "stopped" => note.techniques.push(Technique::Closed),
             "other-technical" => {
                 let text = el.text().unwrap_or("").trim();
-                if let Some((t, _)) = OTHER_TECHNICAL.iter().find(|(_, n)| n.eq_ignore_ascii_case(text)) {
+                if let Some((t, _)) = OTHER_TECHNICAL
+                    .iter()
+                    .find(|(_, n)| n.eq_ignore_ascii_case(text))
+                {
                     note.techniques.push(t.clone());
                 }
             }
@@ -915,7 +1103,10 @@ fn read_harmony(el: Node<'_, '_>, tick: u32) -> Option<ChordSymbol> {
         .map(str::to_owned)
         .or_else(|| {
             let k = kind?.text()?.trim();
-            CHORD_KINDS.iter().find(|(_, n)| *n == k).map(|(t, _)| (*t).to_owned())
+            CHORD_KINDS
+                .iter()
+                .find(|(_, n)| *n == k)
+                .map(|(t, _)| (*t).to_owned())
         })
         .unwrap_or_default();
     let acc = match alter {
@@ -966,7 +1157,10 @@ mod tests {
             }),
             bars: vec![
                 Bar {
-                    time: Some(TimeSig { beats: 4, beat_type: 4 }),
+                    time: Some(TimeSig {
+                        beats: 4,
+                        beat_type: 4,
+                    }),
                     key: Some(2),
                     tempo: Some(120.0),
                     chords: vec![ChordSymbol {
@@ -999,12 +1193,38 @@ mod tests {
                         Event::chord(
                             1,
                             Duration::triplet(NoteValue::Eighth),
-                            vec![Note::at(70, 2, 8).with(Technique::Bend { semitones: 2.0, release: true })],
+                            vec![Note::at(70, 2, 8).with(Technique::Bend {
+                                semitones: 2.0,
+                                release: true,
+                            })],
                         ),
-                        Event::chord(1, Duration::triplet(NoteValue::Eighth), vec![Note::at(67, 1, 0).with(Technique::NaturalHarmonic)]),
-                        Event::chord(1, Duration::triplet(NoteValue::Eighth), vec![Note::at(79, 1, 12).with(Technique::Tap)]),
-                        Event::chord(1, Duration::dotted(NoteValue::Quarter), vec![Note { tie: true, ..Note::at(62, 3, 2).with(Technique::Dead) }]),
-                        Event::chord(1, Duration::new(NoteValue::Eighth), vec![Note::at(62, 3, 2).with(Technique::Ghost).with(Technique::TremoloPicking)]),
+                        Event::chord(
+                            1,
+                            Duration::triplet(NoteValue::Eighth),
+                            vec![Note::at(67, 1, 0).with(Technique::NaturalHarmonic)],
+                        ),
+                        Event::chord(
+                            1,
+                            Duration::triplet(NoteValue::Eighth),
+                            vec![Note::at(79, 1, 12).with(Technique::Tap)],
+                        ),
+                        Event::chord(
+                            1,
+                            Duration::dotted(NoteValue::Quarter),
+                            vec![Note {
+                                tie: true,
+                                ..Note::at(62, 3, 2).with(Technique::Dead)
+                            }],
+                        ),
+                        Event::chord(
+                            1,
+                            Duration::new(NoteValue::Eighth),
+                            vec![
+                                Note::at(62, 3, 2)
+                                    .with(Technique::Ghost)
+                                    .with(Technique::TremoloPicking),
+                            ],
+                        ),
                         Event::rest(1, Duration::new(NoteValue::Quarter)),
                     ],
                     ..Bar::default()
@@ -1026,7 +1246,9 @@ mod tests {
             assert_eq!(back.composer, score.composer);
             let (a, b) = (&score.parts[0], &back.parts[0]);
             assert_eq!(a.name, b.name);
-            let PartKind::Tab(setup) = &b.kind else { panic!("not tab: {:?}", b.kind) };
+            let PartKind::Tab(setup) = &b.kind else {
+                panic!("not tab: {:?}", b.kind)
+            };
             assert_eq!(setup.tuning.strings, Tuning::guitar_drop_d().strings);
             assert_eq!(setup.tuning.name, "Drop D");
             assert_eq!(setup.capo, 3);
@@ -1043,10 +1265,20 @@ mod tests {
             name: "Drums".into(),
             kind: PartKind::Drums(DrumMap::general_midi()),
             bars: vec![Bar {
-                time: Some(TimeSig { beats: 4, beat_type: 4 }),
+                time: Some(TimeSig {
+                    beats: 4,
+                    beat_type: 4,
+                }),
                 key: Some(0),
                 events: vec![
-                    Event::chord(1, e, vec![Note::new(42).with(Technique::Closed), Note::new(38).with(Technique::Accent)]),
+                    Event::chord(
+                        1,
+                        e,
+                        vec![
+                            Note::new(42).with(Technique::Closed),
+                            Note::new(38).with(Technique::Accent),
+                        ],
+                    ),
                     Event::chord(1, e, vec![Note::new(46)]),
                     Event::chord(1, e, vec![Note::new(38).with(Technique::Flam)]),
                     Event::chord(1, e, vec![Note::new(38).with(Technique::Drag)]),
@@ -1078,9 +1310,14 @@ mod tests {
             composer: String::new(),
             parts: vec![Part {
                 name: "Bass".into(),
-                kind: PartKind::Staff { clef: Clef::Bass8vb },
+                kind: PartKind::Staff {
+                    clef: Clef::Bass8vb,
+                },
                 bars: vec![Bar {
-                    time: Some(TimeSig { beats: 3, beat_type: 4 }),
+                    time: Some(TimeSig {
+                        beats: 3,
+                        beat_type: 4,
+                    }),
                     key: Some(-3),
                     events: vec![
                         Event::chord(1, q, vec![Note::new(27)]),
@@ -1092,7 +1329,12 @@ mod tests {
             }],
         };
         let back = round_trip(&score);
-        assert_eq!(back.parts[0].kind, PartKind::Staff { clef: Clef::Bass8vb });
+        assert_eq!(
+            back.parts[0].kind,
+            PartKind::Staff {
+                clef: Clef::Bass8vb
+            }
+        );
         assert_eq!(back.parts[0].bars, score.parts[0].bars);
     }
 
@@ -1120,7 +1362,11 @@ mod tests {
         let score = read(xml).expect("reads");
         assert_eq!(score.title, "Other");
         let kit = &score.parts[0];
-        let keys: Vec<u8> = kit.bars[0].events.iter().map(|e| e.notes[0].pitch).collect();
+        let keys: Vec<u8> = kit.bars[0]
+            .events
+            .iter()
+            .map(|e| e.notes[0].pitch)
+            .collect();
         assert_eq!(keys, [38, 42]);
         let gtr = &score.parts[1];
         assert_eq!(gtr.bars[0].chords[0].name, "Am");

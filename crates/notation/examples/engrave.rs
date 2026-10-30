@@ -15,17 +15,28 @@ const TEXT: &[u8] =
     include_bytes!("../../app/fonts/ibm-plex-sans-condensed/IBMPlexSansCondensed-Regular.ttf");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "target/notation-demo".into());
+    let out = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "target/notation-demo".into());
     std::fs::create_dir_all(&out)?;
     let score = demo();
     let fonts = Fonts::new(MUSIC, TEXT)?;
     let pages = layout(&score, &LayoutOptions::default());
     for (i, page) in pages.iter().enumerate() {
-        std::fs::write(format!("{out}/page-{}.svg", i + 1), svg::page_to_svg(page, &fonts))?;
+        std::fs::write(
+            format!("{out}/page-{}.svg", i + 1),
+            svg::page_to_svg(page, &fonts),
+        )?;
     }
     std::fs::write(format!("{out}/demo.pdf"), pdf::pages_to_pdf(&pages, &fonts))?;
-    std::fs::write(format!("{out}/demo.musicxml"), daw_notation::musicxml::write(&score))?;
-    std::fs::write(format!("{out}/demo.txt"), daw_notation::text_tab::write(&score, 80))?;
+    std::fs::write(
+        format!("{out}/demo.musicxml"),
+        daw_notation::musicxml::write(&score),
+    )?;
+    std::fs::write(
+        format!("{out}/demo.txt"),
+        daw_notation::text_tab::write(&score, 80),
+    )?;
     println!("{} pages written to {out}", pages.len());
     Ok(())
 }
@@ -50,7 +61,10 @@ fn demo() -> Score {
     let e8 = d(Eighth);
     let mut guitar = Vec::new();
     guitar.push(Bar {
-        time: Some(TimeSig { beats: 4, beat_type: 4 }),
+        time: Some(TimeSig {
+            beats: 4,
+            beat_type: 4,
+        }),
         key: Some(1),
         tempo: Some(96.0),
         chords: vec![ChordSymbol {
@@ -68,7 +82,7 @@ fn demo() -> Score {
             Event::chord(1, e8, vec![Note::new(45)]),
             Event::chord(1, e8, vec![Note::new(47).with(PullOff)]),
             Event::chord(1, e8, vec![Note::new(45)]),
-            Event::chord(1, d(Quarter), vec![Note::new(50).with(Slide)]),
+            Event::chord(1, d(Quarter), vec![Note::new(52).with(Slide)]),
         ],
         ..Bar::default()
     });
@@ -87,10 +101,20 @@ fn demo() -> Score {
                 ..Event::chord(
                     1,
                     d(Quarter),
-                    [43, 47, 50, 55, 59, 67].iter().map(|&p| Note::new(p).with(LetRing)).collect(),
+                    [43, 47, 50, 55, 59, 67]
+                        .iter()
+                        .map(|&p| Note::new(p).with(LetRing))
+                        .collect(),
                 )
             },
-            Event::chord(1, Duration::dotted(Quarter), vec![Note::new(69).with(Bend { semitones: 2.0, release: true })]),
+            Event::chord(
+                1,
+                Duration::dotted(Quarter),
+                vec![Note::new(69).with(Bend {
+                    semitones: 2.0,
+                    release: true,
+                })],
+            ),
             Event::chord(1, e8, vec![Note::new(67).with(Vibrato)]),
             Event::chord(1, d(Sixteenth), vec![Note::new(64).with(Dead)]),
             Event::chord(1, d(Sixteenth), vec![Note::new(64)]),
@@ -111,13 +135,20 @@ fn demo() -> Score {
     });
     guitar.push(Bar {
         events: vec![Event {
-            notes: [40, 47, 52, 55, 59, 64].iter().map(|&p| Note::new(p)).collect(),
+            notes: [40, 47, 52, 55, 59, 64]
+                .iter()
+                .map(|&p| Note::new(p))
+                .collect(),
             ..Event::chord(1, d(Whole), vec![])
         }],
         ..Bar::default()
     });
     for _ in 0..4 {
-        guitar.extend_from_slice(&guitar[..2].to_vec());
+        let mut again = guitar[..2].to_vec();
+        again[0].time = None;
+        again[0].key = None;
+        again[0].tempo = None;
+        guitar.extend(again);
     }
     let mut guitar = Part {
         name: "Guitar".into(),
@@ -132,7 +163,10 @@ fn demo() -> Score {
         kind: tab(Tuning::bass_4(), 0, false),
         bars: (0..4)
             .map(|i| Bar {
-                time: (i == 0).then_some(TimeSig { beats: 4, beat_type: 4 }),
+                time: (i == 0).then_some(TimeSig {
+                    beats: 4,
+                    beat_type: 4,
+                }),
                 events: vec![
                     Event::chord(1, e8, vec![Note::new(28).with(Slap)]),
                     Event::chord(1, e8, vec![Note::new(40).with(Pop)]),
@@ -159,7 +193,11 @@ fn demo() -> Score {
             }
         } else {
             for beat in 0..4 {
-                hands.push(Event::chord(1, e8, vec![Note::new(if beat == 3 { 46 } else { 42 })]));
+                hands.push(Event::chord(
+                    1,
+                    e8,
+                    vec![Note::new(if beat == 3 { 46 } else { 42 })],
+                ));
                 let mut n = vec![Note::new(42)];
                 if beat % 2 == 1 {
                     n.push(Note::new(38).with(Accent));
@@ -179,14 +217,21 @@ fn demo() -> Score {
     };
     let mut drum_bars: Vec<Bar> = (0..7)
         .map(|i| Bar {
-            time: (i == 0).then_some(TimeSig { beats: 4, beat_type: 4 }),
+            time: (i == 0).then_some(TimeSig {
+                beats: 4,
+                beat_type: 4,
+            }),
             events: drum_bar(i == 3),
             ..Bar::default()
         })
         .collect();
     drum_bars.push(Bar {
         events: vec![
-            Event::chord(1, d(Quarter), vec![Note::new(49).with(Choke), Note::new(38).with(Flam)]),
+            Event::chord(
+                1,
+                d(Quarter),
+                vec![Note::new(49).with(Choke), Note::new(38).with(Flam)],
+            ),
             Event::chord(1, d(Quarter), vec![Note::new(37)]),
             Event::chord(1, d(Quarter), vec![Note::new(38).with(Drag)]),
             Event::chord(1, d(Quarter), vec![Note::new(38).with(Roll)]),

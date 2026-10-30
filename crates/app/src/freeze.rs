@@ -489,7 +489,16 @@ mod tests {
         };
         let app = h.state_mut();
         let slot = app.effects.restore(&effect, rate).unwrap();
+        let gain = slot.plugin().unwrap().params()[0].id;
         app.tracks[0].fx.push(slot);
+        // A lane on the plugin: its half gain for a second, then an
+        // eighth. The frozen audio follows it.
+        let mut lane =
+            daw_project::Lane::new(format!("{}{}:{gain}", daw_project::Lane::PLUGIN, effect.id));
+        lane.put(0, 0.5);
+        lane.put(rate as i64 / 2 - 1, 0.5);
+        lane.put(rate as i64 / 2, 0.125);
+        app.tracks[0].automation.push(lane);
         app.tracks[0].mix.gain_db = -6.0;
         app.rebuild();
         h.run();
@@ -551,9 +560,24 @@ mod tests {
         assert!(app.frozen_playing(&app.tracks[0]).is_some());
         let without = render(h.state_mut(), frames);
         assert_eq!(without.len(), with_plugin.len());
-        let worst =
-            (with_plugin.iter().zip(&without)).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        // The plugin takes its lane's value once a block, so the lane's
+        // step can land a block apart between the two renders: compare
+        // away from it (stereo, so two samples a frame).
+        let step = rate as usize;
+        let away = |i: usize| i + 8192 < step || i > step + 8192;
+        let worst = (with_plugin.iter().zip(&without).enumerate())
+            .filter(|(i, _)| away(*i))
+            .fold(0.0f32, |m, (_, (a, b))| m.max((a - b).abs()));
         assert!(worst < 1e-5, "sounds the same, within 24 bits ({worst})");
+        let peak = |a: &[f32]| a.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let (early, late) = (
+            peak(&without[..step - 8192]),
+            peak(&without[step + 8192..2 * step]),
+        );
+        assert!(
+            late < early * 0.3,
+            "the lane is in the frozen audio: {early} then {late}"
+        );
 
         // Its own save keeps the effect, its settings and the frozen
         // audio as they were, and makes nothing.

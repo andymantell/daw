@@ -890,6 +890,59 @@ mod tests {
     }
 
     #[test]
+    fn rendering_in_place_follows_a_plugin_lane() {
+        let dir = scratch("plugin-lane");
+        let mut h = two_tracks(&dir);
+        let plugin = crate::freeze::test_plugin::bundle();
+        let class = daw_plugins::scan::scan_here(&plugin)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.is_audio_plugin() && !c.is_instrument())
+            .unwrap();
+        let app = h.state_mut();
+        let rate = app.rate;
+        let effect = daw_project::Effect {
+            id: daw_project::new_id(),
+            name: class.name.clone(),
+            class: class.cid.iter().map(|&b| b as u8).collect(),
+            bundle: plugin.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let slot = app.effects.restore(&effect, rate).unwrap();
+        let gain = slot.plugin().unwrap().params()[0].id;
+        app.tracks[0].fx.push(slot);
+        // Full gain for the first quarter second, then a quarter.
+        let mut lane =
+            daw_project::Lane::new(format!("{}{}:{gain}", daw_project::Lane::PLUGIN, effect.id));
+        lane.put(0, 1.0);
+        lane.put(rate as i64 / 4 - 1, 1.0);
+        lane.put(rate as i64 / 4, 0.25);
+        app.tracks[0].automation.push(lane);
+        app.rebuild();
+        let frames = rate as usize;
+        let before = render(app, frames);
+        let early = loudest(&before[..rate as usize / 4]);
+        let late = loudest(&before[rate as usize / 2..rate as usize]);
+        assert!(early > 0.4 && late < early * 0.3, "{early} then {late}");
+
+        app.render_in_place(0);
+        wait(&mut h);
+        let app = h.state_mut();
+        assert_eq!(app.message, None);
+        assert_eq!(app.tracks[1].name, "Guitar (rendered)");
+        assert!(app.tracks[1].automation.is_empty(), "baked in");
+        let after = render(app, frames);
+        // A plugin takes its lane's value once a block, so the step can
+        // land a block apart between two block sizes: compare away from
+        // it (stereo, so two samples a frame).
+        let step = rate as usize / 2;
+        let (a, b) = (step - 8192, step + 8192);
+        assert!(worst(&before[..a], &after[..a]) < 1e-4);
+        assert!(worst(&before[b..], &after[b..]) < 1e-4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_folder_renders_with_everything_in_it() {
         let dir = scratch("folder");
         let mut h = two_tracks(&dir);

@@ -231,6 +231,8 @@ impl App {
             edit_groups: self.edit_groups_value(),
             control_groups: self.groups.clone(),
             cue_mixes: self.cues.mixes.clone(),
+            timecode: self.timecode.clone(),
+            hit_points: self.hit_points.clone(),
         }
     }
 
@@ -424,6 +426,24 @@ impl App {
             .collect();
         let k = self.rate as f64 / p.rate.max(1) as f64;
         let scale = |v: i64| (v as f64 * k).round() as i64;
+        self.timecode = daw_project::TimecodeSetup {
+            offset: scale(p.timecode.offset),
+            ..p.timecode.clone()
+        };
+        // At another rate, hit points go back on the start of their
+        // frame.
+        let tc = crate::hitpoints::clock(&self.timecode);
+        let rated = self.rate != p.rate;
+        self.hit_points = (p.hit_points.iter())
+            .map(|h| daw_project::HitPoint {
+                at: if rated {
+                    tc.snap(scale(h.at) + 1, self.rate)
+                } else {
+                    h.at
+                },
+                ..h.clone()
+            })
+            .collect();
         let mut old: HashMap<String, Track> = (self.tracks.drain(..))
             .map(|t| (t.key.clone(), t))
             .collect();

@@ -3,7 +3,8 @@
 //!
 //! Layout: a `song` map of settings, a `tracks` map from id to track,
 //! with the track order in the movable list `order`, a `markers` map,
-//! `tempo_changes` and `meter_changes` maps from id to change, and
+//! `tempo_changes` and `meter_changes` maps from id to change, a
+//! `hit_points` map from id to hit point, and
 //! the lesson notes as text, a `tabs` map from id to tab block, an
 //! `assignments` map from id to assignment, and a
 //! `comments` map from id to comment, and an `edit_groups` map from id
@@ -42,8 +43,9 @@ use loro::{
 use crate::identity::Me;
 use crate::{
     Assignment, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel, CueMix, Curve, EditGroup,
-    Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Marker, MeterChange, Practice,
-    Project, Send, TabBlock, TempoChange, Track, TrackKind, TrainerSettings, is_asset_name,
+    Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, HitPoint, Marker, MeterChange,
+    Practice, Project, Send, TabBlock, TempoChange, TimecodeSetup, Track, TrackKind,
+    TrainerSettings, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -337,6 +339,14 @@ impl ProjectDoc {
         w.put(&song, "loop_from", p.loop_bars.0);
         w.put(&song, "loop_to", p.loop_bars.1);
         w.put(&song, "reference_hz", p.reference_hz);
+        // Timecode only once a project has set it up, so older projects
+        // aren't changed by being opened.
+        if p.timecode != TimecodeSetup::default() || song.get("tc_rate").is_some() {
+            w.put(&song, "tc_rate", p.timecode.rate.as_str());
+            w.put(&song, "tc_start", p.timecode.start.as_str());
+            w.put(&song, "tc_offset", p.timecode.offset);
+            w.put(&song, "tc_shown", p.timecode.shown);
+        }
 
         let tracks = self.tracks();
         let keep: HashSet<&str> = p.tracks.iter().map(|t| t.id.as_str()).collect();
@@ -388,6 +398,19 @@ impl ProjectDoc {
             let m = w.child(&markers, &mk.id);
             w.put(&m, "bar", mk.bar);
             w.put(&m, "name", mk.name.as_str());
+        }
+
+        let hits = self.doc.get_map("hit_points");
+        let keep: HashSet<&str> = p.hit_points.iter().map(|h| h.id.as_str()).collect();
+        for id in keys(&hits) {
+            if !keep.contains(id.as_str()) {
+                w.delete(&hits, &id);
+            }
+        }
+        for h in &p.hit_points {
+            let m = w.child(&hits, &h.id);
+            w.put(&m, "at", h.at);
+            w.put(&m, "name", h.name.as_str());
         }
 
         let tempos = self.doc.get_map("tempo_changes");
@@ -530,6 +553,11 @@ impl ProjectDoc {
                 int(s, "loop_to").unwrap_or(p.loop_bars.1),
             );
             p.reference_hz = float(s, "reference_hz").unwrap_or(p.reference_hz);
+            let tc = &mut p.timecode;
+            tc.rate = string(s, "tc_rate").unwrap_or(tc.rate.clone());
+            tc.start = string(s, "tc_start").unwrap_or(tc.start.clone());
+            tc.offset = int(s, "tc_offset").unwrap_or(tc.offset);
+            tc.shown = boolean(s, "tc_shown").unwrap_or(tc.shown);
         }
         let empty = LoroMapValue::default();
         let tracks = match root.get("tracks") {
@@ -632,6 +660,18 @@ impl ProjectDoc {
         }
         p.markers
             .sort_by(|a, b| a.bar.cmp(&b.bar).then(a.id.cmp(&b.id)));
+        if let Some(LoroValue::Map(hs)) = root.get("hit_points") {
+            for (id, h) in hs.iter() {
+                let LoroValue::Map(h) = h else { continue };
+                p.hit_points.push(HitPoint {
+                    id: id.to_string(),
+                    at: int(h, "at").unwrap_or(0),
+                    name: string(h, "name").unwrap_or_default(),
+                });
+            }
+        }
+        p.hit_points
+            .sort_by(|a, b| a.at.cmp(&b.at).then(a.id.cmp(&b.id)));
         if let Some(LoroValue::Map(cs)) = root.get("tempo_changes") {
             for (id, c) in cs.iter() {
                 let LoroValue::Map(c) = c else { continue };
@@ -1608,6 +1648,48 @@ mod tests {
         assert_eq!(back.tracks[1].effects[0].sidechain, None);
         assert!(back.tracks[1].effects[1].outputs.is_empty());
         assert!(back.control_groups.is_empty());
+    }
+
+    #[test]
+    fn timecode_and_hit_points_are_kept() {
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&Project::default());
+        // Not written until it is set up.
+        assert!(doc.song().get("tc_rate").is_none());
+        let mut p = Project {
+            timecode: TimecodeSetup {
+                rate: "29.97df".into(),
+                start: "01:00:00;00".into(),
+                offset: 96_000,
+                shown: true,
+            },
+            hit_points: vec![
+                HitPoint {
+                    id: "h2".into(),
+                    at: 480_000,
+                    name: "Cut to exterior".into(),
+                },
+                HitPoint {
+                    id: "h1".into(),
+                    at: 200_200,
+                    name: "Door slams".into(),
+                },
+            ],
+            ..Project::default()
+        };
+        doc.set(&p);
+        let back = doc.get();
+        assert_eq!(back.timecode, p.timecode);
+        // In time order.
+        assert_eq!(back.hit_points[0], p.hit_points[1]);
+        assert_eq!(back.hit_points[1], p.hit_points[0]);
+        p.hit_points.remove(0);
+        p.timecode = TimecodeSetup::default();
+        doc.set(&p);
+        let back = doc.get();
+        assert_eq!(back.hit_points.len(), 1);
+        assert_eq!(back.hit_points[0].name, "Door slams");
+        assert_eq!(back.timecode, TimecodeSetup::default());
     }
 
     #[test]

@@ -36,6 +36,9 @@ pub(crate) enum Cmd {
     Split,
     Delete,
     Marker,
+    HitPoint,
+    HitPoints,
+    Timecode,
     ClearSelection,
     Crossfade,
     ClipFades,
@@ -269,6 +272,27 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Mark a section at the playhead's bar")
     .words("marker add"),
+    info(
+        Cmd::HitPoint,
+        "hit-point",
+        "Edit",
+        "Add a hit point",
+        &[key(NONE, Key::H)],
+    )
+    .hint("Mark a moment in the picture at the playhead, on the start of its frame")
+    .words("hit point cue sync video film picture"),
+    info(
+        Cmd::HitPoints,
+        "hit-points",
+        "Edit",
+        "Timecode and hit points…",
+        &[],
+    )
+    .hint("Timecode, hit points, and a tempo that lands hit points on beats or bars")
+    .words("tempo fit smpte frame rate video film picture score"),
+    info(Cmd::Timecode, "timecode", "View", "Timecode", &[])
+        .hint("Show timecode on the ruler and in the transport bar")
+        .words("smpte frames hours minutes seconds"),
     info(
         Cmd::ClearSelection,
         "clear-selection",
@@ -1493,6 +1517,12 @@ impl App {
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
             Cmd::FixTiming => self.timing.open = true,
+            Cmd::HitPoint => {
+                let at = self.ctl.status().position().0;
+                self.add_hit_point(at);
+            }
+            Cmd::HitPoints => self.hits_ui.open = true,
+            Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
             Cmd::NextTheme => self.themes.next(),
             Cmd::LightDark => self.themes.flip(ctx),
             Cmd::FindCommand => {

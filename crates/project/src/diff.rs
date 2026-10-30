@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{Clip, Effect, Fade, Project, Track};
 
 /// One thing that changed, and where: "Song", a track's name,
-/// "Tracks", "Markers", "Lesson notes", "Tab" or "Groups".
+/// "Tracks", "Markers", "Hit points", "Lesson notes", "Tab" or "Groups".
 #[derive(Clone, Debug, PartialEq)]
 pub struct Difference {
     pub place: String,
@@ -26,8 +26,8 @@ pub struct Difference {
 const SLACK: i64 = 2;
 
 /// What changed going from `before` to `after`, song first, then each
-/// track in `after`'s order, then markers, notes, tab blocks and edit
-/// groups.
+/// track in `after`'s order, then markers, hit points, notes, tab blocks
+/// and edit groups.
 pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     let mut out = Vec::new();
     let mut say = |place: &str, text: String| {
@@ -36,6 +36,8 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
             text,
         })
     };
+
+    let secs = |p: &Project, at: i64| at as f64 / p.rate.max(1) as f64;
 
     // The song.
     if before.tempo_bpm != after.tempo_bpm {
@@ -124,6 +126,23 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
             format!("Removed the time signature change at bar {}", c.bar),
         );
     }
+    let (bt, at) = (&before.timecode, &after.timecode);
+    if (&bt.rate, &bt.start) != (&at.rate, &at.start)
+        || (secs(before, bt.offset) - secs(after, at.offset)).abs() > 0.0005
+    {
+        say(
+            "Song",
+            format!(
+                "Timecode {} at {:.2} s ({} fps) → {} at {:.2} s ({} fps)",
+                bt.start,
+                secs(before, bt.offset),
+                bt.rate,
+                at.start,
+                secs(after, at.offset),
+                at.rate
+            ),
+        );
+    }
     if before.loop_bars != after.loop_bars {
         let bars = |(a, b): (i64, i64)| format!("{a}–{b}");
         say(
@@ -203,6 +222,37 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
         .filter(|m| !now.contains(m.id.as_str()))
     {
         say("Markers", format!("Removed “{}” (bar {})", m.name, m.bar));
+    }
+
+    // Hit points, in seconds as they are placed in time.
+    let was: HashMap<&str, _> = (before.hit_points.iter())
+        .map(|h| (h.id.as_str(), h))
+        .collect();
+    let now: HashSet<&str> = after.hit_points.iter().map(|h| h.id.as_str()).collect();
+    for h in &after.hit_points {
+        let at = secs(after, h.at);
+        match was.get(h.id.as_str()) {
+            None => say("Hit points", format!("Added “{}” at {at:.2} s", h.name)),
+            Some(b) => {
+                if b.name != h.name {
+                    say(
+                        "Hit points",
+                        format!("Renamed “{}” to “{}”", b.name, h.name),
+                    );
+                }
+                let from = secs(before, b.at);
+                if (from - at).abs() > 0.0005 {
+                    say(
+                        "Hit points",
+                        format!("Moved “{}” from {from:.2} s to {at:.2} s", h.name),
+                    );
+                }
+            }
+        }
+    }
+    for h in (before.hit_points.iter()).filter(|h| !now.contains(h.id.as_str())) {
+        let at = secs(before, h.at);
+        say("Hit points", format!("Removed “{}” ({at:.2} s)", h.name));
     }
 
     // Lesson notes.
@@ -748,6 +798,43 @@ mod tests {
             c.len = (c.len as f64 * 44_100.0 / 48_000.0).round() as i64;
         }
         assert!(differences(&song(), &q).is_empty());
+    }
+
+    #[test]
+    fn hit_points_and_timecode() {
+        let mut p = song();
+        p.hit_points.push(crate::HitPoint {
+            id: "h1".into(),
+            at: 48_000,
+            name: "Door".into(),
+        });
+        let mut q = p.clone();
+        q.hit_points[0].name = "Door slams".into();
+        q.hit_points[0].at = 72_000;
+        q.hit_points.push(crate::HitPoint {
+            id: "h2".into(),
+            at: 96_000,
+            name: "Cut".into(),
+        });
+        q.timecode.start = "01:00:00:00".into();
+        assert_eq!(
+            texts(&differences(&p, &q)),
+            [
+                "Song: Timecode 00:00:00:00 at 0.00 s (25 fps) → 01:00:00:00 at 0.00 s (25 fps)",
+                "Hit points: Renamed “Door” to “Door slams”",
+                "Hit points: Moved “Door slams” from 1.00 s to 1.50 s",
+                "Hit points: Added “Cut” at 2.00 s",
+            ]
+        );
+        assert_eq!(
+            texts(&differences(&q, &p)),
+            [
+                "Song: Timecode 01:00:00:00 at 0.00 s (25 fps) → 00:00:00:00 at 0.00 s (25 fps)",
+                "Hit points: Renamed “Door slams” to “Door”",
+                "Hit points: Moved “Door” from 1.50 s to 1.00 s",
+                "Hit points: Removed “Cut” (2.00 s)",
+            ]
+        );
     }
 
     #[test]

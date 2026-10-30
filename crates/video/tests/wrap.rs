@@ -91,11 +91,17 @@ fn check(video: &Path, name: &str) {
 
     // The same picture, frame for frame.
     let mut r = Reader::open(&out, (64, 48)).unwrap();
-    assert_eq!(r.info().frames(), 24);
-    for n in 0..24 {
-        let f = r.next_frame().unwrap().unwrap();
-        assert_eq!(counted(&f), n);
+    assert_eq!(r.info().frames(), 24, "{:?}", r.info());
+    let mut got = Vec::new();
+    while let Some(f) = r.next_frame().unwrap() {
+        got.push((counted(&f), format!("{:.4}", f.time)));
     }
+    let want: Vec<u64> = (0..24).collect();
+    assert_eq!(
+        got.iter().map(|g| g.0).collect::<Vec<_>>(),
+        want,
+        "frames (number, time): {got:?}"
+    );
     #[cfg(target_os = "linux")]
     {
         let s = sound_seconds(&out);

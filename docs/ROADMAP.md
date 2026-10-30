@@ -772,9 +772,20 @@ replace the app's own UI. See
     users can add and share them. Kit modules often let every pad's note
     be changed and some ship no published default table, so profiles are
     a convenience, not a requirement.
-  - **Learn wizard:** "hit the snare head… now the rim… now the ride
-    bell", building a profile from what the kit actually sends, including
-    the hi-hat pedal's range. This is the route for any kit we don't know.
+  - **Learn wizard, built first (S):** "hit the snare head… now the rim…
+    now the ride bell", building a profile from what the kit actually
+    sends, including the hi-hat pedal's range. This is the route for any
+    kit we don't know. It needs only MIDI input (3.1), so it is built
+    early and on its own, well before the instrument, as a small tool
+    under the MIDI settings that writes a profile file.
+  - **Learn once, ship by default:** a learned profile is saved as a data
+    file that can be exported, imported and contributed to the bundled
+    profile library, so a kit the project owner has learned ships in every
+    install and never needs learning again on a new computer. The pad
+    notes live in the kit module, not the computer, so a profile learned
+    once stays valid wherever that module is plugged in. The owner's own
+    kit is the first bundled profile; the app recognises a bundled kit by
+    the device name of its MIDI port and offers its profile.
   - **Playing feel:** zones (head/rim, cross-stick, bow/edge/bell),
     continuous hi-hat openness from the pedal controller with foot splash
     and chick, chokes (grab a cymbal), exclusive groups, positional

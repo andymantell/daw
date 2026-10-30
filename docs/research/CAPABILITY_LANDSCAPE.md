@@ -119,6 +119,7 @@ end for what could not be verified.
 | Drum machine: layered pads, synthesised drum voices, choke groups, per-pad FX and outputs | 3 | M | |
 | Slicer instrument (transient/grid slices, per-slice pitch/filter/pan/reverse) | 3 | L | |
 | Electronic drum kit instrument: kit profiles, learn wizard, zones, hi-hat pedal, chokes, bundled open-licensed kit, SFZ import | 3 | M | Late in Phase 3. See [DRUM_KIT_SAMPLER.md](DRUM_KIT_SAMPLER.md). |
+| Kit-map learn tool: learn a kit's pad notes once, save as a profile file, bundle learned profiles so no re-learning on a new computer | 3 | S | Built early, before the instrument. See [DRUM_KIT_SAMPLER.md](DRUM_KIT_SAMPLER.md). |
 | Scale mode | 3 | L | |
 | Sampler, drum sampler, synth | 3 | M | Our own content only. |
 | Melodic pattern sequencer | 7 | L | |

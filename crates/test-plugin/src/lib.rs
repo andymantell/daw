@@ -11,6 +11,10 @@
 //! at the event's exact sample offset and each note-off writes
 //! −velocity×gain, so the host's note timing can be checked to the sample.
 //!
+//! A third, [`ROUTER_NAME`] (see [`router`]), has a sidechain input, an
+//! extra output, a delay that changes while it plays, and declares that
+//! it replaces an older version of itself.
+//!
 //! Cargo features build broken variants (crash or hang on load or while
 //! processing, refuse processing setup) for testing how the host copes.
 //!
@@ -31,6 +35,11 @@ use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComRef, ComWrapper, uid};
 
+pub mod router;
+pub use router::{
+    OLD_LOOKAHEAD_PARAM, OLD_ROUTER_CID, ROUTER_CID, ROUTER_LOOKAHEAD, ROUTER_NAME, sdk_string,
+};
+
 /// Reported (and real) processing latency in samples.
 pub const LATENCY: u32 = 64;
 pub const NAME: &str = "DAW Test Gain";
@@ -49,7 +58,7 @@ fn write_cstr(dst: &mut [c_char], s: &str) {
     }
 }
 
-fn write_wstr(dst: &mut [TChar], s: &str) {
+pub(crate) fn write_wstr(dst: &mut [TChar], s: &str) {
     let max = dst.len().saturating_sub(1);
     let mut n = 0;
     for (d, u) in dst.iter_mut().zip(s.encode_utf16()).take(max) {
@@ -61,7 +70,7 @@ fn write_wstr(dst: &mut [TChar], s: &str) {
     }
 }
 
-unsafe fn read_exact(stream: *mut IBStream, buf: &mut [u8]) -> bool {
+pub(crate) unsafe fn read_exact(stream: *mut IBStream, buf: &mut [u8]) -> bool {
     let Some(stream) = (unsafe { ComRef::from_raw(stream) }) else {
         return false;
     };
@@ -70,7 +79,7 @@ unsafe fn read_exact(stream: *mut IBStream, buf: &mut [u8]) -> bool {
     r == kResultOk && got as usize == buf.len()
 }
 
-unsafe fn write_all(stream: *mut IBStream, buf: &[u8]) -> bool {
+pub(crate) unsafe fn write_all(stream: *mut IBStream, buf: &[u8]) -> bool {
     let Some(stream) = (unsafe { ComRef::from_raw(stream) }) else {
         return false;
     };
@@ -568,7 +577,7 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        3
+        5
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
         let info = unsafe { &mut *info };
@@ -600,6 +609,10 @@ impl IPluginFactoryTrait for Factory {
                 gain: AtomicU64::new(1.0f64.to_bits()),
             })
             .to_com_ptr::<FUnknown>()
+        } else if cid == ROUTER_CID {
+            ComWrapper::new(router::Router::new()).to_com_ptr::<FUnknown>()
+        } else if cid == router::COMPAT_CID {
+            ComWrapper::new(router::Compat).to_com_ptr::<FUnknown>()
         } else if cid == CONTROLLER_CID {
             ComWrapper::new(Controller {
                 gain: Mutex::new(1.0),
@@ -627,6 +640,13 @@ fn class(index: i32) -> Option<(TUID, &'static str, &'static str, &'static str)>
             "Audio Module Class",
             SYNTH_NAME,
             "Instrument|Synth",
+        ),
+        3 => (ROUTER_CID, "Audio Module Class", ROUTER_NAME, "Fx|Tools"),
+        4 => (
+            router::COMPAT_CID,
+            "Plugin Compatibility Class",
+            "DAW Test Compatibility",
+            "",
         ),
         _ => return None,
     })

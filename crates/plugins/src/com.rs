@@ -5,7 +5,7 @@
 
 use std::ffi::c_void;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use rtrb::Producer;
 use vst3::Steinberg::Vst::*;
@@ -72,8 +72,9 @@ pub fn host_app() -> ComPtr<FUnknown> {
 /// side, which hands them to the processor with its next block.
 pub struct ComponentHandler {
     pub(crate) edits: Mutex<Producer<(ParamID, ParamValue)>>,
-    /// The plugin asked for a restart (its latency changed, say).
-    pub restart_requested: AtomicBool,
+    /// The restart flags the plugin has raised (its latency changed,
+    /// say), until the UI side takes them.
+    pub restart: AtomicI32,
     /// Something the user did in the editor changed a parameter.
     pub edited: AtomicBool,
 }
@@ -98,8 +99,8 @@ impl IComponentHandlerTrait for ComponentHandler {
     unsafe fn endEdit(&self, _id: ParamID) -> tresult {
         kResultOk
     }
-    unsafe fn restartComponent(&self, _flags: int32) -> tresult {
-        self.restart_requested.store(true, Ordering::Relaxed);
+    unsafe fn restartComponent(&self, flags: int32) -> tresult {
+        self.restart.fetch_or(flags, Ordering::Relaxed);
         kResultOk
     }
 }

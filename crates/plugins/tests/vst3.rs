@@ -17,7 +17,7 @@ use daw_engine::graph::{AudioData, ClipSpec, Insert, InsertSpec, Session, TrackS
 use daw_engine::time::{Frames, Tempo, TempoMap, Ticks, TimeSignature};
 use daw_plugins::scan::{self, PluginList};
 use daw_plugins::{Module, PluginState, instantiate};
-use daw_test_plugin::{LATENCY, NAME, PROCESSOR_CID, SYNTH_NAME};
+use daw_test_plugin::{LATENCY, NAME, PROCESSOR_CID, ROUTER_NAME, SYNTH_NAME};
 
 const RATE: u32 = 48_000;
 const BLOCK: usize = 256;
@@ -44,8 +44,8 @@ fn scanning_finds_both_classes_in_a_child_process() {
     let plugins = list.plugins();
     let names: Vec<_> = plugins.iter().map(|p| p.class.name.as_str()).collect();
     // Effects first, then instruments.
-    assert_eq!(names, vec![NAME, SYNTH_NAME]);
-    assert!(plugins[1].class.is_instrument());
+    assert_eq!(names, vec![NAME, ROUTER_NAME, SYNTH_NAME]);
+    assert!(plugins[2].class.is_instrument());
     assert_eq!(plugins[0].class.cid, PROCESSOR_CID);
 
     // Unchanged bundles are not scanned again.

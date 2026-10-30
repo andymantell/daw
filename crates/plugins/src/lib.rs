@@ -7,13 +7,17 @@
 //! splits it into a UI side and an audio side; the audio side is an
 //! engine [`Insert`](daw_engine::graph::Insert). [`host`] runs plugins
 //! in a helper process instead, so a crash cannot take the app down,
-//! and [`presets`] saves and finds their settings.
+//! and [`presets`] saves and finds their settings. [`compat`] finds the
+//! newer version of a plugin that stands in for an older one, and
+//! [`check`] tries each plugin out for the compatibility list.
 
 // VST 3 enum types are signed on some platforms and unsigned on others,
 // so casts that are no-ops here are needed elsewhere.
 #![allow(clippy::unnecessary_cast)]
 
+pub mod check;
 pub mod com;
+pub mod compat;
 #[cfg(windows)]
 pub mod editor_win;
 pub mod host;
@@ -25,4 +29,7 @@ pub mod scan;
 
 pub use host::{Host, Sandbox};
 pub use module::{ClassInfo, Module, cid_from_hex, cid_to_hex};
-pub use plugin::{LocalPlugin, LocalProcessor, Param, Plugin, PluginState, Processor, instantiate};
+pub use plugin::{
+    Bus, Buses, Layout, LocalPlugin, LocalProcessor, Param, Plugin, PluginState, Processor,
+    instantiate, instantiate_with,
+};

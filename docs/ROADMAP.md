@@ -515,7 +515,21 @@ and made up for), and a plugin that crashes or hangs there is marked
 `.vstpreset` files, the user's own saved under the settings folder and
 the plugin's own found in the standard preset folders, plus the plugin's
 program lists, all from a Presets menu on each effect. Owner checks in
-`docs/review-queue/2.4-plugin-process.md`.*
+`docs/review-queue/2.4-plugin-process.md`. Then (2026-10-30, at risk):
+a plugin's buses are asked for in stereo; one with a sidechain input
+can listen to another track, and one with extra outputs can have them
+mixed into its track, both saved in the project; a plugin whose delay
+changes while playing is stopped and started as VST 3 asks (silent for
+that moment) and the new delay made up for; plugin windows follow the
+display's scale, with an optional cap on how many are open; scanning
+reads which older plugins each one declares it stands in for, so a
+project saved with an older version opens with the newer one and its
+settings (and its parameter ids can be mapped, for automation); and a
+plugin check (Settings → Plugins, or `daw --check-plugins`) writes
+rows for the public list in `docs/plugin-compatibility.md`, run in CI
+on the project's test plugins. Still to do: extra outputs to tracks of
+their own (with instrument tracks). Owner checks in
+`docs/review-queue/2.4-plugin-depth.md`.*
 - Sandboxing options per plugin: in-process, shared host process, or own
   process.
 - Multi-output plugins, sidechain inputs to plugins, bus layouts.

@@ -37,7 +37,9 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use daw_engine::graph::Insert;
 
 use crate::module::{Module, Result};
-use crate::plugin::{LocalPlugin, LocalProcessor, Param, PluginState, instantiate};
+use crate::plugin::{
+    Buses, Layout, LocalPlugin, LocalProcessor, Param, PluginState, instantiate_with,
+};
 use crate::proto::{ProgramList, Reply, Request, Status, read_frame, write_frame};
 
 /// The argument that makes the app run as a plugin helper.
@@ -113,6 +115,7 @@ impl Helper {
                 cid,
                 rate,
                 max_block,
+                layout,
             } => {
                 let bundle = PathBuf::from(bundle);
                 let module = match self.modules.get(&bundle) {
@@ -127,11 +130,12 @@ impl Helper {
                     },
                 };
                 let tuid = cid.map(|b| b as _);
-                match instantiate(module, &tuid, rate, max_block as usize) {
+                match instantiate_with(module, &tuid, rate, max_block as usize, &layout) {
                     Ok((plugin, processor)) => {
                         let reply = Reply::Loaded {
                             latency: plugin.latency(),
                             params: plugin.params(),
+                            buses: plugin.buses().clone(),
                         };
                         self.plugins.insert(id, Held { plugin, processor });
                         reply
@@ -147,9 +151,15 @@ impl Helper {
                 id,
                 mut left,
                 mut right,
+                key,
             } => match self.held(id) {
                 Ok(h) => {
-                    h.processor.process(&mut left, &mut right);
+                    match &key {
+                        Some((kl, kr)) => {
+                            h.processor.process_keyed(&mut left, &mut right, (kl, kr))
+                        }
+                        None => h.processor.process(&mut left, &mut right),
+                    }
                     Reply::Audio { left, right }
                 }
                 Err(e) => e,
@@ -209,6 +219,10 @@ impl Helper {
                 Ok(h) => Reply::Programs(h.plugin.programs()),
                 Err(e) => e,
             },
+            Request::RemapParam { id, old, param } => match self.held(id) {
+                Ok(h) => Reply::ParamId(h.plugin.compatible_param(&old.map(|b| b as _), param)),
+                Err(e) => e,
+            },
             Request::Ping => Reply::Ok,
             Request::Quit => Reply::Ok,
         }
@@ -244,6 +258,10 @@ pub fn helper_main() -> i32 {
         use windows_sys::Win32::System::Diagnostics::Debug::*;
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     }
+    // Plugin windows opened here scale with each display, as the app's
+    // own windows do (see `editor_win`).
+    #[cfg(windows)]
+    crate::editor_win::per_monitor_dpi();
     // Requests are read on a thread so this one can also serve plugin
     // windows while waiting.
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -460,6 +478,20 @@ impl Host {
         max_block: usize,
         live_block: Option<usize>,
     ) -> Result<(RemotePlugin, RemoteProcessor)> {
+        self.instantiate_with(bundle, cid, rate, max_block, live_block, &Layout::default())
+    }
+
+    /// As [`instantiate`](Self::instantiate), also switching on the
+    /// buses `layout` asks for.
+    pub fn instantiate_with(
+        &self,
+        bundle: &Path,
+        cid: &vst3::Steinberg::TUID,
+        rate: f64,
+        max_block: usize,
+        live_block: Option<usize>,
+        layout: &Layout,
+    ) -> Result<(RemotePlugin, RemoteProcessor)> {
         let id = self.0.next_id.fetch_add(1, Ordering::Relaxed);
         let reply = self.0.call(&Request::Load {
             id,
@@ -467,9 +499,21 @@ impl Host {
             cid: cid.map(|b| b as u8),
             rate,
             max_block: max_block as u32,
+            layout: layout.clone(),
         })?;
-        let Reply::Loaded { latency, params } = reply else {
+        let Reply::Loaded {
+            latency,
+            params,
+            buses,
+        } = reply
+        else {
             return Err("unexpected answer to loading a plugin".into());
+        };
+        // A sidechain goes down the pipe beside the track's audio.
+        let width = if layout.sidechain && buses.sidechain().is_some() {
+            4
+        } else {
+            2
         };
         let instance = Arc::new(Instance {
             id,
@@ -479,9 +523,9 @@ impl Host {
         let processor = match live_block {
             Some(block) => {
                 let block = block.max(1);
-                let cap = 2 * (max_block.max(block) + 2 * block);
-                let (in_tx, in_rx) = RingBuffer::<f32>::new(cap);
-                let (mut out_tx, out_rx) = RingBuffer::<f32>::new(cap);
+                let frames = max_block.max(block) + 2 * block;
+                let (in_tx, in_rx) = RingBuffer::<f32>::new(width * frames);
+                let (mut out_tx, out_rx) = RingBuffer::<f32>::new(2 * frames);
                 // One block of silence puts the output a block behind.
                 for _ in 0..2 * block {
                     let _ = out_tx.push(0.0);
@@ -498,7 +542,7 @@ impl Host {
                     input: in_rx,
                     output: out_tx,
                     max_block,
-                    scratch: (Vec::with_capacity(max_block), Vec::with_capacity(max_block)),
+                    width,
                 };
                 let _ = self.0.register.lock().unwrap().send(side);
                 RemoteProcessor::Live(LiveProcessor {
@@ -506,6 +550,7 @@ impl Host {
                     state,
                     input: in_tx,
                     output: out_rx,
+                    width,
                     skip: 0,
                     pad: 0,
                 })
@@ -513,6 +558,7 @@ impl Host {
             None => RemoteProcessor::Offline(OfflineProcessor {
                 instance: instance.clone(),
                 max_block,
+                keyed: width == 4,
             }),
         };
         let plugin = RemotePlugin {
@@ -521,6 +567,7 @@ impl Host {
             latency: AtomicU32::new(latency),
             editor_open: AtomicBool::new(false),
             late,
+            buses,
         };
         Ok((plugin, processor))
     }
@@ -572,6 +619,7 @@ pub struct RemotePlugin {
     latency: AtomicU32,
     editor_open: AtomicBool,
     late: Option<Arc<ProcState>>,
+    buses: Buses,
 }
 
 impl RemotePlugin {
@@ -585,6 +633,21 @@ impl RemotePlugin {
 
     pub fn latency(&self) -> u32 {
         self.latency.load(Ordering::Relaxed) + self.extra()
+    }
+
+    pub fn buses(&self) -> &Buses {
+        &self.buses
+    }
+
+    pub fn compatible_param(&self, old_cid: &vst3::Steinberg::TUID, old: u32) -> Option<u32> {
+        match self.call(Request::RemapParam {
+            id: self.id(),
+            old: old_cid.map(|b| b as u8),
+            param: old,
+        }) {
+            Ok(Reply::ParamId(p)) => p,
+            _ => None,
+        }
     }
 
     pub fn failure(&self) -> Option<String> {
@@ -723,7 +786,9 @@ struct IoSide {
     input: Consumer<f32>,
     output: Producer<f32>,
     max_block: usize,
-    scratch: (Vec<f32>, Vec<f32>),
+    /// Samples per frame in `input`: left and right, then the
+    /// sidechain's left and right if it listens to one.
+    width: usize,
 }
 
 /// Runs queued blocks through the helper, one request per block.
@@ -749,23 +814,29 @@ fn io_main(shared: Weak<Shared>, register: mpsc::Receiver<IoSide>) {
         for side in &mut sides {
             // Never more than the output queue has room for, so nothing
             // is lost between the two.
-            let frames = (side.input.slots() / 2)
+            let frames = (side.input.slots() / side.width)
                 .min(side.output.slots() / 2)
                 .min(side.max_block);
             if frames == 0 {
                 continue;
             }
-            let (l, r) = &mut side.scratch;
-            l.clear();
-            r.clear();
+            let mut take = || side.input.pop().unwrap_or(0.0);
+            let (mut l, mut r) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+            let mut key =
+                (side.width == 4).then(|| (Vec::with_capacity(frames), Vec::with_capacity(frames)));
             for _ in 0..frames {
-                l.push(side.input.pop().unwrap_or(0.0));
-                r.push(side.input.pop().unwrap_or(0.0));
+                l.push(take());
+                r.push(take());
+                if let Some((kl, kr)) = &mut key {
+                    kl.push(take());
+                    kr.push(take());
+                }
             }
             let reply = s.call(&Request::Process {
                 id: side.instance.id,
                 left: l.clone(),
                 right: r.clone(),
+                key,
             });
             let (left, right) = match reply {
                 Ok(Reply::Audio { left, right })
@@ -774,7 +845,7 @@ fn io_main(shared: Weak<Shared>, register: mpsc::Receiver<IoSide>) {
                     (left, right)
                 }
                 // A plugin that fails a block leaves the audio as it was.
-                _ => (l.clone(), r.clone()),
+                _ => (l, r),
             };
             for (a, b) in left.iter().zip(&right) {
                 if side.output.push(*a).is_err() || side.output.push(*b).is_err() {
@@ -791,6 +862,8 @@ pub struct LiveProcessor {
     state: Arc<ProcState>,
     input: Producer<f32>,
     output: Consumer<f32>,
+    /// Samples per frame going in (see [`IoSide::width`]).
+    width: usize,
     /// Frames of late output to throw away, so the delay stays fixed.
     skip: usize,
     /// Frames of silence to play before the next output, making up for
@@ -817,7 +890,7 @@ impl Drop for LiveProcessor {
 }
 
 impl LiveProcessor {
-    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len());
         if self._instance.host.dead_flag.load(Ordering::Relaxed) {
             // Pass the audio through unchanged.
@@ -831,11 +904,16 @@ impl LiveProcessor {
             self.pad += n - extra;
             self.state.extra.store(n as u32, Ordering::Relaxed);
         }
-        let mut dropped = 0;
-        for (i, (l, r)) in left[..n].iter().zip(&right[..n]).enumerate() {
-            if self.input.push(*l).is_err() || self.input.push(*r).is_err() {
-                dropped = n - i;
-                break;
+        // Whole frames only, so the queue never comes out of step.
+        let fit = (self.input.slots() / self.width).min(n);
+        let dropped = n - fit;
+        let k = |c: Option<&[f32]>, i: usize| c.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+        for i in 0..fit {
+            let _ = self.input.push(left[i]);
+            let _ = self.input.push(right[i]);
+            if self.width == 4 {
+                let _ = self.input.push(k(key.map(|k| k.0), i));
+                let _ = self.input.push(k(key.map(|k| k.1), i));
             }
         }
         self._instance.host.wake_io();
@@ -878,18 +956,30 @@ impl LiveProcessor {
 pub struct OfflineProcessor {
     instance: Arc<Instance>,
     max_block: usize,
+    /// It listens to a sidechain.
+    keyed: bool,
 }
 
 impl OfflineProcessor {
-    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let n = left.len().min(right.len());
         let mut done = 0;
         while done < n {
             let end = (done + self.max_block).min(n);
+            let part = |c: &[f32]| {
+                let mut v = c.get(done..end.min(c.len())).unwrap_or(&[]).to_vec();
+                v.resize(end - done, 0.0);
+                v
+            };
+            let key = self.keyed.then(|| match key {
+                Some((kl, kr)) => (part(kl), part(kr)),
+                None => (vec![0.0; end - done], vec![0.0; end - done]),
+            });
             let reply = self.instance.host.call(&Request::Process {
                 id: self.instance.id,
                 left: left[done..end].to_vec(),
                 right: right[done..end].to_vec(),
+                key,
             });
             if let Ok(Reply::Audio { left: l, right: r }) = reply
                 && l.len() == end - done
@@ -932,8 +1022,15 @@ impl RemoteProcessor {
 impl Insert for RemoteProcessor {
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         match self {
-            RemoteProcessor::Live(p) => p.process(left, right),
-            RemoteProcessor::Offline(p) => p.process(left, right),
+            RemoteProcessor::Live(p) => p.process(left, right, None),
+            RemoteProcessor::Offline(p) => p.process(left, right, None),
+        }
+    }
+
+    fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {
+        match self {
+            RemoteProcessor::Live(p) => p.process(left, right, Some(key)),
+            RemoteProcessor::Offline(p) => p.process(left, right, Some(key)),
         }
     }
 }

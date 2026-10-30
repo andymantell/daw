@@ -605,6 +605,9 @@ pub struct Effect {
     /// The track whose audio the effect listens to (a compressor's
     /// sidechain), by id, if it has one.
     pub sidechain: Option<String>,
+    /// A plugin's extra outputs mixed into the track, by the plugin's
+    /// bus index (its main output, 0, always is). Empty for most.
+    pub outputs: Vec<u32>,
 }
 
 impl Effect {

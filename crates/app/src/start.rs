@@ -335,11 +335,15 @@ mod tests {
         // Steps, not runs: the spinner repaints while the project opens.
         h.step();
         assert!(h.state().start.showing.is_none());
-        for _ in 0..200 {
+        // Until it has opened, however slow the machine: a busy test
+        // runner can take seconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while h.state().proj.loading() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the project never opened"
+            );
             h.step();
-            if !h.state().proj.loading() {
-                break;
-            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let folder = h.state().proj.folder.as_ref().map(|f| f.dir.clone());

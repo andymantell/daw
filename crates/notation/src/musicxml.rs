@@ -317,7 +317,7 @@ fn write_voice(
             Some(events[k - 1].1)
         } else {
             let prev = part.bars.get(b.checked_sub(1)?)?;
-            prev.events.iter().filter(|e| e.voice == v).last()
+            prev.events.iter().rfind(|e| e.voice == v)
         }
     };
     for (k, (_, e)) in events.iter().enumerate() {
@@ -496,10 +496,8 @@ fn write_notations(
         notations.push_str("<slide type=\"start\" line-type=\"solid\"/>");
     }
     let mut technical = String::new();
-    if tab {
-        if let (Some(st), Some(f)) = (note.string, note.fret) {
-            let _ = write!(technical, "<string>{st}</string><fret>{f}</fret>");
-        }
+    if tab && let (Some(st), Some(f)) = (note.string, note.fret) {
+        let _ = write!(technical, "<string>{st}</string><fret>{f}</fret>");
     }
     for (t, name, text) in [
         (Technique::HammerOn, "hammer-on", "H"),
@@ -791,10 +789,10 @@ fn read_part(
                         std::mem::take(&mut graces),
                     );
                     if is_chord {
-                        if let Some(e) = bar.events.iter_mut().rev().find(|e| e.voice == voice) {
-                            if let Some(n) = note {
-                                e.notes.push(n);
-                            }
+                        if let Some(e) = bar.events.iter_mut().rev().find(|e| e.voice == voice)
+                            && let Some(n) = note
+                        {
+                            e.notes.push(n);
                         }
                         continue;
                     }
@@ -847,10 +845,10 @@ fn read_attributes(el: Node<'_, '_>, st: &mut PartState, bar: &mut Bar) {
     if let Some(k) = child(el, "key").and_then(|k| num::<i8>(k, "fifths")) {
         bar.key = Some(k);
     }
-    if let Some(t) = child(el, "time") {
-        if let (Some(beats), Some(beat_type)) = (num(t, "beats"), num(t, "beat-type")) {
-            bar.time = Some(TimeSig { beats, beat_type });
-        }
+    if let Some(t) = child(el, "time")
+        && let (Some(beats), Some(beat_type)) = (num(t, "beats"), num(t, "beat-type"))
+    {
+        bar.time = Some(TimeSig { beats, beat_type });
     }
     if let Some(n) = num(el, "staves") {
         st.staves = n;
@@ -973,7 +971,8 @@ fn read_note(
         let alter: f32 = num(p, "alter").unwrap_or(0.0);
         let octave: i32 = num(p, "octave")?;
         (octave + 1) * 12 + STEP_SEMITONES[step] + alter.round() as i32 + st.transpose
-    } else if let Some(u) = child(el, "unpitched") {
+    } else {
+        let u = child(el, "unpitched")?;
         let from_instrument = child(el, "instrument")
             .and_then(|i| i.attribute("id"))
             .and_then(|id| instruments.get(id).copied());
@@ -991,8 +990,6 @@ fn read_note(
                 )
             }
         }
-    } else {
-        return None;
     };
     let mut note = Note::new(pitch.clamp(0, 127) as u8);
     note.tie = el
@@ -1031,12 +1028,11 @@ fn read_note(
                         });
                     }
                 }
-                "articulations" => {
+                "articulations"
                     if t.children()
-                        .any(|a| a.has_tag_name("accent") || a.has_tag_name("strong-accent"))
-                    {
-                        note.techniques.push(Technique::Accent);
-                    }
+                        .any(|a| a.has_tag_name("accent") || a.has_tag_name("strong-accent")) =>
+                {
+                    note.techniques.push(Technique::Accent);
                 }
                 _ => {}
             }
@@ -1118,10 +1114,10 @@ fn read_harmony(el: Node<'_, '_>, tick: u32) -> Option<ChordSymbol> {
         let strings: usize = num(f, "frame-strings").unwrap_or(6);
         let mut frets = vec![None; strings];
         for fnote in f.children().filter(|c| c.has_tag_name("frame-note")) {
-            if let (Some(s), Some(fr)) = (num::<usize>(fnote, "string"), num::<u8>(fnote, "fret")) {
-                if (1..=strings).contains(&s) {
-                    frets[s - 1] = Some(fr);
-                }
+            if let (Some(s), Some(fr)) = (num::<usize>(fnote, "string"), num::<u8>(fnote, "fret"))
+                && (1..=strings).contains(&s)
+            {
+                frets[s - 1] = Some(fr);
             }
         }
         ChordDiagram {

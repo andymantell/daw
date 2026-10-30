@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(map.look_up(36), (1, Notehead::Normal, false));
         assert_eq!(map.look_up(38), (5, Notehead::Normal, true));
         assert_eq!(map.look_up(42), (9, Notehead::X, true));
-        assert_eq!(map.look_up(44).2, false);
+        assert!(!map.look_up(44).2);
         assert_eq!(map.look_up(100), (4, Notehead::Normal, true));
         assert_eq!(map.key_at(9, Notehead::X), Some(42));
         assert_eq!(map.key_at(8, Notehead::Diamond), Some(53));

@@ -45,6 +45,7 @@ fn d(v: NoteValue) -> Duration {
     Duration::new(v)
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn demo() -> Score {
     use NoteValue::*;
     use Technique::*;
@@ -84,7 +85,6 @@ fn demo() -> Score {
             Event::chord(1, e8, vec![Note::new(45)]),
             Event::chord(1, d(Quarter), vec![Note::new(52).with(Slide)]),
         ],
-        ..Bar::default()
     });
     guitar.push(Bar {
         chords: vec![ChordSymbol {

@@ -167,7 +167,7 @@ impl NoteValue {
     ];
 
     pub fn ticks(self) -> u32 {
-        TICKS_PER_QUARTER * 4 >> (self as u32)
+        (TICKS_PER_QUARTER * 4) >> (self as u32)
     }
 
     /// Beams (or flags) this value carries: 0 for quarter notes and longer.

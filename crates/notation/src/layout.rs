@@ -708,7 +708,7 @@ impl<'a> Builder<'a> {
                 }),
                 Some(f) => {
                     let row = i32::from(*f) - i32::from(d.first_fret.max(1));
-                    if (0..frets as i32).contains(&row) {
+                    if (0..frets).contains(&row) {
                         self.items.push(Item::Circle {
                             centre: (sx, top + (row as f32 + 0.5) * fret_h),
                             radius: 0.35 * sp,
@@ -1360,24 +1360,24 @@ impl<'a> Builder<'a> {
                             .find(|m| m.string == Some(s))
                             .map(|m| (q.x + centre, m.fret.unwrap_or(0)))
                     });
-                    if note.has(&Technique::HammerOn) || note.has(&Technique::PullOff) {
-                        if let Some((nx, _)) = next {
-                            let y0 = y - 0.75 * sp;
-                            self.curve((cx, y0), (nx, y0), 1.0 * sp);
-                            let l = if note.has(&Technique::HammerOn) {
-                                "H"
-                            } else {
-                                "P"
-                            };
-                            self.text(
-                                (cx + nx) / 2.0,
-                                y0 - 0.9 * sp,
-                                l,
-                                1.1 * sp,
-                                Anchor::Middle,
-                                false,
-                            );
-                        }
+                    if (note.has(&Technique::HammerOn) || note.has(&Technique::PullOff))
+                        && let Some((nx, _)) = next
+                    {
+                        let y0 = y - 0.75 * sp;
+                        self.curve((cx, y0), (nx, y0), 1.0 * sp);
+                        let l = if note.has(&Technique::HammerOn) {
+                            "H"
+                        } else {
+                            "P"
+                        };
+                        self.text(
+                            (cx + nx) / 2.0,
+                            y0 - 0.9 * sp,
+                            l,
+                            1.1 * sp,
+                            Anchor::Middle,
+                            false,
+                        );
                     }
                     if note.has(&Technique::Slide) {
                         let (nx, nf) = next.unwrap_or((cx + 3.0 * sp, fret.saturating_sub(2)));
@@ -1573,7 +1573,7 @@ fn bar_tick(bar: &Bar, event: usize) -> u32 {
 /// Notes beam within a beat: a quarter in simple time, a dotted quarter in
 /// compound time.
 fn beat_group(time: TimeSig, tick: u32, bar: usize) -> (usize, u32) {
-    let compound = time.beat_type == 8 && time.beats % 3 == 0 && time.beats > 3;
+    let compound = time.beat_type == 8 && time.beats.is_multiple_of(3) && time.beats > 3;
     let beat = if compound {
         TICKS_PER_QUARTER * 3 / 2
     } else {
@@ -1747,10 +1747,10 @@ fn plan_bar(part: &Part, bar: &Bar, time: TimeSig, key: i8, sp: f32) -> BarPlan 
                 {
                     w += 1.6 * sp;
                 }
-                if let Some(acc) = &acc {
-                    if acc[e].iter().any(Option::is_some) {
-                        w += 1.2 * sp;
-                    }
+                if let Some(acc) = &acc
+                    && acc[e].iter().any(Option::is_some)
+                {
+                    w += 1.2 * sp;
                 }
             }
             for c in bar.chords.iter().filter(|c| c.tick == t) {

@@ -14,7 +14,8 @@ use std::collections::{HashMap, HashSet};
 use crate::{Clip, Effect, Fade, NoteClip, Project, Track};
 
 /// One thing that changed, and where: "Song", a track's name,
-/// "Tracks", "Markers", "Hit points", "Lesson notes", "Tab" or "Groups".
+/// "Tracks", "Markers", "Hit points", "Patterns", "Lesson notes", "Tab"
+/// or "Groups".
 #[derive(Clone, Debug, PartialEq)]
 pub struct Difference {
     pub place: String,
@@ -266,6 +267,28 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     for h in (before.hit_points.iter()).filter(|h| !now.contains(h.id.as_str())) {
         let at = secs(before, h.at);
         say("Hit points", format!("Removed “{}” ({at:.2} s)", h.name));
+    }
+
+    // Patterns.
+    let was: HashMap<&str, _> = (before.patterns.iter())
+        .map(|p| (p.id.as_str(), p))
+        .collect();
+    let now: HashSet<&str> = after.patterns.iter().map(|p| p.id.as_str()).collect();
+    for p in &after.patterns {
+        match was.get(p.id.as_str()) {
+            None => say("Patterns", format!("Added “{}”", p.name)),
+            Some(b) => {
+                if b.name != p.name {
+                    say("Patterns", format!("Renamed “{}” to “{}”", b.name, p.name));
+                }
+                if (b.len, b.swing, &b.lanes) != (p.len, p.swing, &p.lanes) {
+                    say("Patterns", format!("Changed “{}”", p.name));
+                }
+            }
+        }
+    }
+    for p in (before.patterns.iter()).filter(|p| !now.contains(p.id.as_str())) {
+        say("Patterns", format!("Removed “{}”", p.name));
     }
 
     // Lesson notes.
@@ -532,7 +555,13 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                 if (b.start, b.len, b.offset) != (c.start, c.len, c.offset) {
                     moved.push(c);
                 }
-                if b.notes != c.notes || b.controllers != c.controllers || b.scale != c.scale {
+                // A pattern clip's notes follow its pattern, which is
+                // told of on its own.
+                if b.pattern != c.pattern
+                    || (c.pattern.is_none() && b.notes != c.notes)
+                    || b.controllers != c.controllers
+                    || b.scale != c.scale
+                {
                     edited.push(c);
                 }
                 if b.muted != c.muted {

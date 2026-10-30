@@ -79,6 +79,10 @@ pub(crate) enum Cmd {
     Lessons,
     Comments,
     NotesEditor,
+    PatternEditor,
+    AddPattern,
+    MakePatternUnique,
+    PatternToNotes,
     AddInstrumentTrack,
     KeepNotes,
     QuantiseNotes,
@@ -352,6 +356,36 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::MidiLearn, "midi-learn", "Notes", "MIDI learn…", &[])
         .hint("Tie a knob, fader or pedal on a MIDI device to a setting")
         .words("controller map knob fader assign"),
+    info(
+        Cmd::PatternEditor,
+        "pattern-editor",
+        "View",
+        "Pattern editor",
+        &[key(NONE, Key::P)],
+    )
+    .hint("Program the steps of a drum pattern: swing, chance, repeats and fills")
+    .words("step sequencer drums beat euclidean ratchet probability swing"),
+    info(Cmd::AddPattern, "add-pattern", "Edit", "Add drum pattern", &[])
+        .hint("A clip playing a new drum pattern at the playhead, on the selected clip's instrument track")
+        .words("step sequencer beat drums pattern clip"),
+    info(
+        Cmd::MakePatternUnique,
+        "make-pattern-unique",
+        "Edit",
+        "Make pattern unique",
+        &[],
+    )
+    .hint("Give the selected pattern clip a copy of its pattern of its own")
+    .words("unlink linked pattern copy"),
+    info(
+        Cmd::PatternToNotes,
+        "pattern-to-notes",
+        "Edit",
+        "Convert pattern to plain notes",
+        &[],
+    )
+    .hint("Keep the notes the selected pattern clip plays as notes, no longer following the pattern")
+    .words("flatten unlink pattern notes"),
     info(
         Cmd::KeepNotes,
         "keep-notes",
@@ -847,6 +881,7 @@ impl Cmd {
                 | Cmd::TakeLanes
                 | Cmd::Lessons
                 | Cmd::NotesEditor
+                | Cmd::PatternEditor
                 | Cmd::AutomationLanes
                 | Cmd::Browser
                 | Cmd::FullSize
@@ -1581,6 +1616,7 @@ impl App {
             Cmd::Undo => self.can_undo(),
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
+            Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             _ => true,
         }
     }
@@ -1677,6 +1713,18 @@ impl App {
             | Cmd::ApplyGroove
             | Cmd::MidiLearn => {
                 self.run_note_tool(cmd);
+            }
+            Cmd::PatternEditor => self.workspace.toggle(Pane::Patterns),
+            Cmd::AddPattern => self.add_pattern_at_playhead(),
+            Cmd::MakePatternUnique => {
+                if let Some(key) = self.selected_pattern_clip() {
+                    self.make_pattern_unique(&key);
+                }
+            }
+            Cmd::PatternToNotes => {
+                if let Some(key) = self.selected_pattern_clip() {
+                    self.pattern_to_notes(&key);
+                }
             }
             Cmd::AddInstrumentTrack => {
                 let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;

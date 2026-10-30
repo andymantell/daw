@@ -308,6 +308,67 @@ impl Editor {
         changed
     }
 
+    /// The selected notes' chance, and grouping them to share one roll
+    /// or to have one of them picked (roadmap 3.3).
+    fn chance_tools(&mut self, ui: &mut egui::Ui, clip: &mut NoteClip) -> bool {
+        let mut changed = false;
+        let picked: Vec<usize> = (0..clip.notes.len())
+            .filter(|&i| self.selected.contains(&clip.notes[i].id))
+            .collect();
+        ui.add_enabled_ui(!picked.is_empty(), |ui| {
+            ui.label("Chance");
+            let mut c = picked
+                .first()
+                .map_or(100, |&i| (clip.notes[i].chance * 100.0).round() as i32);
+            if ui
+                .add(egui::DragValue::new(&mut c).range(0..=100).suffix("%"))
+                .accessible_name("Note chance")
+                .on_hover_text("How likely the selected notes are to play each time round")
+                .changed()
+            {
+                for &i in &picked {
+                    clip.notes[i].chance = c as f64 / 100.0;
+                }
+                changed = true;
+            }
+            let grouped = picked.iter().any(|&i| clip.notes[i].group.is_some());
+            if ui
+                .button("Play together")
+                .on_hover_text(
+                    "The selected notes share one roll of their chance: all play, or none",
+                )
+                .clicked()
+            {
+                let g = daw_project::next_group(&clip.notes);
+                for &i in &picked {
+                    clip.notes[i].group = Some(g);
+                    clip.notes[i].one_of = false;
+                }
+                changed = true;
+            }
+            if ui
+                .button("Play one at random")
+                .on_hover_text("Each time round, one of the selected notes plays, picked at random")
+                .clicked()
+            {
+                let g = daw_project::next_group(&clip.notes);
+                for &i in &picked {
+                    clip.notes[i].group = Some(g);
+                    clip.notes[i].one_of = true;
+                }
+                changed = true;
+            }
+            if grouped && ui.button("Ungroup").clicked() {
+                for &i in &picked {
+                    clip.notes[i].group = None;
+                    clip.notes[i].one_of = false;
+                }
+                changed = true;
+            }
+        });
+        changed
+    }
+
     /// Removes the selected notes.
     pub fn delete_selected(&mut self, clip: &mut NoteClip) -> bool {
         let before = clip.notes.len();
@@ -441,6 +502,7 @@ impl Editor {
                     changed = true;
                 }
             }
+            changed |= self.chance_tools(ui, clip);
             ui.separator();
             if ui.button("Select all").clicked() {
                 self.selected = clip.notes.iter().map(|n| n.id.clone()).collect();
@@ -1321,6 +1383,25 @@ impl crate::App {
             editor.clip = None;
             return;
         };
+        if clip.pattern.is_some() {
+            ui.label("This clip plays a drum pattern: its notes follow the pattern.");
+            ui.horizontal(|ui| {
+                if ui.button("Edit the pattern").clicked() {
+                    self.edit_pattern_of(&key);
+                }
+                if ui
+                    .button("Convert to plain notes")
+                    .on_hover_text(
+                        "Keep its notes as notes to edit here, no longer following the pattern",
+                    )
+                    .clicked()
+                {
+                    self.timeline.note_sel = Some(key.clone());
+                    self.run(&ui.ctx().clone(), crate::commands::Cmd::PatternToNotes);
+                }
+            });
+            return;
+        }
         if editor.show(ui, clip, &map, playhead, playing) {
             self.rebuild();
         }

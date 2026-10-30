@@ -2,7 +2,8 @@
 //! Notes on instrument tracks (roadmap 3.1): notes from clips reach the
 //! instrument on the right frame, round the loop, at practice speed and
 //! transposed; live notes reach it as they arrive and are reported for
-//! recording; and a MIDI output gets the track's notes.
+//! recording; a MIDI output gets the track's notes; and chance is
+//! rolled afresh each time round the loop (roadmap 3.3).
 
 use std::sync::{Arc, Mutex};
 
@@ -41,14 +42,13 @@ impl Instrument for Logger {
 }
 
 fn note(beat: f64, beats: f64, pitch: u8) -> NoteSpec {
-    NoteSpec {
-        start: Ticks((beat * PPQ as f64) as i64),
-        len: Ticks((beats * PPQ as f64) as i64),
+    NoteSpec::new(
+        Ticks((beat * PPQ as f64) as i64),
+        Ticks((beats * PPQ as f64) as i64),
         pitch,
-        velocity: 100,
-        channel: 0,
-        expr: (0, 0),
-    }
+        100,
+        0,
+    )
 }
 
 fn track(notes: Vec<NoteSpec>, latency: u32) -> TrackSpec {
@@ -469,4 +469,59 @@ fn a_notes_expression_reaches_the_instrument_while_it_sounds() {
     let i_on = got.iter().position(|(_, k)| on(60)(k)).unwrap();
     let i_x = got.iter().position(|(_, k)| *k == at(0.0)).unwrap();
     assert!(i_on < i_x);
+}
+
+#[test]
+fn chance_rolls_afresh_each_time_round_and_groups_roll_together() {
+    // A half-beat loop with three notes in it: one at 50%, two sharing
+    // one 50% roll, and a pick of one from three.
+    let mut s = session();
+    let half = |pitch: u8, key: u64| NoteSpec {
+        chance: 0.5,
+        key,
+        ..note(0.0, 0.25, pitch)
+    };
+    let pick = |pitch: u8, n: u16| NoteSpec {
+        key: 9,
+        pick: n,
+        of: 3,
+        ..note(0.0, 0.25, pitch)
+    };
+    s.tracks.push(track(
+        vec![
+            half(60, 1),
+            half(70, 2),
+            half(71, 2),
+            pick(80, 0),
+            pick(81, 1),
+            pick(82, 2),
+            note(0.0, 0.25, 90),
+        ],
+        0,
+    ));
+    let rounds = 200;
+    let loop_len = BEAT / 2;
+    let got = play(&s, 0, rounds * loop_len as usize, Some((0, loop_len)), None);
+    let ons = |p: u8| -> Vec<i64> {
+        (got.iter())
+            .filter(|(_, k)| on(p)(k))
+            .map(|(f, _)| f / loop_len)
+            .collect()
+    };
+    assert_eq!(ons(90).len(), rounds, "a plain note plays every time");
+    let lone = ons(60).len();
+    assert!(
+        (60..140).contains(&lone),
+        "a 50% note plays about half the time, not {lone} of {rounds}"
+    );
+    assert_eq!(ons(70), ons(71), "a group plays or doesn't together");
+    assert_ne!(ons(60), ons(70), "separate rolls differ");
+    let picked: usize = [80, 81, 82].iter().map(|&p| ons(p).len()).sum();
+    assert_eq!(picked, rounds, "exactly one of the pick plays each time");
+    for p in [80, 81, 82] {
+        assert!(ons(p).len() > rounds / 6, "each of the pick gets its turn");
+    }
+    // Notes that didn't play are never stopped.
+    let offs = (got.iter()).filter(|(_, k)| off(60)(k)).count();
+    assert_eq!(offs, lone);
 }

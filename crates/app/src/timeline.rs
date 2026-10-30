@@ -745,6 +745,22 @@ pub struct Outcome {
     pub paste: Option<(usize, i64, bool)>,
     /// Open the note editor on this note clip, by key.
     pub edit_notes: Option<String>,
+    /// Add, edit or copy a drum pattern (roadmap 3.3).
+    pub pattern: Option<PatternAsk>,
+}
+
+/// What the timeline asks of patterns, which the app keeps.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PatternAsk {
+    /// A new pattern, and a clip playing it on this lane at this frame.
+    Add(usize, i64),
+    /// Open the pattern editor on the pattern this note clip plays.
+    Edit(String),
+    /// Give this note clip a copy of its pattern of its own.
+    Unique(String),
+    /// Make this note clip's notes its own, no longer following its
+    /// pattern.
+    ToNotes(String),
 }
 
 /// The amounts, in dB, the clip menu's Change gain offers.
@@ -1993,7 +2009,15 @@ impl Timeline {
                     );
                 }
             }
-            let at = r.left_top() + vec2(4.0, 2.0);
+            let mut at = r.left_top() + vec2(4.0, 2.0);
+            // A pattern clip: a little grid of steps before its name.
+            if c.pattern.is_some() {
+                for (i, j) in [(0.0, 0.0), (5.0, 0.0), (0.0, 5.0), (5.0, 5.0)] {
+                    let p = at + vec2(i, 3.0 + j);
+                    clipped.rect_filled(Rect::from_min_size(p, vec2(4.0, 4.0)), 1.0, ink);
+                }
+                at.x += 13.0;
+            }
             let font = look.font(look.small);
             let name = if c.muted {
                 format!("{} (muted)", c.name)
@@ -2761,7 +2785,11 @@ impl Timeline {
                 Some(Hit::NoteClip { lane, index, .. }) => {
                     if let Some(c) = song.lanes[lane].notes.get(index) {
                         self.note_sel = Some(c.id.clone());
-                        out.edit_notes = Some(c.id.clone());
+                        if c.pattern.is_some() {
+                            out.pattern = Some(PatternAsk::Edit(c.id.clone()));
+                        } else {
+                            out.edit_notes = Some(c.id.clone());
+                        }
                     }
                 }
                 // An empty place on an instrument track: a new clip.
@@ -3441,7 +3469,36 @@ impl Timeline {
                     .and_then(|l| l.notes.get(index))
                     .map(|c| c.id.clone());
                 if let Some(key) = key {
-                    if ui.button("Edit notes…").clicked() {
+                    let linked = song.lanes[lane].notes[index].pattern.is_some();
+                    if linked {
+                        if ui.button("Edit pattern…").clicked() {
+                            self.note_sel = Some(key.clone());
+                            out.pattern = Some(PatternAsk::Edit(key.clone()));
+                            ui.close();
+                        }
+                        if ui
+                            .button("Make unique")
+                            .on_hover_text(
+                                "Give this clip a copy of the pattern of its own, so editing it \
+                                 leaves the other clips playing the pattern as they are",
+                            )
+                            .clicked()
+                        {
+                            out.pattern = Some(PatternAsk::Unique(key.clone()));
+                            ui.close();
+                        }
+                        if ui
+                            .button("Convert to plain notes")
+                            .on_hover_text(
+                                "Keep the notes the pattern plays here as notes to edit one by \
+                                 one, no longer following the pattern",
+                            )
+                            .clicked()
+                        {
+                            out.pattern = Some(PatternAsk::ToNotes(key.clone()));
+                            ui.close();
+                        }
+                    } else if ui.button("Edit notes…").clicked() {
                         self.note_sel = Some(key.clone());
                         out.edit_notes = Some(key.clone());
                         ui.close();
@@ -3452,7 +3509,15 @@ impl Timeline {
                         out.changed = true;
                         ui.close();
                     }
-                    if ui.button("Duplicate").clicked() {
+                    let dup = if linked {
+                        ui.button("Duplicate (linked)").on_hover_text(
+                            "A copy after it playing the same pattern: editing the pattern \
+                             changes both",
+                        )
+                    } else {
+                        ui.button("Duplicate")
+                    };
+                    if dup.clicked() {
                         let mut c = song.lanes[lane].notes[index].clone();
                         c.id = daw_project::new_id();
                         c.start = c.end();
@@ -3606,6 +3671,15 @@ impl Timeline {
                     out.edit_notes = Some(c.id.clone());
                     song.lanes[l].notes.push(c);
                     out.changed = true;
+                    ui.close();
+                }
+                if let Some(l) = self.menu_lane.filter(|&l| song.lanes[l].kind.plays_notes())
+                    && ui
+                        .button("Add drum pattern here")
+                        .on_hover_text("A clip playing a new pattern of steps, to edit in the pattern editor")
+                        .clicked()
+                {
+                    out.pattern = Some(PatternAsk::Add(l, snap_to(at)));
                     ui.close();
                 }
                 let on = match self.menu_lane.and_then(|l| song.lanes.get(l)) {

@@ -54,6 +54,8 @@ pub struct Project {
     /// Controls on MIDI devices tied to settings (MIDI learn), in the
     /// order made.
     pub midi_maps: Vec<MidiMap>,
+    /// Drum patterns that note clips play (roadmap 3.3), by name.
+    pub patterns: Vec<crate::Pattern>,
 }
 
 impl Default for Project {
@@ -81,6 +83,7 @@ impl Default for Project {
             scale: None,
             grooves: Vec::new(),
             midi_maps: Vec::new(),
+            patterns: Vec::new(),
         }
     }
 }
@@ -1231,6 +1234,13 @@ pub struct Note {
     /// pressure and timbre (see [`Note::PITCH`] and the others), with
     /// points in ticks from the note's start. Empty for most notes.
     pub expression: Vec<Lane>,
+    /// Notes of a clip in the same group share one roll of the dice
+    /// for their chance, so the whole group plays or doesn't (roadmap
+    /// 3.3).
+    pub group: Option<u32>,
+    /// Of the notes in its group marked so, one picked at random plays
+    /// each time round ("one note of this chord").
+    pub one_of: bool,
 }
 
 impl Note {
@@ -1249,6 +1259,8 @@ impl Note {
             articulation: None,
             chance: 1.0,
             expression: Vec::new(),
+            group: None,
+            one_of: false,
         }
     }
 
@@ -1306,6 +1318,8 @@ impl Note {
             && self.articulation == other.articulation
             && self.chance == other.chance
             && self.expression == other.expression
+            && self.group == other.group
+            && self.one_of == other.one_of
     }
 }
 
@@ -1504,6 +1518,9 @@ pub struct NoteClip {
     /// wheel or pressure (see [`Controller`]), with points in ticks from
     /// the clip's content start, in the controller's own MIDI units.
     pub controllers: Vec<Lane>,
+    /// The pattern it plays, by id (roadmap 3.3): its notes are then
+    /// made from the pattern, see [`crate::fill_pattern_clips`].
+    pub pattern: Option<String>,
 }
 
 impl NoteClip {
@@ -1519,6 +1536,7 @@ impl NoteClip {
             take: None,
             scale: None,
             controllers: Vec::new(),
+            pattern: None,
         }
     }
 

@@ -32,9 +32,10 @@ pub(crate) enum Pane {
     NotesEditor,
     Automation,
     Browser,
+    Patterns,
 }
 
-pub(crate) const PANES: [Pane; 11] = [
+pub(crate) const PANES: [Pane; 12] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -46,6 +47,7 @@ pub(crate) const PANES: [Pane; 11] = [
     Pane::NotesEditor,
     Pane::Automation,
     Pane::Browser,
+    Pane::Patterns,
 ];
 
 impl Pane {
@@ -63,6 +65,7 @@ impl Pane {
             Pane::NotesEditor => "notes-editor",
             Pane::Automation => "automation",
             Pane::Browser => "browser",
+            Pane::Patterns => "patterns",
         }
     }
 
@@ -83,6 +86,7 @@ impl Pane {
             Pane::NotesEditor => "Note editor",
             Pane::Automation => "Automation",
             Pane::Browser => "Content browser",
+            Pane::Patterns => "Pattern editor",
         }
     }
 
@@ -387,9 +391,12 @@ impl Layout {
             Pane::Timeline => return,
             // Left of the timeline, where sounds are dragged from.
             Pane::Browser => (Pane::Timeline, Side::Left),
-            Pane::Mixer | Pane::Takes | Pane::Monitor | Pane::NotesEditor | Pane::Automation => {
-                (Pane::Timeline, Side::Below)
-            }
+            Pane::Mixer
+            | Pane::Takes
+            | Pane::Monitor
+            | Pane::NotesEditor
+            | Pane::Automation
+            | Pane::Patterns => (Pane::Timeline, Side::Below),
             // Below the side panes open now, so all can be seen.
             _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
                 Some(q) => (q, Side::Below),
@@ -1546,6 +1553,7 @@ impl crate::App {
             Cmd::MonitorSection,
             Cmd::TakeLanes,
             Cmd::NotesEditor,
+            Cmd::PatternEditor,
             Cmd::AutomationLanes,
             Cmd::Browser,
             Cmd::Comments,
@@ -1563,6 +1571,7 @@ impl crate::App {
                 Cmd::LessonNotes => self.notes_ui.open,
                 Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
                 Cmd::NotesEditor => self.workspace.layout.is_open(Pane::NotesEditor),
+                Cmd::PatternEditor => self.workspace.layout.is_open(Pane::Patterns),
                 _ => self.tuner.open,
             };
             ui.add_enabled_ui(true, |ui| {
@@ -1581,7 +1590,8 @@ impl crate::App {
                             | Cmd::TakeLanes
                             | Cmd::Lessons
                             | Cmd::NotesEditor
-                            | Cmd::Browser,
+                            | Cmd::Browser
+                            | Cmd::PatternEditor,
                             _,
                         ) => self.run(&ctx, c),
                         (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
@@ -1721,6 +1731,13 @@ impl Host for crate::App {
             Pane::Notes => self.notes_pane(ui),
             Pane::Lessons => self.lessons_pane(ui),
             Pane::NotesEditor => self.notes_editor_pane(ui),
+            Pane::Patterns => {
+                egui::ScrollArea::vertical()
+                    .id_salt("patterns-pane")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.pattern_editor_pane(ui))
+                    .inner
+            }
             Pane::Tuner => {
                 let inputs = self.input_count();
                 if let Some(c) = self.tuner.pane(ui, inputs) {

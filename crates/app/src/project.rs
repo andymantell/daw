@@ -236,6 +236,7 @@ impl App {
             scale: self.scale,
             grooves: self.grooves.clone(),
             midi_maps: self.midi_maps.clone(),
+            patterns: self.patterns.clone(),
         }
     }
 
@@ -467,6 +468,7 @@ impl App {
         self.scale = p.scale;
         self.grooves = p.grooves.clone();
         self.midi_maps = p.midi_maps.clone();
+        self.patterns = p.patterns.clone();
         let mut old: HashMap<String, Track> = (self.tracks.drain(..))
             .map(|t| (t.key.clone(), t))
             .collect();

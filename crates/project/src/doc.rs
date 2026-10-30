@@ -48,7 +48,7 @@ use crate::{
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
     GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Note,
     NoteClip, Practice, Project, Scale, Send, TabBlock, Technique, TempoChange, TimecodeSetup,
-    Track, TrackKind, TrainerSettings, is_asset_name,
+    Track, TrackKind, TrainerSettings, VideoClip, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -437,6 +437,27 @@ impl ProjectDoc {
             write_cue_mixes(&mut w, &self.doc, &p.cue_mixes);
         }
 
+        // Video clips, likewise only once a project has one.
+        if !p.videos.is_empty() || self.doc.get_by_str_path("videos").is_some() {
+            let videos = self.doc.get_map("videos");
+            let keep: HashSet<&str> = p.videos.iter().map(|v| v.id.as_str()).collect();
+            for id in keys(&videos) {
+                if !keep.contains(id.as_str()) {
+                    w.delete(&videos, &id);
+                }
+            }
+            for (i, v) in p.videos.iter().enumerate() {
+                let m = w.child(&videos, &v.id);
+                w.put(&m, "asset", v.asset.as_str());
+                w.put(&m, "name", v.name.as_str());
+                w.put(&m, "start", v.start);
+                w.put(&m, "offset", v.offset);
+                w.put(&m, "len", v.len);
+                w.put(&m, "sound", opt_str(&v.sound));
+                w.put(&m, "seq", i as i64);
+            }
+        }
+
         let markers = self.markers();
         let keep: HashSet<&str> = p.markers.iter().map(|m| m.id.as_str()).collect();
         for id in keys(&markers) {
@@ -752,6 +773,29 @@ impl ProjectDoc {
             }
         }
         p.cue_mixes = read_cue_mixes(&root, &p.tracks);
+        if let Some(LoroValue::Map(vs)) = root.get("videos") {
+            let mut videos: Vec<(i64, VideoClip)> = Vec::new();
+            for (id, v) in vs.iter() {
+                let LoroValue::Map(v) = v else { continue };
+                let Some(asset) = string(v, "asset") else {
+                    continue;
+                };
+                videos.push((
+                    int(v, "seq").unwrap_or(0),
+                    VideoClip {
+                        id: id.to_string(),
+                        asset,
+                        name: string(v, "name").unwrap_or_default(),
+                        start: int(v, "start").unwrap_or(0),
+                        offset: int(v, "offset").unwrap_or(0),
+                        len: int(v, "len").unwrap_or(0),
+                        sound: string(v, "sound"),
+                    },
+                ));
+            }
+            videos.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+            p.videos = videos.into_iter().map(|(_, v)| v).collect();
+        }
         if let Some(LoroValue::Map(ms)) = root.get("markers") {
             for (id, m) in ms.iter() {
                 let LoroValue::Map(m) = m else { continue };
@@ -2302,6 +2346,41 @@ mod tests {
         assert_eq!(back.hit_points.len(), 1);
         assert_eq!(back.hit_points[0].name, "Door slams");
         assert_eq!(back.timecode, TimecodeSetup::default());
+    }
+
+    #[test]
+    fn video_clips_round_trip_in_order_and_count_as_assets() {
+        let mut doc = ProjectDoc::new(1);
+        let mut p = Project::default();
+        doc.set(&p);
+        assert!(
+            doc.doc.get_by_str_path("videos").is_none(),
+            "none until one"
+        );
+        let film = VideoClip {
+            id: "v1".into(),
+            asset: format!("{}.mp4", "a".repeat(32)),
+            name: "Short film".into(),
+            start: 48_000,
+            offset: 2_400,
+            len: 480_000,
+            sound: Some("c1".into()),
+        };
+        let titles = VideoClip {
+            id: "v0".into(),
+            asset: format!("{}.mov", "b".repeat(32)),
+            name: "Titles".into(),
+            ..VideoClip::default()
+        };
+        p.videos = vec![film.clone(), titles.clone()];
+        doc.set(&p);
+        assert_eq!(doc.get().videos, [film.clone(), titles.clone()]);
+        assert!(doc.assets_in_use().contains(&film.asset));
+        p.videos.remove(0);
+        doc.set(&p);
+        assert_eq!(doc.get().videos, [titles]);
+        assert!(doc.undo());
+        assert_eq!(doc.get().videos.len(), 2);
     }
 
     #[test]

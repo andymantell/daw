@@ -162,7 +162,8 @@ impl ProjectDoc {
                             .flat_map(|e| e.assets())
                             .map(String::from),
                     )
-            }))
+            }));
+            v.extend(p.videos.iter().map(|c| c.asset.clone()));
         };
         add(&self.get());
         for s in self.snapshots() {

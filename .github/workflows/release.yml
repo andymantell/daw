@@ -51,8 +51,14 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: ALSA headers
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: ALSA and media framework headers
+        # The runner's own libunwind-14-dev blocks the libunwind-dev that
+        # the media framework's headers need, so it goes first.
+        run: |
+          sudo apt-get update
+          sudo apt-get remove -y libunwind-14-dev || true
+          sudo apt-get install -y libasound2-dev libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
       - name: Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal

@@ -33,9 +33,10 @@ pub(crate) enum Pane {
     Automation,
     Browser,
     Patterns,
+    Video,
 }
 
-pub(crate) const PANES: [Pane; 12] = [
+pub(crate) const PANES: [Pane; 13] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -48,6 +49,7 @@ pub(crate) const PANES: [Pane; 12] = [
     Pane::Automation,
     Pane::Browser,
     Pane::Patterns,
+    Pane::Video,
 ];
 
 impl Pane {
@@ -66,6 +68,7 @@ impl Pane {
             Pane::Automation => "automation",
             Pane::Browser => "browser",
             Pane::Patterns => "patterns",
+            Pane::Video => "video",
         }
     }
 
@@ -87,6 +90,7 @@ impl Pane {
             Pane::Automation => "Automation",
             Pane::Browser => "Content browser",
             Pane::Patterns => "Pattern editor",
+            Pane::Video => "Video",
         }
     }
 
@@ -397,6 +401,7 @@ impl Layout {
             | Pane::NotesEditor
             | Pane::Automation
             | Pane::Patterns => (Pane::Timeline, Side::Below),
+            Pane::Video => (Pane::Timeline, Side::Right),
             // Below the side panes open now, so all can be seen.
             _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
                 Some(q) => (q, Side::Below),
@@ -1556,6 +1561,7 @@ impl crate::App {
             Cmd::PatternEditor,
             Cmd::AutomationLanes,
             Cmd::Browser,
+            Cmd::Video,
             Cmd::Comments,
             Cmd::LessonNotes,
             Cmd::Lessons,
@@ -1567,6 +1573,7 @@ impl crate::App {
                 Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
                 Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
                 Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
+                Cmd::Video => self.workspace.layout.is_open(Pane::Video),
                 Cmd::Comments => self.comment_ui.open,
                 Cmd::LessonNotes => self.notes_ui.open,
                 Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
@@ -1591,7 +1598,8 @@ impl crate::App {
                             | Cmd::Lessons
                             | Cmd::NotesEditor
                             | Cmd::Browser
-                            | Cmd::PatternEditor,
+                            | Cmd::PatternEditor
+                            | Cmd::Video,
                             _,
                         ) => self.run(&ctx, c),
                         (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
@@ -1728,6 +1736,10 @@ impl Host for crate::App {
             Pane::Takes => self.takes_pane(ui),
             Pane::Automation => self.automation_pane(ui),
             Pane::Browser => self.browser_pane(ui),
+            Pane::Video => {
+                let at = self.ctl.status().position().0;
+                self.video.pane(ui, at, self.rate);
+            }
             Pane::Notes => self.notes_pane(ui),
             Pane::Lessons => self.lessons_pane(ui),
             Pane::NotesEditor => self.notes_editor_pane(ui),

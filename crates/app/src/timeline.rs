@@ -745,6 +745,9 @@ pub struct Outcome {
     pub paste: Option<(usize, i64, bool)>,
     /// Open the note editor on this note clip, by key.
     pub edit_notes: Option<String>,
+    /// Where the band asked for with [`Timeline::band`] is, track names'
+    /// column and all, for the app to draw in.
+    pub band: Option<Rect>,
     /// Add, edit or copy a drum pattern (roadmap 3.3).
     pub pattern: Option<PatternAsk>,
 }
@@ -995,6 +998,10 @@ pub struct Timeline {
     /// the strip was right-clicked.
     hit_drag: Option<String>,
     strip_at: i64,
+    /// The height of a band between the ruler and the tracks, kept for
+    /// the app to draw in (the video filmstrip), or 0 for none. Set by
+    /// the app each frame.
+    pub band: f32,
 }
 
 impl Timeline {
@@ -1040,6 +1047,7 @@ impl Default for Timeline {
             focus_next: None,
             hit_drag: None,
             strip_at: 0,
+            band: 0.0,
         }
     }
 }
@@ -2312,13 +2320,21 @@ impl Timeline {
 
         let size = vec2(
             ui.available_width(),
-            ui.available_height().max(RULER + 40.0),
+            ui.available_height().max(RULER + self.band + 40.0),
         );
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+        // The tracks start under the ruler and the band.
+        let tracks_top = RULER + self.band;
+        if self.band > 0.0 {
+            out.band = Some(Rect::from_x_y_ranges(
+                rect.x_range(),
+                rect.top() + RULER..=rect.top() + tracks_top,
+            ));
+        }
         let lanes_n = song.lanes.len().max(1);
-        let lane_h = ((rect.height() - RULER) / lanes_n as f32).clamp(36.0, 80.0);
+        let lane_h = ((rect.height() - tracks_top) / lanes_n as f32).clamp(36.0, 80.0);
         // Lanes that don't fit scroll up and down.
-        let overflow = (lanes_n as f32 * lane_h - (rect.height() - RULER)).max(0.0);
+        let overflow = (lanes_n as f32 * lane_h - (rect.height() - tracks_top)).max(0.0);
         let left = rect.left() + HEADER;
         self.width = (rect.right() - left).max(50.0);
         let rate = view.rate as f64;
@@ -2349,10 +2365,10 @@ impl Timeline {
         let scroll = self.scroll;
         let x_of = move |f: i64| left + ((f as f64 / rate - scroll) * pps) as f32;
         let frame_of = move |x: f32| ((scroll + (x - left) as f64 / pps) * rate).round() as i64;
-        let lane_top = |i: usize| rect.top() + RULER + i as f32 * lane_h - vscroll;
+        let lane_top = |i: usize| rect.top() + tracks_top + i as f32 * lane_h - vscroll;
         // The track at a height, held to the first and last.
         let lane_at = move |y: f32| {
-            let l = ((y - rect.top() - RULER + vscroll) / lane_h).floor();
+            let l = ((y - rect.top() - tracks_top + vscroll) / lane_h).floor();
             (l.max(0.0) as usize).min(lanes_n - 1)
         };
 
@@ -2396,7 +2412,10 @@ impl Timeline {
                 }
                 return Some(Hit::Ruler);
             }
-            let lane = ((pos.y - rect.top() - RULER + vscroll) / lane_h) as usize;
+            if pos.y < rect.top() + tracks_top {
+                return None;
+            }
+            let lane = ((pos.y - rect.top() - tracks_top + vscroll) / lane_h) as usize;
             let notes = &song.lanes.get(lane)?.notes;
             for (index, c) in notes.iter().enumerate().rev() {
                 let x0 = x_of(view.map.frames_at(Ticks(c.start)).0);
@@ -2832,8 +2851,8 @@ impl Timeline {
             && let Some(p) = resp.interact_pointer_pos()
         {
             self.menu = hit(p, song).map(|h| (h, frame_of(p.x).max(0)));
-            self.menu_lane = (p.y >= rect.top() + RULER)
-                .then(|| ((p.y - rect.top() - RULER + vscroll) / lane_h) as usize)
+            self.menu_lane = (p.y >= rect.top() + tracks_top)
+                .then(|| ((p.y - rect.top() - tracks_top + vscroll) / lane_h) as usize)
                 .filter(|&l| l < song.lanes.len());
             if let Some((Hit::Clip { id, .. }, _)) = self.menu
                 && !self.selected.contains(&id)
@@ -2924,8 +2943,8 @@ impl Timeline {
             }
             if let Some(l) = lane {
                 let (top, bottom) = (lane_top(l), lane_top(l) + lane_h);
-                if top < rect.top() + RULER {
-                    self.vscroll -= rect.top() + RULER - top;
+                if top < rect.top() + tracks_top {
+                    self.vscroll -= rect.top() + tracks_top - top;
                 } else if bottom > rect.bottom() {
                     self.vscroll += bottom - rect.bottom();
                 }
@@ -3065,7 +3084,7 @@ impl Timeline {
         let hover_at = resp.hover_pos();
         // Lanes and clips, under the ruler.
         let lanes = painter.with_clip_rect(Rect::from_min_max(
-            pos2(rect.left(), rect.top() + RULER),
+            pos2(rect.left(), rect.top() + tracks_top),
             rect.max,
         ));
         for (i, lane) in song.lanes.iter().enumerate() {
@@ -3265,7 +3284,7 @@ impl Timeline {
         }
         if song.lanes.is_empty() {
             painter.text(
-                pos2(left + 10.0, rect.top() + RULER + 20.0),
+                pos2(left + 10.0, rect.top() + tracks_top + 20.0),
                 Align2::LEFT_CENTER,
                 "No tracks yet",
                 look.font(look.body),

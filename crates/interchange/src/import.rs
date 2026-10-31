@@ -1199,8 +1199,9 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
                 None => return,
             },
         };
-        let (start, end) = (start.max(c.lo), end.min(c.hi));
-        if end <= start {
+        // What plays of it, inside the clips around it.
+        let (lo, hi) = (start.max(c.lo), end.min(c.hi));
+        if hi <= lo {
             return;
         }
         let muted = attr_bool(clip, "enable") == Some(false);
@@ -1263,17 +1264,16 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
         let first_notes = self.p.tracks[t].note_clips.len();
         for (a, b, pos) in &passes {
             // The pass's content time `a` falls at `pos` into the clip.
-            let ctx = Ctx {
-                lo: (start).max(self.ctx_frame(&base, pos - 0.0).min(start)),
-                hi: end,
-                ..self.inner(&base, *pos - *a, inner_seconds)
-            };
+            let ctx = self.inner(&base, *pos - *a, inner_seconds);
             let window = (self.ctx_frame(&ctx, *a), self.ctx_frame(&ctx, *b));
             let ctx = Ctx {
-                lo: window.0.max(start),
-                hi: window.1.min(end),
+                lo: window.0.max(lo),
+                hi: window.1.min(hi),
                 ..ctx
             };
+            if ctx.hi <= ctx.lo {
+                continue;
+            }
             self.content(content, t, &ctx, Some((*a, *b)));
         }
         // Fades go on the first and last audio of the clip; muting on all.
@@ -1369,29 +1369,27 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
         }
     }
 
+    /// An empty note clip for `window` of content placed through `c`,
+    /// cut to the clips around it. Its offset is where the window starts
+    /// in the content, so notes keep their content times.
     fn note_clip(&self, _t: usize, c: &Ctx, window: Option<(f64, f64)>) -> NoteClip {
-        let lo = (c.lo).max(i64::MIN / 8);
-        let start_tick = match window {
+        let origin = self.ctx_tick(c, 0.0);
+        let mut start = match window {
             Some((a, _)) => self.ctx_tick(c, a),
-            None if lo > i64::MIN / 8 => time::frames_to_ticks(&self.map, lo),
-            None => 0,
+            None => origin,
         };
-        let start_tick = start_tick.max(time::frames_to_ticks(&self.map, c.lo.max(0)));
-        let end_tick = match window {
+        if c.lo > i64::MIN / 8 {
+            start = start.max(time::frames_to_ticks(&self.map, c.lo));
+        }
+        let mut end = match window {
             Some((_, b)) => self.ctx_tick(c, b),
-            None => start_tick,
+            None => start,
         };
-        let end_tick = if c.hi < i64::MAX / 8 {
-            end_tick.min(time::frames_to_ticks(&self.map, c.hi))
-        } else {
-            end_tick
-        };
-        let mut nc = NoteClip::new(
-            new_id(),
-            String::new(),
-            start_tick,
-            (end_tick - start_tick).max(1),
-        );
+        if c.hi < i64::MAX / 8 {
+            end = end.min(time::frames_to_ticks(&self.map, c.hi));
+        }
+        let mut nc = NoteClip::new(new_id(), String::new(), start, (end - start).max(1));
+        nc.offset = (start - origin).max(0);
         // A clip with no window grows to its last note.
         if window.is_none() && c.hi >= i64::MAX / 8 {
             nc.len = 0;
@@ -1401,8 +1399,8 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
 
     fn push_note_clip(&mut self, t: usize, mut nc: NoteClip) {
         if nc.len <= 0 {
-            let end = nc.notes.iter().map(Note::end).max().unwrap_or(PPQ);
-            nc.len = (end + PPQ - 1) / PPQ * PPQ;
+            let end = nc.notes.iter().map(Note::end).max().unwrap_or(PPQ) - nc.offset;
+            nc.len = ((end + PPQ - 1) / PPQ * PPQ).max(PPQ);
         }
         if nc.notes.is_empty() && nc.controllers.iter().all(|l| l.points.is_empty()) {
             return;
@@ -1416,7 +1414,7 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
 
     /// A tick inside `c` as ticks from the start of `nc`.
     fn rel(&self, c: &Ctx, at: f64, nc: &NoteClip) -> i64 {
-        self.ctx_tick(c, at) - nc.start
+        self.ctx_tick(c, at) - (nc.start - nc.offset)
     }
 
     fn notes(&mut self, n: Node, c: &Ctx, window: Option<(f64, f64)>, nc: &mut NoteClip) {
@@ -1492,7 +1490,7 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
     }
 
     /// A controller line inside a note clip.
-    fn controller(&mut self, pts: Node, c: &Ctx, window: Option<(f64, f64)>, nc: &mut NoteClip) {
+    fn controller(&mut self, pts: Node, c: &Ctx, _window: Option<(f64, f64)>, nc: &mut NoteClip) {
         let Some(tg) = child(pts, "Target") else {
             return;
         };
@@ -1521,19 +1519,16 @@ impl<'a, 'b, 'i> Reader<'a, 'b, 'i> {
             }
         };
         let points: Vec<(f64, f64, bool)> = point_list(pts);
-        let start = nc.start;
+        let origin = nc.start - nc.offset;
         let lane = nc.controller_mut(ctl);
         let mut last: Option<(i64, f64, bool)> = None;
+        // The whole line comes, even beyond the clip, so the value at
+        // the clip's start is what it was.
         for (at, v, hold) in points {
-            if let Some((a, b)) = window
-                && (at < a - 1e-9 || at > b + 1e-9)
-            {
-                continue;
-            }
-            let tick = self.ctx_tick(c, at) - start;
+            let tick = self.ctx_tick(c, at) - origin;
             let v = scale(v);
-            if let Some((_, pv, true)) = last
-                && tick > 0
+            if let Some((pt, pv, true)) = last
+                && tick - 1 > pt
             {
                 lane.put(tick - 1, pv);
             }

@@ -37,6 +37,9 @@ pub(crate) enum Cmd {
     Split,
     Delete,
     Marker,
+    InsertBars,
+    DeleteBars,
+    TimeWindow,
     HitPoint,
     HitPoints,
     Timecode,
@@ -579,6 +582,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Mark a section at the playhead's bar")
     .words("marker add"),
+    info(
+        Cmd::InsertBars,
+        "insert-bars",
+        "Edit",
+        "Insert bars at the loop",
+        &[],
+    )
+    .hint("Put in as many empty bars as the loop is long, before it; everything after moves later")
+    .words("insert time add bars space gap shift"),
+    info(
+        Cmd::DeleteBars,
+        "delete-bars",
+        "Edit",
+        "Delete the loop's bars",
+        &[],
+    )
+    .hint("Take the loop's bars out of every track; everything after moves up")
+    .words("delete time remove bars cut close gap shift"),
+    info(
+        Cmd::TimeWindow,
+        "insert-delete-bars",
+        "Edit",
+        "Insert or delete bars…",
+        &[],
+    )
+    .hint("Put in empty bars, or take bars out, anywhere in the song")
+    .words("insert delete time add remove bars gap shift"),
     info(
         Cmd::HitPoint,
         "hit-point",
@@ -2252,6 +2282,9 @@ impl App {
                 self.add_hit_point(at);
             }
             Cmd::HitPoints => self.hits_ui.open = true,
+            Cmd::InsertBars => self.insert_loop_bars(),
+            Cmd::DeleteBars => self.delete_loop_bars(),
+            Cmd::TimeWindow => self.open_time_window(),
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
             Cmd::TimecodeFromFilm => self.timecode_from_film(),
             Cmd::FrameForward => self.step_frame(1),

@@ -128,8 +128,10 @@ impl App {
         let mut actions = Vec::new();
         let mut rebuild = false;
         let groups = self.groups.clone();
+        // The simpler mode leaves out the routing columns.
+        let simple = self.simple.on;
         egui::Grid::new("tracks")
-            .num_columns(13)
+            .num_columns(if simple { 10 } else { 13 })
             .spacing(vec2(10.0, 10.0))
             .striped(true)
             .show(ui, |ui| {
@@ -137,7 +139,9 @@ impl App {
                     "Track", "Input", "", "Level", "Volume", "Pan", "", "", "Effects", "Out",
                     "Sends", "Group", "Take",
                 ] {
-                    ui.strong(h);
+                    if !(simple && matches!(h, "Out" | "Sends" | "Group")) {
+                        ui.strong(h);
+                    }
                 }
                 ui.end_row();
                 let n = self.tracks.len();
@@ -289,15 +293,17 @@ impl App {
                     {
                         self.effects.open_track = (!open).then_some(i);
                     }
-                    rebuild |= output_picker(ui, i, t, &buses, &allowed[i]);
-                    if let Some(changed) = sends_menu(ui, i, t, &buses, &allowed[i]) {
-                        if changed {
-                            rebuild = true;
-                        } else {
-                            actions.push(Action::Sends(i));
+                    if !simple {
+                        rebuild |= output_picker(ui, i, t, &buses, &allowed[i]);
+                        if let Some(changed) = sends_menu(ui, i, t, &buses, &allowed[i]) {
+                            if changed {
+                                rebuild = true;
+                            } else {
+                                actions.push(Action::Sends(i));
+                            }
                         }
+                        rebuild |= group_picker(ui, i, t, &groups);
                     }
-                    rebuild |= group_picker(ui, i, t, &groups);
                     if t.kind.is_bus() {
                         ui.horizontal(|ui| {
                             if !folders.is_empty()
@@ -367,55 +373,57 @@ impl App {
                 self.tracks.push(t);
                 rebuild = true;
             }
-            if ui
-                .button("+ Add bus")
-                .on_hover_text(
-                    "A bus: tracks can go to it (a group), or send a copy of their audio to \
-                     it for an effect they share (a return)",
-                )
-                .clicked()
-            {
-                let n = self
-                    .tracks
-                    .iter()
-                    .filter(|t| t.kind == TrackKind::Bus)
-                    .count();
-                let mut t = Track::new(format!("Bus {}", n + 1));
-                t.kind = TrackKind::Bus;
-                self.tracks.push(t);
-                rebuild = true;
-            }
-            if ui
-                .button("+ Add folder")
-                .on_hover_text(
-                    "A folder: tracks put in it sit under it and go through its fader and \
-                     effects",
-                )
-                .clicked()
-            {
-                let n = self
-                    .tracks
-                    .iter()
-                    .filter(|t| t.kind == TrackKind::Folder)
-                    .count();
-                let mut t = Track::new(format!("Folder {}", n + 1));
-                t.kind = TrackKind::Folder;
-                self.tracks.push(t);
-                rebuild = true;
-            }
-            if ui
-                .button("+ Add control group")
-                .on_hover_text(
-                    "One fader and mute over several tracks, without summing their audio",
-                )
-                .clicked()
-            {
-                let n = self.groups.len() + 1;
-                self.groups.push(ControlGroup::new(
-                    daw_project::new_id(),
-                    format!("Group {n}"),
-                ));
-                rebuild = true;
+            if !simple {
+                if ui
+                    .button("+ Add bus")
+                    .on_hover_text(
+                        "A bus: tracks can go to it (a group), or send a copy of their audio to \
+                         it for an effect they share (a return)",
+                    )
+                    .clicked()
+                {
+                    let n = self
+                        .tracks
+                        .iter()
+                        .filter(|t| t.kind == TrackKind::Bus)
+                        .count();
+                    let mut t = Track::new(format!("Bus {}", n + 1));
+                    t.kind = TrackKind::Bus;
+                    self.tracks.push(t);
+                    rebuild = true;
+                }
+                if ui
+                    .button("+ Add folder")
+                    .on_hover_text(
+                        "A folder: tracks put in it sit under it and go through its fader and \
+                         effects",
+                    )
+                    .clicked()
+                {
+                    let n = self
+                        .tracks
+                        .iter()
+                        .filter(|t| t.kind == TrackKind::Folder)
+                        .count();
+                    let mut t = Track::new(format!("Folder {}", n + 1));
+                    t.kind = TrackKind::Folder;
+                    self.tracks.push(t);
+                    rebuild = true;
+                }
+                if ui
+                    .button("+ Add control group")
+                    .on_hover_text(
+                        "One fader and mute over several tracks, without summing their audio",
+                    )
+                    .clicked()
+                {
+                    let n = self.groups.len() + 1;
+                    self.groups.push(ControlGroup::new(
+                        daw_project::new_id(),
+                        format!("Group {n}"),
+                    ));
+                    rebuild = true;
+                }
             }
             rebuild |= self.input_tracks_button(ui, inputs);
         });

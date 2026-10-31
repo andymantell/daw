@@ -80,6 +80,7 @@ pub(crate) enum Cmd {
     Browser,
     Video,
     FullSize,
+    SimpleMode,
     /// Recalls saved layout n, counted from 0.
     Layout(u8),
     SaveLayout,
@@ -188,6 +189,8 @@ pub(crate) struct Info {
     typing: bool,
     /// Holding its key down repeats it.
     repeat: bool,
+    /// Shown in the simpler mode too: see `simple_mode`.
+    pub(crate) everyday: bool,
 }
 
 const fn info(
@@ -207,6 +210,7 @@ const fn info(
         keys,
         typing: false,
         repeat: false,
+        everyday: false,
     }
 }
 
@@ -241,11 +245,20 @@ impl Info {
             ..self
         }
     }
+
+    const fn everyday(self) -> Info {
+        Info {
+            everyday: true,
+            ..self
+        }
+    }
 }
 
 /// Every command, in menu order.
 pub(crate) const COMMANDS: &[Info] = &[
-    info(Cmd::NewProject, "new-project", "File", "New project", &[]).words("start empty"),
+    info(Cmd::NewProject, "new-project", "File", "New project", &[])
+        .words("start empty")
+        .everyday(),
     info(
         Cmd::NewFromTemplate,
         "new-from-template",
@@ -254,7 +267,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Start a project with tracks, sections and notes laid out")
-    .words("start lesson band demo"),
+    .words("start lesson band demo")
+    .everyday(),
     info(
         Cmd::OpenProject,
         "open-project",
@@ -262,7 +276,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Open project…",
         &[],
     )
-    .words("load"),
+    .words("load")
+    .everyday(),
     info(
         Cmd::StartScreen,
         "start-screen",
@@ -271,11 +286,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Recent projects and templates")
-    .words("recent welcome begin"),
+    .words("recent welcome begin")
+    .everyday(),
     info(Cmd::Save, "save", "File", "Save", &[key(CTRL, Key::S)])
         .hint("Save the project")
-        .typing(),
-    info(Cmd::SaveAs, "save-as", "File", "Save as…", &[]).words("copy rename"),
+        .typing()
+        .everyday(),
+    info(Cmd::SaveAs, "save-as", "File", "Save as…", &[])
+        .words("copy rename")
+        .everyday(),
     info(
         Cmd::SaveAsTemplate,
         "save-as-template",
@@ -293,7 +312,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("The project and its audio in one file, to send by any means")
-    .words("share send"),
+    .words("share send")
+    .everyday(),
     info(
         Cmd::ImportBundle,
         "import-bundle",
@@ -302,7 +322,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Merges into your copy of the project if you have one")
-    .words("share receive"),
+    .words("share receive")
+    .everyday(),
     info(Cmd::Snapshots, "snapshots", "File", "Snapshots…", &[])
         .hint("Name the project as it is now, or go back to a named moment")
         .words("restore version history"),
@@ -311,7 +332,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         .words("roles join name"),
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
-        .words("render bounce stems wav flac mp3 opus ogg mixdown bus"),
+        .words("render bounce stems wav flac mp3 opus ogg mixdown bus")
+        .everyday(),
     info(
         Cmd::ExportVideo,
         "export-video",
@@ -546,7 +568,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Makes a note clip from what was played on a MIDI keyboard without Record on")
     .words("retrospective capture midi"),
-    info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)]).repeat(),
+    info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)])
+        .repeat()
+        .everyday(),
     info(
         Cmd::Redo,
         "redo",
@@ -554,7 +578,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Redo",
         &[key(CTRL_SHIFT, Key::Z), key(CTRL, Key::Y)],
     )
-    .repeat(),
+    .repeat()
+    .everyday(),
     info(
         Cmd::Split,
         "split",
@@ -563,7 +588,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::S)],
     )
     .hint("Split clips at the playhead: the selected ones, or all under it")
-    .words("cut"),
+    .words("cut")
+    .everyday(),
     info(
         Cmd::Delete,
         "delete",
@@ -572,7 +598,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::Delete), key(NONE, Key::Backspace)],
     )
     .hint("Delete the selected clips, or the focused marker")
-    .words("remove erase"),
+    .words("remove erase")
+    .everyday(),
     info(
         Cmd::Marker,
         "marker",
@@ -581,7 +608,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::M)],
     )
     .hint("Mark a section at the playhead's bar")
-    .words("marker add"),
+    .words("marker add")
+    .everyday(),
     info(
         Cmd::InsertBars,
         "insert-bars",
@@ -691,7 +719,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Clear the selection",
         &[key(NONE, Key::Escape)],
     )
-    .words("deselect none"),
+    .words("deselect none")
+    .everyday(),
     info(
         Cmd::Crossfade,
         "crossfade",
@@ -718,7 +747,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(CTRL, Key::C)],
     )
     .hint("Copy the selected clips, to paste at the playhead or onto a track")
-    .words("duplicate clipboard"),
+    .words("duplicate clipboard")
+    .everyday(),
     info(
         Cmd::Paste,
         "paste",
@@ -727,7 +757,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(CTRL, Key::V)],
     )
     .hint("Paste the copied clips at the playhead, each on the track it came from")
-    .words("duplicate clipboard"),
+    .words("duplicate clipboard")
+    .everyday(),
     info(Cmd::Bounce, "bounce", "Edit", "Bounce to a new track", &[])
         .hint(
             "The selected clips through their track's effects, as new audio on a track beside \
@@ -748,7 +779,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::Equals)],
     )
     .repeat()
-    .words("magnify closer"),
+    .words("magnify closer")
+    .everyday(),
     info(
         Cmd::ZoomOut,
         "zoom-out",
@@ -757,7 +789,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::Minus)],
     )
     .repeat()
-    .words("further"),
+    .words("further")
+    .everyday(),
     info(
         Cmd::ZoomSelection,
         "zoom-selection",
@@ -775,7 +808,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::N)],
     )
     .hint("Snap clips to the grid while dragging")
-    .words("grid magnet"),
+    .words("grid magnet")
+    .everyday(),
     info(
         Cmd::Ripple,
         "ripple",
@@ -810,7 +844,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Play or stop",
         &[key(NONE, Key::Space)],
     )
-    .words("start pause"),
+    .words("start pause")
+    .everyday(),
     info(
         Cmd::ToStart,
         "to-start",
@@ -818,7 +853,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Back to the start",
         &[key(NONE, Key::Home)],
     )
-    .words("rewind beginning"),
+    .words("rewind beginning")
+    .everyday(),
     info(
         Cmd::Record,
         "record",
@@ -826,7 +862,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Record on or off",
         &[key(NONE, Key::R)],
     )
-    .hint("Armed tracks record while playing"),
+    .hint("Armed tracks record while playing")
+    .everyday(),
     info(
         Cmd::Loop,
         "loop",
@@ -834,7 +871,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Loop on or off",
         &[key(NONE, Key::L)],
     )
-    .words("repeat cycle"),
+    .words("repeat cycle")
+    .everyday(),
     info(
         Cmd::Metronome,
         "metronome",
@@ -842,7 +880,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Metronome on or off",
         &[key(NONE, Key::K)],
     )
-    .words("click"),
+    .words("click")
+    .everyday(),
     info(
         Cmd::CountIn,
         "count-in",
@@ -851,10 +890,12 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::C)],
     )
     .hint("One bar of clicks before playing")
-    .words("pre-roll"),
+    .words("pre-roll")
+    .everyday(),
     info(Cmd::Mixer, "mixer", "View", "Mixer", &[])
         .hint("Show or hide the mixer")
-        .words("pane faders tracks"),
+        .words("pane faders tracks")
+        .everyday(),
     info(
         Cmd::MonitorSection,
         "monitor-section",
@@ -903,6 +944,10 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Show or hide your sound folders and the project's audio, to hear and add")
     .words("samples loops sounds library files search tags preview audition"),
+    info(Cmd::SimpleMode, "simpler-mode", "View", "Simpler mode", &[])
+        .hint("Show only the everyday commands and controls; the rest stay under More")
+        .words("beginner basic easy simple advanced hide everyday")
+        .everyday(),
     info(
         Cmd::FullSize,
         "full-size",
@@ -1005,7 +1050,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Let a pane open in a window of its own, to put on another screen")
     .words("detach screens monitors undock float tear"),
-    info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[]).words("tune pitch"),
+    info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[])
+        .words("tune pitch")
+        .everyday(),
     info(Cmd::Meters, "meters", "Practice", "Meters…", &[])
         .words("loudness lufs level peak rms spectrum phase"),
     info(
@@ -1015,11 +1062,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Lesson notes…",
         &[],
     )
-    .words("tab text"),
+    .words("tab text")
+    .everyday(),
     info(Cmd::Lessons, "lessons", "Practice", "Lessons", &[])
         .hint("Show or hide assignments, the practice log and the lessons so far")
-        .words("assignment homework practice log history progress teacher student"),
-    info(Cmd::Comments, "comments", "Practice", "Comments…", &[]).words("pins feedback"),
+        .words("assignment homework practice log history progress teacher student")
+        .everyday(),
+    info(Cmd::Comments, "comments", "Practice", "Comments…", &[])
+        .words("pins feedback")
+        .everyday(),
     info(
         Cmd::AudioDevice,
         "audio-device",
@@ -1027,7 +1078,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Audio device…",
         &[],
     )
-    .words("interface sound card input output latency"),
+    .words("interface sound card input output latency")
+    .everyday(),
     info(Cmd::Plugins, "plugins", "Settings", "Plugins…", &[]).words("effects scan"),
     info(
         Cmd::PerformanceCheck,
@@ -1113,7 +1165,8 @@ pub(crate) const COMMANDS: &[Info] = &[
     .words("keyboard shortcuts keys"),
     info(Cmd::Theme, "theme", "Settings", "Theme…", &[])
         .hint("Choose how the app looks on this computer")
-        .words("look colours colors appearance skin dark light"),
+        .words("look colours colors appearance skin dark light")
+        .everyday(),
     info(Cmd::NextTheme, "next-theme", "Settings", "Next theme", &[])
         .words("look colours colors appearance skin switch"),
     info(
@@ -1124,7 +1177,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Swap the theme's light and dark colours")
-    .words("night day mode appearance"),
+    .words("night day mode appearance")
+    .everyday(),
     info(
         Cmd::FindCommand,
         "find-command",
@@ -1134,7 +1188,8 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Type part of a command's name and press Enter to run it")
     .words("search palette")
-    .typing(),
+    .typing()
+    .everyday(),
     info(
         Cmd::CheckUpdates,
         "check-updates",
@@ -1142,14 +1197,16 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Check for updates…",
         &[],
     )
-    .words("version new"),
+    .words("version new")
+    .everyday(),
     info(
         Cmd::CrashReports,
         "crash-reports",
         "Help",
         "Crash reports…",
         &[],
-    ),
+    )
+    .everyday(),
     info(
         Cmd::SoundCredits,
         "sound-credits",
@@ -1166,7 +1223,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Show the track's notes as tab or a staff under it, or take it off")
-    .words("tab tablature staff score drums notes view"),
+    .words("tab tablature staff score drums notes view")
+    .everyday(),
     info(
         Cmd::NotationView,
         "notation-view",
@@ -1175,7 +1233,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Tab, then a standard staff, then a drum staff")
-    .words("tab staff drums score"),
+    .words("tab staff drums score")
+    .everyday(),
     info(
         Cmd::NotationSettings,
         "notation-settings",
@@ -1223,7 +1282,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Silence the notation track's part, to play it yourself")
-    .words("play along mute practise practice"),
+    .words("play along mute practise practice")
+    .everyday(),
     info(
         Cmd::ContinuousScroll,
         "continuous-scroll",
@@ -1232,7 +1292,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("While playing, the lanes move under a still playhead, rather than a page at a time")
-    .words("follow page continuous notation"),
+    .words("follow page continuous notation")
+    .everyday(),
     info(
         Cmd::ImportMusicXml,
         "import-musicxml",
@@ -1585,6 +1646,8 @@ struct Palette {
     chosen: usize,
     /// Its text field takes the keyboard when it opens.
     focus: bool,
+    /// Lists advanced commands in the simpler mode too.
+    all: bool,
 }
 
 /// The key commands window.
@@ -1670,16 +1733,19 @@ impl Commands {
     /// input. While a text field has the keyboard (`typing`), only the
     /// few commands meant for that run; while the search, a menu or a
     /// list is open, none do.
-    fn pressed(&mut self, ctx: &egui::Context, typing: bool) -> Vec<Cmd> {
+    /// In the simpler mode (`simple`), the keys of advanced commands are
+    /// taken but run nothing; they come back as the second list.
+    fn pressed(&mut self, ctx: &egui::Context, typing: bool, simple: bool) -> (Vec<Cmd>, Vec<Cmd>) {
         if let Some(cmd) = self.editor.capturing {
             self.capture(ctx, cmd);
-            return Vec::new();
+            return Default::default();
         }
         // The search takes its own keys (Esc closes it).
         if self.palette.open || egui::Popup::is_any_open(ctx) {
-            return Vec::new();
+            return Default::default();
         }
         let mut run = Vec::new();
+        let mut held = Vec::new();
         let keymap = &self.keymap;
         ctx.input_mut(|i| {
             i.events.retain(|e| {
@@ -1700,13 +1766,17 @@ impl Commands {
                 if typing && !info.typing {
                     return true;
                 }
-                if !*repeat || info.repeat {
+                if simple && !info.everyday {
+                    if !*repeat {
+                        held.push(cmd);
+                    }
+                } else if !*repeat || info.repeat {
                     run.push(cmd);
                 }
                 false
             });
         });
-        run
+        (run, held)
     }
 
     /// The next key pressed goes to `cmd`; Esc stops waiting.
@@ -1753,12 +1823,19 @@ impl Commands {
     fn palette_window(
         &mut self,
         ctx: &egui::Context,
+        simple: bool,
         can_run: impl Fn(Cmd) -> bool,
     ) -> Option<Cmd> {
         if !self.palette.open {
             return None;
         }
-        let found = search_named(&self.palette.query, &self.names);
+        let mut found = search_named(&self.palette.query, &self.names);
+        let mut left_out = 0;
+        if simple && !self.palette.all {
+            let before = found.len();
+            found.retain(|c| c.info().everyday);
+            left_out = before - found.len();
+        }
         let mut run = None;
         let mut open = true;
         egui::Window::new("Find a command")
@@ -1800,6 +1877,20 @@ impl Commands {
                 if esc {
                     open = false;
                 }
+                if simple {
+                    let text = match left_out {
+                        0 => "Show advanced commands too".to_string(),
+                        1 => "Show advanced commands too (1 more found)".to_string(),
+                        n => format!("Show advanced commands too ({n} more found)"),
+                    };
+                    if ui
+                        .checkbox(&mut self.palette.all, text)
+                        .on_hover_text("The commands the simpler mode leaves out")
+                        .changed()
+                    {
+                        self.palette.chosen = 0;
+                    }
+                }
                 if found.is_empty() {
                     ui.weak("No command has that name.");
                 }
@@ -1838,7 +1929,8 @@ impl Commands {
     }
 
     /// Settings → Key commands: every command's keys, to change.
-    fn editor_window(&mut self, ctx: &egui::Context) {
+    /// In the simpler mode (`simple`), advanced commands say so.
+    fn editor_window(&mut self, ctx: &egui::Context, simple: bool) {
         let mut open = self.editor.open;
         egui::Window::new("Key commands")
             .open(&mut open)
@@ -1907,7 +1999,7 @@ impl Commands {
                         .num_columns(4)
                         .show(ui, |ui| {
                             for i in COMMANDS.iter().filter(|i| shown.contains(&i.cmd)) {
-                                self.editor_row(ui, i);
+                                self.editor_row(ui, i, simple);
                                 ui.end_row();
                             }
                         });
@@ -1930,12 +2022,17 @@ impl Commands {
         }
     }
 
-    fn editor_row(&mut self, ui: &mut egui::Ui, i: &Info) {
+    fn editor_row(&mut self, ui: &mut egui::Ui, i: &Info, simple: bool) {
         let r = ui.label(self.name(i.cmd));
         if !i.hint.is_empty() {
             r.on_hover_text(i.hint);
         }
-        ui.weak(i.group);
+        if simple && !i.everyday {
+            ui.weak(format!("{}, advanced", i.group))
+                .on_hover_text("Its keys do nothing in the simpler mode");
+        } else {
+            ui.weak(i.group);
+        }
         ui.horizontal(|ui| {
             let keys = self.keymap.of(i.cmd).to_vec();
             if keys.is_empty() {
@@ -1998,8 +2095,17 @@ impl App {
         self.notation_keys(ctx);
         // A clip or marker holding the keyboard is not a text field.
         let typing = ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx);
-        for cmd in self.commands.pressed(ctx, typing) {
+        let (run, held) = self.commands.pressed(ctx, typing, self.simple.on);
+        for cmd in run {
             self.run(ctx, cmd);
+        }
+        if let Some(cmd) = held.first() {
+            self.message = Some(format!(
+                "{} is left out of the simpler mode: it is under More in the {} menu, \
+                 or turn the simpler mode off in View.",
+                self.commands.name(*cmd).trim_end_matches('…'),
+                cmd.info().group
+            ));
         }
     }
 
@@ -2011,17 +2117,19 @@ impl App {
             self.proj.bundle_job.is_none(),
         );
         let layouts = self.workspace.saved.len();
-        let chosen = self.commands.palette_window(ctx, |c| match c {
-            Cmd::Layout(n) => (n as usize) < layouts,
-            Cmd::Undo => can_undo,
-            Cmd::Redo => can_redo,
-            Cmd::ExportBundle | Cmd::ImportBundle => idle,
-            _ => true,
-        });
+        let chosen = self
+            .commands
+            .palette_window(ctx, self.simple.on, |c| match c {
+                Cmd::Layout(n) => (n as usize) < layouts,
+                Cmd::Undo => can_undo,
+                Cmd::Redo => can_redo,
+                Cmd::ExportBundle | Cmd::ImportBundle => idle,
+                _ => true,
+            });
         if let Some(cmd) = chosen {
             self.run(ctx, cmd);
         }
-        self.commands.editor_window(ctx);
+        self.commands.editor_window(ctx, self.simple.on);
     }
 
     pub(crate) fn can_run(&self, cmd: Cmd) -> bool {
@@ -2043,8 +2151,16 @@ impl App {
         }
     }
 
-    /// A menu entry for the command, with its keys beside it.
+    /// A menu entry for the command, with its keys beside it, or under
+    /// More in the simpler mode if it is advanced.
     pub(crate) fn menu_item(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
+        if !self.menu_hold(cmd) {
+            self.menu_entry(ui, cmd);
+        }
+    }
+
+    pub(crate) fn menu_entry(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
+        self.menu_mark(ui);
         let i = cmd.info();
         let keys = self.commands.keymap.text(cmd);
         let mut r = ui.add_enabled(
@@ -2248,6 +2364,7 @@ impl App {
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::Video => self.workspace.toggle(Pane::Video),
             Cmd::FullSize => self.workspace.toggle_full(),
+            Cmd::SimpleMode => self.toggle_simple(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),
             Cmd::PaneWindows => {

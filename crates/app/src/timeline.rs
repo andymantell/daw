@@ -980,6 +980,8 @@ pub struct Timeline {
     pub groups: Vec<LaneGroup>,
     /// Edit grouped tracks together; off, each clip is edited alone.
     pub group_edit: bool,
+    /// The simpler mode is on: the advanced controls are left out.
+    pub simple: bool,
     /// The fades and volume window for the selected clips is open.
     pub fades_open: bool,
     /// Width of the lanes last drawn, in points, for zooming.
@@ -1041,6 +1043,7 @@ impl Default for Timeline {
             ripple: false,
             show_volume: false,
             continuous: false,
+            simple: false,
             groups: Vec::new(),
             group_edit: true,
             fades_open: false,
@@ -2210,15 +2213,17 @@ impl Timeline {
                     "The grid's step, drawn on the timeline. Auto follows the zoom. \
                      The arrow keys move clips by it",
                 );
-            ui.checkbox(&mut self.magnet, "To clips")
-                .on_hover_text("Also snap to other clips' edges, markers and the playhead");
-            ui.checkbox(&mut self.ripple, "Ripple").on_hover_text(
-                "Deleting a clip, or trimming its end, moves the later clips on its track to close the gap",
-            );
-            ui.checkbox(&mut self.show_volume, "Volume").on_hover_text(
-                "Show each clip's volume line: drag it up or down, double-click to add a point",
-            );
-            if !self.groups.is_empty() {
+            if !self.simple {
+                ui.checkbox(&mut self.magnet, "To clips")
+                    .on_hover_text("Also snap to other clips' edges, markers and the playhead");
+                ui.checkbox(&mut self.ripple, "Ripple").on_hover_text(
+                    "Deleting a clip, or trimming its end, moves the later clips on its track to close the gap",
+                );
+                ui.checkbox(&mut self.show_volume, "Volume").on_hover_text(
+                    "Show each clip's volume line: drag it up or down, double-click to add a point",
+                );
+            }
+            if !self.groups.is_empty() && !self.simple {
                 ui.checkbox(&mut self.group_edit, "Groups").on_hover_text(
                     "Edit the clips on grouped tracks together. Untick to edit one track alone",
                 );
@@ -3508,23 +3513,25 @@ impl Timeline {
                     }
                     ui.close();
                 }
-                ui.separator();
-                if ui.button("Normalise").clicked() {
-                    out.process = Some(Process::Normalise);
-                    ui.close();
-                }
-                if ui.button("Reverse").clicked() {
-                    out.process = Some(Process::Reverse);
-                    ui.close();
-                }
-                ui.menu_button("Change gain", |ui| {
-                    for db in GAIN_STEPS {
-                        if ui.button(Process::Gain(db).label()).clicked() {
-                            out.process = Some(Process::Gain(db));
-                            ui.close();
-                        }
+                if !self.simple {
+                    ui.separator();
+                    if ui.button("Normalise").clicked() {
+                        out.process = Some(Process::Normalise);
+                        ui.close();
                     }
-                });
+                    if ui.button("Reverse").clicked() {
+                        out.process = Some(Process::Reverse);
+                        ui.close();
+                    }
+                    ui.menu_button("Change gain", |ui| {
+                        for db in GAIN_STEPS {
+                            if ui.button(Process::Gain(db).label()).clicked() {
+                                out.process = Some(Process::Gain(db));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
                 ui.separator();
                 if ui.button("Copy").clicked() {
                     out.copy = true;

@@ -21,6 +21,7 @@ mod pattern;
 mod scale;
 mod snapshots;
 mod templates;
+mod timeshift;
 
 pub use diff::{Difference, differences};
 pub use doc::ProjectDoc;
@@ -46,6 +47,7 @@ pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{
     TEMPLATE_EXTENSION, Template, built_in_templates, template_from_bytes, template_to_bytes,
 };
+pub use timeshift::{Bars, delete_bars, insert_bars};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

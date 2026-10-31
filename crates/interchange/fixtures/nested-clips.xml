@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Fixture" version="1"/>
+  <Transport>
+    <Tempo unit="bpm" value="120" id="tempo"/>
+    <TimeSignature numerator="4" denominator="4" id="sig"/>
+  </Transport>
+  <Structure>
+    <Track contentType="audio" loaded="true" id="t1" name="Drums">
+      <Channel audioChannels="2" role="regular" destination="m1" id="c1">
+        <Volume unit="linear" value="1" id="v1"/>
+      </Channel>
+    </Track>
+    <Track contentType="audio notes" loaded="true" id="t0" name="Master">
+      <Channel audioChannels="2" role="master" id="m1"/>
+    </Track>
+  </Structure>
+  <Arrangement id="arr">
+    <Lanes timeUnit="beats" id="l0">
+      <Lanes track="t1" id="l1">
+        <Clips id="cl1">
+          <Clip time="4" duration="3" playStart="1" name="Beat" fadeTimeUnit="beats" fadeInTime="0.1">
+            <Clips id="cl2">
+              <Clip time="0" duration="8" contentTimeUnit="seconds" playStart="0.5" playStop="4.5">
+                <Audio channels="2" sampleRate="48000" duration="3" timeUnit="seconds" id="a1">
+                  <File path="audio/loop.wav"/>
+                </Audio>
+              </Clip>
+            </Clips>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+</Project>

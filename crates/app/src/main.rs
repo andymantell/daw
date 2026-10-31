@@ -54,6 +54,7 @@ mod remote;
 mod render;
 mod sections;
 mod share;
+mod simple_mode;
 mod snapshots;
 mod start;
 mod templates;
@@ -400,6 +401,7 @@ struct App {
     start: start::Start,
     /// Named commands, their keys, and their windows.
     commands: commands::Commands,
+    simple: simple_mode::Simple,
     proj: project::Proj,
     latency: latency::Latency,
     updates: update::Updates,
@@ -535,6 +537,9 @@ impl App {
             template_ui: templates::Templates::default(),
             start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
+            simple: simple_mode::Simple::new(
+                (!cfg!(test)).then(|| config_dir().join("simple.txt")),
+            ),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
             updates: update::Updates::new((!cfg!(test)).then(|| config_dir().join("updates.txt"))),
@@ -1342,6 +1347,7 @@ impl App {
             bands: &[],
         };
         self.timeline.groups = self.lane_groups();
+        self.timeline.simple = self.simple.on;
         self.timeline.band = if self.video.clips.is_empty() && !self.video.busy() {
             0.0
         } else {
@@ -2362,7 +2368,7 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
+                self.top_menu(ui, "File", |app, ui| {
                     for c in [
                         Cmd::NewProject,
                         Cmd::NewFromTemplate,
@@ -2372,55 +2378,55 @@ impl eframe::App for App {
                         Cmd::SaveAs,
                         Cmd::SaveAsTemplate,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::ExportBundle,
                         Cmd::ImportBundle,
                         Cmd::Snapshots,
                         Cmd::People,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
-                    self.menu_item(ui, Cmd::Export);
-                    self.menu_item(ui, Cmd::ExportVideo);
-                    self.menu_item(ui, Cmd::ImportMidi);
-                    self.menu_item(ui, Cmd::ExportMidi);
-                    self.menu_item(ui, Cmd::ImportMusicXml);
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::Export);
+                    app.menu_item(ui, Cmd::ExportVideo);
+                    app.menu_item(ui, Cmd::ImportMidi);
+                    app.menu_item(ui, Cmd::ExportMidi);
+                    app.menu_item(ui, Cmd::ImportMusicXml);
                 });
-                ui.menu_button("Edit", |ui| {
-                    self.menu_item(ui, Cmd::Undo);
-                    self.menu_item(ui, Cmd::Redo);
-                    ui.separator();
-                    self.menu_item(ui, Cmd::AddInstrumentTrack);
-                    ui.separator();
+                self.top_menu(ui, "Edit", |app, ui| {
+                    app.menu_item(ui, Cmd::Undo);
+                    app.menu_item(ui, Cmd::Redo);
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::AddInstrumentTrack);
+                    app.menu_gap();
                     for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::InsertBars, Cmd::DeleteBars, Cmd::TimeWindow] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::HitPoint, Cmd::HitPoints, Cmd::TimecodeFromFilm] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::Copy, Cmd::Paste, Cmd::Bounce] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::Crossfade, Cmd::ClipFades] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::EditGroups, Cmd::FixTiming] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Notes", |ui| {
+                self.top_menu(ui, "Notes", |app, ui| {
                     for c in [
                         Cmd::QuantiseNotes,
                         Cmd::HumaniseNotes,
@@ -2429,47 +2435,47 @@ impl eframe::App for App {
                         Cmd::ScaleMode,
                         Cmd::SelectNotes,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::GrooveFromNotes, Cmd::GrooveFromAudio, Cmd::ApplyGroove] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
-                    self.menu_item(ui, Cmd::MidiLearn);
-                    ui.separator();
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::MidiLearn);
+                    app.menu_gap();
                     for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Notation", |ui| {
+                self.top_menu(ui, "Notation", |app, ui| {
                     for c in [Cmd::NotationLane, Cmd::NotationView, Cmd::NotationSettings] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::TabEntry,
                         Cmd::StringUp,
                         Cmd::StringDown,
                         Cmd::AssignFrets,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::PracticeMutePart, Cmd::ContinuousScroll] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::ImportMusicXml,
                         Cmd::ExportMusicXml,
                         Cmd::ExportTextTab,
                         Cmd::PrintNotation,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Transport", |ui| {
+                self.top_menu(ui, "Transport", |app, ui| {
                     for c in [
                         Cmd::PlayStop,
                         Cmd::ToStart,
@@ -2479,42 +2485,55 @@ impl eframe::App for App {
                         Cmd::CountIn,
                         Cmd::KeepNotes,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::FrameBack,
                         Cmd::FrameForward,
                         Cmd::PrevHitPoint,
                         Cmd::NextHitPoint,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::Talkback, Cmd::Dim, Cmd::Mono] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("View", |ui| {
-                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
-                        self.menu_item(ui, c);
-                    }
-                    ui.separator();
-                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
-                        self.menu_item(ui, c);
-                    }
-                    let mut on = self.timecode.shown;
+                self.top_menu(ui, "View", |app, ui| {
+                    app.menu_mark(ui);
+                    let mut on = app.simple.on;
                     if ui
-                        .checkbox(&mut on, self.commands.name(Cmd::Timecode).to_string())
-                        .on_hover_text(self.commands.hover(Cmd::Timecode))
+                        .checkbox(&mut on, app.commands.name(Cmd::SimpleMode).to_string())
+                        .on_hover_text(app.commands.hover(Cmd::SimpleMode))
                         .changed()
                     {
-                        self.timecode.shown = on;
+                        app.toggle_simple();
                     }
-                    ui.separator();
-                    self.view_menu(ui);
+                    app.menu_gap();
+                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
+                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
+                        app.menu_item(ui, c);
+                    }
+                    if !app.menu_hold(Cmd::Timecode) {
+                        app.menu_mark(ui);
+                        let mut on = app.timecode.shown;
+                        if ui
+                            .checkbox(&mut on, app.commands.name(Cmd::Timecode).to_string())
+                            .on_hover_text(app.commands.hover(Cmd::Timecode))
+                            .changed()
+                        {
+                            app.timecode.shown = on;
+                        }
+                    }
+                    app.menu_gap();
+                    app.view_menu(ui);
                 });
-                ui.menu_button("Settings", |ui| {
+                self.top_menu(ui, "Settings", |app, ui| {
                     for c in [
                         Cmd::AudioDevice,
                         Cmd::Plugins,
@@ -2523,18 +2542,19 @@ impl eframe::App for App {
                         Cmd::KeyCommands,
                         Cmd::Theme,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
+                    app.menu_mark(ui);
                     if ui
                         .button("Phone remote…")
                         .on_hover_text("Record and run the transport from your phone")
                         .clicked()
                     {
-                        self.remote.open = true;
+                        app.remote.open = true;
                         ui.close();
                     }
                 });
-                ui.menu_button("Practice", |ui| {
+                self.top_menu(ui, "Practice", |app, ui| {
                     for c in [
                         Cmd::Tuner,
                         Cmd::Meters,
@@ -2542,17 +2562,18 @@ impl eframe::App for App {
                         Cmd::Lessons,
                         Cmd::Comments,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Help", |ui| {
-                    self.menu_item(ui, Cmd::FindCommand);
-                    self.menu_item(ui, Cmd::KeyCommands);
-                    ui.separator();
-                    self.menu_item(ui, Cmd::CheckUpdates);
-                    self.menu_item(ui, Cmd::CrashReports);
-                    self.menu_item(ui, Cmd::SoundCredits);
+                self.top_menu(ui, "Help", |app, ui| {
+                    app.menu_item(ui, Cmd::FindCommand);
+                    app.menu_item(ui, Cmd::KeyCommands);
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::CheckUpdates);
+                    app.menu_item(ui, Cmd::CrashReports);
+                    app.menu_item(ui, Cmd::SoundCredits);
                 });
+                self.simple_badge(ui);
                 ui.separator();
                 match &self.audio {
                     Audio::Running(r) => {

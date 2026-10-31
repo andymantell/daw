@@ -51,6 +51,7 @@ mod project;
 mod recording;
 mod remote;
 mod render;
+mod sections;
 mod share;
 mod snapshots;
 mod start;
@@ -359,6 +360,7 @@ struct App {
     timecode: daw_project::TimecodeSetup,
     hit_points: Vec<daw_project::HitPoint>,
     hits_ui: hitpoints::HitPointsWindow,
+    time_ui: sections::TimeWindow,
     /// The song's key and scale, its groove templates and its MIDI
     /// learn ties, as in the project, and the note tools' settings.
     scale: Option<daw_project::Scale>,
@@ -503,6 +505,7 @@ impl App {
             note_tools: note_tools::NoteTools::default(),
             notation: notation::Lanes::default(),
             hits_ui: hitpoints::HitPointsWindow::default(),
+            time_ui: sections::TimeWindow::default(),
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
             notes: String::new(),
@@ -2393,6 +2396,10 @@ impl eframe::App for App {
                         self.menu_item(ui, c);
                     }
                     ui.separator();
+                    for c in [Cmd::InsertBars, Cmd::DeleteBars, Cmd::TimeWindow] {
+                        self.menu_item(ui, c);
+                    }
+                    ui.separator();
                     for c in [Cmd::HitPoint, Cmd::HitPoints, Cmd::TimecodeFromFilm] {
                         self.menu_item(ui, c);
                     }
@@ -2733,6 +2740,7 @@ impl eframe::App for App {
         self.select_notes_window(&ctx);
         self.midi_learn_window(&ctx);
         self.groups_window(&ctx);
+        self.time_window(&ctx);
         self.timing_window(&ctx);
         self.remote_tick(&ctx);
         self.template_windows(&ctx);

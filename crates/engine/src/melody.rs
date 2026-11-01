@@ -5,13 +5,16 @@
 //! assistant that can't hear can tell which key a vocal is in, and how
 //! far to move it, from more than a key name.
 //!
-//! The pitch comes from the tuner's detector (YIN) every 10 ms, on the
-//! audio taken down to about 16 kHz. Readings that stay within about
-//! half a semitone of each other for 60 ms or more make a note. It reads
-//! one note at a time: chords and whole mixes read poorly.
+//! The notes come from the pitch line pitch editing uses
+//! ([`crate::pitch_line`]): the tuner's detector (YIN) every 10 ms, on
+//! the audio taken down to about 16 kHz, cut into notes where the pitch
+//! moves and stays, where the sound stops, or where the level dips
+//! between two of the same note. It reads one note at a time: chords
+//! and whole mixes read poorly.
 
 use crate::analysis::{KeyGuess, key_of};
-use crate::tuner::{Detector, Note, window};
+use crate::pitch_line;
+use crate::tuner::Note;
 
 /// One note heard.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,85 +43,24 @@ pub struct Melody {
     pub key: Option<KeyGuess>,
 }
 
-/// Readings 10 ms apart.
-const STEPS_PER_SECOND: u32 = 100;
-/// A reading this close to the note's middle (in semitones) is part of it.
-const SAME_NOTE: f32 = 0.6;
-/// Unclear readings bridged inside a note (a consonant, a breath).
-const GAP: usize = 2;
-/// Shorter than this (in readings) is not a note.
-const SHORTEST: usize = 6;
-
-fn middle(v: &mut [f32]) -> f32 {
-    v.sort_by(f32::total_cmp);
-    v[v.len() / 2]
-}
-
 /// Reads the notes of `left` and `right`, the same length, at `rate`.
 pub fn melody(left: &[f32], right: &[f32], rate: u32) -> Melody {
-    // Mono, taken down by averaging to about 16 kHz: plenty for a voice's
-    // fundamental, and quick.
-    let factor = (rate / 16_000).max(1) as usize;
-    let low_rate = rate / factor as u32;
-    let mono: Vec<f32> = (left.chunks(factor).zip(right.chunks(factor)))
-        .map(|(l, r)| (l.iter().sum::<f32>() + r.iter().sum::<f32>()) / (2 * l.len()) as f32)
+    let mono: Vec<f32> = (left.iter().zip(right))
+        .map(|(l, r)| 0.5 * (l + r))
         .collect();
-    let w = window(low_rate);
-    let hop = (low_rate / STEPS_PER_SECOND).max(1) as usize;
-    let mut detector = Detector::new(low_rate);
-    // Each reading: the time at its middle and the pitch in semitones.
-    let mut readings: Vec<(f64, Option<f32>)> = Vec::new();
-    let mut at = w;
-    while at <= mono.len() {
-        let pitch = detector
-            .detect(&mono[at - w..at])
-            .map(|hz| 69.0 + 12.0 * (hz / 440.0).log2());
-        readings.push(((at - w / 2) as f64 / low_rate as f64, pitch));
-        at += hop;
-    }
-    let step = hop as f64 / low_rate as f64;
-    let mut notes = Vec::new();
-    let mut current: Vec<f32> = Vec::new();
-    let mut began = 0.0;
-    let mut last = 0.0;
-    let mut gap = 0;
-    let mut finish = |current: &mut Vec<f32>, began: f64, last: f64| {
-        if current.len() >= SHORTEST {
-            let m = middle(current);
-            let n = Note::from_hz(440.0 * 2f32.powf((m - 69.0) / 12.0), 440.0);
-            notes.push(Heard {
-                start: began - step / 2.0,
-                seconds: last - began + step,
-                midi: n.midi,
-                cents: n.cents,
-            });
-        }
-        current.clear();
-    };
-    for &(t, pitch) in &readings {
-        match pitch {
-            Some(p) => {
-                let fits = !current.is_empty() && {
-                    let mut c = current.clone();
-                    (p - middle(&mut c)).abs() < SAME_NOTE
-                };
-                if !fits {
-                    finish(&mut current, began, last);
-                    began = t;
-                }
-                current.push(p);
-                last = t;
-                gap = 0;
+    let line = pitch_line::line(&mono, rate);
+    let notes: Vec<Heard> = pitch_line::notes(&line, &mono)
+        .into_iter()
+        .map(|n| {
+            let note = Note::from_hz(440.0 * 2f32.powf((n.midi - 69.0) / 12.0), 440.0);
+            Heard {
+                start: n.start as f64 / rate as f64,
+                seconds: (n.end - n.start) as f64 / rate as f64,
+                midi: note.midi,
+                cents: note.cents,
             }
-            None => {
-                gap += 1;
-                if gap > GAP {
-                    finish(&mut current, began, last);
-                }
-            }
-        }
-    }
-    finish(&mut current, began, last);
+        })
+        .collect();
     let mut pitch_classes = [0.0f64; 12];
     for n in &notes {
         pitch_classes[n.midi.rem_euclid(12) as usize] += n.seconds;

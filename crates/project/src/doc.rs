@@ -1605,6 +1605,13 @@ fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
             let lanes = w.fixed(&cm, "controllers");
             write_lines(w, &lanes, &c.controllers);
         }
+        if c.loop_len.is_some() || cm.get("loop_len").is_some() {
+            w.put(
+                &cm,
+                "loop_len",
+                c.loop_len.map_or(LoroValue::Null, LoroValue::I64),
+            );
+        }
         if c.pattern.is_some() || cm.get("pattern").is_some() {
             w.put(
                 &cm,
@@ -1737,6 +1744,7 @@ fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
         clip.scale = string(c, "scale").and_then(|t| Scale::from_text(&t));
         clip.controllers = read_lines(c.get("controllers"));
         clip.pattern = string(c, "pattern");
+        clip.loop_len = int(c, "loop_len").filter(|l| *l > 0);
         if let Some(LoroValue::Map(notes)) = c.get("notes") {
             for (nid, n) in notes.iter() {
                 let LoroValue::Map(n) = n else { continue };
@@ -3368,6 +3376,7 @@ mod tests {
         let mut clip = NoteClip::new("nc1".into(), "Riff".into(), PPQ * 4, PPQ * 8);
         clip.offset = PPQ;
         clip.take = Some(2);
+        clip.loop_len = Some(PPQ * 2);
         let mut a = Note::new(PPQ, PPQ / 2, 64, 90);
         a.id = "n1".into();
         a.string = Some(3);
@@ -3398,6 +3407,7 @@ mod tests {
             (clip.start, clip.len, clip.offset, clip.take),
             (PPQ * 4, PPQ * 8, PPQ, Some(2))
         );
+        assert_eq!(clip.loop_len, Some(PPQ * 2));
         // Notes come back in time order.
         assert_eq!(clip.notes, vec![b, a]);
         assert_eq!(back.tracks[0].instrument, p.tracks[0].instrument);
@@ -3412,6 +3422,11 @@ mod tests {
         assert_eq!(back.tracks[0].note_clips[0].notes.len(), 1);
         assert_eq!(back.tracks[0].note_clips[0].notes[0].id, "n1");
         assert_eq!(back.tracks[0].instrument, None);
+        // Looping goes off again.
+        let mut q = back.clone();
+        q.tracks[0].note_clips[0].loop_len = None;
+        assert!(doc.set(&q));
+        assert_eq!(doc.get().tracks[0].note_clips[0].loop_len, None);
     }
 
     #[test]

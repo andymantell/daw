@@ -2474,6 +2474,15 @@ impl Timeline {
                     );
                 }
             }
+            // A looping clip: a notch where each time round begins.
+            for (_, _, shift) in c.spans().into_iter().skip(1) {
+                let t = c.start - c.offset + shift;
+                let x = x_of(view.map.frames_at(Ticks(t)).0);
+                clipped.line_segment(
+                    [pos2(x, full.top()), pos2(x, full.top() + 10.0)],
+                    Stroke::new(1.5, ink),
+                );
+            }
             let mut at = r.left_top() + vec2(4.0, 2.0);
             // A pattern clip: a little grid of steps before its name.
             if c.pattern.is_some() {
@@ -2484,11 +2493,14 @@ impl Timeline {
                 at.x += 13.0;
             }
             let font = look.font(look.small);
-            let name = if c.muted {
+            let mut name = if c.muted {
                 format!("{} (muted)", c.name)
             } else {
                 c.name.clone()
             };
+            if c.looped().is_some() {
+                name.push_str(" (loops)");
+            }
             clipped.text(at, Align2::LEFT_TOP, name, font, ink);
             if selected {
                 lanes.rect_stroke(r, corner, Stroke::new(2.0, tc.text), StrokeKind::Inside);
@@ -4174,6 +4186,24 @@ impl Timeline {
                         song.lanes[lane].notes[index].muted = !muted;
                         out.changed = true;
                         ui.close();
+                    }
+                    if !linked {
+                        let c = &mut song.lanes[lane].notes[index];
+                        let mut looping = c.loop_len.is_some();
+                        // ai: edit_clip
+                        if ui
+                            .checkbox(&mut looping, "Loop notes")
+                            .on_hover_text(
+                                "Play the notes from the clip's start to its end as it is now \
+                                 over and over: drag its end out to repeat them, and editing \
+                                 them changes every time round",
+                            )
+                            .changed()
+                        {
+                            c.loop_len = looping.then_some(c.offset + c.len);
+                            out.changed = true;
+                            ui.close();
+                        }
                     }
                     let dup = if linked {
                         ui.button("Duplicate (linked)").on_hover_text(

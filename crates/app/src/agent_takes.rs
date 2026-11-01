@@ -1515,6 +1515,45 @@ mod tests {
     }
 
     #[test]
+    fn a_chop_is_copied_to_a_list_of_bars_and_times() {
+        let mut d = Driver::new();
+        let c = take(4_800, &[100]);
+        let key = c.key.clone();
+        let app = d.app();
+        app.tracks.push(Track::new("Chops".into()));
+        app.tracks[0].clips.push(c);
+        app.rebuild();
+        // 120 bpm in 4/4: a bar is 2 seconds.
+        let v = d
+            .call(
+                "duplicate_clip",
+                json!({"clip": key, "bars": [5, 3], "at_seconds": [10.25]}),
+            )
+            .unwrap();
+        let copies: Vec<String> = (v["clips"].as_array().unwrap().iter())
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        let p = d.project();
+        let starts: Vec<f64> = (copies.iter())
+            .map(|k| {
+                (p["tracks"][0]["clips"].as_array().unwrap().iter())
+                    .find(|c| c["id"] == k.as_str())
+                    .map(|c| c["start_seconds"].as_f64().unwrap())
+                    .unwrap()
+            })
+            .collect();
+        let want = [4.0, 8.0, 10.25];
+        for (got, want) in starts.iter().zip(want) {
+            assert!((got - want).abs() < 0.001, "{starts:?}");
+        }
+        // An audio clip doesn't loop: duplicate_clip repeats it.
+        let e = d
+            .call("edit_clip", json!({"clip": key, "loop": true}))
+            .unwrap_err();
+        assert!(e.contains("Only note clips loop"), "{e}");
+    }
+
+    #[test]
     fn a_clip_that_follows_tempo_stays_put_when_something_else_changes() {
         let mut d = Driver::new();
         let c = take(48_000, &[12_000]);

@@ -1040,6 +1040,12 @@ impl<'a> Writer<'a> {
                 ("time", num(ticks_to_beats(c.start))),
                 ("duration", num(ticks_to_beats(c.len))),
                 ("playStart", num(ticks_to_beats(c.offset))),
+                // A clip looping its notes loops its content from its start.
+                ("loopStart", c.looped().map_or(String::new(), |_| num(0.0))),
+                (
+                    "loopEnd",
+                    c.looped().map_or(String::new(), |l| num(ticks_to_beats(l))),
+                ),
                 ("enable", if c.muted { b(false) } else { String::new() }),
                 ("name", c.name.clone()),
             ],

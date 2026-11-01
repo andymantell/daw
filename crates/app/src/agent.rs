@@ -1333,6 +1333,7 @@ impl App {
                             "len_ticks": c.len,
                             "muted": c.muted,
                             "pattern": c.pattern,
+                            "loop_ticks": c.looped(),
                             "note_count": c.notes.len(),
                         });
                         if notes {

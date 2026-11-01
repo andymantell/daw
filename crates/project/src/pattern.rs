@@ -470,35 +470,44 @@ impl NoteClip {
     /// its group's pick of one.
     pub fn rolls(&self) -> Vec<(Note, Roll)> {
         let clip = hash(self.id.as_bytes());
-        let placed: Vec<Note> = self.placed().collect();
-        let mut counts: HashMap<u32, u16> = HashMap::new();
-        for n in &placed {
+        let end = self.end();
+        let placed: Vec<(u32, Note)> = (self.sounding().into_iter())
+            .map(|(k, n)| {
+                let len = n.len.min(end - n.start).max(1);
+                (k, Note { len, ..n })
+            })
+            .collect();
+        // Each time round a loop rolls on its own: the first as a clip
+        // that doesn't loop, the later ones with the round mixed in.
+        let round = |key: u64, k: u32| if k == 0 { key } else { mix(key, k as u64) };
+        let mut counts: HashMap<(u32, u32), u16> = HashMap::new();
+        for (k, n) in &placed {
             if let (Some(g), true) = (n.group, n.one_of) {
-                *counts.entry(g).or_default() += 1;
+                *counts.entry((*k, g)).or_default() += 1;
             }
         }
-        let mut seen: HashMap<u32, u16> = HashMap::new();
+        let mut seen: HashMap<(u32, u32), u16> = HashMap::new();
         placed
             .into_iter()
-            .map(|n| {
+            .map(|(k, n)| {
                 let roll = match (n.group, n.one_of) {
                     (Some(g), true) => {
-                        let k = seen.entry(g).or_default();
-                        let pick = *k;
-                        *k += 1;
+                        let at = seen.entry((k, g)).or_default();
+                        let pick = *at;
+                        *at += 1;
                         Roll {
-                            key: mix(clip, 0x0100_0000_0000 | g as u64),
+                            key: round(mix(clip, 0x0100_0000_0000 | g as u64), k),
                             pick,
-                            of: counts[&g],
+                            of: counts[&(k, g)],
                         }
                     }
                     (Some(g), false) => Roll {
-                        key: mix(clip, g as u64),
+                        key: round(mix(clip, g as u64), k),
                         pick: 0,
                         of: 1,
                     },
                     (None, _) => Roll {
-                        key: mix(clip, hash(n.id.as_bytes())),
+                        key: round(mix(clip, hash(n.id.as_bytes())), k),
                         pick: 0,
                         of: 1,
                     },
@@ -883,6 +892,27 @@ mod tests {
         let alone = r.iter().find(|(n, _)| n.pitch == 50).unwrap().1;
         assert_ne!(shared.key, alone.key);
         assert_eq!(next_group(&c.notes), 2);
+    }
+
+    #[test]
+    fn each_time_round_a_loop_rolls_afresh() {
+        // A beat of two notes, one of which plays, looped 3 times.
+        let mut c = NoteClip::new("c".into(), "C".into(), 0, PPQ * 3);
+        c.loop_len = Some(PPQ);
+        for (i, p) in [60, 64].into_iter().enumerate() {
+            let mut n = Note::new(i as i64 * 10, PPQ / 4, p, 100);
+            n.group = Some(1);
+            n.one_of = true;
+            c.notes.push(n);
+        }
+        let r = c.rolls();
+        let picks: Vec<(u16, u16)> = r.iter().map(|(_, r)| (r.pick, r.of)).collect();
+        assert_eq!(picks, [(0, 2), (1, 2), (0, 2), (1, 2), (0, 2), (1, 2)]);
+        let keys: HashSet<u64> = r.iter().map(|(_, r)| r.key).collect();
+        assert_eq!(keys.len(), 3, "a roll for each time round");
+        // The first time round rolls as the clip did before it looped.
+        c.loop_len = None;
+        assert_eq!(c.rolls()[0].1, r[0].1);
     }
 
     #[test]

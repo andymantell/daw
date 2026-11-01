@@ -69,6 +69,48 @@ fn new_notes() -> Value {
     }))}})
 }
 
+/// The most copies duplicate_clip makes at once.
+const MOST_COPIES: usize = 256;
+
+/// Where a copy starts: a tick (from a bar), or a time.
+#[derive(Clone, Copy)]
+enum At {
+    Tick(i64),
+    Seconds(f64),
+}
+
+impl At {
+    /// Its place in time, to sort by.
+    fn order(&self, map: &TempoMap, rate: u32) -> f64 {
+        match *self {
+            At::Tick(t) => map.frames_at(Ticks(t)).0 as f64 / rate as f64,
+            At::Seconds(s) => s,
+        }
+    }
+}
+
+/// Where duplicate_clip's copies go.
+enum Places {
+    /// Back to back, from `first` or the clip's end.
+    BackToBack { first: Option<At>, times: usize },
+    /// One at each.
+    List(Vec<At>),
+}
+
+impl Places {
+    /// Each copy's start, in the clip's own unit (`to` turns a place
+    /// into it); `end` and `len` are the clip's, in that unit too.
+    fn starts(&self, end: i64, len: i64, to: impl Fn(&At) -> i64) -> Vec<i64> {
+        match self {
+            Places::BackToBack { first, times } => {
+                let from = first.as_ref().map_or(end, &to);
+                (0..*times as i64).map(|k| from + k * len).collect()
+            }
+            Places::List(at) => at.iter().map(to).collect(),
+        }
+    }
+}
+
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_note_clip",
@@ -86,19 +128,29 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "duplicate_clip",
-        description: "Copies an audio clip or a note clip, straight after it unless a bar \
-                      or seconds is given (the first copy then starts there), as many times \
-                      as asked, back to back (a 4-bar riff 8 times fills 32 bars). A copy of a pattern clip plays the same \
-                      pattern (linked: editing the pattern changes both) unless linked is \
-                      false, when it gets a copy of the pattern of its own. Gives the new \
-                      clip's id.",
+        description: "Copies an audio clip or a note clip. Where the copies go: straight \
+                      after it, back to back, as many times as asked (a 4-bar riff 8 times \
+                      fills 32 bars); from a bar or seconds given instead (the first copy \
+                      starts there); every_bars apart from there (times copies, such as a \
+                      chop on every 4th bar); or one copy on each of a list of bars or \
+                      at_seconds, each at its own place (bars 9, 13.5 and 17 make three). \
+                      To repeat a note clip without making copies, edit_clip loop makes it \
+                      play its notes over and over as it is lengthened. A copy of a pattern \
+                      clip plays the same pattern (linked: editing the pattern changes both) \
+                      unless linked is false, when the copies share a copy of the pattern \
+                      of their own. Gives the new clips' ids, in time order.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": clip_props(json!({
                 "clip": {"type": "string"},
-                "track": {"type": "string", "description": "Put the copy on this track."},
+                "track": {"type": "string", "description": "Put the copies on this track."},
                 "linked": {"type": "boolean", "description": "Pattern clips: true if left out."},
-                "times": {"type": "integer", "description": "How many copies; 1 if left out."}
+                "times": {"type": "integer", "description": "How many copies; 1 if left out. Not with bars or at_seconds."},
+                "every_bars": {"type": "number", "description": "How far apart the copies start, in bars (from bar or seconds, or the clip's end); back to back if left out."},
+                "bars": {"type": "array", "items": {"type": "number"},
+                         "description": "A copy starting on each of these bars, from 1 (2.5 is halfway through bar 2)."},
+                "at_seconds": {"type": "array", "items": {"type": "number"},
+                               "description": "A copy starting at each of these times."}
             })), "required": ["clip"]})
         },
     },
@@ -106,7 +158,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "add_note_clip",
         description: "Adds a note clip to an instrument track, starting on a bar, some \
                       bars long, with the notes given (as edit_notes adds them, chords \
-                      too). Gives its id.",
+                      too); loop_bars makes it loop its first bars over its length. Gives \
+                      its id.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -114,6 +167,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "bar": {"type": "integer", "description": "From 1."},
                 "bars": {"type": "integer", "description": "How long; 1 if left out."},
                 "name": {"type": "string"},
+                "loop_bars": {"type": "number", "description": "Loop the notes of the first this many bars over the whole clip (a 4-bar riff in a 32-bar clip plays 8 times)."},
                 "notes": new_notes()
             }, "required": ["track", "bar"]})
         },
@@ -243,7 +297,10 @@ pub(crate) const TOOLS: &[Tool] = &[
                       fills a lane with a Euclidean rhythm; and sets steps, counted from \
                       1, in a lane given by id or name. Step offset is -0.5 to 0.5 of a \
                       step, gate 0.05 to 4, chance 0 to 1, repeats 1 to 8. delete removes \
-                      a pattern no clip plays. Gives the pattern's id.",
+                      a pattern no clip plays. A clip playing a pattern plays it over and \
+                      over for as long as the clip is (each lane repeating its own steps), \
+                      so lengthen the clip with edit_clip len_beats rather than adding \
+                      copies. Gives the pattern's id.",
         access: Access::Edit,
         schema: || {
             let lane = json!({
@@ -637,6 +694,10 @@ impl App {
             "muted": c.muted,
             "key": c.scale.map(|s| s.label()),
             "pattern": c.pattern,
+            // Pattern clips play their pattern over and over (each lane
+            // its own steps); other clips loop only when asked.
+            "loops": c.pattern.is_some() || c.looped().is_some(),
+            "loop_beats": c.looped().map(in_beats),
             "notes": c.notes.iter().map(note_value).collect::<Vec<_>>(),
             "controllers": c.controllers.iter().filter(|l| !l.points.is_empty()).map(|l| {
                 let mut v = lane_value(l, PPQ as f64);
@@ -683,6 +744,20 @@ impl App {
             if let Some(s) = start {
                 c.start = s;
             }
+            // Looping first, so a loop made of the clip as it is can then
+            // be lengthened in the same call.
+            if args["loop"].as_bool().is_some() || args["loop_beats"].is_number() {
+                if c.pattern.is_some() {
+                    return Err("A pattern clip plays its pattern over and over already; \
+                                lengthen it with len_beats."
+                        .into());
+                }
+                c.loop_len = match (args["loop"].as_bool(), args["loop_beats"].as_f64()) {
+                    (Some(false), _) => None,
+                    (_, Some(b)) => Some(beats(b).max(daw_project::SHORTEST_LOOP)),
+                    _ => Some(c.loop_len.unwrap_or(c.offset + c.len)),
+                };
+            }
             if let Some(b) = args["len_beats"].as_f64() {
                 c.len = beats(b).max(1);
             }
@@ -721,7 +796,9 @@ impl App {
                 }
             }
             let v = json!({"clip": id, "bar": bar_of(&map, c.start),
-                           "len_beats": in_beats(c.len), "pattern": c.pattern});
+                           "len_beats": in_beats(c.len), "pattern": c.pattern,
+                           "loop_beats": c.looped().map(in_beats),
+                           "times_round": c.looped().map(|_| c.spans().len())});
             clips.sort_by_key(|c| c.start);
             Ok(v)
         })
@@ -730,12 +807,22 @@ impl App {
 
     fn duplicate_clip_tool(&mut self, args: &Value) -> Done {
         let id = text(args, "clip", "the clip's id")?.to_string();
-        let at_tick = self.tick_arg(args);
-        let at_frame = at_tick.map(|t| self.tempo_map().frames_at(Ticks(t)).0);
+        let end = {
+            let p = self.project();
+            let map = self.tempo_map();
+            let audio = (p.tracks.iter().flat_map(|t| &t.clips)).find(|c| c.id == id);
+            let notes = (p.tracks.iter().flat_map(|t| &t.note_clips)).find(|c| c.id == id);
+            match (audio, notes) {
+                (Some(c), _) => map.ticks_at(Frames(c.start + c.len)).0,
+                (None, Some(c)) => c.end(),
+                (None, None) => return Err(format!("There is no clip {id}.")),
+            }
+        };
+        let places = self.copy_places(args, end)?;
         let linked = args["linked"].as_bool().unwrap_or(true);
         let to = args["track"].as_str().map(String::from);
-        let times = args["times"].as_i64().unwrap_or(1).clamp(1, 256);
         let map = self.tempo_map();
+        let rate = self.rate as f64;
         self.edit_model(|p| {
             let dest = |p: &Project, i: usize, audio: bool| -> Result<usize, String> {
                 let Some(to) = &to else { return Ok(i) };
@@ -753,15 +840,24 @@ impl App {
                 }
                 Ok(ti)
             };
+            // Where each copy starts: in frames for audio, ticks for notes.
+            let frame = |at: &At| match *at {
+                At::Tick(t) => map.frames_at(Ticks(t)).0,
+                At::Seconds(s) => (s.max(0.0) * rate).round() as i64,
+            };
+            let tick = |at: &At| match *at {
+                At::Tick(t) => t,
+                At::Seconds(s) => map.ticks_at(Frames((s.max(0.0) * rate).round() as i64)).0,
+            };
             for i in 0..p.tracks.len() {
                 if let Some(src) = p.tracks[i].clips.iter().find(|c| c.id == id).cloned() {
                     let ti = dest(p, i, true)?;
-                    let first = at_frame.unwrap_or(src.start + src.len);
+                    let starts = places.starts(src.start + src.len, src.len, frame);
                     let mut new = Vec::new();
-                    for k in 0..times {
+                    for start in starts {
                         let mut c = src.clone();
                         c.id = daw_project::new_id();
-                        c.start = first + k * src.len;
+                        c.start = start;
                         // A clip that follows tempo is placed by its beat.
                         c.beat = map.ticks_at(Frames(c.start)).0;
                         new.push(c.id.clone());
@@ -771,7 +867,7 @@ impl App {
                 }
                 if let Some(src) = p.tracks[i].note_clips.iter().find(|c| c.id == id).cloned() {
                     let ti = dest(p, i, false)?;
-                    let first = at_tick.unwrap_or(src.end());
+                    let starts = places.starts(src.end(), src.len, tick);
                     let mut new = Vec::new();
                     let mut pattern = src.pattern.clone();
                     if !linked
@@ -783,10 +879,10 @@ impl App {
                         pattern = Some(copy.id.clone());
                         p.patterns.push(copy);
                     }
-                    for k in 0..times {
+                    for start in starts {
                         let mut c = src.clone();
                         c.id = daw_project::new_id();
-                        c.start = first + k * src.len;
+                        c.start = start;
                         c.pattern = pattern.clone();
                         for n in &mut c.notes {
                             n.id = daw_project::new_id();
@@ -803,6 +899,82 @@ impl App {
         .map(|v| (v, Some("Duplicate a clip".into())))
     }
 
+    /// Where duplicate_clip puts its copies.
+    /// `end` is the clip's end, in ticks: copies every so many bars
+    /// start there if no bar or seconds is given.
+    fn copy_places(&self, args: &Value, end: i64) -> Result<Places, String> {
+        let map = self.tempo_map();
+        let list = |key: &str| -> Result<Option<Vec<f64>>, String> {
+            match &args[key] {
+                Value::Null => Ok(None),
+                Value::Array(a) => {
+                    let v: Option<Vec<f64>> = a.iter().map(Value::as_f64).collect();
+                    match v {
+                        Some(v) if !v.is_empty() && v.iter().all(|x| x.is_finite()) => Ok(Some(v)),
+                        Some(_) | None => Err(format!("Give {key} as a list of numbers.")),
+                    }
+                }
+                _ => Err(format!("Give {key} as a list of numbers.")),
+            }
+        };
+        let (bars, secs) = (list("bars")?, list("at_seconds")?);
+        let many = bars.as_ref().map_or(0, Vec::len) + secs.as_ref().map_or(0, Vec::len);
+        if many > MOST_COPIES {
+            return Err(format!("At most {MOST_COPIES} copies at once."));
+        }
+        if bars.is_some() || secs.is_some() {
+            if args["times"].is_number() || args["every_bars"].is_number() {
+                return Err(
+                    "Give a list of bars or at_seconds, or times and every_bars, not both.".into(),
+                );
+            }
+            let mut at: Vec<At> = (bars.into_iter().flatten())
+                .map(|b| At::Tick(bar_ticks(&map, b)))
+                .chain(secs.into_iter().flatten().map(At::Seconds))
+                .collect();
+            at.sort_by(|a, b| {
+                a.order(&map, self.rate)
+                    .total_cmp(&b.order(&map, self.rate))
+            });
+            return Ok(Places::List(at));
+        }
+        let times = args["times"]
+            .as_i64()
+            .unwrap_or(1)
+            .clamp(1, MOST_COPIES as i64) as usize;
+        let first = match (args["bar"].as_f64(), args["seconds"].as_f64()) {
+            (Some(bar), _) => Some(At::Tick(bar_ticks(&map, bar))),
+            (None, Some(s)) => Some(At::Seconds(s)),
+            (None, None) => None,
+        };
+        let every = match args["every_bars"].as_f64() {
+            Some(b) if b.is_finite() && b > 0.0 => Some(b),
+            Some(_) => return Err("every_bars is more than 0.".into()),
+            None => None,
+        };
+        let Some(every) = every else {
+            return Ok(Places::BackToBack { first, times });
+        };
+        // Every so many bars from the first: worked out by bar, so a
+        // change of time signature on the way is followed.
+        let from = match &first {
+            Some(At::Tick(t)) => bar_of(&map, *t),
+            Some(At::Seconds(s)) => {
+                let f = (s.max(0.0) * self.rate as f64).round() as i64;
+                bar_of(&map, map.ticks_at(Frames(f)).0)
+            }
+            None => bar_of(&map, end),
+        };
+        Ok(Places::List(
+            (0..times)
+                .map(|k| match (k, &first) {
+                    (0, Some(f)) => *f,
+                    _ => At::Tick(bar_ticks(&map, from + every * k as f64)),
+                })
+                .collect(),
+        ))
+    }
+
     fn add_note_clip_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?.to_string();
         let bar = args["bar"]
@@ -814,6 +986,13 @@ impl App {
         let (start, end) = (map.bar_start(bar).0, map.bar_start(bar + bars).0);
         let name = args["name"].as_str().map(String::from);
         let notes = notes_of(&args["notes"])?;
+        let loop_len = match args["loop_bars"].as_f64() {
+            Some(b) if b.is_finite() && b > 0.0 => {
+                Some((bar_ticks(&map, bar as f64 + b) - start).max(daw_project::SHORTEST_LOOP))
+            }
+            Some(_) => return Err("loop_bars is more than 0.".into()),
+            None => None,
+        };
         self.edit_model(|p| {
             let t = (p.tracks.iter_mut())
                 .find(|t| t.id == key)
@@ -825,6 +1004,7 @@ impl App {
             let n = t.note_clips.len() + 1;
             let name = name.unwrap_or_else(|| format!("{} {n}", t.name));
             let mut c = NoteClip::new(id.clone(), name, start, end - start);
+            c.loop_len = loop_len;
             c.notes = notes;
             c.sort_notes();
             let count = c.notes.len();
@@ -1417,6 +1597,173 @@ mod tests {
         assert_eq!(chord("C/C").unwrap(), [-12, 0, 4, 7]);
         assert!(chord("H7").is_err());
         assert!(chord("Cweird").is_err());
+    }
+
+    fn bars_of(d: &mut Driver, v: &Value) -> Vec<f64> {
+        let ids: Vec<String> = (v["clips"].as_array().unwrap().iter())
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        ids.iter()
+            .map(|k| clip(d, k)["bar"].as_f64().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_clip_is_copied_to_each_bar_of_a_list_or_every_few_bars() {
+        let mut d = Driver::new();
+        let (_, c) = with_clip(&mut d);
+        // Each at its own place, in time order whatever order they came in.
+        let v = d
+            .call("duplicate_clip", json!({"clip": c, "bars": [17, 9, 13.5]}))
+            .unwrap();
+        assert_eq!(bars_of(&mut d, &v), [9.0, 13.5, 17.0]);
+        // Every 4 bars from bar 21, 3 times.
+        let v = d
+            .call(
+                "duplicate_clip",
+                json!({"clip": c, "bar": 21, "every_bars": 4, "times": 3}),
+            )
+            .unwrap();
+        assert_eq!(bars_of(&mut d, &v), [21.0, 25.0, 29.0]);
+        // Every 8 bars from the clip's end (bar 3).
+        let v = d
+            .call(
+                "duplicate_clip",
+                json!({"clip": c, "every_bars": 8, "times": 2}),
+            )
+            .unwrap();
+        assert_eq!(bars_of(&mut d, &v), [3.0, 11.0]);
+        // A list and times together is a mistake, said so.
+        let e = d
+            .call(
+                "duplicate_clip",
+                json!({"clip": c, "bars": [5], "times": 2}),
+            )
+            .unwrap_err();
+        assert!(e.contains("not both"), "{e}");
+        assert!(
+            d.call("duplicate_clip", json!({"clip": c, "bars": ["x"]}))
+                .is_err()
+        );
+        // A list is one step to undo.
+        let v = d
+            .call("duplicate_clip", json!({"clip": c, "bars": [40, 44]}))
+            .unwrap();
+        d.command("undo");
+        let first = v["clips"][0].as_str().unwrap();
+        assert!(d.call("get_note_clip", json!({"clip": first})).is_err());
+    }
+
+    /// The (start, pitch) of each note the engine plays on track `t`.
+    fn played(d: &mut Driver, t: usize) -> Vec<(i64, u8)> {
+        let app = d.app();
+        let (notes, _, _) = crate::note_tools::specs(&app.tracks[t].note_clips);
+        notes.iter().map(|n| (n.start.0, n.pitch)).collect()
+    }
+
+    #[test]
+    fn a_note_clip_loops_its_notes_as_it_is_lengthened() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        // A 1-bar bass riff.
+        let c = id(
+            d.call(
+                "add_note_clip",
+                json!({"track": t, "bar": 1, "notes": [
+                    {"beat": 0, "beats": 1, "pitch": 38},
+                    {"beat": 2, "beats": 1, "pitch": 45}
+                ]}),
+            )
+            .unwrap(),
+            "clip",
+        );
+        let bar = 4 * daw_project::PPQ;
+        // Looped and made 4 bars long in one call: it plays 4 times.
+        let v = d
+            .call(
+                "edit_clip",
+                json!({"clip": c, "loop": true, "len_beats": 16}),
+            )
+            .unwrap();
+        assert_eq!(
+            (v["loop_beats"].as_f64(), v["times_round"].as_u64()),
+            (Some(4.0), Some(4))
+        );
+        let got = played(&mut d, 0);
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[6], (3 * bar, 38));
+        let info = clip(&mut d, &c);
+        assert_eq!(
+            (info["loops"].as_bool(), info["loop_beats"].as_f64()),
+            (Some(true), Some(4.0))
+        );
+        // Editing the riff changes every time round.
+        let first = info["notes"][1]["id"].as_str().unwrap().to_string();
+        d.call(
+            "edit_notes",
+            json!({"clip": c, "change": [{"id": first, "pitch": 43}]}),
+        )
+        .unwrap();
+        let got = played(&mut d, 0);
+        assert_eq!(got.iter().filter(|n| n.1 == 43).count(), 4);
+        // A shorter loop: half a bar, so only the first note, 8 times.
+        d.call("edit_clip", json!({"clip": c, "loop_beats": 2}))
+            .unwrap();
+        assert_eq!(played(&mut d, 0).len(), 8);
+        assert!(played(&mut d, 0).iter().all(|n| n.1 == 38));
+        // Looping off: the notes play once, and the rest of the clip is empty.
+        d.call("edit_clip", json!({"clip": c, "loop": false}))
+            .unwrap();
+        assert_eq!(played(&mut d, 0).len(), 2);
+        assert_eq!(clip(&mut d, &c)["loops"], false);
+        // Undo brings the loop back.
+        d.command("undo");
+        assert_eq!(played(&mut d, 0).len(), 8);
+
+        // add_note_clip can loop from the start: 1 bar over 8.
+        let v = d
+            .call(
+                "add_note_clip",
+                json!({"track": t, "bar": 9, "bars": 8, "loop_bars": 1,
+                       "notes": [{"beat": 0, "beats": 1, "pitch": 50}]}),
+            )
+            .unwrap();
+        let k = id(v, "clip");
+        assert_eq!(clip(&mut d, &k)["loop_beats"], 4.0);
+        assert_eq!(played(&mut d, 0).iter().filter(|n| n.1 == 50).count(), 8);
+        // The project says it loops, and saving keeps it.
+        let p = d.project();
+        let nc = (p["tracks"][0]["note_clips"].as_array().unwrap().iter())
+            .find(|c| c["id"] == k.as_str())
+            .unwrap()
+            .clone();
+        assert_eq!(nc["loop_ticks"], bar);
+    }
+
+    #[test]
+    fn a_pattern_clip_says_it_loops_and_audio_clips_dont_loop() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        let v = d
+            .call("edit_pattern", json!({"new": true, "track": t, "bar": 1}))
+            .unwrap();
+        let pc = v["clip"].as_str().unwrap().to_string();
+        assert_eq!(clip(&mut d, &pc)["loops"], true);
+        let e = d
+            .call("edit_clip", json!({"clip": pc, "loop": true}))
+            .unwrap_err();
+        assert!(e.contains("over and over already"), "{e}");
+        let desc = (crate::agent::all_tools())
+            .find(|t| t.name == "edit_clip")
+            .unwrap()
+            .description;
+        assert!(desc.contains("longer than its pattern plays"), "{desc}");
     }
 
     #[test]

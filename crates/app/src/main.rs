@@ -21,6 +21,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod agent;
+mod agent_arrange;
 mod agent_edit;
 mod assistants;
 mod audio_setup;

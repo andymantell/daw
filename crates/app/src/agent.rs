@@ -415,7 +415,9 @@ fn region_args() -> Value {
 
 /// Every tool: these, then those for what the panes do.
 pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
-    TOOLS.iter().chain(crate::agent_edit::TOOLS)
+    (TOOLS.iter())
+        .chain(crate::agent_edit::TOOLS)
+        .chain(crate::agent_arrange::TOOLS)
 }
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
@@ -631,6 +633,7 @@ impl App {
             "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
             "get_exports" => Ok(self.exports_value()),
             "list_effect_kinds" => Ok(self.effect_kinds_value()),
+            "get_comments" => Ok(self.comments_value()),
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -1036,6 +1039,7 @@ impl App {
                             v["notes"] = (c.notes.iter())
                                 .map(|n| {
                                     json!({
+                                        "id": n.id,
                                         "start_ticks": n.start,
                                         "len_ticks": n.len,
                                         "pitch": n.pitch,

@@ -117,11 +117,13 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Every setting of a track that can be set by value (volume, pan, \
                       mute, solo, sends, each effect's settings, and its built-in \
                       instrument's, named instrument.<key>), with its value, range and \
-                      how it reads. Without a track, every track's; a drum machine has \
-                      hundreds, so ask for one track, or give a prefix such as \
-                      \"instrument.pad0.\". Every parameter of a plugin is listed: narrow \
-                      them with effect, prefix or search, and page through them with offset \
-                      and limit (each track's list says how many it has in all).",
+                      how it reads, and whether it is automated. Without a track, every \
+                      track's; a drum machine has hundreds, so ask for one track, or give a \
+                      prefix such as \"instrument.pad0.\". Every parameter of a plugin is \
+                      listed: narrow them with effect, prefix or search, and page through \
+                      them with offset and limit (each track's list says how many it has in \
+                      all). To make a setting change over time as the song plays, use \
+                      edit_automation.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -238,8 +240,10 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "set_parameter",
-        description: "Sets one track setting to a value. list_parameters gives each \
-                      setting's param name and range. Mute and solo take 0 or 1.",
+        description: "Sets one track setting to a value, the same all through the song. \
+                      list_parameters gives each setting's param name and range. Mute and \
+                      solo take 0 or 1. For a setting that changes as the song plays (a \
+                      volume ride, fade, filter sweep or pan move), use edit_automation.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {

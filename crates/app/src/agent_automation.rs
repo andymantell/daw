@@ -27,7 +27,8 @@ const AT: &str = "A bar (from 1, fractions for within the bar) or seconds from t
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_automation",
-        description: "A track's automation (or every track's): its mode (Off, Read, Touch, \
+        description: "Automation: how a track's settings change over time as the song \
+                      plays. Gives a track's automation (or every track's): its mode (Off, Read, Touch, \
                       Latch or Write) and its lanes, each with the setting it is on and its \
                       points in time order (place in the lane, bar, seconds, value in the \
                       setting's own unit, and that value as text). Points are joined by \
@@ -41,7 +42,11 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "edit_automation",
-        description: "Changes one automation lane of a track: adds it (for any setting \
+        description: "Automates a track setting so it changes over time as the song plays: \
+                      a volume ride or fade, a filter sweep, a pan move, a send or effect \
+                      setting rising or falling. Draws points on the setting's automation \
+                      lane, which the setting follows from point to point. It changes one \
+                      lane: adds it (for any setting \
                       list_parameters names that can be automated; it starts level at the \
                       setting's value now unless points are given), removes it, clears its \
                       points, and adds, moves and deletes points. Points are given by place \
@@ -49,7 +54,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                       anything; values are in the setting's own unit (dB for volume and \
                       sends, -1 to 1 for pan, 0 to 1 for plugins) and are kept in its \
                       range. Adding points to a lane that isn't there adds it. Done in the \
-                      order: remove lane, clear, delete, move, add.",
+                      order: remove lane, clear, delete, move, add. Example, a fade in over \
+                      two bars: param gain, add [{bar: 1, value: -60}, {bar: 3, value: 0}].",
         access: Access::Edit,
         schema: || {
             let point = json!({"type": "object", "properties": {

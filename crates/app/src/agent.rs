@@ -131,6 +131,19 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: no_args,
     },
     Tool {
+        name: "get_history",
+        description: "The undo list (this user's steps Undo would take back, next first, \
+                      each with what it changed), the redo list, and who changed what in \
+                      the project and when, newest first.",
+        access: Access::Read,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "runs": {"type": "integer",
+                         "description": "How many runs of activity to give; 20 if not said."}
+            }})
+        },
+    },
+    Tool {
         name: "run_command",
         description: "Runs a command by its id, as its menu entry or key would. \
                       list_commands gives the ids. Commands that save or write files need \
@@ -183,6 +196,18 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "tags": {"type": "array", "items": {"type": "string"}},
                 "about": {"type": "string", "description": "What it is for."}
             }, "required": ["track", "kind", "name"]})
+        },
+    },
+    Tool {
+        name: "undo_steps",
+        description: "Undoes several steps at once (undo), or redoes them (redo), as \
+                      choosing a step on the undo list does. Each stays a step of its own.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "undo": {"type": "integer", "minimum": 0},
+                "redo": {"type": "integer", "minimum": 0}
+            }})
         },
     },
     Tool {
@@ -400,6 +425,7 @@ impl App {
                 ))
             }
             "export_report" => Ok(crate::interchange::report_value(&self.interchange_report())),
+            "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -488,6 +514,19 @@ impl App {
                 let about = args["about"].as_str().unwrap_or("");
                 let (_, left_out) = self.save_preset(ctx, i, kind, name, &tags, about)?;
                 Ok((json!({"saved": name, "files_left_out": left_out}), None))
+            }
+            "undo_steps" => {
+                let undo = args["undo"].as_u64().unwrap_or(0) as usize;
+                let redo = args["redo"].as_u64().unwrap_or(0) as usize;
+                if (undo == 0) == (redo == 0) {
+                    return Err("Give a number of steps to undo or to redo.".into());
+                }
+                let done = match undo {
+                    0 => self.redo_steps(ctx, redo),
+                    n => self.undo_steps(ctx, n),
+                };
+                // Undoing is no new step: it moves steps between the lists.
+                Ok((json!({"done": done}), None))
             }
             "seek" => {
                 let map = self.tempo_map();

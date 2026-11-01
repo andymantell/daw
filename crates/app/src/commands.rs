@@ -39,6 +39,9 @@ pub(crate) enum Cmd {
     ExportStemPackage,
     Export,
     ExportVideo,
+    ExportSections,
+    ExportThisSection,
+    ClearExportQueue,
     Undo,
     Redo,
     History,
@@ -446,6 +449,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("A copy of the video with the mix as its sound; the picture is copied as it is")
     .words("film picture movie score scoring render mp4 mov soundtrack"),
+    info(
+        Cmd::ExportSections,
+        "export-sections",
+        "File",
+        "Export a practice file per section",
+        &[],
+    )
+    .hint("One file of the mix for each section, cut at its bars, as the Export window is set")
+    .words("practice practise sections verse chorus marker range split render bounce queue"),
+    info(
+        Cmd::ExportThisSection,
+        "export-this-section",
+        "File",
+        "Export this section as a practice file",
+        &[],
+    )
+    .hint("A file of the mix for the section the playhead is in, cut at its bars")
+    .words("practice practise section verse chorus marker range render bounce queue"),
+    info(
+        Cmd::ClearExportQueue,
+        "clear-export-queue",
+        "File",
+        "Clear the export queue",
+        &[],
+    )
+    .hint("Takes out the exports waiting their turn; the one running carries on")
+    .words("cancel queue waiting exports"),
     info(
         Cmd::ExportDawProject,
         "export-for-other-daws",
@@ -2557,6 +2587,8 @@ impl App {
             Cmd::ExportVideo => {
                 daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
             }
+            Cmd::ExportSections | Cmd::ExportThisSection => !self.markers.is_empty(),
+            Cmd::ClearExportQueue => self.export.queue().next().is_some(),
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
             Cmd::SaveTrackPreset | Cmd::SaveChainPreset => !self.tracks.is_empty(),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
@@ -2902,7 +2934,10 @@ impl App {
             | Cmd::AddToPlayOrder
             | Cmd::PlayOrder
             | Cmd::WriteOrder
-            | Cmd::ClearPlayOrder => self.section_command(cmd),
+            | Cmd::ClearPlayOrder
+            | Cmd::ExportSections
+            | Cmd::ExportThisSection
+            | Cmd::ClearExportQueue => self.section_command(cmd),
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
             Cmd::TimecodeFromFilm => self.timecode_from_film(),
             Cmd::FrameForward => self.step_frame(1),

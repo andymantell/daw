@@ -1529,9 +1529,19 @@ impl Effects {
                         Row::Chain { of, branch, depth } => {
                             let name = slots[of].chain_name(branch);
                             let key = slots[of].key.clone();
+                            let heard = slots[of].builtin().and_then(|b| b.heard());
                             ui.horizontal(|ui| {
                                 ui.add_space(depth as f32 * 16.0);
                                 ui.label(RichText::new(&name).italics());
+                                match heard {
+                                    Some(h) if h == branch => {
+                                        ui.label(RichText::new("heard").strong());
+                                    }
+                                    Some(_) => {
+                                        ui.label(RichText::new("not heard now").weak());
+                                    }
+                                    None => {}
+                                }
                                 ui.menu_button("Add…", |ui| {
                                     if let Some(p) = add_list(ui, &mut self.filter, &effects) {
                                         add = Some((p, Some((key.clone(), branch as u32))));
@@ -1568,6 +1578,22 @@ impl Effects {
                         }
                         ui.label(RichText::new(&s.name).strong())
                             .on_hover_text(format!("Runs {}", s.runs()));
+                        // A switching container: which chain is heard.
+                        if let Some(b) = s.builtin()
+                            && let Some(heard) = b.heard()
+                        {
+                            for c in 0..b.chains() {
+                                let name = s.chain_name(c);
+                                if ui
+                                    // ai: set_parameter
+                                    .selectable_label(heard == c, &name)
+                                    .on_hover_text(format!("Hear {name}"))
+                                    .clicked()
+                                {
+                                    b.set_heard(c);
+                                }
+                            }
+                        }
                         if idle {
                             ui.label(RichText::new("not playing").weak()).on_hover_text(
                                 "Its container has no chain of this number now; move it \

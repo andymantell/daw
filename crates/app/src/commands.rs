@@ -86,6 +86,10 @@ pub(crate) enum Cmd {
     NextVersion,
     PrevVersion,
     DeleteVersion,
+    /// A switching container's next chain, on the track it acts on.
+    NextChain,
+    /// A switching container's chain n, counted from 0.
+    HearChain(u8),
     EditGroups,
     FixTiming,
     FollowTempo,
@@ -1215,6 +1219,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Delete the version the track plays; the one before it plays instead")
     .words("alternative alternate playlist remove"),
+    info(Cmd::NextChain, "next-chain", "Edit", "Switch to the next chain", &[])
+        .hint(
+            "Hear the next chain of the track's switching container, such as the driven \
+             amp after the clean one",
+        )
+        .words("amp channel clean driven drive footswitch toggle switch container"),
+    info(Cmd::HearChain(0), "hear-chain-1", "Edit", "Hear chain 1", &[])
+        .hint("Hear the first chain of the track's switching container")
+        .words("amp channel clean switch container"),
+    info(Cmd::HearChain(1), "hear-chain-2", "Edit", "Hear chain 2", &[])
+        .hint("Hear the second chain of the track's switching container")
+        .words("amp channel driven drive switch container"),
+    info(Cmd::HearChain(2), "hear-chain-3", "Edit", "Hear chain 3", &[])
+        .hint("Hear the third chain of the track's switching container")
+        .words("amp channel switch container"),
+    info(Cmd::HearChain(3), "hear-chain-4", "Edit", "Hear chain 4", &[])
+        .hint("Hear the fourth chain of the track's switching container")
+        .words("amp channel switch container"),
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
@@ -2950,6 +2972,10 @@ impl App {
             Cmd::NextVersion | Cmd::PrevVersion | Cmd::DeleteVersion => self
                 .version_track()
                 .is_some_and(|i| !self.tracks[i].versions.is_empty()),
+            Cmd::NextChain => self.switch_track().is_some(),
+            Cmd::HearChain(n) => self
+                .switch_track()
+                .is_some_and(|i| self.switch_chains(i) > n as usize),
             Cmd::AddNoteFx(_) => self.note_fx_track().is_some(),
             Cmd::NoteFxOnOff | Cmd::RenderNoteFx | Cmd::ClearNoteFx => self
                 .note_fx_track()
@@ -3349,6 +3375,8 @@ impl App {
             Cmd::PrevVersion => {
                 self.step_version(ctx, true);
             }
+            Cmd::NextChain => self.next_chain(),
+            Cmd::HearChain(n) => self.hear_chain(n as usize),
             Cmd::DeleteVersion => {
                 self.delete_playing_version(ctx);
             }

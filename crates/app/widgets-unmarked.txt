@@ -26,7 +26,7 @@ meters.rs 4
 mixer.rs 33
 monitor.rs 0
 notation.rs 8
-note_tools.rs 31
+note_tools.rs 26
 notefx.rs 9
 notes.rs 0
 notes_editor.rs 19

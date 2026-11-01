@@ -258,6 +258,40 @@ pub(crate) fn set_control(t: &mut Track, param: &str, v: f64) {
     }
 }
 
+/// Moves a track's control on a step, as a footswitch press does (see
+/// `MidiMap::step`): a setting with choices to its next one, going round
+/// (a switching container's heard chain only through the chains it has),
+/// and any other between its lowest and highest. False if it isn't there.
+pub(crate) fn step_control(t: &mut Track, param: &str) -> bool {
+    let (Some(v), Some(r)) = (control(t, param), range(t, param)) else {
+        return false;
+    };
+    let choices = match Lane::new(param).target() {
+        LaneTarget::Fx { effect, key } => slot(t, effect).and_then(|s| {
+            let b = s.builtin()?;
+            let p = b.kind().params()[fx_index(s, key)?];
+            if !p.stepped() {
+                None
+            } else if b.kind() == daw_effects::Kind::Switch && key == "heard" {
+                Some(b.chains())
+            } else {
+                Some((p.max - p.min).round() as usize + 1)
+            }
+        }),
+        _ => None,
+    };
+    let next = match choices {
+        Some(n) => {
+            let at = (v - r.min).round().max(0.0) as usize;
+            r.min + ((at + 1) % n.max(1)) as f64
+        }
+        None if r.fraction(v) < 0.5 => r.max,
+        None => r.min,
+    };
+    set_control(t, param, next);
+    true
+}
+
 /// The setting's range, if it is there.
 pub(crate) fn range(t: &Track, param: &str) -> Option<Range> {
     match Lane::new(param).target() {

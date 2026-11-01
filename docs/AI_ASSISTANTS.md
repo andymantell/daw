@@ -172,6 +172,15 @@ assistant finds them for itself. In outline:
   section), `edit_assignments` (set, change, remove, mark done, or
   practise one) and `edit_lessons` (start, rename or remove a lesson,
   or take a practice session out of the log).
+- **MIDI learn:** `get_midi_maps` and `edit_midi_maps` (tie a MIDI
+  device's controller to any setting, untie it, choose whether each
+  press steps the setting on, as a footswitch does, and move a
+  controller as if from a device, to try a tie).
+- **Switching containers** (one chain heard at a time, such as a clean
+  and a driven amp channel): `get_effects` gives the chain `heard`; it
+  is the setting `fx:<id>:heard` for `set_parameter`, `edit_automation`
+  and `edit_midi_maps`, and the commands `next-chain` and
+  `hear-chain-1` to `hear-chain-4` switch it (with `track`).
 - **Plugins on this computer:** `get_plugins` and `manage_plugins`
   (rescan, check, try a failed one again, offer or hide, where each
   runs, how many plugin windows may be open).

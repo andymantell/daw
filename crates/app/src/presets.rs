@@ -121,6 +121,27 @@ fn fx(kind: Kind, set: &[(&str, f64)]) -> daw_project::Effect {
     }
 }
 
+/// A switching container with `clean` in its first chain and `driven`
+/// in its second, followed by `after`, as a chain's effects.
+fn switching(
+    clean: Vec<daw_project::Effect>,
+    driven: Vec<daw_project::Effect>,
+    after: Vec<daw_project::Effect>,
+) -> Vec<daw_project::Effect> {
+    let mut switch = fx(Kind::Switch, &[]);
+    switch.name = "Clean or driven".into();
+    let mut list = vec![switch.clone()];
+    for (branch, chain) in [clean, driven].into_iter().enumerate() {
+        list.extend(chain.into_iter().map(|e| daw_project::Effect {
+            container: Some(switch.id.clone()),
+            branch: branch as u32,
+            ..e
+        }));
+    }
+    list.extend(after);
+    list
+}
+
 /// The presets that come with the app. Placeholders until the owner
 /// chooses which tones ship (see the review queue).
 pub(crate) fn included() -> Vec<Preset> {
@@ -169,6 +190,23 @@ pub(crate) fn included() -> Vec<Preset> {
                 fx(Kind::Amp, &[("voice", 3.0), ("gain", 7.0), ("middle", 4.0)]),
                 fx(Kind::Eq, &[("low_cut", 80.0)]),
             ],
+        ),
+        chain(
+            "Clean and driven guitar",
+            "guitar, clean, crunch, switch",
+            "A clean amp channel and a driven one, switched by a key, a footswitch or \
+             automation (Switch to the next chain), into one reverb.",
+            switching(
+                vec![
+                    fx(Kind::Compressor, &[("threshold", -20.0), ("ratio", 3.0)]),
+                    fx(Kind::Amp, &[("voice", 0.0), ("gain", 3.0), ("treble", 6.0)]),
+                ],
+                vec![
+                    fx(Kind::Gate, &[("threshold", -55.0)]),
+                    fx(Kind::Amp, &[("voice", 2.0), ("gain", 7.0)]),
+                ],
+                vec![fx(Kind::Reverb, &[("decay", 1.2), ("mix", 15.0)])],
+            ),
         ),
         chain(
             "Bass DI",

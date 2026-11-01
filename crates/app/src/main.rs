@@ -27,6 +27,7 @@ mod agent_edit;
 mod agent_files;
 mod agent_layers;
 mod agent_lessons;
+mod agent_midi;
 mod agent_monitor;
 mod agent_notes;
 mod agent_plugins;
@@ -84,6 +85,7 @@ mod simple_mode;
 mod snapshots;
 mod start;
 mod stretch;
+mod switch;
 mod templates;
 mod tempo;
 mod theme;
@@ -2888,6 +2890,10 @@ impl eframe::App for App {
                         Cmd::PrevVersion,
                         Cmd::DeleteVersion,
                     ] {
+                        app.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    for c in [Cmd::NextChain, Cmd::HearChain(0), Cmd::HearChain(1)] {
                         app.menu_item(ui, c);
                     }
                 });

@@ -1543,6 +1543,12 @@ pub struct MidiMap {
     /// Which setting, named as an automation lane names it (see
     /// [`Lane::param`]).
     pub param: String,
+    /// Each press steps the setting on to its next choice, going round,
+    /// in place of following the control's position: for a footswitch
+    /// that sends a high value when pressed and a low one when let go,
+    /// on a setting with choices (such as the chain a switching
+    /// container plays).
+    pub step: bool,
 }
 
 /// A change of time signature, from the start of a bar.

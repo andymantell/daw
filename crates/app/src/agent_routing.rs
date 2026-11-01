@@ -24,7 +24,10 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "A track's effects as the effects window shows them, in order: each \
                       with where it sits (container: a layer's or a container's id, and \
                       branch: which of the container's chains, from 0), its chain count if \
-                      it is a container, the track it listens to (sidechain) if it can, a \
+                      it is a container (and for a switching container, heard: the one \
+                      chain playing, from 0; set it with set_parameter, as its \
+                      fx:<id>:heard setting, or the next-chain and hear-chain-N commands), \
+                      the track it listens to (sidechain) if it can, a \
                       plugin's extra outputs and which are heard, the file a reverb, \
                       cabinet or amp capture player uses, and a plugin's presets and \
                       programs. Also the recorded rooms a reverb can use.",
@@ -243,6 +246,10 @@ impl App {
                 };
                 if s.chains() > 0 {
                     v["chains"] = json!(s.chains());
+                }
+                // A switching container: the one chain heard, from 0.
+                if let Some(heard) = s.builtin().and_then(|b| b.heard()) {
+                    v["heard"] = json!(heard);
                 }
                 if s.takes_key() {
                     v["sidechain"] = json!(e.sidechain);

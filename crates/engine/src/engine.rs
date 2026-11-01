@@ -50,6 +50,10 @@ pub enum Command {
     Seek(Frames),
     /// Loops `[start, end)` while playing; `None` turns looping off.
     SetLoop(Option<(Frames, Frames)>),
+    /// The loop to go on to when play next reaches the end of the one
+    /// playing, instead of going round it again: how song sections play
+    /// in any order. `None` goes round as usual.
+    QueueLoop(Option<(Frames, Frames)>),
     /// A whole new graph. Ownership moves through the queue, so the audio
     /// thread only swaps a pointer.
     SetGraph(Box<Graph>),
@@ -98,7 +102,8 @@ pub enum Command {
     SetMeterTap(Option<Tap>),
     /// Practice speed (1 is normal, 0.5 to 1.5) and transpose in
     /// semitones (±12, fractions for cents), keeping pitch and tempo
-    /// apart. Nothing records while either is changed.
+    /// apart. Armed tracks still record: their takes are sped back up to
+    /// the song's speed (see [`crate::record`]).
     SetPractice {
         speed: f64,
         semitones: f64,
@@ -487,6 +492,9 @@ pub struct Engine {
     playing: bool,
     pos: i64,
     looping: Option<(i64, i64)>,
+    /// Where play goes at the loop's end instead of its start, which
+    /// then becomes the loop (see [`Command::QueueLoop`]).
+    next_loop: Option<(i64, i64)>,
     metronome: Metronome,
     voice: Option<Voice>,
     /// During a count-in: where playback starts. `pos` runs up to it.
@@ -516,6 +524,9 @@ pub struct Engine {
     to_tuner: Producer<f32>,
     speed: f64,
     semitones: f64,
+    /// While recording at a practice speed: the `at` of the next block
+    /// recorded, if it continues the take (see [`crate::record`]).
+    slow_at: Option<i64>,
     /// While stretching: the play position, fractional, and the same in
     /// unwrapped play time (not sent back round the loop).
     posf: f64,
@@ -618,6 +629,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             playing: false,
             pos: 0,
             looping: None,
+            next_loop: None,
             metronome: Metronome::default(),
             voice: None,
             count_in_to: None,
@@ -638,6 +650,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             to_tuner: tuner_tx,
             speed: 1.0,
             semitones: 0.0,
+            slow_at: None,
             posf: 0.0,
             u: 0.0,
             stretch_reset: true,
@@ -719,7 +732,11 @@ impl Engine {
                 }
                 Command::SetLoop(l) => {
                     self.looping = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
+                    self.next_loop = None;
                     self.stretch_reset = true;
+                }
+                Command::QueueLoop(l) => {
+                    self.next_loop = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
                 }
                 Command::SetGraph(mut g) => {
                     if let Some(old) = &mut self.graph {
@@ -781,6 +798,8 @@ impl Engine {
                 Command::SetPractice { speed, semitones } => {
                     self.speed = speed.clamp(stretch::SPEED_RANGE.0, stretch::SPEED_RANGE.1);
                     self.semitones = semitones.clamp(-stretch::SEMITONES, stretch::SEMITONES);
+                    // Played at another speed: a new take.
+                    self.slow_at = None;
                 }
                 Command::SetCueBus { cue, bus } => {
                     if let Some(b) = self.monitor.buses.get_mut(cue) {
@@ -940,6 +959,11 @@ impl Engine {
                 && self.pos == end
             {
                 self.pos = start;
+                if let Some(next) = self.next_loop.take() {
+                    self.looping = Some(next);
+                    self.pos = next.0;
+                    self.stretch_reset = true;
+                }
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1103,6 +1127,10 @@ impl Engine {
                 b.len = run as u16;
                 b.kind = kind;
                 b.at = at + done as i64;
+                if self.speed != 1.0 || self.semitones != 0.0 {
+                    b.speed = self.speed as f32;
+                    b.semitones = self.semitones as f32;
+                }
                 for i in 0..run {
                     for c in 0..ch {
                         b.samples[i * ch + c] = input.get(from + done + i, sel.first + c);
@@ -1169,7 +1197,7 @@ impl Engine {
     /// Plays one callback's block at the practice speed and transpose.
     /// Output frame `i` plays timeline position `posf + i × speed`; tracks
     /// read through their stretchers, clicks follow the slowed beat, and
-    /// nothing records.
+    /// armed tracks record as played (see [`Self::record_stretched`]).
     fn play_stretched(
         &mut self,
         input: &[f32],
@@ -1183,6 +1211,7 @@ impl Engine {
         if self.stretch_reset {
             self.posf = self.pos as f64;
             self.u = self.posf;
+            self.slow_at = None;
         }
         let mut done = 0;
         while self.playing && done < n {
@@ -1197,8 +1226,12 @@ impl Engine {
                     self.posf = start as f64;
                     self.u = self.posf;
                     self.stretch_reset = true;
+                    self.slow_at = None;
                 }
                 len = len.min(until(end, self.posf));
+            }
+            if let Some(stop) = self.stop_at.filter(|&s| s as f64 > self.posf && !counting) {
+                len = len.min(until(stop, self.posf));
             }
             let range = done..done + len;
             let block = InputBlock {
@@ -1221,6 +1254,7 @@ impl Engine {
                 !counting,
                 rate,
             );
+            self.record_stretched(block, len, counting);
             if counting || self.metronome.enabled {
                 let buf = &mut self.click_buf[..len];
                 buf.fill(0.0);
@@ -1270,15 +1304,69 @@ impl Engine {
                 self.u = self.posf;
                 self.count_in_to = None;
                 self.stretch_reset = true;
+            } else if !counting && self.stop_at.is_some_and(|s| self.posf >= s as f64) {
+                // Post-roll done: the rest of the block is as if stopped.
+                self.pos = self.posf.floor() as i64;
+                self.playing = false;
+                self.stop_at = None;
+                self.voice = None;
+                self.render_stopped(input, channels, left, right, done);
+                return;
             } else if let Some((start, end)) = self.looping
                 && !counting
                 && self.posf >= end as f64
             {
                 // The stretchers carry on round the loop by themselves.
                 self.posf = start as f64 + (self.posf - end as f64);
+                if let Some(next) = self.next_loop.take() {
+                    self.posf += (next.0 - start) as f64;
+                    self.u = self.posf;
+                    self.looping = Some(next);
+                    self.stretch_reset = true;
+                }
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
+                self.slow_at = None;
             }
             self.pos = self.posf.floor() as i64;
+        }
+    }
+
+    /// Records `len` output frames of input at the practice speed, from
+    /// `posf`: output frame `i` plays timeline `posf + i × speed`. The
+    /// take starts at the timeline frame playing when its first frame was
+    /// captured and counts captured frames from there; the recorder
+    /// speeds it back up when it ends. A punch range applies to the
+    /// timeline as played (not moved by the round trip, which at a
+    /// practice speed is a few milliseconds of the song either way).
+    /// Retrospective capture is not kept at a practice speed.
+    fn record_stretched(&mut self, input: InputBlock, len: usize, counting: bool) {
+        if counting || !self.recording {
+            self.slow_at = None;
+            return;
+        }
+        let (posf, speed) = (self.posf, self.speed);
+        // The first output frame at or after timeline frame `to`.
+        let frame = |to: i64| (((to as f64 - posf) / speed).ceil().max(0.0) as usize).min(len);
+        let (lo, hi) = match self.punch {
+            Some((a, b)) => (frame(a), frame(b).max(frame(a))),
+            None => (0, len),
+        };
+        if lo < hi {
+            let at = *self
+                .slow_at
+                .get_or_insert((posf + lo as f64 * speed).floor() as i64);
+            self.send_input(input, lo, hi - lo, at, Kind::Record);
+            self.slow_at = Some(at + (hi - lo) as i64);
+        }
+        if let Some((_, out)) = self.punch
+            && posf < out as f64
+            && out as f64 <= posf + len as f64 * speed
+        {
+            // Punched out: the takes end here, not when playback stops.
+            self.send_input(input, 0, 0, self.slow_at.unwrap_or(out), Kind::End);
+            self.slow_at = None;
+        } else if lo == hi {
+            self.slow_at = None;
         }
     }
 

@@ -39,6 +39,7 @@ use crate::monitor::{CueLine, CueSend, MAX_CUES};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
 use crate::time::{Frames, TempoMap, Ticks};
+use crate::warp::{Warp, Warper};
 
 /// Most tracks a graph can hold; meters are sized to this up front.
 pub const MAX_TRACKS: usize = 256;
@@ -157,6 +158,15 @@ pub struct ClipSpec {
     pub fade_out: Fade,
     /// The clip's gain envelope, in source frames, in order.
     pub envelope: Arc<[GainPoint]>,
+    /// Audio that follows tempo: the source frames `[offset, offset +
+    /// len)` tied to the timeline frames they play on, stretched between
+    /// the points. Its first point is the clip's start and its last the
+    /// clip's end, both in source and on the timeline; `start` is not
+    /// used.
+    pub warp: Option<Arc<Warp>>,
+    /// Tells a warped clip apart across graph changes, so its stretcher
+    /// carries on instead of starting afresh; 0 for none.
+    pub tag: u64,
 }
 
 impl ClipSpec {
@@ -170,6 +180,8 @@ impl ClipSpec {
             fade_in: Fade::default(),
             fade_out: Fade::default(),
             envelope: Arc::new([]),
+            warp: None,
+            tag: 0,
         }
     }
 }
@@ -703,6 +715,158 @@ pub(crate) enum NodeSrc {
     Stream(usize),
 }
 
+/// A clip that follows tempo: played through its own stretcher along
+/// its warp, so each tied frame lands on its timeline frame.
+pub(crate) struct WarpNode {
+    pub tag: u64,
+    pub warp: Arc<Warp>,
+    pub warper: Warper,
+    /// Timeline frames it plays on.
+    pub start: i64,
+    pub end: i64,
+    /// Source frames it plays: `len` from `offset`.
+    pub offset: usize,
+    pub len: usize,
+    pub shape: Shape,
+    pub src: NodeSrc,
+}
+
+/// A clip's source as its stretcher reads it: by source frame, silent
+/// outside the frames the clip plays.
+struct SrcFeed<'a> {
+    src: &'a NodeSrc,
+    streams: &'a [StreamNode],
+    lo: i64,
+    hi: i64,
+    missing: usize,
+}
+
+impl Feed for SrcFeed<'_> {
+    fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
+        l.fill(0.0);
+        r.fill(0.0);
+        let n = l.len() as i64;
+        let (from, to) = (start.max(self.lo), (start + n).min(self.hi));
+        if from >= to {
+            return;
+        }
+        let dst = (from - start) as usize;
+        let len = (to - from) as usize;
+        let (l, r) = (&mut l[dst..dst + len], &mut r[dst..dst + len]);
+        match self.src {
+            NodeSrc::Memory(d) => {
+                let chans = &d.channels;
+                let right = chans.get(1).unwrap_or(&chans[0]);
+                let f = from as usize;
+                l.copy_from_slice(&chans[0][f..f + len]);
+                r.copy_from_slice(&right[f..f + len]);
+            }
+            NodeSrc::Stream(si) => {
+                let slots = &self.streams[*si].slots;
+                let mut done = 0;
+                while done < len {
+                    let f = from as usize + done;
+                    let (ci, within) = (f / CHUNK, f % CHUNK);
+                    let run = (len - done).min(CHUNK - within);
+                    match slots.get(ci).and_then(|s| s.as_deref()) {
+                        Some(ch) => {
+                            let got = run.min(ch.frames().saturating_sub(within));
+                            let k = ch.channels;
+                            let samples = &ch.samples[within * k..(within + got) * k];
+                            for (i, frame) in samples.chunks_exact(k).enumerate() {
+                                l[done + i] = frame[0];
+                                r[done + i] = frame[k - 1];
+                            }
+                            self.missing += run - got;
+                        }
+                        None => self.missing += run,
+                    }
+                    done += run;
+                }
+            }
+        }
+    }
+}
+
+/// Plays `w` for `n` output frames from timeline position `from` (in
+/// unwrapped play time, which `looping` sends back round the loop),
+/// each output frame `step` timeline frames on, into `tmp`, and adds
+/// it at the clip's level into `sl` and `sr`. Returns how many frames
+/// of streamed audio were missing.
+#[allow(clippy::too_many_arguments)]
+fn render_warped(
+    w: &mut WarpNode,
+    streams: &[StreamNode],
+    looping: Option<(i64, i64)>,
+    from: f64,
+    step: f64,
+    semitones: f64,
+    n: usize,
+    tmp: (&mut [f32], &mut [f32]),
+    sl: &mut [f32],
+    sr: &mut [f32],
+) -> usize {
+    let step = if step > 0.0 { step } else { 1.0 };
+    w.warper.set_pitch(semitones);
+    let mut missing = 0;
+    let mut done = 0usize;
+    while done < n {
+        let u = from + done as f64 * step;
+        let (p, until) = match looping {
+            Some((a, b)) if u >= b as f64 && b > a => {
+                let len = (b - a) as f64;
+                let p = a as f64 + (u - b as f64).rem_euclid(len);
+                (p, b as f64 - p)
+            }
+            Some((_, b)) if u < b as f64 => (u, b as f64 - u),
+            _ => (u, f64::INFINITY),
+        };
+        let run = ((until / step).ceil().max(1.0) as usize).min(n - done);
+        // The output frames of this run on which the clip plays.
+        let (start, end) = (w.start as f64, w.end as f64);
+        let k0 = if p >= start {
+            0
+        } else {
+            ((start - p) / step).ceil() as usize
+        };
+        let k1 = if p >= end {
+            0
+        } else {
+            (((end - p) / step).ceil() as usize).min(run)
+        };
+        if k1 > k0 {
+            let out0 = p + k0 as f64 * step;
+            let m = k1 - k0;
+            let (tl, tr) = (&mut tmp.0[..m], &mut tmp.1[..m]);
+            let mut feed = SrcFeed {
+                src: &w.src,
+                streams,
+                lo: w.offset as i64,
+                hi: (w.offset + w.len) as i64,
+                missing: 0,
+            };
+            w.warper.process(&mut feed, &w.warp, out0, step, tl, tr);
+            missing += feed.missing;
+            let flat = w.shape.is_flat();
+            for k in 0..m {
+                let g = if flat {
+                    w.shape.gain
+                } else {
+                    let src = w.warp.src_at(out0 + k as f64 * step);
+                    let rel = ((src - w.offset as f64).max(0.0) as usize).min(w.len - 1);
+                    w.shape.at(rel, w.len, w.offset)
+                };
+                sl[done + k0 + k] += tl[k] * g;
+                sr[done + k0 + k] += tr[k] * g;
+            }
+        } else {
+            w.warper.stop();
+        }
+        done += run;
+    }
+    missing
+}
+
 /// A note as the audio thread plays it: frames on the timeline.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NoteNode {
@@ -826,6 +990,11 @@ const MAX_SOUNDING: usize = 256;
 pub(crate) struct TrackNode {
     /// Sorted by start.
     pub clips: Vec<ClipNode>,
+    /// Clips that follow tempo, each with its own stretcher.
+    pub warped: Vec<WarpNode>,
+    /// A block of one warped clip's audio, `max_block` long, before it
+    /// is added at its level; empty with no warped clips.
+    pub warp_buf: [Vec<f32>; 2],
     /// Sorted by start.
     pub notes: Vec<NoteNode>,
     pub exprs: Vec<ExprNode>,
@@ -1487,6 +1656,7 @@ impl Session {
         let mut aux_routed: Vec<Vec<bool>> = Vec::with_capacity(self.tracks.len());
         for (ti, t) in self.tracks.iter().enumerate() {
             let mut clips = Vec::with_capacity(t.clips.len());
+            let mut warped = Vec::new();
             let mut stereo = false;
             for c in &t.clips {
                 if c.source.rate() != rate {
@@ -1502,15 +1672,22 @@ impl Session {
                 if len == 0 {
                     continue;
                 }
-                let start = c.start.frames(&self.tempo).0;
+                let (start, end) = match &c.warp {
+                    Some(w) => (w.out_range().start, w.out_range().end),
+                    None => {
+                        let start = c.start.frames(&self.tempo).0;
+                        (start, start + len as i64)
+                    }
+                };
                 let src = match &c.source {
                     Source::Memory(d) => NodeSrc::Memory(d.clone()),
                     Source::File(f) => {
                         placements.push(Placement {
                             source: f.clone(),
                             start,
-                            end: start + len as i64,
+                            end,
                             offset: c.offset,
+                            warp: c.warp.clone(),
                         });
                         let i = match streams.iter().position(|s| s.id == f.id) {
                             Some(i) => i,
@@ -1525,21 +1702,40 @@ impl Session {
                         NodeSrc::Stream(i)
                     }
                 };
-                clips.push(ClipNode {
-                    start,
-                    end: start + len as i64,
-                    offset: c.offset,
-                    shape: Shape {
-                        fade_in: c.fade_in,
-                        fade_out: c.fade_out,
-                        envelope: c.envelope.clone(),
-                        ..Shape::flat(c.gain_db)
-                    }
-                    .fitted(len),
-                    src,
-                });
+                let shape = Shape {
+                    fade_in: c.fade_in,
+                    fade_out: c.fade_out,
+                    envelope: c.envelope.clone(),
+                    ..Shape::flat(c.gain_db)
+                }
+                .fitted(len);
+                match &c.warp {
+                    Some(w) => warped.push(WarpNode {
+                        tag: c.tag,
+                        warp: w.clone(),
+                        warper: Warper::new(max_block),
+                        start,
+                        end,
+                        offset: c.offset,
+                        len,
+                        shape,
+                        src,
+                    }),
+                    None => clips.push(ClipNode {
+                        start,
+                        end,
+                        offset: c.offset,
+                        shape,
+                        src,
+                    }),
+                }
             }
             clips.sort_by_key(|c| c.start);
+            let warp_buf = if warped.is_empty() {
+                [Vec::new(), Vec::new()]
+            } else {
+                [vec![0.0; max_block], vec![0.0; max_block]]
+            };
             let mut exprs: Vec<ExprNode> = Vec::new();
             let mut notes: Vec<NoteNode> = (t.notes.iter())
                 .filter(|n| n.len.0 > 0 && n.pitch <= 127)
@@ -1659,6 +1855,8 @@ impl Session {
             stereo |= !inserts.is_empty() || plays;
             tracks.push(TrackNode {
                 clips,
+                warped,
+                warp_buf,
                 notes,
                 exprs,
                 controls,
@@ -2013,6 +2211,32 @@ impl Graph {
                             read_looped(&t.clips, &self.streams, looping, pos + t.latency, sl, sr)
                     }
                 }
+                // Clips that follow tempo, each through its own stretcher.
+                if !t.warped.is_empty() {
+                    let (from, step, semis) = match &rate {
+                        Some(r) => (r.u + t.latency as f64 * r.speed, r.speed, r.semitones),
+                        None => ((pos + t.latency) as f64, 1.0, 0.0),
+                    };
+                    let [bl, br] = &mut t.warp_buf;
+                    for w in &mut t.warped {
+                        missing += render_warped(
+                            w,
+                            &self.streams,
+                            looping,
+                            from,
+                            step,
+                            semis,
+                            n,
+                            (&mut bl[..n], &mut br[..n]),
+                            sl,
+                            sr,
+                        );
+                    }
+                }
+            } else {
+                for w in &mut t.warped {
+                    w.warper.stop();
+                }
             }
 
             // Notes: those from clips for this block, then the live
@@ -2196,6 +2420,18 @@ impl Graph {
     pub(crate) fn adopt_stretchers(&mut self, old: &mut Graph) {
         for (t, o) in self.tracks.iter_mut().zip(&mut old.tracks) {
             std::mem::swap(&mut t.stretch, &mut o.stretch);
+        }
+        // Warped clips by tag, wherever they were: a clip that moved
+        // tracks keeps its stretcher too.
+        for w in self.tracks.iter_mut().flat_map(|t| &mut t.warped) {
+            if w.tag == 0 {
+                continue;
+            }
+            if let Some(o) =
+                (old.tracks.iter_mut().flat_map(|t| &mut t.warped)).find(|o| o.tag == w.tag)
+            {
+                std::mem::swap(&mut w.warper, &mut o.warper);
+            }
         }
     }
 

@@ -19,6 +19,8 @@
 //!
 //! [`latency`] measures the recording offset with a loopback cable, by
 //! running a test in the engine's place through the same path.
+//!
+//! [`setup`] holds the guided setup's suggestions and checks.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -34,6 +36,7 @@ pub const MAX_BLOCK: usize = 4096;
 
 pub mod latency;
 pub mod midi;
+pub mod setup;
 
 /// What runs in the audio callback: the engine, or a stand-in such as
 /// the latency test. Called with each block's input and outputs, as
@@ -137,7 +140,7 @@ pub struct Speakers {
 }
 
 /// One device as the driver describes it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DeviceInfo {
     pub name: String,
     pub output_channels: u16,

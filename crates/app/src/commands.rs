@@ -26,6 +26,10 @@ pub(crate) enum Cmd {
     Save,
     SaveAs,
     SaveAsTemplate,
+    Presets,
+    SaveTrackPreset,
+    SaveChainPreset,
+    ImportPreset,
     ExportBundle,
     ImportBundle,
     Snapshots,
@@ -40,6 +44,16 @@ pub(crate) enum Cmd {
     InsertBars,
     DeleteBars,
     TimeWindow,
+    Sections,
+    LoopSection,
+    DuplicateSection,
+    DeleteSection,
+    SectionEarlier,
+    SectionLater,
+    AddToPlayOrder,
+    PlayOrder,
+    WriteOrder,
+    ClearPlayOrder,
     HitPoint,
     HitPoints,
     Timecode,
@@ -57,6 +71,15 @@ pub(crate) enum Cmd {
     Bounce,
     EditGroups,
     FixTiming,
+    FollowTempo,
+    ClipTempo,
+    StretchMarkersFromAttacks,
+    AddStretchMarker,
+    ClearStretchMarkers,
+    QuantiseAudio,
+    QuantiseAudioApply,
+    TempoFromClip,
+    TempoFromClipApply,
     ZoomIn,
     ZoomOut,
     ZoomSelection,
@@ -80,6 +103,7 @@ pub(crate) enum Cmd {
     Browser,
     Video,
     FullSize,
+    SimpleMode,
     /// Recalls saved layout n, counted from 0.
     Layout(u8),
     SaveLayout,
@@ -89,6 +113,9 @@ pub(crate) enum Cmd {
     LessonNotes,
     Lessons,
     Comments,
+    SlowerSpeed,
+    FasterSpeed,
+    NormalSpeed,
     NotesEditor,
     PatternEditor,
     AddPattern,
@@ -117,6 +144,8 @@ pub(crate) enum Cmd {
     Instrument,
     AddLayer,
     SingleInstrument,
+    ExportDawProject,
+    ImportDawProject,
     ImportMidi,
     ExportMidi,
     NotationLane,
@@ -133,6 +162,12 @@ pub(crate) enum Cmd {
     ExportTextTab,
     PrintNotation,
     AudioDevice,
+    AudioSetup,
+    AudioSetupNext,
+    AudioSetupSkip,
+    AudioSetupBack,
+    AudioSetupCancel,
+    MeasureLatency,
     Plugins,
     PerformanceCheck,
     DrumKits,
@@ -190,6 +225,8 @@ pub(crate) struct Info {
     typing: bool,
     /// Holding its key down repeats it.
     repeat: bool,
+    /// Shown in the simpler mode too: see `simple_mode`.
+    pub(crate) everyday: bool,
 }
 
 const fn info(
@@ -209,6 +246,7 @@ const fn info(
         keys,
         typing: false,
         repeat: false,
+        everyday: false,
     }
 }
 
@@ -243,11 +281,20 @@ impl Info {
             ..self
         }
     }
+
+    const fn everyday(self) -> Info {
+        Info {
+            everyday: true,
+            ..self
+        }
+    }
 }
 
 /// Every command, in menu order.
 pub(crate) const COMMANDS: &[Info] = &[
-    info(Cmd::NewProject, "new-project", "File", "New project", &[]).words("start empty"),
+    info(Cmd::NewProject, "new-project", "File", "New project", &[])
+        .words("start empty")
+        .everyday(),
     info(
         Cmd::NewFromTemplate,
         "new-from-template",
@@ -256,7 +303,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Start a project with tracks, sections and notes laid out")
-    .words("start lesson band demo"),
+    .words("start lesson band demo")
+    .everyday(),
     info(
         Cmd::OpenProject,
         "open-project",
@@ -264,7 +312,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Open project…",
         &[],
     )
-    .words("load"),
+    .words("load")
+    .everyday(),
     info(
         Cmd::StartScreen,
         "start-screen",
@@ -273,11 +322,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Recent projects and templates")
-    .words("recent welcome begin"),
+    .words("recent welcome begin")
+    .everyday(),
     info(Cmd::Save, "save", "File", "Save", &[key(CTRL, Key::S)])
         .hint("Save the project")
-        .typing(),
-    info(Cmd::SaveAs, "save-as", "File", "Save as…", &[]).words("copy rename"),
+        .typing()
+        .everyday(),
+    info(Cmd::SaveAs, "save-as", "File", "Save as…", &[])
+        .words("copy rename")
+        .everyday(),
     info(
         Cmd::SaveAsTemplate,
         "save-as-template",
@@ -287,6 +340,36 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Keep this project's tracks, effects, sections and notes to start from")
     .words("layout set-up"),
+    info(Cmd::Presets, "presets", "File", "Presets…", &[])
+        .hint("Track and effect chain presets, to add as new tracks and put on tracks")
+        .words("tone sound library chain load"),
+    info(
+        Cmd::SaveTrackPreset,
+        "save-track-preset",
+        "File",
+        "Save track as preset…",
+        &[],
+    )
+    .hint("Keep a track's instrument, effects, amp, sends and settings to use again")
+    .words("tone sound library"),
+    info(
+        Cmd::SaveChainPreset,
+        "save-chain-preset",
+        "File",
+        "Save effect chain as preset…",
+        &[],
+    )
+    .hint("Keep a track's effects to put on other tracks")
+    .words("tone sound library fx"),
+    info(
+        Cmd::ImportPreset,
+        "import-preset",
+        "File",
+        "Import preset…",
+        &[],
+    )
+    .hint("Take in a preset someone sent you")
+    .words("tone receive share"),
     info(
         Cmd::ExportBundle,
         "export-bundle",
@@ -295,7 +378,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("The project and its audio in one file, to send by any means")
-    .words("share send"),
+    .words("share send")
+    .everyday(),
     info(
         Cmd::ImportBundle,
         "import-bundle",
@@ -304,7 +388,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Merges into your copy of the project if you have one")
-    .words("share receive"),
+    .words("share receive")
+    .everyday(),
     info(Cmd::Snapshots, "snapshots", "File", "Snapshots…", &[])
         .hint("Name the project as it is now, or go back to a named moment")
         .words("restore version history"),
@@ -313,7 +398,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         .words("roles join name"),
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
-        .words("render bounce stems wav flac mp3 opus ogg mixdown bus"),
+        .words("render bounce stems wav flac mp3 opus ogg mixdown bus")
+        .everyday(),
     info(
         Cmd::ExportVideo,
         "export-video",
@@ -323,6 +409,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("A copy of the video with the mix as its sound; the picture is copied as it is")
     .words("film picture movie score scoring render mp4 mov soundtrack"),
+    info(
+        Cmd::ExportDawProject,
+        "export-for-other-daws",
+        "File",
+        "Export for other DAWs…",
+        &[],
+    )
+    .hint("The project as a .dawproject file, which several other DAWs open; says first what won't go")
+    .words("dawproject interchange exchange share other daw convert"),
+    info(
+        Cmd::ImportDawProject,
+        "import-from-other-daw",
+        "File",
+        "Import from another DAW…",
+        &[],
+    )
+    .hint("Opens a .dawproject file from another DAW as a new project, and says what didn't come in")
+    .words("dawproject interchange exchange open other daw convert"),
     info(
         Cmd::ImportMidi,
         "import-midi",
@@ -548,7 +652,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Makes a note clip from what was played on a MIDI keyboard without Record on")
     .words("retrospective capture midi"),
-    info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)]).repeat(),
+    info(Cmd::Undo, "undo", "Edit", "Undo", &[key(CTRL, Key::Z)])
+        .repeat()
+        .everyday(),
     info(
         Cmd::Redo,
         "redo",
@@ -556,7 +662,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Redo",
         &[key(CTRL_SHIFT, Key::Z), key(CTRL, Key::Y)],
     )
-    .repeat(),
+    .repeat()
+    .everyday(),
     info(
         Cmd::Split,
         "split",
@@ -565,7 +672,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::S)],
     )
     .hint("Split clips at the playhead: the selected ones, or all under it")
-    .words("cut"),
+    .words("cut")
+    .everyday(),
     info(
         Cmd::Delete,
         "delete",
@@ -574,7 +682,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::Delete), key(NONE, Key::Backspace)],
     )
     .hint("Delete the selected clips, or the focused marker")
-    .words("remove erase"),
+    .words("remove erase")
+    .everyday(),
     info(
         Cmd::Marker,
         "marker",
@@ -583,7 +692,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::M)],
     )
     .hint("Mark a section at the playhead's bar")
-    .words("marker add"),
+    .words("marker add")
+    .everyday(),
     info(
         Cmd::InsertBars,
         "insert-bars",
@@ -611,6 +721,89 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Put in empty bars, or take bars out, anywhere in the song")
     .words("insert delete time add remove bars gap shift"),
+    info(Cmd::Sections, "sections", "Edit", "Sections…", &[])
+        .hint("Loop, copy, move or delete a section, and try the sections in another order")
+        .words("arrange arranger arrangement verse chorus solo bridge song parts form"),
+    info(
+        Cmd::LoopSection,
+        "loop-section",
+        "Edit",
+        "Practise this section",
+        &[],
+    )
+    .hint("Loops the section the playhead is in, to practise it")
+    .words("loop practice repeat verse chorus"),
+    info(
+        Cmd::DuplicateSection,
+        "duplicate-section",
+        "Edit",
+        "Copy this section after itself",
+        &[],
+    )
+    .hint("Puts a copy of the playhead's section straight after it, on every track")
+    .words("duplicate repeat again verse chorus arrange"),
+    info(
+        Cmd::DeleteSection,
+        "delete-section",
+        "Edit",
+        "Delete this section",
+        &[],
+    )
+    .hint("Takes the playhead's section out of every track, closing the gap")
+    .words("remove cut verse chorus arrange"),
+    info(
+        Cmd::SectionEarlier,
+        "section-earlier",
+        "Edit",
+        "Move this section earlier",
+        &[],
+    )
+    .hint("Swaps the playhead's section with the one before it")
+    .words("rearrange arrange order swap up"),
+    info(
+        Cmd::SectionLater,
+        "section-later",
+        "Edit",
+        "Move this section later",
+        &[],
+    )
+    .hint("Swaps the playhead's section with the one after it")
+    .words("rearrange arrange order swap down"),
+    info(
+        Cmd::AddToPlayOrder,
+        "add-to-play-order",
+        "Edit",
+        "Add this section to the play order",
+        &[],
+    )
+    .hint("Adds the playhead's section to the end of the play order")
+    .words("arrangement arrange sequence playlist repeat"),
+    info(
+        Cmd::PlayOrder,
+        "play-order",
+        "Transport",
+        "Play the sections in the play order",
+        &[],
+    )
+    .hint("Plays the play order's sections one after another, round and round")
+    .words("arrangement arrange sequence playlist audition try"),
+    info(
+        Cmd::WriteOrder,
+        "write-play-order",
+        "Edit",
+        "Write the play order into the song",
+        &[],
+    )
+    .hint("Lays the song out in the play order, so it plays that way from start to end")
+    .words("flatten arrangement arrange render commit apply"),
+    info(
+        Cmd::ClearPlayOrder,
+        "clear-play-order",
+        "Edit",
+        "Clear the play order",
+        &[],
+    )
+    .words("arrangement arrange reset empty"),
     info(
         Cmd::HitPoint,
         "hit-point",
@@ -693,7 +886,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Clear the selection",
         &[key(NONE, Key::Escape)],
     )
-    .words("deselect none"),
+    .words("deselect none")
+    .everyday(),
     info(
         Cmd::Crossfade,
         "crossfade",
@@ -720,7 +914,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(CTRL, Key::C)],
     )
     .hint("Copy the selected clips, to paste at the playhead or onto a track")
-    .words("duplicate clipboard"),
+    .words("duplicate clipboard")
+    .everyday(),
     info(
         Cmd::Paste,
         "paste",
@@ -729,7 +924,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(CTRL, Key::V)],
     )
     .hint("Paste the copied clips at the playhead, each on the track it came from")
-    .words("duplicate clipboard"),
+    .words("duplicate clipboard")
+    .everyday(),
     info(Cmd::Bounce, "bounce", "Edit", "Bounce to a new track", &[])
         .hint(
             "The selected clips through their track's effects, as new audio on a track beside \
@@ -742,6 +938,71 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::FixTiming, "fix-timing", "Edit", "Fix timing…", &[])
         .hint("Cut the selected clips at each note and move the notes toward the grid")
         .words("quantise quantize tighten align beat slice transient attack groove"),
+    info(Cmd::FollowTempo, "follow-tempo", "Edit", "Follow tempo", &[])
+        .hint(
+            "The selected clips keep to the song's beats: they stretch with the tempo map              and the project tempo, live and when exporting",
+        )
+        .words("musical time warp stretch elastic tempo sync"),
+    info(Cmd::ClipTempo, "clip-tempo", "Edit", "Clip tempo…", &[])
+        .hint("The tempo the selected clips were played at, which they follow the song from")
+        .words("original bpm warp stretch loop"),
+    info(
+        Cmd::StretchMarkersFromAttacks,
+        "stretch-markers-from-attacks",
+        "Edit",
+        "Stretch markers from attacks",
+        &[],
+    )
+    .hint("A stretch marker on every attack in the selected clips, to drag onto the beats")
+    .words("warp marker transient detect"),
+    info(
+        Cmd::AddStretchMarker,
+        "add-stretch-marker",
+        "Edit",
+        "Add stretch marker at playhead",
+        &[],
+    )
+    .hint("A stretch marker where the playhead crosses the selected clips")
+    .words("warp marker"),
+    info(
+        Cmd::ClearStretchMarkers,
+        "clear-stretch-markers",
+        "Edit",
+        "Clear stretch markers",
+        &[],
+    )
+    .hint("Take every stretch marker off the selected clips")
+    .words("warp marker remove"),
+    info(Cmd::QuantiseAudio, "quantise-audio", "Edit", "Quantise audio…", &[])
+        .hint("Move the selected clips' attacks toward the grid by stretching, with no cuts")
+        .words("quantize warp tighten align beat transient"),
+    info(
+        Cmd::QuantiseAudioApply,
+        "quantise-audio-apply",
+        "Edit",
+        "Quantise audio now",
+        &[],
+    )
+    .hint("Quantise the selected clips' attacks with the window's current settings")
+    .words("quantize warp"),
+    info(
+        Cmd::TempoFromClip,
+        "tempo-from-clip",
+        "Edit",
+        "Tempo from performance…",
+        &[],
+    )
+    .hint("Make the song's tempo map follow the selected clip's beats, as it was played")
+    .words("tempo map detect free time rubato beat"),
+    info(
+        Cmd::TempoFromClipApply,
+        "tempo-from-clip-apply",
+        "Edit",
+        "Tempo from performance now",
+        &[],
+    )
+    .hint("Set the song's tempo from the selected clip with the window's current settings")
+    .words("tempo map detect"),
     info(
         Cmd::ZoomIn,
         "zoom-in",
@@ -750,7 +1011,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::Equals)],
     )
     .repeat()
-    .words("magnify closer"),
+    .words("magnify closer")
+    .everyday(),
     info(
         Cmd::ZoomOut,
         "zoom-out",
@@ -759,7 +1021,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::Minus)],
     )
     .repeat()
-    .words("further"),
+    .words("further")
+    .everyday(),
     info(
         Cmd::ZoomSelection,
         "zoom-selection",
@@ -777,7 +1040,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::N)],
     )
     .hint("Snap clips to the grid while dragging")
-    .words("grid magnet"),
+    .words("grid magnet")
+    .everyday(),
     info(
         Cmd::Ripple,
         "ripple",
@@ -812,7 +1076,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Play or stop",
         &[key(NONE, Key::Space)],
     )
-    .words("start pause"),
+    .words("start pause")
+    .everyday(),
     info(
         Cmd::ToStart,
         "to-start",
@@ -820,7 +1085,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Back to the start",
         &[key(NONE, Key::Home)],
     )
-    .words("rewind beginning"),
+    .words("rewind beginning")
+    .everyday(),
     info(
         Cmd::Record,
         "record",
@@ -828,7 +1094,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Record on or off",
         &[key(NONE, Key::R)],
     )
-    .hint("Armed tracks record while playing"),
+    .hint("Armed tracks record while playing")
+    .everyday(),
     info(
         Cmd::Loop,
         "loop",
@@ -836,7 +1103,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Loop on or off",
         &[key(NONE, Key::L)],
     )
-    .words("repeat cycle"),
+    .words("repeat cycle")
+    .everyday(),
     info(
         Cmd::Metronome,
         "metronome",
@@ -844,7 +1112,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Metronome on or off",
         &[key(NONE, Key::K)],
     )
-    .words("click"),
+    .words("click")
+    .everyday(),
     info(
         Cmd::CountIn,
         "count-in",
@@ -853,10 +1122,12 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[key(NONE, Key::C)],
     )
     .hint("One bar of clicks before playing")
-    .words("pre-roll"),
+    .words("pre-roll")
+    .everyday(),
     info(Cmd::Mixer, "mixer", "View", "Mixer", &[])
         .hint("Show or hide the mixer")
-        .words("pane faders tracks"),
+        .words("pane faders tracks")
+        .everyday(),
     info(
         Cmd::MonitorSection,
         "monitor-section",
@@ -905,6 +1176,10 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Show or hide your sound folders and the project's audio, to hear and add")
     .words("samples loops sounds library files search tags preview audition"),
+    info(Cmd::SimpleMode, "simpler-mode", "View", "Simpler mode", &[])
+        .hint("Show only the everyday commands and controls; the rest stay under More")
+        .words("beginner basic easy simple advanced hide everyday")
+        .everyday(),
     info(
         Cmd::FullSize,
         "full-size",
@@ -1007,7 +1282,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Let a pane open in a window of its own, to put on another screen")
     .words("detach screens monitors undock float tear"),
-    info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[]).words("tune pitch"),
+    info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[])
+        .words("tune pitch")
+        .everyday(),
     info(Cmd::Meters, "meters", "Practice", "Meters…", &[])
         .words("loudness lufs level peak rms spectrum phase"),
     info(
@@ -1017,11 +1294,32 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Lesson notes…",
         &[],
     )
-    .words("tab text"),
+    .words("tab text")
+    .everyday(),
     info(Cmd::Lessons, "lessons", "Practice", "Lessons", &[])
         .hint("Show or hide assignments, the practice log and the lessons so far")
-        .words("assignment homework practice log history progress teacher student"),
-    info(Cmd::Comments, "comments", "Practice", "Comments…", &[]).words("pins feedback"),
+        .words("assignment homework practice log history progress teacher student")
+        .everyday(),
+    info(Cmd::Comments, "comments", "Practice", "Comments…", &[])
+        .words("pins feedback")
+        .everyday(),
+    info(Cmd::SlowerSpeed, "slower-speed", "Practice", "Slower", &[])
+        .hint("Play 5% slower, pitch kept. Takes recorded slowed are sped back up to the song's speed")
+        .words("speed slow down tempo practise record learn")
+        .everyday(),
+    info(Cmd::FasterSpeed, "faster-speed", "Practice", "Faster", &[])
+        .hint("Play 5% faster, pitch kept")
+        .words("speed up tempo practise")
+        .everyday(),
+    info(
+        Cmd::NormalSpeed,
+        "normal-speed",
+        "Practice",
+        "Normal speed and pitch",
+        &[],
+    )
+    .words("reset speed transpose 100%")
+    .everyday(),
     info(
         Cmd::AudioDevice,
         "audio-device",
@@ -1029,7 +1327,61 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Audio device…",
         &[],
     )
-    .words("interface sound card input output latency"),
+    .words("interface sound card input output latency")
+    .everyday(),
+    info(
+        Cmd::AudioSetup,
+        "audio-setup",
+        "Settings",
+        "Guided audio setup…",
+        &[],
+    )
+    .hint("Step by step: the interface, its driver, buffer size, input level and latency, with what to fix")
+    .words("interface sound card wizard first run driver asio buffer gain level monitoring latency help")
+    .everyday(),
+    info(
+        Cmd::AudioSetupNext,
+        "audio-setup-next",
+        "Settings",
+        "Audio setup: next step",
+        &[],
+    )
+    .hint("Use what this step shows and go on")
+    .words("guided setup wizard"),
+    info(
+        Cmd::AudioSetupSkip,
+        "audio-setup-skip",
+        "Settings",
+        "Audio setup: skip this step",
+        &[],
+    )
+    .hint("Go on without changing this")
+    .words("guided setup wizard"),
+    info(
+        Cmd::AudioSetupBack,
+        "audio-setup-back",
+        "Settings",
+        "Audio setup: back a step",
+        &[],
+    )
+    .words("guided setup wizard"),
+    info(
+        Cmd::AudioSetupCancel,
+        "audio-setup-cancel",
+        "Settings",
+        "Audio setup: close",
+        &[],
+    )
+    .words("guided setup wizard cancel"),
+    info(
+        Cmd::MeasureLatency,
+        "measure-latency",
+        "Settings",
+        "Measure latency…",
+        &[],
+    )
+    .hint("Measure the round trip with a loopback cable, so recordings line up exactly")
+    .words("loopback recording offset delay round trip"),
     info(Cmd::Plugins, "plugins", "Settings", "Plugins…", &[]).words("effects scan"),
     info(
         Cmd::PerformanceCheck,
@@ -1134,7 +1486,8 @@ pub(crate) const COMMANDS: &[Info] = &[
     .typing(),
     info(Cmd::Theme, "theme", "Settings", "Theme…", &[])
         .hint("Choose how the app looks on this computer")
-        .words("look colours colors appearance skin dark light"),
+        .words("look colours colors appearance skin dark light")
+        .everyday(),
     info(Cmd::NextTheme, "next-theme", "Settings", "Next theme", &[])
         .words("look colours colors appearance skin switch"),
     info(
@@ -1145,7 +1498,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Swap the theme's light and dark colours")
-    .words("night day mode appearance"),
+    .words("night day mode appearance")
+    .everyday(),
     info(
         Cmd::FindCommand,
         "find-command",
@@ -1155,7 +1509,8 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Type part of a command's name and press Enter to run it")
     .words("search palette")
-    .typing(),
+    .typing()
+    .everyday(),
     info(
         Cmd::CheckUpdates,
         "check-updates",
@@ -1163,14 +1518,16 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Check for updates…",
         &[],
     )
-    .words("version new"),
+    .words("version new")
+    .everyday(),
     info(
         Cmd::CrashReports,
         "crash-reports",
         "Help",
         "Crash reports…",
         &[],
-    ),
+    )
+    .everyday(),
     info(
         Cmd::SoundCredits,
         "sound-credits",
@@ -1187,7 +1544,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Show the track's notes as tab or a staff under it, or take it off")
-    .words("tab tablature staff score drums notes view"),
+    .words("tab tablature staff score drums notes view")
+    .everyday(),
     info(
         Cmd::NotationView,
         "notation-view",
@@ -1196,7 +1554,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Tab, then a standard staff, then a drum staff")
-    .words("tab staff drums score"),
+    .words("tab staff drums score")
+    .everyday(),
     info(
         Cmd::NotationSettings,
         "notation-settings",
@@ -1244,7 +1603,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Silence the notation track's part, to play it yourself")
-    .words("play along mute practise practice"),
+    .words("play along mute practise practice")
+    .everyday(),
     info(
         Cmd::ContinuousScroll,
         "continuous-scroll",
@@ -1253,7 +1613,8 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("While playing, the lanes move under a still playhead, rather than a page at a time")
-    .words("follow page continuous notation"),
+    .words("follow page continuous notation")
+    .everyday(),
     info(
         Cmd::ImportMusicXml,
         "import-musicxml",
@@ -1606,6 +1967,8 @@ struct Palette {
     chosen: usize,
     /// Its text field takes the keyboard when it opens.
     focus: bool,
+    /// Lists advanced commands in the simpler mode too.
+    all: bool,
 }
 
 /// The key commands window.
@@ -1691,16 +2054,19 @@ impl Commands {
     /// input. While a text field has the keyboard (`typing`), only the
     /// few commands meant for that run; while the search, a menu or a
     /// list is open, none do.
-    fn pressed(&mut self, ctx: &egui::Context, typing: bool) -> Vec<Cmd> {
+    /// In the simpler mode (`simple`), the keys of advanced commands are
+    /// taken but run nothing; they come back as the second list.
+    fn pressed(&mut self, ctx: &egui::Context, typing: bool, simple: bool) -> (Vec<Cmd>, Vec<Cmd>) {
         if let Some(cmd) = self.editor.capturing {
             self.capture(ctx, cmd);
-            return Vec::new();
+            return Default::default();
         }
         // The search takes its own keys (Esc closes it).
         if self.palette.open || egui::Popup::is_any_open(ctx) {
-            return Vec::new();
+            return Default::default();
         }
         let mut run = Vec::new();
+        let mut held = Vec::new();
         let keymap = &self.keymap;
         ctx.input_mut(|i| {
             i.events.retain(|e| {
@@ -1721,13 +2087,17 @@ impl Commands {
                 if typing && !info.typing {
                     return true;
                 }
-                if !*repeat || info.repeat {
+                if simple && !info.everyday {
+                    if !*repeat {
+                        held.push(cmd);
+                    }
+                } else if !*repeat || info.repeat {
                     run.push(cmd);
                 }
                 false
             });
         });
-        run
+        (run, held)
     }
 
     /// The next key pressed goes to `cmd`; Esc stops waiting.
@@ -1774,12 +2144,19 @@ impl Commands {
     fn palette_window(
         &mut self,
         ctx: &egui::Context,
+        simple: bool,
         can_run: impl Fn(Cmd) -> bool,
     ) -> Option<Cmd> {
         if !self.palette.open {
             return None;
         }
-        let found = search_named(&self.palette.query, &self.names);
+        let mut found = search_named(&self.palette.query, &self.names);
+        let mut left_out = 0;
+        if simple && !self.palette.all {
+            let before = found.len();
+            found.retain(|c| c.info().everyday);
+            left_out = before - found.len();
+        }
         let mut run = None;
         let mut open = true;
         egui::Window::new("Find a command")
@@ -1821,6 +2198,20 @@ impl Commands {
                 if esc {
                     open = false;
                 }
+                if simple {
+                    let text = match left_out {
+                        0 => "Show advanced commands too".to_string(),
+                        1 => "Show advanced commands too (1 more found)".to_string(),
+                        n => format!("Show advanced commands too ({n} more found)"),
+                    };
+                    if ui
+                        .checkbox(&mut self.palette.all, text)
+                        .on_hover_text("The commands the simpler mode leaves out")
+                        .changed()
+                    {
+                        self.palette.chosen = 0;
+                    }
+                }
                 if found.is_empty() {
                     ui.weak("No command has that name.");
                 }
@@ -1859,7 +2250,8 @@ impl Commands {
     }
 
     /// Settings → Key commands: every command's keys, to change.
-    fn editor_window(&mut self, ctx: &egui::Context) {
+    /// In the simpler mode (`simple`), advanced commands say so.
+    fn editor_window(&mut self, ctx: &egui::Context, simple: bool) {
         let mut open = self.editor.open;
         egui::Window::new("Key commands")
             .open(&mut open)
@@ -1928,7 +2320,7 @@ impl Commands {
                         .num_columns(4)
                         .show(ui, |ui| {
                             for i in COMMANDS.iter().filter(|i| shown.contains(&i.cmd)) {
-                                self.editor_row(ui, i);
+                                self.editor_row(ui, i, simple);
                                 ui.end_row();
                             }
                         });
@@ -1951,12 +2343,17 @@ impl Commands {
         }
     }
 
-    fn editor_row(&mut self, ui: &mut egui::Ui, i: &Info) {
+    fn editor_row(&mut self, ui: &mut egui::Ui, i: &Info, simple: bool) {
         let r = ui.label(self.name(i.cmd));
         if !i.hint.is_empty() {
             r.on_hover_text(i.hint);
         }
-        ui.weak(i.group);
+        if simple && !i.everyday {
+            ui.weak(format!("{}, advanced", i.group))
+                .on_hover_text("Its keys do nothing in the simpler mode");
+        } else {
+            ui.weak(i.group);
+        }
         ui.horizontal(|ui| {
             let keys = self.keymap.of(i.cmd).to_vec();
             if keys.is_empty() {
@@ -2019,8 +2416,17 @@ impl App {
         self.notation_keys(ctx);
         // A clip or marker holding the keyboard is not a text field.
         let typing = ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx);
-        for cmd in self.commands.pressed(ctx, typing) {
+        let (run, held) = self.commands.pressed(ctx, typing, self.simple.on);
+        for cmd in run {
             self.run(ctx, cmd);
+        }
+        if let Some(cmd) = held.first() {
+            self.message = Some(format!(
+                "{} is left out of the simpler mode: it is under More in the {} menu, \
+                 or turn the simpler mode off in View.",
+                self.commands.name(*cmd).trim_end_matches('…'),
+                cmd.info().group
+            ));
         }
     }
 
@@ -2032,17 +2438,19 @@ impl App {
             self.proj.bundle_job.is_none(),
         );
         let layouts = self.workspace.saved.len();
-        let chosen = self.commands.palette_window(ctx, |c| match c {
-            Cmd::Layout(n) => (n as usize) < layouts,
-            Cmd::Undo => can_undo,
-            Cmd::Redo => can_redo,
-            Cmd::ExportBundle | Cmd::ImportBundle => idle,
-            _ => true,
-        });
+        let chosen = self
+            .commands
+            .palette_window(ctx, self.simple.on, |c| match c {
+                Cmd::Layout(n) => (n as usize) < layouts,
+                Cmd::Undo => can_undo,
+                Cmd::Redo => can_redo,
+                Cmd::ExportBundle | Cmd::ImportBundle => idle,
+                _ => true,
+            });
         if let Some(cmd) = chosen {
             self.run(ctx, cmd);
         }
-        self.commands.editor_window(ctx);
+        self.commands.editor_window(ctx, self.simple.on);
     }
 
     pub(crate) fn can_run(&self, cmd: Cmd) -> bool {
@@ -2058,14 +2466,44 @@ impl App {
                 daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
             }
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
+            Cmd::SaveTrackPreset | Cmd::SaveChainPreset => !self.tracks.is_empty(),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
+            Cmd::LoopSection
+            | Cmd::DuplicateSection
+            | Cmd::DeleteSection
+            | Cmd::SectionEarlier
+            | Cmd::SectionLater
+            | Cmd::AddToPlayOrder => !self.markers.is_empty(),
+            Cmd::PlayOrder | Cmd::WriteOrder | Cmd::ClearPlayOrder => !self.arrangement.is_empty(),
+            Cmd::FollowTempo
+            | Cmd::ClipTempo
+            | Cmd::StretchMarkersFromAttacks
+            | Cmd::AddStretchMarker
+            | Cmd::ClearStretchMarkers
+            | Cmd::QuantiseAudio
+            | Cmd::QuantiseAudioApply
+            | Cmd::TempoFromClip
+            | Cmd::TempoFromClipApply => self.has_stretch_clips(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
+            Cmd::AudioSetupNext
+            | Cmd::AudioSetupSkip
+            | Cmd::AudioSetupBack
+            | Cmd::AudioSetupCancel => self.audio_setup.open,
+            Cmd::MeasureLatency => !self.recording && !self.latency.busy(),
             _ => true,
         }
     }
 
-    /// A menu entry for the command, with its keys beside it.
+    /// A menu entry for the command, with its keys beside it, or under
+    /// More in the simpler mode if it is advanced.
     pub(crate) fn menu_item(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
+        if !self.menu_hold(cmd) {
+            self.menu_entry(ui, cmd);
+        }
+    }
+
+    pub(crate) fn menu_entry(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
+        self.menu_mark(ui);
         let i = cmd.info();
         let keys = self.commands.keymap.text(cmd);
         let mut r = ui.add_enabled(
@@ -2102,6 +2540,10 @@ impl App {
             Cmd::NewProject => self.then(ctx, After::New),
             Cmd::NewFromTemplate => self.choose_template(),
             Cmd::SaveAsTemplate => self.template_ui.saving = Some(String::new()),
+            Cmd::Presets => self.open_presets(),
+            Cmd::SaveTrackPreset => self.ask_save_preset(None, daw_project::PresetKind::Track),
+            Cmd::SaveChainPreset => self.ask_save_preset(None, daw_project::PresetKind::Chain),
+            Cmd::ImportPreset => self.pick_preset_to_import(),
             Cmd::OpenProject => {
                 self.proj.dialog = Some(Dialog::Open {
                     found: find_projects(),
@@ -2239,6 +2681,8 @@ impl App {
                     );
                 }
             }
+            Cmd::ExportDawProject => self.ask_export_dawproject(),
+            Cmd::ImportDawProject => self.pick_import_dawproject(ctx),
             Cmd::ImportMidi => self.pick_midi_file(ctx),
             Cmd::ExportMidi => self.export_midi_file(),
             Cmd::NotationLane => self.toggle_notation_lane(),
@@ -2269,6 +2713,7 @@ impl App {
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::Video => self.workspace.toggle(Pane::Video),
             Cmd::FullSize => self.workspace.toggle_full(),
+            Cmd::SimpleMode => self.toggle_simple(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),
             Cmd::PaneWindows => {
@@ -2283,7 +2728,21 @@ impl App {
             Cmd::Meters => self.meters.show(None),
             Cmd::LessonNotes => self.notes_ui.open = true,
             Cmd::Comments => self.comment_ui.open = true,
+            Cmd::SlowerSpeed => self.nudge_speed(-5.0),
+            Cmd::FasterSpeed => self.nudge_speed(5.0),
+            Cmd::NormalSpeed => self.normal_speed(),
             Cmd::AudioDevice => self.show_devices = true,
+            Cmd::AudioSetup
+            | Cmd::AudioSetupNext
+            | Cmd::AudioSetupSkip
+            | Cmd::AudioSetupBack
+            | Cmd::AudioSetupCancel => self.audio_setup_command(cmd),
+            Cmd::MeasureLatency => {
+                self.latency.open = true;
+                if let Some(d) = &self.draft {
+                    self.latency.inputs = crate::input_channels(&d.host, d.input.as_deref());
+                }
+            }
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::DrumKits
@@ -2303,6 +2762,17 @@ impl App {
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
             Cmd::FixTiming => self.timing.open = true,
+            Cmd::FollowTempo
+            | Cmd::ClipTempo
+            | Cmd::StretchMarkersFromAttacks
+            | Cmd::AddStretchMarker
+            | Cmd::ClearStretchMarkers
+            | Cmd::QuantiseAudio
+            | Cmd::QuantiseAudioApply
+            | Cmd::TempoFromClip
+            | Cmd::TempoFromClipApply => {
+                self.run_stretch(cmd);
+            }
             Cmd::HitPoint => {
                 let at = self.ctl.status().position().0;
                 self.add_hit_point(at);
@@ -2311,6 +2781,16 @@ impl App {
             Cmd::InsertBars => self.insert_loop_bars(),
             Cmd::DeleteBars => self.delete_loop_bars(),
             Cmd::TimeWindow => self.open_time_window(),
+            Cmd::Sections
+            | Cmd::LoopSection
+            | Cmd::DuplicateSection
+            | Cmd::DeleteSection
+            | Cmd::SectionEarlier
+            | Cmd::SectionLater
+            | Cmd::AddToPlayOrder
+            | Cmd::PlayOrder
+            | Cmd::WriteOrder
+            | Cmd::ClearPlayOrder => self.section_command(cmd),
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
             Cmd::TimecodeFromFilm => self.timecode_from_film(),
             Cmd::FrameForward => self.step_frame(1),

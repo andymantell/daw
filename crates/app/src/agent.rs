@@ -67,7 +67,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "list_commands",
         description: "Every command in the app (the same as the menus, keys and command \
-                      search), with its id, name, menu, keys, and whether it can run now.",
+                      search), with its id, name, menu, keys, and whether it can run now. In the \
+                      simpler mode, \"offered\" is false for the advanced ones the person \
+                      can't see; they still run by id.",
         access: Access::Read,
         schema: no_args,
     },
@@ -88,7 +90,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_transport",
         description: "Where playback is (frames, seconds, bar and beat), whether it is \
-                      playing or recording, and the loop, metronome and count-in.",
+                      playing or recording, the loop, metronome and count-in, and the \
+                      practice speed and transpose.",
         access: Access::Read,
         schema: no_args,
     },
@@ -111,9 +114,24 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "list_presets",
+        description: "Every track and effect chain preset: the user's and those that come \
+                      with the app, each with its name, kind (track or chain), tags and \
+                      description.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
         name: "get_meters",
         description: "The meters now: peak and RMS of every track and the master, left \
                       and right, in dBFS. They move only while playing.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
+        name: "export_report",
+        description: "What exporting the project for other DAWs (a .dawproject file) would \
+                      leave out, item by item, without writing anything.",
         access: Access::Read,
         schema: no_args,
     },
@@ -174,6 +192,35 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "add_preset",
+        description: "Adds a preset, by name, as a new track, or with a track id puts it \
+                      on that track: an effect chain replaces the track's effects; a track \
+                      preset replaces its instrument, effects, sends and settings, keeping \
+                      its clips and notes. Says which routes it couldn't find.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "name": {"type": "string", "description": "The preset's name, as list_presets gives it."},
+                "track": {"type": "string", "description": "A track's id, to put it on that track."}
+            }, "required": ["name"]})
+        },
+    },
+    Tool {
+        name: "save_preset",
+        description: "Saves a track, or only its effect chain, as one of the user's \
+                      presets, replacing one of that name.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string", "description": "The track's id."},
+                "kind": {"type": "string", "enum": ["track", "chain"]},
+                "name": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "about": {"type": "string", "description": "What it is for."}
+            }, "required": ["track", "kind", "name"]})
+        },
+    },
+    Tool {
         name: "seek",
         description: "Moves the playhead to a bar (counted from 1) or to a time in seconds.",
         access: Access::Edit,
@@ -195,6 +242,29 @@ pub(crate) const TOOLS: &[Tool] = &[
             }, "required": ["clips"]})
         },
     },
+    Tool {
+        name: "export_project_file",
+        description: "Writes the project as a .dawproject file, which several other DAWs \
+                      open, at a full path. Answers with what was left out.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "path": {"type": "string", "description": "Where to write it, ending .dawproject."}
+            }, "required": ["path"]})
+        },
+    },
+    Tool {
+        name: "import_project_file",
+        description: "Opens a .dawproject file from another DAW, at a full path, as a new \
+                      unsaved project in place of this one. Refused while this one has \
+                      unsaved work. Answers with what didn't come in.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "path": {"type": "string", "description": "The file's full path."}
+            }, "required": ["path"]})
+        },
+    },
 ];
 
 fn region_args() -> Value {
@@ -213,6 +283,8 @@ pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
 /// Commands that open the system's file chooser, which waits for a
 /// person.
 const NEEDS_A_PERSON: &[Cmd] = &[
+    Cmd::ExportDawProject,
+    Cmd::ImportDawProject,
     Cmd::ExportBundle,
     Cmd::ImportBundle,
     Cmd::ImportMidi,
@@ -223,6 +295,7 @@ const NEEDS_A_PERSON: &[Cmd] = &[
     Cmd::PrintNotation,
     Cmd::ImportKit,
     Cmd::ExportKit,
+    Cmd::ImportPreset,
 ];
 
 /// What a command needs of an assistant.
@@ -233,6 +306,7 @@ pub(crate) fn command_access(cmd: Cmd) -> Access {
         | Cmd::SaveAsTemplate
         | Cmd::Export
         | Cmd::ExportVideo
+        | Cmd::ExportDawProject
         | Cmd::ExportBundle
         | Cmd::ExportMidi
         | Cmd::ExportMusicXml
@@ -379,6 +453,23 @@ impl App {
             "get_transport" => Ok(self.transport_value()),
             "get_selection" => Ok(self.selection_value()),
             "list_parameters" => self.parameters_value(args["track"].as_str()),
+            "list_presets" => {
+                let (list, _) = crate::presets::all_presets(self.preset_ui.dir.as_deref());
+                Ok(Value::Array(
+                    (list.iter())
+                        .map(|e| {
+                            json!({
+                                "name": e.preset.name,
+                                "kind": e.preset.kind.id(),
+                                "tags": e.preset.tags,
+                                "about": e.preset.about,
+                                "included": e.file.is_none(),
+                            })
+                        })
+                        .collect(),
+                ))
+            }
+            "export_report" => Ok(crate::interchange::report_value(&self.interchange_report())),
             "get_meters" => Ok(self.meters_value()),
             _ => Err(format!("There is no tool {name}.")),
         }
@@ -429,6 +520,46 @@ impl App {
                 let label = self.set_parameter(track, param, value)?;
                 Ok((json!({"set": param, "value": value}), Some(label)))
             }
+            "add_preset" => {
+                let name = args["name"].as_str().ok_or("Give the preset's name.")?;
+                let e = self.find_preset(name)?;
+                match args["track"].as_str() {
+                    Some(key) => {
+                        let i = (self.tracks.iter())
+                            .position(|t| t.key == key)
+                            .ok_or_else(|| format!("There is no track {key}."))?;
+                        let note = self.apply_preset(ctx, i, &e)?;
+                        Ok((
+                            json!({"track": key, "note": note.trim()}),
+                            Some(format!("Put the preset {name} on a track")),
+                        ))
+                    }
+                    None => {
+                        let (i, note) = self.add_preset_track(ctx, &e)?;
+                        Ok((
+                            json!({"track": self.tracks[i].key, "note": note.trim()}),
+                            Some(format!("Added the preset {name}")),
+                        ))
+                    }
+                }
+            }
+            "save_preset" => {
+                let key = args["track"].as_str().ok_or("Give the track's id.")?;
+                let i = (self.tracks.iter())
+                    .position(|t| t.key == key)
+                    .ok_or_else(|| format!("There is no track {key}."))?;
+                let kind = (args["kind"].as_str())
+                    .and_then(daw_project::PresetKind::from_id)
+                    .ok_or("Give the kind: track or chain.")?;
+                let name = args["name"].as_str().ok_or("Give the preset's name.")?;
+                let tags: Vec<&str> = (args["tags"].as_array().into_iter().flatten())
+                    .filter_map(|t| t.as_str())
+                    .collect();
+                let tags = daw_project::parse_tags(&tags.join(","));
+                let about = args["about"].as_str().unwrap_or("");
+                let (_, left_out) = self.save_preset(ctx, i, kind, name, &tags, about)?;
+                Ok((json!({"saved": name, "files_left_out": left_out}), None))
+            }
             "seek" => {
                 let map = self.tempo_map();
                 let at = match (args["bar"].as_f64(), args["seconds"].as_f64()) {
@@ -445,6 +576,28 @@ impl App {
                 let at = Frames(at.0.max(0));
                 self.send(Command::Seek(at));
                 Ok((json!({"frames": at.0}), None))
+            }
+            "export_project_file" => {
+                let path = args["path"].as_str().ok_or("Give the file's full path.")?;
+                let r = self.write_dawproject(std::path::Path::new(path))?;
+                Ok((
+                    json!({"written": path, "left_out": crate::interchange::report_value(&r)}),
+                    None,
+                ))
+            }
+            "import_project_file" => {
+                let path = args["path"].as_str().ok_or("Give the file's full path.")?;
+                if self.proj.dirty && self.proj.folder.is_none() && !self.tracks.is_empty() {
+                    return Err(
+                        "This project has unsaved work: save it, or start a new project, first."
+                            .into(),
+                    );
+                }
+                let r = self.import_dawproject(ctx, std::path::Path::new(path))?;
+                Ok((
+                    json!({"imported": path, "left_out": crate::interchange::report_value(&r)}),
+                    None,
+                ))
             }
             "select_clips" => {
                 let keys = args["clips"].as_array().ok_or("Give a list of clip ids.")?;
@@ -475,6 +628,8 @@ impl App {
                     "keys": self.commands.keymap.text(i.cmd),
                     "can_run": ready,
                     "needs": command_access(i.cmd).name(),
+                    "everyday": i.everyday,
+                    "offered": self.offered(i.cmd),
                 })
             })
             .collect();
@@ -509,6 +664,9 @@ impl App {
                             "muted": c.muted,
                             "gain_db": c.gain_db,
                             "take": c.take,
+                            "tempo": c.tempo,
+                            "beat": c.tempo.is_some().then_some(c.beat),
+                            "markers": c.markers.iter().map(|m| json!({"frame": m.frame, "at": m.at})).collect::<Vec<_>>(),
                         })
                     })
                     .collect();
@@ -604,6 +762,9 @@ impl App {
             "loop_bars": [self.loop_bars.0, self.loop_bars.1],
             "metronome": self.metronome.enabled,
             "count_in": self.count_in,
+            "speed_pct": self.speed_pct,
+            "semitones": self.semitones,
+            "cents": self.cents,
         })
     }
 
@@ -766,11 +927,30 @@ pub(crate) mod driver {
             while std::time::Instant::now() < until {
                 self.h.step();
                 if let Ok(a) = answer.try_recv() {
+                    if tool == "seek"
+                        && let Ok(v) = &a
+                    {
+                        self.wait_for_playhead(v["frames"].as_i64().unwrap_or(0));
+                    }
                     return a;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             panic!("{tool} was not answered");
+        }
+
+        /// Waits for the engine to move the playhead: it does so on its
+        /// own thread, which a slow machine may not have run yet.
+        fn wait_for_playhead(&mut self, at: i64) {
+            for _ in 0..200 {
+                // Playing, it may have moved on a little already.
+                let pos = self.h.state().ctl.status().position().0;
+                if (at..at + 4800).contains(&pos) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                self.h.step();
+            }
         }
 
         /// Runs a command by id; panics if it is refused.
@@ -892,6 +1072,27 @@ mod tests {
     }
 
     #[test]
+    fn practice_speed_is_set_and_seen_through_the_commands() {
+        let mut d = Driver::new();
+        for _ in 0..6 {
+            d.command("slower-speed");
+        }
+        let t = d.call("get_transport", json!({})).unwrap();
+        assert_eq!(t["speed_pct"], 70.0);
+        d.command("faster-speed");
+        assert_eq!(
+            d.call("get_transport", json!({})).unwrap()["speed_pct"],
+            75.0
+        );
+        d.command("normal-speed");
+        let t = d.call("get_transport", json!({})).unwrap();
+        assert_eq!(
+            (t["speed_pct"].as_f64(), t["semitones"].as_i64()),
+            (Some(100.0), Some(0))
+        );
+    }
+
+    #[test]
     fn what_an_assistant_may_do_is_held_to_its_permission() {
         let mut d = Driver::new();
         d.access = Access::Read;
@@ -919,8 +1120,17 @@ mod tests {
         // Two bars of 4/4 at 120 bpm: four seconds.
         let rate = d.app().rate as i64;
         assert_eq!(at, 4 * rate);
-        d.h.run();
-        let t = d.call("get_transport", json!({})).unwrap();
+        // The engine moves on its own thread: give it a moment, as a
+        // slow machine may not have run a block yet.
+        let mut t = Value::Null;
+        for _ in 0..100 {
+            d.h.run();
+            t = d.call("get_transport", json!({})).unwrap();
+            if t["bar"] == json!(3) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!((t["bar"].clone(), t["beat"].clone()), (json!(3), json!(1)));
     }
 }

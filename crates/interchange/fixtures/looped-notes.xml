@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Project version="1.0">
+  <Application name="Fixture" version="1"/>
+  <Transport>
+    <Tempo unit="bpm" value="100" id="tempo"/>
+  </Transport>
+  <Structure>
+    <Track contentType="notes" loaded="true" id="t1" name="Bass">
+      <Channel audioChannels="2" role="regular" id="c1"/>
+    </Track>
+  </Structure>
+  <Arrangement id="arr">
+    <Lanes timeUnit="beats" id="l0">
+      <Lanes track="t1" id="l1">
+        <Clips id="cl1">
+          <Clip time="0" duration="5" playStart="0" loopStart="0" loopEnd="2" name="Groove">
+            <Notes id="n1">
+              <Note time="0" duration="0.5" channel="0" key="40" vel="0.8" rel="0.8"/>
+              <Note time="1" duration="0.5" channel="0" key="43" vel="0.6" rel="0.6"/>
+            </Notes>
+          </Clip>
+        </Clips>
+      </Lanes>
+    </Lanes>
+  </Arrangement>
+</Project>

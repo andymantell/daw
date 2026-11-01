@@ -472,3 +472,36 @@ impl Stretcher {
         }
     }
 }
+
+/// Plays all of `l` and `r` (the same length) at `speed` and transpose,
+/// off the audio thread: `len / speed` frames.
+pub fn whole(l: &[f32], r: &[f32], speed: f64, semitones: f64) -> (Vec<f32>, Vec<f32>) {
+    let out = (l.len() as f64 / speed).round() as usize;
+    let mut s = Stretcher::new(FRAME);
+    s.set(speed, semitones);
+    s.reset(0.0);
+    let mut feed = Buffer { l, r };
+    let (mut ol, mut or) = (vec![0.0; out], vec![0.0; out]);
+    for (a, b) in ol.chunks_mut(FRAME).zip(or.chunks_mut(FRAME)) {
+        s.process(&mut feed, a, b);
+    }
+    (ol, or)
+}
+
+/// Input held in memory; silence outside it.
+struct Buffer<'a> {
+    l: &'a [f32],
+    r: &'a [f32],
+}
+
+impl Feed for Buffer<'_> {
+    fn read(&mut self, start: i64, l: &mut [f32], r: &mut [f32]) {
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let at = start + i as i64;
+            (*a, *b) = match usize::try_from(at) {
+                Ok(k) if k < self.l.len().min(self.r.len()) => (self.l[k], self.r[k]),
+                _ => (0.0, 0.0),
+            };
+        }
+    }
+}

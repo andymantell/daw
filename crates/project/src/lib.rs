@@ -18,7 +18,9 @@ pub mod midifile;
 mod model;
 pub mod noteops;
 mod pattern;
+mod presets;
 mod scale;
+mod sections;
 mod snapshots;
 mod templates;
 mod timeshift;
@@ -35,14 +37,16 @@ pub use model::{
     Controller, CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade,
     Frozen, FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, InstrumentOutput, Lane,
     LaneTarget, Layer, Marker, MeterChange, MidiMap, Notation, NotationView, Note, NoteClip, PPQ,
-    Practice, Project, Send, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
-    TrainerSettings, VideoClip,
+    Practice, Project, Send, StretchMarker, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
+    TrackKind, TrainerSettings, VideoClip,
 };
 pub use pattern::{
     DRUM_LANES, Direction, MAX_GATE, MAX_REPEATS, MAX_STEPS, MIN_GATE, Pattern, PatternLane, Roll,
     Step, StepRate, euclid, fill_pattern_clip, fill_pattern_clips, next_group,
 };
+pub use presets::{Dropped, MAX_TAG, MAX_TAGS, PRESET_EXTENSION, Preset, PresetKind, parse_tags};
 pub use scale::{ROOTS, Scale, ScaleKind};
+pub use sections::{Clock, Section, bars_between, flatten, paste_bars, piece, sections};
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{
     TEMPLATE_EXTENSION, Template, built_in_templates, template_from_bytes, template_to_bytes,

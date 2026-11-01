@@ -165,6 +165,43 @@ fn loop_is_sample_accurate() {
 }
 
 #[test]
+fn a_queued_loop_takes_over_at_the_loop_end_to_the_sample() {
+    let mut s = session();
+    let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), counting(10_000))]);
+    t.mix.pan = -1.0;
+    s.tracks.push(t);
+    let (mut ctl, mut eng) = engine::new(256);
+    ctl.send(Command::SetGraph(Box::new(s.compile(256).unwrap())))
+        .ok()
+        .unwrap();
+    // Plays 1000–1300, then 5000–5200 (a section later in the song),
+    // then goes round that.
+    ctl.send(Command::SetLoop(Some((Frames(1000), Frames(1300)))))
+        .ok()
+        .unwrap();
+    ctl.send(Command::QueueLoop(Some((Frames(5000), Frames(5200)))))
+        .ok()
+        .unwrap();
+    ctl.send(Command::Seek(Frames(1000))).ok().unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let mut out = Vec::new();
+    for _ in 0..8 {
+        let (mut l, mut r) = (vec![0.0; 97], vec![0.0; 97]);
+        eng.process(&mut l, &mut r);
+        out.extend(l);
+    }
+    let mut want: Vec<i64> = (1000..1300).collect();
+    while want.len() < out.len() {
+        want.extend(5000..5200);
+    }
+    for (i, (&o, &w)) in out.iter().zip(&want).enumerate() {
+        let got = (o * 1e6).round() as i64 - 1;
+        assert_eq!(got, w, "output sample {i}");
+    }
+    assert_eq!(ctl.status().loops(), 3);
+}
+
+#[test]
 fn stop_and_seek() {
     let mut s = session();
     s.tracks.push(TrackSpec::new(vec![ClipSpec::new(

@@ -1567,6 +1567,10 @@ impl crate::App {
             Cmd::Lessons,
             Cmd::Tuner,
         ] {
+            if self.menu_hold(c) {
+                continue;
+            }
+            self.menu_mark(ui);
             let open = match c {
                 Cmd::Mixer => self.workspace.layout.is_open(Pane::Mixer),
                 Cmd::MonitorSection => self.workspace.layout.is_open(Pane::Monitor),
@@ -1611,12 +1615,16 @@ impl crate::App {
             });
         }
         self.menu_item(ui, Cmd::FullSize);
-        ui.separator();
+        self.menu_gap();
         for n in 0..self.workspace.saved.len() {
             self.menu_item(ui, Cmd::Layout(n as u8));
         }
         self.menu_item(ui, Cmd::SaveLayout);
-        ui.separator();
+        self.menu_gap();
+        if self.menu_hold(Cmd::PaneWindows) {
+            return;
+        }
+        self.menu_mark(ui);
         let mut on = self.workspace.windows_allowed;
         if ui
             .checkbox(&mut on, Cmd::PaneWindows.info().name)

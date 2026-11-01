@@ -129,7 +129,7 @@ pub struct Proj {
     /// Audio by asset, so clips that undo brings back can play.
     pub(crate) sources: HashMap<String, Arc<StreamSource>>,
     /// Files moved into the project folder: full path before, asset now.
-    moved: HashMap<String, String>,
+    pub(crate) moved: HashMap<String, String>,
     /// Clips and effects that couldn't be loaded (audio missing, plugin
     /// not installed), by track: kept so saving doesn't lose them. Each
     /// effect is kept with its place in the chain.
@@ -242,6 +242,7 @@ impl App {
             midi_maps: self.midi_maps.clone(),
             patterns: self.patterns.clone(),
             videos: self.video.clips.iter().map(|c| c.value()).collect(),
+            arrangement: self.arrangement.clone(),
         }
     }
 
@@ -270,6 +271,9 @@ impl App {
                         db: p.db as f64,
                     })
                     .collect(),
+                tempo: c.tempo,
+                beat: c.beat,
+                markers: c.markers.clone(),
             })
             .collect();
         clips.extend(
@@ -448,6 +452,7 @@ impl App {
         self.notes = p.notes.clone();
         self.tabs = p.tabs.clone();
         self.assignments = p.assignments.clone();
+        self.arrangement = p.arrangement.clone();
         self.comments = p.comments.clone();
         self.edit_groups = p.edit_groups.clone();
         self.groups = p.control_groups.clone();
@@ -618,6 +623,15 @@ impl App {
                     .collect();
                 c.set_fade(false, c.fade_in.len);
                 c.set_fade(true, c.fade_out.len);
+                c.tempo = pc.tempo.filter(|t| t.is_finite() && *t > 0.0);
+                c.beat = pc.beat.max(0);
+                c.markers = (pc.markers.iter())
+                    .map(|m| daw_project::StretchMarker {
+                        frame: scale(m.frame),
+                        at: if c.tempo.is_some() { m.at } else { scale(m.at) },
+                    })
+                    .filter(|m| m.frame > c.offset as i64 && m.frame < (c.offset + c.len) as i64)
+                    .collect();
                 t.clips.push(c);
             }
             let mut had: HashMap<String, crate::fx::FxSlot> =
@@ -707,6 +721,7 @@ impl App {
             }
             self.message = Some(m);
         }
+        self.retime = true;
         self.rebuild();
         self.send_loop();
     }

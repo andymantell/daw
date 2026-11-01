@@ -21,6 +21,7 @@ daw-collab = { path = "../collab" }
 daw-effects = { path = "../effects" }
 daw-engine = { path = "../engine" }
 daw-instruments = { path = "../instruments" }
+daw-interchange = { path = "../interchange" }
 daw-notation = { path = "../notation" }
 daw-plugins = { path = "../plugins" }
 daw-project = { path = "../project" }

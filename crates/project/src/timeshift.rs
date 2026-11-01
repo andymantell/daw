@@ -185,6 +185,14 @@ pub fn delete_bars(p: &mut Project, b: &Bars) {
             p.meter_changes.push(c);
         }
     }
+    // A change that now falls on the very start is the song's own.
+    if let Some(i) = (p.tempo_changes.iter()).position(|c| (c.bar, c.beat) == (1, 1)) {
+        p.tempo_bpm = p.tempo_changes.remove(i).bpm;
+    }
+    if let Some(i) = p.meter_changes.iter().position(|c| c.bar <= 1) {
+        let c = p.meter_changes.remove(i);
+        (p.beats_per_bar, p.beat_unit) = (c.beats, c.unit);
+    }
 
     let span = |(a, z): (i64, i64)| {
         let a = earlier(a);

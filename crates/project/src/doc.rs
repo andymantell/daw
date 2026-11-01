@@ -47,8 +47,9 @@ use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
     GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Notation,
-    NotationView, Note, NoteClip, Practice, Project, Scale, Send, TabBlock, Technique, TempoChange,
-    TimecodeSetup, Track, TrackKind, TrainerSettings, VideoClip, is_asset_name,
+    NotationView, Note, NoteClip, Practice, Project, Scale, Send, StretchMarker, TabBlock,
+    Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, VideoClip,
+    is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -359,6 +360,10 @@ impl ProjectDoc {
             w.put(&song, "tc_offset", p.timecode.offset);
             w.put(&song, "tc_shown", p.timecode.shown);
         }
+        if !p.arrangement.is_empty() || song.get("arrangement").is_some() {
+            let ids: Vec<LoroValue> = p.arrangement.iter().map(|s| s.as_str().into()).collect();
+            w.put(&song, "arrangement", LoroValue::List(ids.into()));
+        }
         if p.scale.is_some() || song.get("scale").is_some() {
             w.put(
                 &song,
@@ -641,6 +646,14 @@ impl ProjectDoc {
             tc.offset = int(s, "tc_offset").unwrap_or(tc.offset);
             tc.shown = boolean(s, "tc_shown").unwrap_or(tc.shown);
             p.scale = string(s, "scale").and_then(|t| Scale::from_text(&t));
+            if let Some(LoroValue::List(l)) = s.get("arrangement") {
+                p.arrangement = (l.iter())
+                    .filter_map(|v| match v {
+                        LoroValue::String(s) => Some(s.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+            }
         }
         if let Some(LoroValue::Map(gs)) = root.get("grooves") {
             for (id, g) in gs.iter() {
@@ -1169,6 +1182,22 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
                 .map(|p| LoroValue::List(vec![p.at.into(), p.db.into()].into()))
                 .collect();
             w.put(&cm, "envelope", LoroValue::List(points.into()));
+        }
+        // Clips in frames, as all were before musical time, gain no
+        // new entries.
+        if !plain("tempo", c.tempo.is_none()) {
+            w.put(
+                &cm,
+                "tempo",
+                c.tempo.map_or(LoroValue::Null, LoroValue::Double),
+            );
+            w.put(&cm, "beat", c.beat);
+        }
+        if !plain("markers", c.markers.is_empty()) {
+            let points: Vec<LoroValue> = (c.markers.iter())
+                .map(|m| LoroValue::List(vec![m.frame.into(), m.at.into()].into()))
+                .collect();
+            w.put(&cm, "markers", LoroValue::List(points.into()));
         }
     }
 
@@ -1898,6 +1927,9 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 fade_in: read_fade(c, "fade_in"),
                 fade_out: read_fade(c, "fade_out"),
                 envelope: read_envelope(c),
+                tempo: float(c, "tempo").filter(|t| t.is_finite() && *t > 0.0),
+                beat: int(c, "beat").unwrap_or(0).max(0),
+                markers: read_markers(c),
             });
         }
     }
@@ -2030,6 +2062,39 @@ fn read_envelope(c: &LoroMapValue) -> Vec<GainPoint> {
         })
         .collect();
     points.sort_by_key(|p| p.at);
+    points
+}
+
+/// A clip's stretch markers, in order of frame, each later than the
+/// one before on both sides; anything odd is left out.
+fn read_markers(c: &LoroMapValue) -> Vec<StretchMarker> {
+    let Some(LoroValue::List(l)) = c.get("markers") else {
+        return Vec::new();
+    };
+    let mut points: Vec<StretchMarker> = (l.iter())
+        .filter_map(|p| match p {
+            LoroValue::List(p) => match &p[..] {
+                [LoroValue::I64(frame), LoroValue::I64(at)] if *frame > 0 && *at > 0 => {
+                    Some(StretchMarker {
+                        frame: *frame,
+                        at: *at,
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    points.sort_by_key(|m| m.frame);
+    points.dedup_by_key(|m| m.frame);
+    let mut last = 0;
+    points.retain(|m| {
+        let keep = m.at > last;
+        if keep {
+            last = m.at;
+        }
+        keep
+    });
     points
 }
 
@@ -2348,6 +2413,75 @@ mod tests {
         assert_eq!(back.tracks[1].effects[0].sidechain, None);
         assert!(back.tracks[1].effects[1].outputs.is_empty());
         assert!(back.control_groups.is_empty());
+    }
+
+    #[test]
+    fn the_order_sections_play_in_is_kept() {
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&Project::default());
+        let mut p = doc.get();
+        p.arrangement = vec!["a".into(), "b".into(), "a".into()];
+        doc.set(&p);
+        assert_eq!(doc.get().arrangement, p.arrangement);
+        p.arrangement.clear();
+        doc.set(&p);
+        assert!(doc.get().arrangement.is_empty());
+    }
+
+    #[test]
+    fn a_clips_tempo_and_stretch_markers_are_kept_and_tidied() {
+        let mut p = Project::default();
+        let mut t = Track::new("t".into(), "Guitar".into());
+        t.clips.push(Clip {
+            id: "c".into(),
+            asset: "a.wav".into(),
+            start: 0,
+            len: 1000,
+            tempo: Some(100.0),
+            beat: 960,
+            markers: vec![
+                StretchMarker {
+                    frame: 500,
+                    at: 400,
+                },
+                StretchMarker {
+                    frame: 200,
+                    at: 150,
+                },
+                StretchMarker { frame: 0, at: 0 },
+                StretchMarker {
+                    frame: 700,
+                    at: 300,
+                },
+            ],
+            ..Clip::default()
+        });
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let c = &doc.get().tracks[0].clips[0];
+        assert_eq!(c.tempo, Some(100.0));
+        assert_eq!(c.beat, 960);
+        // Sorted by frame, the start and a marker going backwards dropped.
+        assert_eq!(
+            c.markers,
+            vec![
+                StretchMarker {
+                    frame: 200,
+                    at: 150
+                },
+                StretchMarker {
+                    frame: 500,
+                    at: 400
+                },
+            ]
+        );
+        p.tracks[0].clips[0].tempo = None;
+        p.tracks[0].clips[0].markers.clear();
+        doc.set(&p);
+        let c = &doc.get().tracks[0].clips[0];
+        assert_eq!(c.tempo, None);
+        assert!(c.markers.is_empty());
     }
 
     #[test]

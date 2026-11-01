@@ -233,7 +233,7 @@ impl App {
                 s.tracks[t.index].clips = clips
                     .iter()
                     .filter(|c| !c.muted && c.source.rate == self.rate)
-                    .map(clip_spec)
+                    .map(|c| clip_spec(c, &s.tempo))
                     .collect();
             }
         }

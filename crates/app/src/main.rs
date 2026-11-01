@@ -19,6 +19,7 @@
 
 mod agent;
 mod assistants;
+mod audio_setup;
 mod automation;
 mod browser;
 mod commands;
@@ -31,6 +32,7 @@ mod fx;
 mod groups;
 mod hitpoints;
 mod instrument;
+mod interchange;
 mod kits;
 mod latency;
 mod layers;
@@ -49,6 +51,7 @@ mod patterns;
 mod people;
 mod perf;
 mod practice;
+mod presets;
 mod process;
 mod project;
 mod recording;
@@ -56,8 +59,10 @@ mod remote;
 mod render;
 mod sections;
 mod share;
+mod simple_mode;
 mod snapshots;
 mod start;
+mod stretch;
 mod templates;
 mod tempo;
 mod theme;
@@ -247,8 +252,10 @@ struct Import {
     done: mpsc::Receiver<Result<(PathBuf, Arc<StreamSource>), String>>,
 }
 
-/// How the engine plays a clip.
-fn clip_spec(c: &Clip) -> ClipSpec {
+/// How the engine plays a clip under the song's tempo map: through the
+/// stretcher along its warp when it follows tempo or has markers.
+fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
+    let warp = c.warp(map).map(Arc::new);
     ClipSpec {
         offset: c.offset,
         len: Some(c.len),
@@ -256,6 +263,8 @@ fn clip_spec(c: &Clip) -> ClipSpec {
         fade_in: c.fade_in,
         fade_out: c.fade_out,
         envelope: c.envelope.as_slice().into(),
+        tag: if warp.is_some() { c.id } else { 0 },
+        warp,
         ..ClipSpec::new(Frames(c.start), c.source.clone())
     }
 }
@@ -310,6 +319,10 @@ struct App {
     beats_per_bar: u32,
     /// Tempo and time-signature changes, and the start's beat unit.
     time: tempo::Changes,
+    /// The tempo map changed: clips that follow tempo move to where
+    /// their beat now falls at the next rebuild, instead of their beat
+    /// following where they are.
+    retime: bool,
     tempo_ui: tempo::TempoWindow,
     rate: u32,
     ctl: Controller,
@@ -364,6 +377,10 @@ struct App {
     hit_points: Vec<daw_project::HitPoint>,
     hits_ui: hitpoints::HitPointsWindow,
     time_ui: sections::TimeWindow,
+    sections_ui: sections::SectionsWindow,
+    /// The order the song's sections play in, by marker id.
+    arrangement: Vec<String>,
+    arranging: Option<sections::Arranging>,
     /// The song's key and scale, its groove templates and its MIDI
     /// learn ties, as in the project, and the note tools' settings.
     scale: Option<daw_project::Scale>,
@@ -388,6 +405,8 @@ struct App {
     groups_ui: groups::Groups,
     /// The Fix timing window.
     timing: timing::Timing,
+    /// Audio that follows tempo: its windows and settings.
+    stretch: stretch::Stretch,
     takes_ui: comping::TakesPane,
     /// Automation lanes: their pane, modes and the passes being written.
     automation: automation::Automation,
@@ -398,12 +417,16 @@ struct App {
     snapshot_ui: snapshots::Snapshots,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
+    preset_ui: presets::Presets,
     /// The start screen, and the recent projects it lists.
     start: start::Start,
     /// Named commands, their keys, and their windows.
     commands: commands::Commands,
+    simple: simple_mode::Simple,
     proj: project::Proj,
     latency: latency::Latency,
+    /// The guided audio setup.
+    audio_setup: audio_setup::AudioSetup,
     updates: update::Updates,
     crashes: crash::Crashes,
     /// This install's identity, and the people windows.
@@ -438,6 +461,8 @@ struct App {
     video: video::Videos,
     /// Tool calls from AI assistants (roadmap 2.11).
     agent: agent::Agent,
+    /// Exporting for and importing from other DAWs.
+    swap: interchange::Swap,
     /// Settings → AI assistants…, and the server they connect to.
     assistants: assistants::Assistants,
     /// Renders and pictures being made for assistants.
@@ -490,6 +515,7 @@ impl App {
             loop_bars: (1, 5),
             master_meter: (0.0, 0.0),
             message: None,
+            retime: false,
             reconnect: None,
             saved,
             effects: Effects::new(config_dir().join("plugins.txt")),
@@ -515,6 +541,9 @@ impl App {
             notation: notation::Lanes::default(),
             hits_ui: hitpoints::HitPointsWindow::default(),
             time_ui: sections::TimeWindow::default(),
+            sections_ui: sections::SectionsWindow::default(),
+            arrangement: Vec::new(),
+            arranging: None,
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
             notes: String::new(),
@@ -533,16 +562,24 @@ impl App {
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
+            stretch: stretch::Stretch::default(),
             takes_ui: comping::TakesPane::default(),
             automation: automation::Automation::default(),
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
             template_ui: templates::Templates::default(),
+            preset_ui: presets::Presets::default(),
             start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
+            simple: simple_mode::Simple::new(
+                (!cfg!(test)).then(|| config_dir().join("simple.txt")),
+            ),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
+            audio_setup: audio_setup::AudioSetup::new(
+                (!cfg!(test)).then(|| config_dir().join("audio-setup.txt")),
+            ),
             updates: update::Updates::new((!cfg!(test)).then(|| config_dir().join("updates.txt"))),
             crashes: crash::Crashes::new(if cfg!(test) {
                 std::env::temp_dir().join("daw-test-no-crash-reports")
@@ -562,6 +599,7 @@ impl App {
             browser_sent: false,
             video: video::Videos::default(),
             agent: agent::Agent::default(),
+            swap: interchange::Swap::default(),
             assistants: assistants::Assistants::load(),
             listening: listen::Listening::default(),
         };
@@ -570,6 +608,10 @@ impl App {
         }
         app.look_for_recovery();
         app.audio = app.open_device(eng);
+        // First run with no device settings: the guide helps pick one.
+        if app.audio_setup.first_run(!app.saved.profiles.is_empty()) {
+            app.audio_setup_command(Cmd::AudioSetup);
+        }
         app.midi.start(&mut app.ctl);
         app.send_capture();
         app.sign_in();
@@ -676,7 +718,7 @@ impl App {
         }
         self.rebuild();
         self.send(Command::SetMetronome(self.metronome));
-        self.send(self.tuner.command());
+        self.send_input_tap();
         self.send(self.meters.command());
         self.send(self.practice());
         self.send_loop();
@@ -816,8 +858,30 @@ impl App {
         changed
     }
 
+    /// Keeps clips that follow tempo in step with the tempo map: after
+    /// a tempo change they move to where their beat now falls, after
+    /// an edit their beat follows where they are; and works out how
+    /// long every stretched clip is on the timeline.
+    fn sync_clips(&mut self) {
+        let map = self.tempo_map();
+        let retime = std::mem::take(&mut self.retime);
+        for t in &mut self.tracks {
+            for c in &mut t.clips {
+                if c.tempo.is_some() {
+                    if retime {
+                        c.start = map.frames_at(daw_engine::time::Ticks(c.beat)).0;
+                    } else {
+                        c.beat = map.ticks_at(Frames(c.start)).0;
+                    }
+                }
+                c.retime(&map);
+            }
+        }
+    }
+
     /// Compiles the session and sends it to the engine.
     fn rebuild(&mut self) {
+        self.sync_clips();
         self.fill_patterns();
         let s = self.session();
         self.pending_instruments
@@ -869,7 +933,7 @@ impl App {
             // until it is ready, but keeps its place.
             let clips = (t.clips.iter())
                 .filter(|c| !c.muted && c.source.rate == self.rate)
-                .map(clip_spec)
+                .map(|c| clip_spec(c, &s.tempo))
                 .collect();
             let mut spec = TrackSpec::new(clips);
             spec.mix = t.heard();
@@ -1350,6 +1414,7 @@ impl App {
             bands: &[],
         };
         self.timeline.groups = self.lane_groups();
+        self.timeline.simple = self.simple.on;
         self.timeline.band = if self.video.clips.is_empty() && !self.video.busy() {
             0.0
         } else {
@@ -1458,7 +1523,13 @@ impl App {
         match out.track {
             Some((i, timeline::TrackAsk::Freeze)) => self.toggle_freeze(ui.ctx(), i),
             Some((i, timeline::TrackAsk::RenderInPlace)) => self.render_in_place(i),
+            Some((i, timeline::TrackAsk::SavePreset)) => {
+                self.ask_save_preset(Some(i), daw_project::PresetKind::Track)
+            }
             None => {}
+        }
+        if let Some(cmd) = out.command {
+            self.run(ui.ctx(), cmd);
         }
         if out.undo {
             self.undo(ui.ctx());
@@ -1757,7 +1828,10 @@ impl App {
             }
         }
         if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
-            && ui.button("Reset").clicked()
+            && ui
+                .button("Reset")
+                .on_hover_text(self.commands.hover(Cmd::NormalSpeed))
+                .clicked()
         {
             (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
         }
@@ -1770,10 +1844,7 @@ impl App {
             self.send(c);
         }
         if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                "Recording waits for normal speed and pitch",
-            );
+            ui.label(self.slowed_note());
         }
     }
 
@@ -1788,6 +1859,7 @@ impl App {
     fn device_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_devices;
         let mut apply = false;
+        let mut guide = false;
         egui::Window::new("Audio device")
             .open(&mut open)
             .resizable(false)
@@ -2016,6 +2088,9 @@ impl App {
                     if ui.button("Apply").clicked() {
                         apply = true;
                     }
+                    if ui.button("Guided setup…").on_hover_text("Step by step, with checks").clicked() {
+                        guide = true;
+                    }
                     if ui.button("Rescan devices").clicked() {
                         self.hosts = audio::list();
                         self.input_devices = input_names(&draft_host(&self.draft));
@@ -2027,6 +2102,9 @@ impl App {
         self.show_devices = open;
         if apply {
             self.apply_draft();
+        }
+        if guide {
+            self.run(ctx, Cmd::AudioSetup);
         }
     }
 
@@ -2290,6 +2368,8 @@ impl eframe::App for App {
                 self.open_dropped(&ctx, p);
             } else if daw_collab::bundle::is_bundle(&p) {
                 self.import_bundle(p);
+            } else if presets::is_preset(&p) {
+                self.import_dropped_preset(&p);
             } else if midifile::is_midi(&p) {
                 self.import_midi(&p);
             } else {
@@ -2370,7 +2450,7 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
+                self.top_menu(ui, "File", |app, ui| {
                     for c in [
                         Cmd::NewProject,
                         Cmd::NewFromTemplate,
@@ -2380,55 +2460,92 @@ impl eframe::App for App {
                         Cmd::SaveAs,
                         Cmd::SaveAsTemplate,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
+                    for c in [
+                        Cmd::Presets,
+                        Cmd::SaveTrackPreset,
+                        Cmd::SaveChainPreset,
+                        Cmd::ImportPreset,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
                     for c in [
                         Cmd::ExportBundle,
                         Cmd::ImportBundle,
                         Cmd::Snapshots,
                         Cmd::People,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
-                    self.menu_item(ui, Cmd::Export);
-                    self.menu_item(ui, Cmd::ExportVideo);
-                    self.menu_item(ui, Cmd::ImportMidi);
-                    self.menu_item(ui, Cmd::ExportMidi);
-                    self.menu_item(ui, Cmd::ImportMusicXml);
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::Export);
+                    app.menu_item(ui, Cmd::ExportVideo);
+                    app.menu_item(ui, Cmd::ExportDawProject);
+                    app.menu_item(ui, Cmd::ImportDawProject);
+                    app.menu_item(ui, Cmd::ImportMidi);
+                    app.menu_item(ui, Cmd::ExportMidi);
+                    app.menu_item(ui, Cmd::ImportMusicXml);
                 });
-                ui.menu_button("Edit", |ui| {
-                    self.menu_item(ui, Cmd::Undo);
-                    self.menu_item(ui, Cmd::Redo);
-                    ui.separator();
-                    self.menu_item(ui, Cmd::AddInstrumentTrack);
-                    ui.separator();
+                self.top_menu(ui, "Edit", |app, ui| {
+                    app.menu_item(ui, Cmd::Undo);
+                    app.menu_item(ui, Cmd::Redo);
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::AddInstrumentTrack);
+                    app.menu_gap();
                     for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::InsertBars, Cmd::DeleteBars, Cmd::TimeWindow] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
+                    for c in [
+                        Cmd::Sections,
+                        Cmd::LoopSection,
+                        Cmd::DuplicateSection,
+                        Cmd::DeleteSection,
+                        Cmd::SectionEarlier,
+                        Cmd::SectionLater,
+                        Cmd::AddToPlayOrder,
+                        Cmd::WriteOrder,
+                        Cmd::ClearPlayOrder,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
                     for c in [Cmd::HitPoint, Cmd::HitPoints, Cmd::TimecodeFromFilm] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::Copy, Cmd::Paste, Cmd::Bounce] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::Crossfade, Cmd::ClipFades] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
+                    for c in [Cmd::EditGroups, Cmd::FixTiming] {
+                        app.menu_item(ui, c);
                     }
                     ui.separator();
-                    for c in [Cmd::EditGroups, Cmd::FixTiming] {
-                        self.menu_item(ui, c);
+                    for c in [
+                        Cmd::FollowTempo,
+                        Cmd::ClipTempo,
+                        Cmd::StretchMarkersFromAttacks,
+                        Cmd::AddStretchMarker,
+                        Cmd::ClearStretchMarkers,
+                        Cmd::QuantiseAudio,
+                        Cmd::TempoFromClip,
+                    ] {
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Notes", |ui| {
+                self.top_menu(ui, "Notes", |app, ui| {
                     for c in [
                         Cmd::QuantiseNotes,
                         Cmd::HumaniseNotes,
@@ -2437,47 +2554,47 @@ impl eframe::App for App {
                         Cmd::ScaleMode,
                         Cmd::SelectNotes,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::GrooveFromNotes, Cmd::GrooveFromAudio, Cmd::ApplyGroove] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
-                    self.menu_item(ui, Cmd::MidiLearn);
-                    ui.separator();
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::MidiLearn);
+                    app.menu_gap();
                     for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Notation", |ui| {
+                self.top_menu(ui, "Notation", |app, ui| {
                     for c in [Cmd::NotationLane, Cmd::NotationView, Cmd::NotationSettings] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::TabEntry,
                         Cmd::StringUp,
                         Cmd::StringDown,
                         Cmd::AssignFrets,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::PracticeMutePart, Cmd::ContinuousScroll] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::ImportMusicXml,
                         Cmd::ExportMusicXml,
                         Cmd::ExportTextTab,
                         Cmd::PrintNotation,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Transport", |ui| {
+                self.top_menu(ui, "Transport", |app, ui| {
                     for c in [
                         Cmd::PlayStop,
                         Cmd::ToStart,
@@ -2486,45 +2603,61 @@ impl eframe::App for App {
                         Cmd::Metronome,
                         Cmd::CountIn,
                         Cmd::KeepNotes,
+                        Cmd::PlayOrder,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::FrameBack,
                         Cmd::FrameForward,
                         Cmd::PrevHitPoint,
                         Cmd::NextHitPoint,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [Cmd::Talkback, Cmd::Dim, Cmd::Mono] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("View", |ui| {
-                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
-                        self.menu_item(ui, c);
-                    }
-                    ui.separator();
-                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
-                        self.menu_item(ui, c);
-                    }
-                    let mut on = self.timecode.shown;
+                self.top_menu(ui, "View", |app, ui| {
+                    app.menu_mark(ui);
+                    let mut on = app.simple.on;
                     if ui
-                        .checkbox(&mut on, self.commands.name(Cmd::Timecode).to_string())
-                        .on_hover_text(self.commands.hover(Cmd::Timecode))
+                        .checkbox(&mut on, app.commands.name(Cmd::SimpleMode).to_string())
+                        .on_hover_text(app.commands.hover(Cmd::SimpleMode))
                         .changed()
                     {
-                        self.timecode.shown = on;
+                        app.toggle_simple();
                     }
-                    ui.separator();
-                    self.view_menu(ui);
+                    app.menu_gap();
+                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
+                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
+                        app.menu_item(ui, c);
+                    }
+                    if !app.menu_hold(Cmd::Timecode) {
+                        app.menu_mark(ui);
+                        let mut on = app.timecode.shown;
+                        if ui
+                            .checkbox(&mut on, app.commands.name(Cmd::Timecode).to_string())
+                            .on_hover_text(app.commands.hover(Cmd::Timecode))
+                            .changed()
+                        {
+                            app.timecode.shown = on;
+                        }
+                    }
+                    app.menu_gap();
+                    app.view_menu(ui);
                 });
-                ui.menu_button("Settings", |ui| {
+                self.top_menu(ui, "Settings", |app, ui| {
                     for c in [
                         Cmd::AudioDevice,
+                        Cmd::AudioSetup,
+                        Cmd::MeasureLatency,
                         Cmd::Plugins,
                         Cmd::PerformanceCheck,
                         Cmd::DrumKits,
@@ -2532,18 +2665,19 @@ impl eframe::App for App {
                         Cmd::Theme,
                         Cmd::Assistants,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
+                    app.menu_mark(ui);
                     if ui
                         .button("Phone remote…")
                         .on_hover_text("Record and run the transport from your phone")
                         .clicked()
                     {
-                        self.remote.open = true;
+                        app.remote.open = true;
                         ui.close();
                     }
                 });
-                ui.menu_button("Practice", |ui| {
+                self.top_menu(ui, "Practice", |app, ui| {
                     for c in [
                         Cmd::Tuner,
                         Cmd::Meters,
@@ -2551,17 +2685,22 @@ impl eframe::App for App {
                         Cmd::Lessons,
                         Cmd::Comments,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
+                    for c in [Cmd::SlowerSpeed, Cmd::FasterSpeed, Cmd::NormalSpeed] {
+                        app.menu_item(ui, c);
                     }
                 });
-                ui.menu_button("Help", |ui| {
-                    self.menu_item(ui, Cmd::FindCommand);
-                    self.menu_item(ui, Cmd::KeyCommands);
-                    ui.separator();
-                    self.menu_item(ui, Cmd::CheckUpdates);
-                    self.menu_item(ui, Cmd::CrashReports);
-                    self.menu_item(ui, Cmd::SoundCredits);
+                self.top_menu(ui, "Help", |app, ui| {
+                    app.menu_item(ui, Cmd::FindCommand);
+                    app.menu_item(ui, Cmd::KeyCommands);
+                    app.menu_gap();
+                    app.menu_item(ui, Cmd::CheckUpdates);
+                    app.menu_item(ui, Cmd::CrashReports);
+                    app.menu_item(ui, Cmd::SoundCredits);
                 });
+                self.simple_badge(ui);
                 ui.separator();
                 match &self.audio {
                     Audio::Running(r) => {
@@ -2667,6 +2806,7 @@ impl eframe::App for App {
             .show(ui, |ui| self.panes(ui));
         self.device_window(&ctx);
         self.latency_window(&ctx);
+        self.audio_setup_update(&ctx);
         self.effects.manager_window(&ctx);
         self.effects.credits_window(&ctx);
         self.poll_freezing(&ctx);
@@ -2746,6 +2886,7 @@ impl eframe::App for App {
         self.crashes.window(&ctx);
         self.start_window(&ctx);
         self.project_windows(&ctx);
+        self.interchange_windows(&ctx);
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);
@@ -2754,12 +2895,16 @@ impl eframe::App for App {
         self.midi_learn_window(&ctx);
         self.groups_window(&ctx);
         self.time_window(&ctx);
+        self.sections_window(&ctx);
+        self.arrangement_tick();
         self.timing_window(&ctx);
+        self.stretch_windows(&ctx);
         self.remote_tick(&ctx);
         self.assistants_tick(&ctx);
         self.agent_tick(&ctx);
         self.listen_tick(&ctx);
         self.template_windows(&ctx);
+        self.preset_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.log_practice(&ctx);

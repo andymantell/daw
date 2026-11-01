@@ -373,6 +373,7 @@ impl App {
     /// The song's time changed: the engine plays to the new map, and the
     /// loop, which is in bars, moves with it.
     pub(crate) fn time_changed(&mut self) {
+        self.retime = true;
         self.rebuild();
         self.send_loop();
     }

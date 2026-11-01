@@ -2,8 +2,9 @@
 //! Effects that come with the app (roadmaps 2.5 and 3.5): EQ, compressor,
 //! gate, limiter, de-esser, multiband dynamics, transient shaper,
 //! saturation, delay, chorus, flanger, phaser, tremolo, an algorithmic
-//! reverb, a convolution reverb, a guitar amp, speaker cabinets and a
-//! player for amp captures. Each runs as a track insert, like a hosted
+//! reverb, a convolution reverb, a guitar amp, speaker cabinets, a
+//! player for amp captures, and for lo-fi character a worn record, a
+//! worn tape and a bit crusher. Each runs as a track insert, like a hosted
 //! plugin. Effect containers (3.5) are built in too: they split the
 //! audio into chains of effects (built in or plugins) and join them
 //! again.
@@ -29,6 +30,7 @@ mod delay;
 mod dynamics;
 mod eq;
 pub mod library;
+mod lofi;
 mod modulation;
 mod multiband;
 mod resample;
@@ -68,6 +70,9 @@ pub enum Kind {
     Amp,
     Cabinet,
     Capture,
+    Vinyl,
+    Tape,
+    BitCrusher,
     /// Containers: see [`Kind::is_container`].
     Parallel,
     Bands,
@@ -77,7 +82,7 @@ pub enum Kind {
 
 impl Kind {
     /// In the order the effects list shows them.
-    pub const ALL: [Kind; 22] = [
+    pub const ALL: [Kind; 25] = [
         Kind::Eq,
         Kind::Compressor,
         Kind::Gate,
@@ -96,6 +101,9 @@ impl Kind {
         Kind::Amp,
         Kind::Cabinet,
         Kind::Capture,
+        Kind::Vinyl,
+        Kind::Tape,
+        Kind::BitCrusher,
         Kind::Parallel,
         Kind::Bands,
         Kind::MidSide,
@@ -123,6 +131,9 @@ impl Kind {
             Kind::Amp => "amp",
             Kind::Cabinet => "cabinet",
             Kind::Capture => "amp-capture",
+            Kind::Vinyl => "vinyl",
+            Kind::Tape => "tape",
+            Kind::BitCrusher => "bit-crusher",
             Kind::Parallel => "parallel",
             Kind::Bands => "band-split",
             Kind::MidSide => "mid-side",
@@ -155,6 +166,9 @@ impl Kind {
             Kind::Amp => "Guitar amp",
             Kind::Cabinet => "Speaker cabinet",
             Kind::Capture => "Amp capture",
+            Kind::Vinyl => "Vinyl",
+            Kind::Tape => "Tape",
+            Kind::BitCrusher => "Bit crusher",
             Kind::Parallel => "Parallel chains",
             Kind::Bands => "Split by frequency",
             Kind::MidSide => "Mid/side split",
@@ -179,6 +193,12 @@ impl Kind {
     /// the compressor and gate react to its level instead of their own.
     pub fn takes_key(self) -> bool {
         matches!(self, Kind::Compressor | Kind::Gate)
+    }
+
+    /// Whether it makes sound of its own, even on silence (a record's
+    /// hiss and crackle).
+    pub fn makes_sound(self) -> bool {
+        matches!(self, Kind::Vinyl)
     }
 
     /// A line saying what it does.
@@ -206,6 +226,11 @@ impl Kind {
             Kind::Amp => "A guitar amp, from clean to high gain, with a speaker cabinet",
             Kind::Cabinet => "A speaker cabinet, for after an amp or a capture made without one",
             Kind::Capture => "Plays a capture file of a real amp or pedal (.nam) that you supply",
+            Kind::Vinyl => "The hiss, crackle and rumble of an old record, and its narrower sound",
+            Kind::Tape => "The wobbling pitch, warmth and dull highs of a worn tape",
+            Kind::BitCrusher => {
+                "Fewer bits and a lower sample rate, for the grit of early samplers"
+            }
             Kind::Parallel => {
                 "Up to four chains of effects side by side, mixed with the untouched sound"
             }
@@ -235,6 +260,9 @@ impl Kind {
             Kind::Amp => amp::PARAMS,
             Kind::Cabinet => cabinet::PARAMS,
             Kind::Capture => capture::PARAMS,
+            Kind::Vinyl => lofi::VINYL,
+            Kind::Tape => lofi::TAPE,
+            Kind::BitCrusher => lofi::CRUSHER,
             Kind::Parallel => container::PARALLEL,
             Kind::Bands => container::BANDS,
             Kind::MidSide => container::MID_SIDE,
@@ -576,6 +604,9 @@ impl Effect {
             }
             Kind::Amp => Box::new(amp::Amp::new(rate)),
             Kind::Capture => Box::new(capture::Player::new(rate, self.capture().as_deref())),
+            Kind::Vinyl => Box::new(lofi::Vinyl::new(rate)),
+            Kind::Tape => Box::new(lofi::Tape::new(rate)),
+            Kind::BitCrusher => Box::new(lofi::Crusher::new(rate)),
             Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight => {
                 Box::new(container::Container::new(self.kind, rate))
             }
@@ -836,7 +867,7 @@ mod tests {
                 assert!(!p.log || p.min > 0.0);
             }
         }
-        assert_eq!(Kind::from_id("tape"), None);
+        assert_eq!(Kind::from_id("tape-machine"), None);
     }
 
     #[test]
@@ -906,7 +937,7 @@ mod tests {
                 // About four seconds after the noise stopped, with
                 // feedback as high as it goes, it may still ring; with
                 // the defaults it has died away.
-                if setting == 0 {
+                if setting == 0 && !k.makes_sound() {
                     let tail = l.iter().chain(&r).fold(0f32, |m, x| m.max(x.abs()));
                     assert!(tail < 1e-3, "{k:?} still sounds: {tail}");
                 }

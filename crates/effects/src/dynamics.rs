@@ -7,8 +7,12 @@
 //! and Analysis", JAES 60(6), 2012. The limiter looks ahead: the gain it
 //! needs is held at its lowest over the look-ahead and then averaged over
 //! it, so the gain is already down when a peak arrives and never lets one
-//! over the ceiling. Both channels share one gain, so the stereo image
-//! stays put.
+//! over the ceiling. It watches the true peak, between samples as well
+//! as at them (4× oversampled, as ITU-R BS.1770-4 Annex 2 measures it),
+//! so the ceiling holds once the audio is turned back into a wave too.
+//! Both channels share one gain, so the stereo image stays put.
+
+use daw_engine::meter::TRUE_PEAK_FIR;
 
 use crate::{Dsp, Param, Unit, coef, db, gain};
 
@@ -240,19 +244,35 @@ pub const LIMITER: &[Param] = &[
 
 /// How far ahead the limiter looks, in seconds.
 const LOOKAHEAD_SECONDS: f64 = 0.0015;
+/// How many frames behind the newest the true-peak detector looks at:
+/// its interpolating filter finds the peaks between the frames this far
+/// and one less back.
+const DETECT: usize = 6;
+/// How far under the ceiling the gain aims, in dB. The gain changes
+/// across the dozen frames the detector's filter spans, which can lift
+/// the peak between them by a hundredth of a dB or so.
+const MARGIN_DB: f64 = 0.05;
 
 pub struct Limiter {
     rate: f64,
     ceiling: f32,
+    /// [`MARGIN_DB`] as a gain.
+    margin: f32,
     drive: f32,
     release: f64,
-    /// The look-ahead in frames: the signal is delayed by one less.
+    /// The look-ahead in frames.
     len: usize,
-    /// The input, delayed.
+    /// The input, delayed by `len - 1 + DETECT` frames.
     delay: [Vec<f32>; 2],
-    /// The gain each recent frame needs, and that held at its lowest
-    /// and recovering at the release rate.
+    dat: usize,
+    /// The newest 12 frames, for the true-peak detector.
+    history: [[f32; 12]; 2],
+    hat: usize,
+    /// The gain each recent frame needs, one more than the look-ahead,
+    /// so a peak's gain covers every frame that averages it in.
     needed: Vec<f64>,
+    nat: usize,
+    /// That held at its lowest and recovering at the release rate.
     held: Vec<f64>,
     /// The sum of `held`, for its average.
     sum: f64,
@@ -266,20 +286,49 @@ pub struct Limiter {
 impl Limiter {
     pub fn new(rate: f64) -> Limiter {
         let len = (LOOKAHEAD_SECONDS * rate).round() as usize + 1;
+        let delay = len + DETECT;
         Limiter {
             rate,
             ceiling: 1.0,
+            margin: gain(-MARGIN_DB) as f32,
             drive: 1.0,
             release: 0.0,
             len,
-            delay: [vec![0.0; len], vec![0.0; len]],
-            needed: vec![1.0; len],
+            delay: [vec![0.0; delay], vec![0.0; delay]],
+            dat: 0,
+            history: [[0.0; 12]; 2],
+            hat: 0,
+            needed: vec![1.0; len + 1],
+            nat: 0,
             held: vec![1.0; len],
             sum: len as f64,
             at: 0,
             last: 1.0,
             now: 1.0,
         }
+    }
+
+    /// Takes the newest frame and gives the true peak (BS.1770 Annex 2,
+    /// 4× oversampled) between the frames `DETECT` and `DETECT - 1`
+    /// back, and at them.
+    #[inline]
+    fn detect(&mut self, xl: f32, xr: f32) -> f32 {
+        self.hat = (self.hat + 11) % 12;
+        let mut m = 0f32;
+        for (c, x) in [xl, xr].into_iter().enumerate() {
+            let h = &mut self.history[c];
+            h[self.hat] = x;
+            let at = |k: usize| h[(self.hat + k) % 12];
+            m = m.max(at(DETECT).abs()).max(at(DETECT - 1).abs());
+            for phase in &TRUE_PEAK_FIR {
+                let mut y = 0.0;
+                for (k, coef) in phase.iter().enumerate() {
+                    y += coef * at(k);
+                }
+                m = m.max(y.abs());
+            }
+        }
+        m
     }
 }
 
@@ -294,28 +343,29 @@ impl Dsp for Limiter {
         let n = self.len;
         for (l, r) in left.iter_mut().zip(right.iter_mut()) {
             let (xl, xr) = (*l * self.drive, *r * self.drive);
-            let peak = xl.abs().max(xr.abs());
-            let need = if peak > self.ceiling {
-                (self.ceiling / peak) as f64
-            } else {
-                1.0
-            };
-            let i = self.at;
-            // The oldest frame leaves the delay as this one comes in:
-            // the delay is one frame shorter than the look-ahead.
-            let next = (i + 1) % n;
+            // The peak a frame `DETECT` back is aimed at: its audio is
+            // delayed that much more than the gain.
+            let peak = self.detect(xl, xr);
+            let aim = self.ceiling * self.margin;
+            let need = if peak > aim { (aim / peak) as f64 } else { 1.0 };
+            // The oldest frame leaves the delay as this one comes in.
+            let d = self.delay[0].len();
+            let next = (self.dat + 1) % d;
             let (ol, or) = (self.delay[0][next], self.delay[1][next]);
-            self.delay[0][i] = xl;
-            self.delay[1][i] = xr;
-            self.needed[i] = need;
+            self.delay[0][self.dat] = xl;
+            self.delay[1][self.dat] = xr;
+            self.dat = next;
+            self.needed[self.nat] = need;
+            self.nat = (self.nat + 1) % self.needed.len();
             let lowest = self.needed.iter().copied().fold(1.0, f64::min);
             let recovering = 1.0 - (1.0 - self.last) * self.release;
             let held = lowest.min(recovering);
             self.last = held;
+            let i = self.at;
             self.sum += held - self.held[i];
             self.held[i] = held;
-            self.at = next;
-            if next == 0 {
+            self.at = (i + 1) % n;
+            if self.at == 0 {
                 // Rounding errors don't build up.
                 self.sum = self.held.iter().sum();
             }
@@ -327,7 +377,7 @@ impl Dsp for Limiter {
     }
 
     fn latency(&self) -> u32 {
-        self.len as u32 - 1
+        (self.len - 1 + DETECT) as u32
     }
 
     fn reduction_db(&self) -> f32 {
@@ -449,7 +499,7 @@ mod tests {
         e.set(0, -6.0);
         e.set(1, 12.0);
         let mut p = e.processor(48_000);
-        assert_eq!(p.latency(), 72);
+        assert_eq!(p.latency(), 78);
         let ceiling = 10f32.powf(-6.0 / 20.0);
         // Sudden loud clicks over a tone.
         let mut l = sine(48_000, 0.5);
@@ -468,8 +518,61 @@ mod tests {
         let mut l = src.clone();
         let mut r = src.clone();
         p.process(&mut l, &mut r);
-        for i in 72..4_800 {
-            assert!((l[i] - src[i - 72]).abs() < 1e-6);
+        for i in 78..4_800 {
+            assert!((l[i] - src[i - 78]).abs() < 1e-6);
+        }
+    }
+
+    /// The true peak of what comes out, as the meters measure it, stays
+    /// under the ceiling: a tone at a quarter of the sample rate, whose
+    /// samples miss its tops by 3 dB, then loud bursts of it and noise.
+    #[test]
+    fn limiter_holds_the_true_peak_under_its_ceiling() {
+        use daw_engine::meter::TruePeak;
+        for (ceiling_db, drive, release) in [
+            (-1.5, 0.0, 60.0),
+            (-1.5, 12.0, 5.0),
+            (-0.3, 6.0, 1.0),
+            (-6.0, 24.0, 1.0),
+            (-1.0, 18.0, 300.0),
+        ] {
+            let e = Effect::new(Kind::Limiter);
+            e.set(0, ceiling_db);
+            e.set(1, drive);
+            e.set(2, release);
+            let mut p = e.processor(48_000);
+            let mut seed = 7u32;
+            let n = 96_000;
+            let mut l: Vec<f32> = (0..n)
+                .map(|i| {
+                    let t = i as f32;
+                    // Quarter rate, 45° off: every sample at 0.707.
+                    let tone = (std::f32::consts::FRAC_PI_2 * t + 0.785).sin();
+                    let level = if (i / 3000) % 2 == 0 { 0.9 } else { 0.3 };
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let noise = (seed >> 8) as f32 / (1 << 23) as f32 - 1.0;
+                    let click = if i % 4_801 < 3 { 0.8 } else { 0.0 };
+                    level * tone + 0.3 * noise + click
+                })
+                .collect();
+            let mut r: Vec<f32> = l.iter().map(|x| -0.8 * x).collect();
+            for (cl, cr) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                p.process(cl, cr);
+            }
+            let mut tp = TruePeak::default();
+            let frames: Vec<f32> = l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]).collect();
+            tp.push(&frames);
+            let (tl, tr) = tp.max();
+            let got = 20.0 * tl.max(tr).log10();
+            assert!(
+                got <= ceiling_db as f32,
+                "{ceiling_db} dB ceiling: {got} dBTP"
+            );
+            // And it isn't simply turned right down.
+            assert!(
+                got > ceiling_db as f32 - 1.0,
+                "{ceiling_db} dB ceiling: {got} dBTP"
+            );
         }
     }
 }

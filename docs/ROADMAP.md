@@ -565,6 +565,12 @@ and a player for amp capture files the user supplies were added
 2026-10-30, at risk; the capture library's licence is checked in
 decision 0012 and the listening checks are in
 `docs/review-queue/2.5-amp-and-cabinet.md`.
+On 2026-11-01 the limiter became true-peak (it watches the level between
+samples, 4× oversampled as BS.1770 measures it), and three effects for
+lo-fi character were added: a worn record (hiss, crackle, rumble, wear),
+a worn tape (wow, flutter, saturation, dull highs, hiss) and a bit
+crusher (bits, sample rate, smoothing); checks in
+`docs/review-queue/4-lofi-effects-true-peak-limiter.md`.
 Still to do: the tuner as an insert.*
 - EQ, compressor, gate, limiter, algorithmic and convolution reverb, delay.
 - Guitar amp and cabinet simulation (our own models and impulse

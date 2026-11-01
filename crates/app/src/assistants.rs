@@ -23,7 +23,9 @@ use crate::commands::Cmd;
 /// Told to assistants when they connect.
 const INSTRUCTIONS: &str = "This is a music app (a digital audio workstation). get_project \
     gives the tracks, clips and effects with their ids; list_commands gives every command; \
-    list_parameters gives each track setting with its range. Each request that changes the \
+    list_parameters gives each track setting with its range; set_parameter sets one for the \
+    whole song, and edit_automation makes one change over time (volume rides, fades, filter \
+    sweeps, pan moves). Each request that changes the \
     project is one undo step, which the person can take back. Ask before big changes.";
 
 /// What has been chosen for one assistant.

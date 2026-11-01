@@ -457,6 +457,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
     (TOOLS.iter())
         .chain(crate::agent_edit::TOOLS)
         .chain(crate::agent_arrange::TOOLS)
+        .chain(crate::agent_automation::TOOLS)
         .chain(crate::agent_files::TOOLS)
         .chain(crate::agent_takes::TOOLS)
         .chain(crate::agent_notes::TOOLS)
@@ -727,6 +728,7 @@ impl App {
             "list_effect_kinds" => Ok(self.effect_kinds_value()),
             "get_comments" => Ok(self.comments_value()),
             "list_projects" => Ok(self.projects_value()),
+            "get_automation" => self.automation_value(args["track"].as_str()),
             _ => (self.takes_read(name, args))
                 .or_else(|| self.notes_read_tool(name, args))
                 .or_else(|| self.layers_read(name, args))

@@ -137,6 +137,11 @@ assistant finds them for itself. In outline:
   `edit_clip` moves, resizes, mutes and keys note clips too.
   `add_note_clip` and `edit_notes` take chords by name (`Dm9`, `G/B`)
   or several pitches at once, and `select_clips` picks a note clip.
+- **Automation:** `get_automation` (each track's mode, lanes and
+  points), `edit_automation` (add or remove a lane for any setting
+  `list_parameters` names, clear it, and add, move or delete points;
+  points are joined by straight lines), `set_automation_mode` (Off,
+  Read, Touch, Latch or Write).
 - **Files:** `save_project`, `open_project`, `new_project`, `export_mix`,
   `export_sections`, `export_as_project`, `export_stem_package`,
   `import_from_project`, `export_project_file`, `import_project_file`.

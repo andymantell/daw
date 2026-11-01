@@ -962,8 +962,7 @@ mod tests {
         let tar = dir.join("Stems 1.tar");
         assert!(
             tar.is_file(),
-            "{:?} {:?}",
-            h.state().export.finished(),
+            "{:?}",
             std::fs::read_dir(&dir)
                 .unwrap()
                 .flatten()

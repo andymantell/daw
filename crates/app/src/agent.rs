@@ -491,7 +491,11 @@ fn region_args() -> Value {
                  without changing them: to try a shift before making it."},
         "notes": {"type": "boolean", "description": "analyse only: also read the notes of one \
                  voice or instrument, one at a time: each note with its start, length and cents \
-                 off, seconds of each of the 12 notes, the overall tuning, and the key they fit."}
+                 off, seconds of each of the 12 notes, the overall tuning, and the key they fit."},
+        "beats": {"type": "boolean", "description": "analyse only: also find the beat grid of a \
+                 voice alone or another sparse part, from its note starts: tempo candidates with \
+                 confidence, where the first beat and first downbeat fall, and how far the beat \
+                 drifts."}
     }})
 }
 

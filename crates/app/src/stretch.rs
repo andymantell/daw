@@ -11,7 +11,7 @@
 
 use eframe::egui::{self, RichText};
 
-use daw_engine::time::{PPQ, TempoMap, Ticks};
+use daw_engine::time::{Frames, PPQ, TempoMap, Ticks};
 use daw_project::TempoChange;
 
 use crate::commands::Cmd;
@@ -182,7 +182,106 @@ pub(crate) fn tempo_map_from(
     Ok((start_bpm, changes, shift))
 }
 
+/// The beat line (or bar line, if `bar`) nearest timeline frame `at`.
+pub(crate) fn nearest_line(map: &TempoMap, at: i64, bar: bool) -> i64 {
+    let t = map.ticks_at(Frames(at));
+    let bb = map.bar_beat(t);
+    let sig = map.signature_at(t);
+    let (before, after) = if bar {
+        (map.bar_start(bb.bar), map.bar_start(bb.bar + 1))
+    } else {
+        let b = Ticks(t.0 - bb.tick);
+        (b, Ticks(b.0 + sig.beat_ticks()))
+    };
+    let (b, a) = (map.frames_at(before).0, map.frames_at(after).0);
+    if at - b <= a - at { b } else { a }
+}
+
+/// Where a clip starting at frame `start` (tick `beat`, when it
+/// `follows` tempo) starts once moved so the point now at timeline frame
+/// `anchor` is at `to`: in frames, and in ticks. A clip that follows
+/// tempo moves in ticks, so the point lands exactly whatever the tempo
+/// does in between.
+pub(crate) fn moved_by_anchor(
+    map: &TempoMap,
+    start: i64,
+    beat: i64,
+    follows: bool,
+    anchor: i64,
+    to: i64,
+) -> Result<(i64, i64), String> {
+    let (start, beat) = if follows {
+        let into = map.ticks_at(Frames(anchor)).0 - beat;
+        let beat = map.ticks_at(Frames(to)).0 - into;
+        (map.frames_at(Ticks(beat)).0, beat)
+    } else {
+        let start = start + (to - anchor);
+        (start, map.ticks_at(Frames(start.max(0))).0)
+    };
+    if start < 0 {
+        return Err(format!(
+            "That would start the clip {:.3} seconds before the song does.",
+            -start as f64 / map.sample_rate().max(1) as f64
+        ));
+    }
+    Ok((start, beat))
+}
+
 impl App {
+    /// Moves the chosen clips so the point of them under the playhead
+    /// lands on the nearest beat line (or bar line, if `bar`); clips
+    /// grouped with them move by as much. Nothing moves unless the
+    /// playhead is inside one of them.
+    pub(crate) fn anchor_to_grid(&mut self, bar: bool) {
+        if !self.may_edit_song() {
+            return;
+        }
+        let at = self.ctl.status().position().0;
+        let map = self.tempo_map();
+        let chosen = self.stretch_clips();
+        let inside = chosen.iter().any(|&(l, id)| {
+            (self.tracks[l].clips.iter()).any(|c| c.id == id && at >= c.start && at <= c.end())
+        });
+        if !inside {
+            self.said
+                .say("Put the playhead on the point of the clip to line up".into());
+            return;
+        }
+        let to = nearest_line(&map, at, bar);
+        if to == at {
+            return;
+        }
+        let mut moves = Vec::new();
+        for &(l, id) in &chosen {
+            let Some(c) = self.tracks[l].clips.iter().find(|c| c.id == id) else {
+                continue;
+            };
+            match moved_by_anchor(&map, c.start, c.beat, c.tempo.is_some(), at, to) {
+                Ok(m) => moves.push((l, id, m)),
+                Err(e) => {
+                    self.said.say(e);
+                    return;
+                }
+            }
+        }
+        for (l, id, (start, beat)) in moves {
+            if let Some(c) = self.tracks[l].clips.iter_mut().find(|c| c.id == id) {
+                c.start = start;
+                if c.tempo.is_some() {
+                    c.beat = beat;
+                }
+                c.retime(&map);
+            }
+        }
+        let by = (to - at) as f64 / self.rate.max(1) as f64;
+        self.said.say(format!(
+            "Moved {:.3} seconds {}",
+            by.abs(),
+            if by > 0.0 { "later" } else { "earlier" }
+        ));
+        self.rebuild();
+    }
+
     /// The selected audio clips and those grouped with them, by lane
     /// and id: what the stretch commands act on.
     pub(crate) fn stretch_clips(&mut self) -> Vec<(usize, u64)> {
@@ -690,6 +789,8 @@ impl App {
                 self.stretch.open = Some(Window::TempoFrom);
             }
             Cmd::TempoFromClipApply => self.tempo_from_clip(),
+            Cmd::AnchorToBeat => self.anchor_to_grid(false),
+            Cmd::AnchorToBar => self.anchor_to_grid(true),
             _ => return false,
         }
         true
@@ -789,6 +890,111 @@ mod tests {
             d.call("select_clips", json!({"clips": [key.clone()]}))
                 .unwrap();
             key
+        }
+
+        /// Where the first clip starts now, in seconds.
+        fn start_of(d: &mut Driver) -> f64 {
+            let c = d.project()["tracks"][0]["clips"][0].clone();
+            c["start"].as_f64().unwrap() / d.app().rate as f64
+        }
+
+        #[test]
+        fn a_point_of_a_clip_is_put_on_a_bar_a_beat_or_a_time() {
+            let mut d = Driver::new();
+            let key = with_clip(&mut d, take(96_000, &[14_400, 48_000]));
+            let edit = |d: &mut Driver, args: serde_json::Value| {
+                let mut a = args;
+                a["clip"] = json!(key.clone());
+                d.call("edit_clip", a)
+            };
+            edit(&mut d, json!({"seconds": 1.0})).unwrap();
+            // The point 0.3 s into it onto bar 3: 4 s in, at 120 bpm.
+            let v = edit(&mut d, json!({"anchor_seconds": 1.3, "bar": 3})).unwrap();
+            assert!((start_of(&mut d) - 3.7).abs() < 1e-4, "{v}");
+            assert!(
+                (v["moved_seconds"].as_f64().unwrap() - 2.7).abs() < 1e-4,
+                "{v}"
+            );
+            assert!(
+                (v["anchor_now_seconds"].as_f64().unwrap() - 4.0).abs() < 1e-4,
+                "{v}"
+            );
+            // 0.2 s into it to the nearest beat, then 0.6 s in to the
+            // nearest bar line, then to a time.
+            edit(&mut d, json!({"anchor_seconds": 3.9, "snap": "beat"})).unwrap();
+            assert!((start_of(&mut d) - 3.8).abs() < 1e-4);
+            edit(&mut d, json!({"anchor_seconds": 4.4, "snap": "bar"})).unwrap();
+            assert!((start_of(&mut d) - 3.4).abs() < 1e-4);
+            edit(&mut d, json!({"anchor_seconds": 3.5, "seconds": 10.0})).unwrap();
+            assert!((start_of(&mut d) - 9.9).abs() < 1e-4);
+            // One undo step each.
+            d.command("undo");
+            assert!((start_of(&mut d) - 3.4).abs() < 1e-4);
+
+            let err = |d: &mut Driver, args| edit(d, args).unwrap_err();
+            assert!(
+                err(&mut d, json!({"anchor_seconds": 1.0, "bar": 2})).contains("isn't in the clip")
+            );
+            assert!(err(&mut d, json!({"snap": "bar"})).contains("anchor_seconds"));
+            assert!(err(&mut d, json!({"anchor_seconds": 4.0})).contains("Say where"));
+            assert!(err(&mut d, json!({"anchor_seconds": 4.0, "snap": "half"})).contains("snap"));
+            assert!(
+                err(
+                    &mut d,
+                    json!({"anchor_seconds": 4.0, "snap": "bar", "bar": 2})
+                )
+                .contains("not both")
+            );
+            assert!(
+                err(&mut d, json!({"anchor_seconds": 4.4, "seconds": 0.5}))
+                    .contains("before the song")
+            );
+            assert!(
+                (start_of(&mut d) - 3.4).abs() < 1e-4,
+                "a refused move changes nothing"
+            );
+        }
+
+        #[test]
+        fn a_clip_that_follows_tempo_is_put_on_a_bar_by_a_point_in_beats() {
+            let mut d = Driver::new();
+            let key = with_clip(&mut d, take(96_000, &[14_400, 48_000]));
+            d.command("follow-tempo");
+            d.call("edit_clip", json!({"clip": key, "bar": 2})).unwrap();
+            // Half a beat in (0.25 s at 120) onto bar 4 beat 2.
+            d.call(
+                "edit_clip",
+                json!({"clip": key, "anchor_seconds": 2.25, "bar": 4.25}),
+            )
+            .unwrap();
+            let c = d.project()["tracks"][0]["clips"][0].clone();
+            assert_eq!(c["beat"], json!(13 * PPQ - PPQ / 2), "{c}");
+            // The song slows: the point stays on bar 4 beat 2.
+            d.call("set_tempo", json!({"bpm": 60})).unwrap();
+            let start = start_of(&mut d);
+            assert!((start - (13.0 - 0.5)).abs() < 1e-3, "{start}");
+        }
+
+        #[test]
+        fn the_point_at_the_playhead_is_lined_up_from_the_timeline() {
+            let mut d = Driver::new();
+            let key = with_clip(&mut d, take(96_000, &[14_400, 48_000]));
+            d.call("edit_clip", json!({"clip": key, "seconds": 1.1}))
+                .unwrap();
+            // The playhead outside the clip: nothing moves.
+            d.call("seek", json!({"seconds": 0.5})).unwrap();
+            d.command("anchor-to-beat");
+            assert!((start_of(&mut d) - 1.1).abs() < 1e-4);
+            // 0.3 s in, at 1.4 s: the nearest beat is 1.5 s, the nearest
+            // bar 2 s.
+            d.call("seek", json!({"seconds": 1.4})).unwrap();
+            d.command("anchor-to-beat");
+            assert!((start_of(&mut d) - 1.2).abs() < 1e-4);
+            d.call("seek", json!({"seconds": 1.6})).unwrap();
+            d.command("anchor-to-bar");
+            assert!((start_of(&mut d) - 1.6).abs() < 1e-4);
+            d.command("undo");
+            assert!((start_of(&mut d) - 1.2).abs() < 1e-4);
         }
 
         #[test]

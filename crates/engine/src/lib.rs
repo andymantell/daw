@@ -4,6 +4,7 @@
 pub mod ahead;
 pub mod analysis;
 pub mod automation;
+pub mod beats;
 pub mod bend;
 mod chain;
 pub mod engine;

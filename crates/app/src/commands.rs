@@ -113,6 +113,8 @@ pub(crate) enum Cmd {
     QuantiseAudioApply,
     TempoFromClip,
     TempoFromClipApply,
+    AnchorToBeat,
+    AnchorToBar,
     ZoomIn,
     ZoomOut,
     ZoomSelection,
@@ -1418,6 +1420,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Set the song's tempo from the selected clip with the window's current settings")
     .words("tempo map detect"),
+    info(
+        Cmd::AnchorToBeat,
+        "anchor-to-beat",
+        "Edit",
+        "Line up playhead point with nearest beat",
+        &[],
+    )
+    .hint("Move the selected clips so the point under the playhead lands on the nearest beat")
+    .words("align snap onset anchor phrase grid move"),
+    info(
+        Cmd::AnchorToBar,
+        "anchor-to-bar",
+        "Edit",
+        "Line up playhead point with nearest bar",
+        &[],
+    )
+    .hint("Move the selected clips so the point under the playhead lands on the nearest bar line")
+    .words("align snap onset anchor phrase downbeat grid move"),
     info(
         Cmd::ZoomIn,
         "zoom-in",
@@ -3092,7 +3112,9 @@ impl App {
             | Cmd::QuantiseAudio
             | Cmd::QuantiseAudioApply
             | Cmd::TempoFromClip
-            | Cmd::TempoFromClipApply => self.has_stretch_clips(),
+            | Cmd::TempoFromClipApply
+            | Cmd::AnchorToBeat
+            | Cmd::AnchorToBar => self.has_stretch_clips(),
             Cmd::PitchNotesUp
             | Cmd::PitchNotesDown
             | Cmd::SnapPitchNotes
@@ -3487,7 +3509,9 @@ impl App {
             | Cmd::QuantiseAudio
             | Cmd::QuantiseAudioApply
             | Cmd::TempoFromClip
-            | Cmd::TempoFromClipApply => {
+            | Cmd::TempoFromClipApply
+            | Cmd::AnchorToBeat
+            | Cmd::AnchorToBar => {
                 self.run_stretch(cmd);
             }
             Cmd::TransposeClips

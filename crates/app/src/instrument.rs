@@ -29,6 +29,7 @@ use eframe::egui;
 
 use crate::commands::Cmd;
 use crate::fx::{Effects, FxSlot};
+use crate::spoken;
 
 /// The simple synth, as a project names it.
 pub const SYNTH: &str = "synth";
@@ -594,10 +595,17 @@ impl Slot {
                     } else {
                         slider
                     };
+                    let first = spoken::start(ui);
                     if ui.add(slider).accessible_name(label).changed() {
                         p.set(name, v);
                         changed = true;
                     }
+                    let text = match name {
+                        "sustain" => format!("{:.0}%", v * 100.0),
+                        "level" => spoken::db_text(v),
+                        _ => format!("{v:.3}{suffix}"),
+                    };
+                    spoken::hearable(ui, first, text, spoken::steady(v, lo, hi));
                     ui.end_row();
                 }
             });
@@ -655,6 +663,7 @@ fn param(
     }
     ui.label(&info.name);
     let mut v = p.get(i);
+    let first = spoken::start(ui);
     let changed = match info.unit {
         Unit::Choice => {
             let mut c = v as usize;
@@ -699,6 +708,17 @@ fn param(
             .changed()
         }
     };
+    // A screen reader hears the setting with its unit, and Hear the
+    // value plays it.
+    let hear = match info.unit {
+        Unit::Choice | Unit::Switch => None,
+        Unit::Db => Some(spoken::Hear::Level(v)),
+        Unit::Pan => Some(spoken::Hear::Pan(v)),
+        _ => Some(spoken::steady(v, info.min, info.max)),
+    };
+    if let Some(hear) = hear {
+        spoken::hearable(ui, first, info.text(v), hear);
+    }
     ui.end_row();
     if changed {
         p.set(i, v);

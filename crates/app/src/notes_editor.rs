@@ -185,6 +185,40 @@ struct BoxSelect {
     from: Pos2,
 }
 
+/// A key pressed on a note.
+#[derive(Clone, Copy)]
+enum NoteKey {
+    /// By this many grid steps.
+    Move(i64),
+    /// By this many semitones.
+    Pitch(i32),
+    Select,
+    Delete,
+}
+
+/// The widget for a note, for the keyboard and a screen reader.
+fn note_node(grid: egui::Id, note: &str) -> egui::Id {
+    grid.with(("note", note))
+}
+
+/// A note as a screen reader should say it: "C4 at bar 1 beat 2, 1 beat
+/// long, velocity 100".
+pub(crate) fn note_words(map: &TempoMap, origin: i64, n: &Note) -> String {
+    let at = map.frames_at(Ticks(origin + n.start)).0;
+    let beats = n.len as f64 / PPQ as f64;
+    let long = if (beats - 1.0).abs() < 1e-9 {
+        "1 beat".to_string()
+    } else {
+        format!("{} beats", (beats * 100.0).round() / 100.0)
+    };
+    format!(
+        "{} at {}, {long} long, velocity {}",
+        Note::pitch_name(n.pitch),
+        crate::timeline::spoken(map, at),
+        n.velocity
+    )
+}
+
 pub struct Editor {
     /// The clip being edited, by key.
     pub clip: Option<String>,
@@ -370,6 +404,101 @@ impl Editor {
     }
 
     /// Removes the selected notes.
+    /// Each note for the keyboard and a screen reader (Phase 4 D3): Tab
+    /// reaches it, read as "C4 at bar 1 beat 2, 1 beat long, velocity
+    /// 100". Left and Right move it by the grid, Up and Down a semitone
+    /// (Shift: an octave), Enter selects it and Delete removes it. True if
+    /// a note changed.
+    fn note_nodes(
+        &mut self,
+        ui: &mut egui::Ui,
+        grid: egui::Id,
+        clip: &mut NoteClip,
+        map: &TempoMap,
+        area: Rect,
+        note_rect: &dyn Fn(&Note) -> Rect,
+    ) -> bool {
+        // Enough for a part; a clip with more is edited with the tools.
+        const MOST: usize = 512;
+        let origin = clip.start - clip.offset;
+        let keys = egui::EventFilter {
+            horizontal_arrows: true,
+            vertical_arrows: true,
+            ..Default::default()
+        };
+        let mut act: Option<(String, NoteKey)> = None;
+        for n in clip.notes.iter().take(MOST) {
+            let id = note_node(grid, &n.id);
+            let r = note_rect(n).intersect(area);
+            let r = if r.is_positive() {
+                r
+            } else {
+                // Off screen: still in the tree, at the editor's edge.
+                Rect::from_min_size(area.min, vec2(1.0, 1.0))
+            };
+            let resp = ui.interact(r, id, Sense::focusable_noninteractive());
+            let selected = self.selected.contains(&n.id);
+            let words = note_words(map, origin, n);
+            resp.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::Button, true, selected, &words)
+            });
+            if !resp.has_focus() {
+                continue;
+            }
+            ui.memory_mut(|m| m.set_focus_lock_filter(id, keys));
+            ui.painter().rect_stroke(
+                r.expand(2.0),
+                2.0,
+                ui.visuals().selection.stroke,
+                StrokeKind::Outside,
+            );
+            let k = ui.input(|i| {
+                let shift = i.modifiers.shift;
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    Some(NoteKey::Move(-1))
+                } else if i.key_pressed(egui::Key::ArrowRight) {
+                    Some(NoteKey::Move(1))
+                } else if i.key_pressed(egui::Key::ArrowUp) {
+                    Some(NoteKey::Pitch(if shift { 12 } else { 1 }))
+                } else if i.key_pressed(egui::Key::ArrowDown) {
+                    Some(NoteKey::Pitch(if shift { -12 } else { -1 }))
+                } else if i.key_pressed(egui::Key::Enter) {
+                    Some(NoteKey::Select)
+                } else if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+                    Some(NoteKey::Delete)
+                } else {
+                    None
+                }
+            });
+            act = k.map(|k| (n.id.clone(), k));
+        }
+        let Some((id, k)) = act else {
+            return false;
+        };
+        let Some(n) = clip.notes.iter_mut().find(|n| n.id == id) else {
+            return false;
+        };
+        match k {
+            NoteKey::Move(by) => {
+                let at = origin + n.start;
+                let step = self.grid.ticks(map, at).max(1);
+                n.start = (n.start + by * step).max(0);
+                clip.sort_notes();
+            }
+            NoteKey::Pitch(by) => n.pitch = (n.pitch as i32 + by).clamp(0, 127) as u8,
+            NoteKey::Select => {
+                self.selected.clear();
+                self.selected.insert(id);
+                return false;
+            }
+            NoteKey::Delete => {
+                clip.notes.retain(|n| n.id != id);
+                self.selected.remove(&id);
+            }
+        }
+        true
+    }
+
     pub fn delete_selected(&mut self, clip: &mut NoteClip) -> bool {
         let before = clip.notes.len();
         clip.notes.retain(|n| !self.selected.contains(&n.id));
@@ -955,6 +1084,8 @@ impl Editor {
         {
             match pointer_hit.clone() {
                 Some((id, _)) => {
+                    // The arrow keys then work on it.
+                    ui.memory_mut(|m| m.request_focus(note_node(resp.id, &id)));
                     if modifiers.shift {
                         if !self.selected.remove(&id) {
                             self.selected.insert(id);
@@ -1052,6 +1183,8 @@ impl Editor {
                 );
             }
         }
+        changed |= self.note_nodes(ui, resp.id, clip, map, grid_rect, &note_rect);
+
         // A line in the lane: a controller of the clip, or the selected
         // note's expression.
         if !bars {

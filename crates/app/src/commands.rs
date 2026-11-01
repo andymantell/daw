@@ -144,6 +144,7 @@ pub(crate) enum Cmd {
     FretboardPositionDown,
     FretboardType,
     FretboardHear,
+    HearValue,
     FretLeft,
     FretRight,
     FretUp,
@@ -2013,6 +2014,19 @@ pub(crate) const COMMANDS: &[Info] = &[
     .typing()
     .everyday(),
     info(
+        Cmd::HearValue,
+        "hear-value",
+        "Help",
+        "Hear the value",
+        &[key(CTRL_SHIFT, Key::H)],
+    )
+    .hint("Say and play the value of the control with the keyboard, or the one last moved: a pan is heard from its side, a level as loud, an automation lane as a tone that rises and falls with it")
+    .words("accessibility screen reader blind listen pan level volume automation sonify")
+    // It works on the focused control, so it works while one has the
+    // keyboard.
+    .typing()
+    .everyday(),
+    info(
         Cmd::CheckUpdates,
         "check-updates",
         "Help",
@@ -3310,6 +3324,7 @@ impl App {
             | Cmd::FretDown
             | Cmd::FretEnter => self.fretboard_command(cmd),
             Cmd::FullSize => self.workspace.toggle_full(),
+            Cmd::HearValue => self.hear_value(ctx),
             Cmd::SimpleMode => self.toggle_simple(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
             Cmd::SaveLayout => self.workspace.saving = Some(String::new()),

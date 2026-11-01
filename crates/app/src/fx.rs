@@ -2482,6 +2482,12 @@ pub(crate) fn builtin_params(
                     continue;
                 }
                 if !b.shown(p.key) {
+                    if let Some(n) = b.synced().filter(|_| p.key == "time") {
+                        ui.label(p.name);
+                        ui.label(format!("{n}, following the tempo"))
+                            .on_hover_text("Set Sync to tempo to Off to set the time in ms");
+                        ui.end_row();
+                    }
                     continue;
                 }
                 let mut v = b.get(i);

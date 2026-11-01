@@ -1062,6 +1062,140 @@ pub(crate) mod tests {
         assert!(d.call("analyse", json!({"without": "master"})).is_err());
     }
 
+    /// The delay's echoes come a note length apart, in time with the
+    /// tempo and its changes, set and read through the assistant tools.
+    #[test]
+    fn a_delay_synced_to_the_tempo_follows_tempo_changes() {
+        let mut d = Driver::new();
+        let key = synth(&mut d);
+        {
+            // A short note at bar 1, and another at bar 3, after the
+            // tempo halves at bar 2.
+            let a = d.app();
+            let c = &mut a.tracks[0].note_clips[0];
+            c.len = 12 * 960;
+            c.notes.clear();
+            c.notes.push(daw_project::Note::new(0, 120, 69, 120));
+            c.notes.push(daw_project::Note::new(8 * 960, 120, 69, 120));
+            a.rebuild();
+        }
+        let fx = d
+            .call("add_effect", json!({"track": key, "effect": "delay"}))
+            .unwrap();
+        let fx = fx["effect"].as_str().unwrap().to_string();
+        let params = d.call("list_parameters", json!({"track": key})).unwrap();
+        let param = |end: &str| {
+            (params[0]["params"].as_array().unwrap().iter())
+                .find(|p| {
+                    p["param"].as_str().unwrap().contains(&fx)
+                        && p["param"].as_str().unwrap().ends_with(end)
+                })
+                .unwrap_or_else(|| panic!("the delay's {end}"))
+                .clone()
+        };
+        let sync = param(":sync");
+        assert!(
+            (sync["choices"].as_array().unwrap().iter()).any(|c| c == "1/8."),
+            "{sync}"
+        );
+        let name = |p: &Value| p["param"].as_str().unwrap().to_string();
+        let (sync, time) = (name(&sync), name(&param(":time")));
+        let changes: Vec<Value> = [
+            (":mix", json!(100.0)),
+            (":feedback", json!(0.0)),
+            (":sync", json!("1/8.")),
+        ]
+        .into_iter()
+        .map(|(p, v)| json!({"param": name(&param(p)), "value": v}))
+        .collect();
+        d.call("set_parameters", json!({"track": key, "changes": changes}))
+            .unwrap();
+        // A note length by its name.
+        d.call(
+            "set_parameter",
+            json!({"track": key, "param": sync, "value": "1/4"}),
+        )
+        .unwrap();
+        let e = d
+            .call(
+                "set_parameter",
+                json!({"track": key, "param": sync, "value": "1/5"}),
+            )
+            .unwrap_err();
+        assert!(e.contains("1/8."), "{e}");
+        d.call(
+            "set_tempo",
+            json!({"bpm": 120.0, "changes": [{"bar": 2, "bpm": 60.0}]}),
+        )
+        .unwrap();
+        // It reads back with its time in ms, and the time as not used.
+        let params = d.call("list_parameters", json!({"track": key})).unwrap();
+        let read = |n: &str| {
+            (params[0]["params"].as_array().unwrap().iter())
+                .find(|p| p["param"] == n)
+                .unwrap()
+                .clone()
+        };
+        let s = read(&sync);
+        assert_eq!(s["text"], "1/4");
+        assert!(
+            s["note"]
+                .as_str()
+                .unwrap()
+                .contains("500.0 ms at 120.0 bpm"),
+            "{s}"
+        );
+        assert!(
+            read(&time)["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("Not used")
+        );
+
+        // Bar 1 at 120 is 2 s; bar 2 at 60 is 4 s, so bar 3 is at 6 s.
+        let r = d
+            .call(
+                "render_audio",
+                json!({"from_seconds": 0.0, "to_seconds": 8.0}),
+            )
+            .unwrap();
+        let path = r["file"].as_str().unwrap().to_string();
+        let mut wav = hound::WavReader::open(&path).unwrap();
+        let spec = wav.spec();
+        let rate = spec.sample_rate as f64;
+        let left: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => (wav.samples::<f32>().step_by(2))
+                .map(|s| s.unwrap())
+                .collect(),
+            hound::SampleFormat::Int => {
+                let full = (1i64 << (spec.bits_per_sample - 1)) as f32;
+                (wav.samples::<i32>().step_by(2))
+                    .map(|s| s.unwrap() as f32 / full)
+                    .collect()
+            }
+        };
+        let _ = std::fs::remove_file(&path);
+        let peak = left.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "the echoes are heard");
+        let onset = |from: f64, to: f64| {
+            let (a, b) = ((from * rate) as usize, (to * rate) as usize);
+            (left[a..b].iter().position(|s| s.abs() > peak * 0.2))
+                .map(|i| (a + i) as f64 / rate)
+                .unwrap_or_else(|| panic!("no echo between {from} and {to} s"))
+        };
+        // All wet: the notes themselves are gone, their echoes a quarter
+        // note later: half a second at 120, a whole second at 60.
+        assert!(
+            left[..(0.4 * rate) as usize]
+                .iter()
+                .all(|s| s.abs() < peak * 0.05)
+        );
+        let first = onset(0.0, 2.0);
+        assert!((first - 0.5).abs() < 0.02, "first echo at {first} s");
+        let second = onset(6.0, 8.0);
+        assert!((second - 7.0).abs() < 0.02, "second echo at {second} s");
+    }
+
     #[test]
     fn rendered_audio_is_written_and_sent_when_short() {
         let mut d = Driver::new();

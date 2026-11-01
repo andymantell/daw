@@ -266,7 +266,7 @@ pub(crate) const TOOLS: &[Tool] = &[
             json!({"type": "object", "properties": {
                 "track": {"type": "string", "description": "The track's id."},
                 "param": {"type": "string", "description": "The setting, as list_parameters names it."},
-                "value": {"type": "number"}
+                "value": {"type": ["number", "string"], "description": "A number, or for a setting that picks from a list, a name from its choices (such as \"1/8.\" for a delay's Sync to tempo)."}
             }, "required": ["track", "param", "value"]})
         },
     },
@@ -285,7 +285,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "changes": {"type": "array", "items": {"type": "object", "properties": {
                     "track": {"type": "string", "description": "The track's id, if not the call's."},
                     "param": {"type": "string", "description": "The setting, as list_parameters names it."},
-                    "value": {"type": "number"}
+                    "value": {"type": ["number", "string"], "description": "A number, or a name from the setting's choices."}
                 }, "required": ["param", "value"]}}
             }, "required": ["changes"]})
         },
@@ -898,9 +898,12 @@ impl App {
             "set_parameter" => {
                 let track = args["track"].as_str().ok_or("Give the track's id.")?;
                 let param = args["param"].as_str().ok_or("Give the setting's name.")?;
-                let value = args["value"]
-                    .as_f64()
-                    .ok_or("Give the value as a number.")?;
+                let value = match &args["value"] {
+                    Value::String(name) => self.choice_value(track, param, name)?,
+                    v => v
+                        .as_f64()
+                        .ok_or("Give the value as a number, or a choice's name.")?,
+                };
                 let label = self.set_parameter(track, param, value)?;
                 Ok((json!({"set": param, "value": value}), Some(label)))
             }
@@ -1480,6 +1483,7 @@ impl App {
     /// The master channel's settings for `list_parameters`: its fader
     /// and its effects'.
     fn master_parameters(&self) -> Value {
+        let bpm = self.tempo_now();
         let t = &self.master;
         let params: Vec<Value> = (crate::automation::choices_up_to(t, &[], usize::MAX).iter())
             .filter_map(|c| {
@@ -1497,6 +1501,9 @@ impl App {
                 let named = crate::automation::choice_names(t, &c.param);
                 if !named.is_empty() {
                     p["choices"] = json!(named);
+                }
+                if let Some(note) = crate::automation::note_of(t, &c.param, bpm) {
+                    p["note"] = json!(note);
                 }
                 Some(p)
             })
@@ -1517,6 +1524,7 @@ impl App {
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
             .collect();
+        let bpm = self.tempo_now();
         let mut out = Vec::new();
         for t in self
             .tracks
@@ -1547,6 +1555,9 @@ impl App {
                     "max": r.max,
                     "automated": t.automation.iter().any(|l| l.param == c.param),
                 });
+                if let Some(note) = crate::automation::note_of(t, &c.param, bpm) {
+                    p["note"] = json!(note);
+                }
                 // A setting that picks one of a few named values (a
                 // waveform, a mode, a number of stages) lists their
                 // names, by value.
@@ -1645,9 +1656,14 @@ impl App {
                 .or(default)
                 .ok_or_else(|| format!("Change {n} has no track, and the call gives none."))?;
             let param = (c["param"].as_str()).ok_or_else(|| format!("Change {n} has no param."))?;
-            let value = (c["value"].as_f64())
-                .filter(|v| v.is_finite())
-                .ok_or_else(|| format!("Change {n}'s value isn't a number."))?;
+            let value = match &c["value"] {
+                Value::String(name) => self
+                    .choice_value(track, param, name)
+                    .map_err(|e| format!("Change {n}: {e}"))?,
+                v => (v.as_f64()).filter(|v| v.is_finite()).ok_or_else(|| {
+                    format!("Change {n}'s value isn't a number or a choice's name.")
+                })?,
+            };
             list.push((track, param, value));
         }
         // Undone as a whole if one fails, so a half-set voicing can't stay.
@@ -1676,6 +1692,47 @@ impl App {
             _ => format!("Set {} settings", labels.len()),
         };
         Ok((json!({"set": labels.len(), "changes": labels}), Some(label)))
+    }
+
+    /// The tempo at the play position, in quarter notes a minute.
+    fn tempo_now(&self) -> f64 {
+        let map = self.tempo_map();
+        map.tempo_at(map.ticks_at(self.ctl.status().position()))
+            .as_f64()
+    }
+
+    /// The value of the choice `name` (as list_parameters' choices give
+    /// it, any case) for a track's setting that picks from a list.
+    fn choice_value(&self, key: &str, param: &str, name: &str) -> Result<f64, String> {
+        let t = if key == daw_project::Master::KEY {
+            &self.master
+        } else {
+            let i = (self.track_index(key)).ok_or_else(|| format!("There is no track {key}."))?;
+            &self.tracks[i]
+        };
+        let named = crate::automation::choice_names(t, param);
+        let names: Vec<String> = if !named.is_empty() {
+            named
+        } else {
+            match crate::automation::range(t, param) {
+                Some(r) if r.min.fract() == 0.0 && r.max - r.min <= 16.0 => (r.min as i64
+                    ..=r.max as i64)
+                    .map(|i| crate::automation::text_of(t, param, i as f64))
+                    .collect(),
+                _ => return Err(format!("{param} takes a number, not a name.")),
+            }
+        };
+        let first = crate::automation::range(t, param).map_or(0.0, |r| r.min);
+        (names
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(name.trim())))
+        .map(|i| first + i as f64)
+        .ok_or_else(|| {
+            format!(
+                "{param} has no choice {name}: it takes one of {}.",
+                names.join(", ")
+            )
+        })
     }
 
     /// Sets a track's setting. The undo step's name, or why it can't.

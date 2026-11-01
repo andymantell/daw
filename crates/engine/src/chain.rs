@@ -47,6 +47,8 @@ pub(crate) struct Keys<'a> {
     pub edges: &'a mut [Edge],
     pub post: &'a [[Vec<f32>; 2]],
     pub key: &'a mut [Vec<f32>; 2],
+    /// The tempo heard this block, for effects that follow it.
+    pub bpm: f64,
 }
 
 /// The top of a track's chain, built from its flat list of inserts.
@@ -222,6 +224,7 @@ fn run_fx(i: &mut InsertNode, keys: &mut Keys, l: &mut [f32], r: &mut [f32]) {
         return;
     };
     let n = l.len();
+    fx.set_tempo(keys.bpm);
     match i.key {
         Some(e) => {
             let e = &mut keys.edges[e];

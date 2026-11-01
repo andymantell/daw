@@ -8,7 +8,7 @@
 //! Times are given as a bar (counted from 1, fractions within it) or in
 //! seconds; notes in beats (quarter notes) from their clip's start.
 
-use daw_engine::time::{Frames, PPQ, TempoMap, Ticks};
+use daw_engine::time::{Frames, TempoMap, Ticks};
 use daw_project::{Project, Scale, ScaleKind};
 use serde_json::{Value, json};
 
@@ -41,9 +41,14 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "edit_clip",
-        description: "Changes an audio clip: where it starts (bar or seconds), the track \
-                      it is on, its length or offset into its file (seconds), its gain, \
-                      fades (seconds), mute or name. Only what is given changes.",
+        description: "Changes a clip. Either kind: where it starts (bar or seconds), the \
+                      track it is on, mute or name. An audio clip: its length or offset \
+                      into its file (seconds), gain and fades (seconds). A note clip: its \
+                      length and offset into its notes (beats), its own key (\"none\" \
+                      for the song's), the pattern it plays, pattern_unique (a copy of \
+                      its pattern of its own) or pattern_to_notes (its notes, no longer \
+                      following the pattern). Only what is given changes; duplicate_clip \
+                      copies one.",
         access: Access::Edit,
         schema: || {
             with_time(
@@ -56,7 +61,13 @@ pub(crate) const TOOLS: &[Tool] = &[
                     "fade_in_seconds": {"type": "number"},
                     "fade_out_seconds": {"type": "number"},
                     "muted": {"type": "boolean"},
-                    "name": {"type": "string"}
+                    "name": {"type": "string"},
+                    "len_beats": {"type": "number", "description": "Note clips."},
+                    "offset_beats": {"type": "number", "description": "Note clips."},
+                    "key": {"type": "string", "description": "Note clips: such as \"A minor\", or \"none\"."},
+                    "pattern": {"type": "string", "description": "Note clips: a pattern's id."},
+                    "pattern_unique": {"type": "boolean"},
+                    "pattern_to_notes": {"type": "boolean"}
                 }),
                 &["clip"],
             )
@@ -97,27 +108,6 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "bars": {"type": "integer", "description": "How long; 1 if left out."},
                 "name": {"type": "string"}
             }, "required": ["track", "bar"]})
-        },
-    },
-    Tool {
-        name: "edit_notes",
-        description: "Adds notes to a note clip, removes some by id, or clears it first. \
-                      Notes are placed in beats (quarter notes) from the clip's start; \
-                      pitch is a MIDI number (60 is middle C). get_project with notes \
-                      gives their ids.",
-        access: Access::Edit,
-        schema: || {
-            json!({"type": "object", "properties": {
-                "clip": {"type": "string"},
-                "clear": {"type": "boolean"},
-                "remove": {"type": "array", "items": {"type": "string"}},
-                "add": {"type": "array", "items": {"type": "object", "properties": {
-                    "beat": {"type": "number"},
-                    "beats": {"type": "number", "description": "How long."},
-                    "pitch": {"type": "integer"},
-                    "velocity": {"type": "integer", "description": "1 to 127; 100 if left out."}
-                }, "required": ["beat", "beats", "pitch"]}}
-            }, "required": ["clip"]})
         },
     },
     Tool {
@@ -228,7 +218,7 @@ fn text<'a>(args: &'a Value, key: &str, what: &str) -> Result<&'a str, String> {
 }
 
 /// A key from words such as "A minor" or "F# harmonic minor".
-fn parse_key(s: &str) -> Result<Option<Scale>, String> {
+pub(crate) fn parse_key(s: &str) -> Result<Option<Scale>, String> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("none") || s.is_empty() {
         return Ok(None);
@@ -282,7 +272,6 @@ impl App {
             "delete_clip" => self.delete_clip_tool(args),
             "import_audio" => self.import_audio_tool(args),
             "add_note_clip" => self.add_note_clip_tool(args),
-            "edit_notes" => self.edit_notes_tool(args),
             "edit_markers" => self.edit_markers_tool(args),
             "set_tempo" => self.set_tempo_tool(args),
             "set_key" => self.set_key_tool(args),
@@ -340,15 +329,16 @@ impl App {
 
     fn edit_clip_tool(&mut self, args: &Value) -> Done {
         let id = text(args, "clip", "the clip's id")?.to_string();
+        if let Ok(Found::Notes(..)) = find_clip(&self.project(), &id) {
+            return self.edit_note_clip(args);
+        }
         let start = self.time_arg(args);
         let rate = self.rate as f64;
         let map = self.tempo_map();
         let frames = |k: &str| args[k].as_f64().map(|s| (s.max(0.0) * rate).round() as i64);
         self.edit_model(|p| {
             let Found::Audio(mut i, j) = find_clip(p, &id)? else {
-                return Err(format!(
-                    "{id} is a note clip; edit_notes changes its notes, delete_clip deletes it."
-                ));
+                unreachable!("note clips are handed on first");
             };
             if let Some(to) = args["track"].as_str() {
                 let ti = (p.tracks.iter())
@@ -457,53 +447,6 @@ impl App {
             Ok(json!({"clip": id, "start_ticks": start, "len_ticks": end - start}))
         })
         .map(|v| (v, Some("Add a note clip".into())))
-    }
-
-    fn edit_notes_tool(&mut self, args: &Value) -> Done {
-        let id = text(args, "clip", "the clip's id")?.to_string();
-        let mut add = Vec::new();
-        for n in args["add"].as_array().into_iter().flatten() {
-            let (Some(beat), Some(beats), Some(pitch)) =
-                (n["beat"].as_f64(), n["beats"].as_f64(), n["pitch"].as_u64())
-            else {
-                return Err("Each note needs a beat, beats (how long) and a pitch.".into());
-            };
-            if pitch > 127 {
-                return Err(format!("Pitch {pitch} is past 127."));
-            }
-            let ticks = |b: f64| (b * PPQ as f64).round() as i64;
-            let velocity = n["velocity"].as_u64().unwrap_or(100).clamp(1, 127) as u8;
-            add.push(daw_project::Note::new(
-                ticks(beat.max(0.0)),
-                ticks(beats).max(1),
-                pitch as u8,
-                velocity,
-            ));
-        }
-        let remove: Vec<String> = (args["remove"].as_array().into_iter().flatten())
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        let clear = args["clear"].as_bool() == Some(true);
-        self.edit_model(|p| {
-            let Found::Notes(i, j) = find_clip(p, &id)? else {
-                return Err(format!("{id} is an audio clip, which has no notes."));
-            };
-            let c = &mut p.tracks[i].note_clips[j];
-            if c.pattern.is_some() {
-                return Err("The clip plays a pattern; its notes come from the pattern.".into());
-            }
-            if clear {
-                c.notes.clear();
-            }
-            let before = c.notes.len();
-            c.notes.retain(|n| !remove.contains(&n.id));
-            let removed = before - c.notes.len();
-            let added: Vec<String> = add.iter().map(|n| n.id.clone()).collect();
-            c.notes.extend(add);
-            c.notes.sort_by_key(|n| (n.start, n.pitch));
-            Ok(json!({"added": added, "removed": removed, "notes": c.notes.len()}))
-        })
-        .map(|v| (v, Some("Edit notes".into())))
     }
 
     fn edit_markers_tool(&mut self, args: &Value) -> Done {

@@ -24,6 +24,7 @@ mod agent;
 mod agent_arrange;
 mod agent_edit;
 mod agent_files;
+mod agent_notes;
 mod agent_takes;
 mod assistants;
 mod audio_setup;

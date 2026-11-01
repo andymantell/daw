@@ -13,11 +13,45 @@ use serde_json::{Value, json};
 
 use crate::App;
 use crate::agent::{Access, Tool};
+use crate::commands::Cmd;
+use crate::notation::NotationFile;
 use crate::project::After;
 
 type Done = Result<(Value, Option<String>), String>;
 
+/// The commands that ask for a file in a file chooser, and whether
+/// they write one (needing the edit and export permission). Assistants
+/// run them with `file_command`, giving the file.
+pub(crate) const FILE_COMMANDS: &[(Cmd, bool)] = &[
+    (Cmd::ImportPreset, false),
+    (Cmd::ImportBundle, false),
+    (Cmd::ExportBundle, true),
+    (Cmd::ImportMidi, false),
+    (Cmd::ExportMidi, true),
+    (Cmd::ImportMusicXml, false),
+    (Cmd::ExportMusicXml, true),
+    (Cmd::ExportTextTab, true),
+    (Cmd::PrintNotation, true),
+    (Cmd::ImportKit, false),
+    (Cmd::ExportKit, true),
+];
+
 pub(crate) const TOOLS: &[Tool] = &[
+    Tool {
+        name: "file_command",
+        description: "Runs a command that would ask for a file in a file chooser, with the \
+                      file given instead: import-preset, import-bundle, export-bundle, \
+                      import-midi, export-midi, import-musicxml, export-musicxml, \
+                      export-text-tab, print-notation (a PDF), import-kit or export-kit. \
+                      Those that write a file need the edit and export permission.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "id": {"type": "string", "description": "The command's id."},
+                "path": {"type": "string", "description": "The file's full path."}
+            }, "required": ["id", "path"]})
+        },
+    },
     Tool {
         name: "list_projects",
         description: "The projects in the projects folder, and the templates a new project \
@@ -111,14 +145,72 @@ impl App {
         ctx: &eframe::egui::Context,
         name: &str,
         args: &Value,
+        access: Access,
     ) -> Option<Done> {
         Some(match name {
+            "file_command" => self.file_command_tool(ctx, args, access),
             "save_project" => self.save_project_tool(ctx, args),
             "open_project" => self.leave_for(ctx, args, true),
             "new_project" => self.leave_for(ctx, args, false),
             "export_mix" => self.export_mix_tool(args),
             _ => return None,
         })
+    }
+
+    fn file_command_tool(
+        &mut self,
+        ctx: &eframe::egui::Context,
+        args: &Value,
+        access: Access,
+    ) -> Done {
+        let id = args["id"].as_str().ok_or("Give the command's id.")?;
+        let path = PathBuf::from(args["path"].as_str().ok_or("Give the file's full path.")?);
+        let &(cmd, writes) = (FILE_COMMANDS.iter())
+            .find(|(c, _)| Some(*c) == Cmd::from_id(id))
+            .ok_or_else(|| format!("{id} isn't a command that asks for a file."))?;
+        if writes && access < Access::EditExport {
+            return Err(format!(
+                "{id} writes a file, which needs the edit and export permission."
+            ));
+        }
+        if !writes && !path.is_file() {
+            return Err(format!("There is no file {}.", path.display()));
+        }
+        self.message = None;
+        match cmd {
+            Cmd::ImportPreset => self.import_dropped_preset(&path),
+            Cmd::ImportBundle => self.import_bundle(path.clone()),
+            Cmd::ExportBundle => {
+                if self.proj.folder.is_none() {
+                    return Err("Save the project first, then export it as a bundle.".into());
+                }
+                self.save(ctx)?;
+                self.write_bundle(path.clone());
+            }
+            Cmd::ImportMidi => self.import_midi(&path),
+            Cmd::ExportMidi => self.write_midi(&path),
+            Cmd::ImportMusicXml => self.import_musicxml_file(&path),
+            Cmd::ExportMusicXml | Cmd::ExportTextTab | Cmd::PrintNotation => {
+                let score = self.notation_score();
+                if score.parts.is_empty() {
+                    return Err("Show a notation lane under a track first.".into());
+                }
+                let what = match cmd {
+                    Cmd::ExportMusicXml => NotationFile::MusicXml,
+                    Cmd::ExportTextTab => NotationFile::TextTab,
+                    _ => NotationFile::Pdf,
+                };
+                self.write_notation(what, &score, &path);
+            }
+            Cmd::ImportKit => self.import_kit(&path),
+            Cmd::ExportKit => self.export_kit(&path),
+            _ => unreachable!("only the commands listed"),
+        }
+        let name = self.commands.name(cmd).to_string();
+        Ok((
+            json!({"ran": id, "path": path.display().to_string(), "message": self.message.take()}),
+            (!writes).then_some(name),
+        ))
     }
 
     pub(crate) fn projects_value(&self) -> Value {

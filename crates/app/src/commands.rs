@@ -358,6 +358,12 @@ pub(crate) const FRETBOARD_MENU: [Cmd; 19] = [
 ];
 
 /// Every command, in menu order.
+///
+/// Assistants run each of these by id (roadmap 2.11), and the tests in
+/// `agent::coverage` run every one so: a command must work without a
+/// person at the computer. One that asks for a file in a file chooser
+/// goes in `agent::NEEDS_A_PERSON`, and in `agent_files::FILE_COMMANDS`
+/// (or `agent::OWN_TOOL`) so an assistant can give the file instead.
 pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::NewProject, "new-project", "File", "New project", &[])
         .words("start empty")

@@ -84,6 +84,7 @@ end for what could not be verified.
 | Engine-wide delay compensation (incl. sends, sidechains, plugins) | 1 (per track), 2 (global) | M | |
 | Automation (draw; read/touch/latch/write), clip automation | 2 | M | |
 | Mixer embedded in main window and as a full window | 2 | L | |
+| Desk-style mixer: vertical channel strips, long-throw faders with unity mark and fader law, meters beside faders, scribble strips | 2 | M | See [MIXER_DESK.md](MIXER_DESK.md). |
 | Metering: LUFS, true peak, spectrum, phase correlation | 2 | L | |
 | Channel strip presets, mixer snapshots | 3 | L | |
 | Freeze / render in place | 3 | M | Frozen audio for missing plugins is Phase 1. |

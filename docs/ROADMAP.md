@@ -507,6 +507,16 @@ pane in `app/monitor.rs`. Owner checks on the interface's outputs in
   great for in-person lessons: the student gets their own headphone mix.
 - Metering: peak/RMS, LUFS, true peak, spectrum, phase correlation.
 - Mixer view inside the main window, and as a full window.
+- **A desk-style mixer (M):** one narrow vertical strip per channel in
+  timeline order, with a long-throw vertical fader (dB scale, unity mark,
+  more travel where it matters), a level meter beside it, pan above, lit
+  mute, solo and arm buttons, insert and send slots at the top, a name
+  tag in the track colour at the bottom, buses and the master on the
+  right, a narrow mode and horizontal scrolling with the master pinned.
+  Fine control, scroll nudges, double-click to unity, grouped drags.
+  Drawn from theme tokens so each theme has its own desk look. The same
+  commands and accessible names as the table today. See
+  [research/MIXER_DESK.md](research/MIXER_DESK.md).
 
 ### 2.4 Plugin hosting — depth (L)
 *Started 2026-10-29, at risk. Done so far: a choice per plugin (Settings

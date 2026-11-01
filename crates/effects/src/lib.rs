@@ -400,6 +400,9 @@ impl Param {
         match self.unit {
             Unit::Db => format!("{v:+.1} dB"),
             Unit::Hz if v >= 1000.0 => format!("{:.2} kHz", v / 1000.0),
+            // Slow speeds (a phaser at 0.4 Hz) keep their decimals.
+            Unit::Hz if v < 1.0 => format!("{v:.2} Hz"),
+            Unit::Hz if v < 100.0 => format!("{v:.1} Hz"),
             Unit::Hz => format!("{v:.0} Hz"),
             Unit::Ms if v < 10.0 => format!("{v:.1} ms"),
             Unit::Ms => format!("{v:.0} ms"),
@@ -924,6 +927,15 @@ mod tests {
         assert_eq!(p.text(2500.0), "2.50 kHz");
         let r = Param::new("r", "R", 1.0, 20.0, 4.0, Unit::Ratio);
         assert_eq!(r.text(4.0), "4.0:1");
+        let speed = Param::new("rate", "Speed", 0.02, 5.0, 0.4, Unit::Hz);
+        assert_eq!(
+            speed.text(0.4),
+            "0.40 Hz",
+            "a slow speed isn't rounded to 0"
+        );
+        assert_eq!(speed.text(0.8), "0.80 Hz");
+        assert_eq!(speed.text(5.0), "5.0 Hz");
+        assert_eq!(p.text(440.0), "440 Hz");
     }
 
     /// Every effect, with its default settings and at its extremes,

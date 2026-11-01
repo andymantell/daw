@@ -295,8 +295,13 @@ impl App {
                 if with_settings {
                     v["settings"] = (live.slot.settings().into_iter())
                         .map(|(k, name, v, min, max, text)| {
-                            json!({"key": k, "name": name, "value": v, "min": min,
-                                   "max": max, "text": text})
+                            let mut s = json!({"key": k, "name": name, "value": v,
+                                               "min": min, "max": max, "text": text});
+                            let names = live.slot.choices(&k);
+                            if !names.is_empty() {
+                                s["choices"] = json!(names);
+                            }
+                            s
                         })
                         .collect();
                 }
@@ -841,6 +846,19 @@ mod tests {
         let i = d
             .call("get_instrument", json!({"track": t, "settings": true}))
             .unwrap();
+        // The simple synth's settings say what their values mean: the
+        // wave by name, with its choices listed by value.
+        let simple = i["layers"][0]["settings"].as_array().unwrap();
+        let wave = simple.iter().find(|s| s["key"] == "wave").unwrap();
+        assert_eq!(wave["name"], "Wave");
+        assert_eq!(wave["text"], "Saw", "{wave}");
+        assert_eq!(
+            wave["choices"],
+            json!(["Sine", "Triangle", "Saw", "Square"])
+        );
+        let cutoff = simple.iter().find(|s| s["key"] == "cutoff").unwrap();
+        assert_eq!(cutoff["text"], "6.00 kHz");
+        assert!(cutoff.get("choices").is_none(), "a frequency is a number");
         let s = i["layers"][1]["settings"][0].clone();
         let k = s["key"].as_str().unwrap().to_string();
         let max = s["max"].as_f64().unwrap();

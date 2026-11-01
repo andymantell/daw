@@ -389,6 +389,21 @@ pub(crate) fn text_of(t: &Track, param: &str, v: f64) -> String {
     }
 }
 
+/// The names of a built-in effect setting's values, by value from 0,
+/// when it picks one of a list (a mode, a number of stages); empty for
+/// any other setting.
+pub(crate) fn choice_names(t: &Track, param: &str) -> Vec<String> {
+    let lane = Lane::new(param);
+    let LaneTarget::Fx { effect, key } = lane.target() else {
+        return Vec::new();
+    };
+    slot(t, effect)
+        .and_then(|s| Some(s.builtin()?.kind().params()[fx_index(s, key)?]))
+        .filter(|p| p.unit == daw_effects::Unit::Choice)
+        .map(|p| p.choices.iter().map(|c| c.to_string()).collect())
+        .unwrap_or_default()
+}
+
 /// How far Up and Down move a lane's value, as a share of its range.
 const LANE_STEP: f64 = 0.02;
 

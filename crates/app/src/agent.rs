@@ -92,7 +92,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_transport",
         description: "Where playback is (frames, seconds, bar and beat), whether it is \
-                      playing or recording, and the loop, metronome and count-in.",
+                      playing or recording, the loop, metronome and count-in, and the \
+                      practice speed and transpose.",
         access: Access::Read,
         schema: no_args,
     },
@@ -631,6 +632,9 @@ impl App {
             "loop_bars": [self.loop_bars.0, self.loop_bars.1],
             "metronome": self.metronome.enabled,
             "count_in": self.count_in,
+            "speed_pct": self.speed_pct,
+            "semitones": self.semitones,
+            "cents": self.cents,
         })
     }
 
@@ -913,6 +917,27 @@ mod tests {
             )
             .unwrap_err();
         assert!(e.contains("no setting"), "{e}");
+    }
+
+    #[test]
+    fn practice_speed_is_set_and_seen_through_the_commands() {
+        let mut d = Driver::new();
+        for _ in 0..6 {
+            d.command("slower-speed");
+        }
+        let t = d.call("get_transport", json!({})).unwrap();
+        assert_eq!(t["speed_pct"], 70.0);
+        d.command("faster-speed");
+        assert_eq!(
+            d.call("get_transport", json!({})).unwrap()["speed_pct"],
+            75.0
+        );
+        d.command("normal-speed");
+        let t = d.call("get_transport", json!({})).unwrap();
+        assert_eq!(
+            (t["speed_pct"].as_f64(), t["semitones"].as_i64()),
+            (Some(100.0), Some(0))
+        );
     }
 
     #[test]

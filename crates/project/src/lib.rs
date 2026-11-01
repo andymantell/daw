@@ -17,6 +17,7 @@ mod lessons;
 pub mod midifile;
 mod model;
 pub mod noteops;
+mod parts;
 mod pattern;
 mod presets;
 mod scale;
@@ -40,6 +41,7 @@ pub use model::{
     Practice, Project, Send, StretchMarker, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
     TrackKind, TrainerSettings, VideoClip,
 };
+pub use parts::{Brought, Pick, Range, bar_ticks};
 pub use pattern::{
     DRUM_LANES, Direction, MAX_GATE, MAX_REPEATS, MAX_STEPS, MIN_GATE, Pattern, PatternLane, Roll,
     Step, StepRate, euclid, fill_pattern_clip, fill_pattern_clips, next_group,

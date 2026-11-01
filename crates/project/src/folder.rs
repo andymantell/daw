@@ -167,6 +167,30 @@ impl ProjectFolder {
         Ok(name)
     }
 
+    /// Copies `assets` from another project's folder into this one's,
+    /// each checked against its name on the way. Those already here are
+    /// kept; returns those `from` doesn't have.
+    pub fn bring_assets(
+        &self,
+        from: &ProjectFolder,
+        assets: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut missing = Vec::new();
+        for a in assets {
+            if self.has_asset(a) {
+                continue;
+            }
+            if !is_asset_name(a) || !from.has_asset(a) {
+                missing.push(a.clone());
+                continue;
+            }
+            let src = from.asset(a);
+            let mut f = fs::File::open(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+            self.receive_asset(a, &mut f)?;
+        }
+        Ok(missing)
+    }
+
     /// Takes in an asset sent from elsewhere (a bundle, another
     /// computer), checking that `src` really holds what `name` says. An
     /// asset already here is read past and kept.
@@ -247,4 +271,36 @@ fn hash_file(path: &Path) -> std::io::Result<String> {
         h.update(&buf[..n]);
     }
     Ok(hex(&h.finalize()[..16]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("daw-folder-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn assets_come_across_from_another_project_once() {
+        let (a, b) = (scratch("from"), scratch("to"));
+        let from = ProjectFolder::create(&a).unwrap();
+        let to = ProjectFolder::create(&b).unwrap();
+        let wav = a.join("take.wav");
+        fs::write(&wav, b"RIFF pretend audio").unwrap();
+        let name = from.add_asset(&wav, true).unwrap();
+        let other = "0123456789abcdef0123456789abcdef.wav".to_string();
+        let missing = to
+            .bring_assets(&from, &[name.clone(), other.clone()])
+            .unwrap();
+        assert_eq!(missing, [other]);
+        assert!(to.has_asset(&name));
+        assert_eq!(fs::read(to.asset(&name)).unwrap(), b"RIFF pretend audio");
+        // Again: kept, not copied twice.
+        assert!(to.bring_assets(&from, &[name]).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&a);
+        let _ = fs::remove_dir_all(&b);
+    }
 }

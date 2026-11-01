@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::ahead::{AheadMeters, AheadSide, LiveSide, Seg};
 use crate::automation::Target;
 use crate::graph::{Graph, GroupSpec, InputBlock, Level, MAX_TRACKS, Mix, Rate};
 use crate::meter::Tap;
@@ -157,13 +158,15 @@ pub struct Status {
     /// behind.
     meter_dropped: AtomicU64,
     /// Times playback has gone round the loop.
-    loops: AtomicU64,
+    pub(crate) loops: AtomicU64,
     /// The headphone mixes' peaks.
     pub monitor: monitor::Meters,
     /// The preview voice's frame, or -1 when silent; and its sound's
     /// length.
     preview_pos: AtomicI64,
     preview_len: AtomicI64,
+    /// The worker, when the mix is split (see [`crate::ahead`]).
+    pub ahead: AheadMeters,
 }
 
 impl Status {
@@ -194,6 +197,7 @@ impl Status {
             monitor: monitor::Meters::new(),
             preview_pos: AtomicI64::new(-1),
             preview_len: AtomicI64::new(0),
+            ahead: AheadMeters::default(),
         }
     }
 
@@ -251,6 +255,19 @@ impl Status {
     }
 
     pub(crate) fn playhead(&self) -> Playhead {
+        // Split, the worker reads the files, ahead of what is heard.
+        if self.ahead.block().is_some() {
+            let a = &self.ahead;
+            return Playhead {
+                position: a.pos.load(Ordering::Relaxed),
+                looping: a.loop_on.load(Ordering::Relaxed).then(|| {
+                    (
+                        a.loop_start.load(Ordering::Relaxed),
+                        a.loop_end.load(Ordering::Relaxed),
+                    )
+                }),
+            };
+        }
         Playhead {
             position: self.position.load(Ordering::Relaxed),
             looping: self.loop_on.load(Ordering::Relaxed).then(|| {
@@ -312,7 +329,7 @@ fn take_pair(p: &[AtomicU32; 2]) -> (f32, f32) {
 /// Returns a chunk to the disk thread to be freed there. The queue is
 /// sized for every chunk in flight; if it is somehow full, leaking beats
 /// freeing on the audio thread.
-fn give_back(q: &mut Producer<Box<Chunk>>, c: Box<Chunk>) {
+pub(crate) fn give_back(q: &mut Producer<Box<Chunk>>, c: Box<Chunk>) {
     if let Err(rtrb::PushError::Full(c)) = q.push(c) {
         std::mem::forget(c);
     }
@@ -358,7 +375,12 @@ impl Controller {
 
     /// Sends a new graph, first telling the disk thread which files it
     /// streams.
-    pub fn set_graph(&mut self, graph: Graph) -> Result<(), Command> {
+    pub fn set_graph(&mut self, mut graph: Graph) -> Result<(), Command> {
+        if self.wants_twin() {
+            graph.prepare_split();
+        } else {
+            graph.twin = None;
+        }
         *self.placements.lock().unwrap() = graph.placements();
         *self.record_rate.lock().unwrap() = graph.tempo().sample_rate();
         self.send(Command::SetGraph(Box::new(graph)))
@@ -454,6 +476,12 @@ impl Controller {
         }
     }
 
+    /// Whether the engine is split (see [`crate::ahead`]), so graphs
+    /// should come with a twin ([`Graph::with_twin`]).
+    pub fn wants_twin(&self) -> bool {
+        self.status.ahead.block().is_some()
+    }
+
     /// The block size graphs must be compiled for.
     pub fn max_block(&self) -> usize {
         self.max_block
@@ -481,72 +509,84 @@ impl Controller {
 
 /// The audio-thread side.
 pub struct Engine {
-    commands: Consumer<Command>,
-    retired: Producer<Box<Graph>>,
-    retired_previews: Producer<Box<PreviewSound>>,
-    from_disk: Consumer<ToAudio>,
-    to_disk: Producer<Box<Chunk>>,
-    status: Arc<Status>,
-    graph: Option<Box<Graph>>,
-    max_block: usize,
-    playing: bool,
-    pos: i64,
-    looping: Option<(i64, i64)>,
+    pub(crate) commands: Consumer<Command>,
+    pub(crate) retired: Producer<Box<Graph>>,
+    pub(crate) retired_previews: Producer<Box<PreviewSound>>,
+    pub(crate) from_disk: Consumer<ToAudio>,
+    pub(crate) to_disk: Producer<Box<Chunk>>,
+    pub(crate) status: Arc<Status>,
+    pub(crate) graph: Option<Box<Graph>>,
+    pub(crate) max_block: usize,
+    pub(crate) playing: bool,
+    pub(crate) pos: i64,
+    pub(crate) looping: Option<(i64, i64)>,
     /// Where play goes at the loop's end instead of its start, which
     /// then becomes the loop (see [`Command::QueueLoop`]).
-    next_loop: Option<(i64, i64)>,
-    metronome: Metronome,
-    voice: Option<Voice>,
+    pub(crate) next_loop: Option<(i64, i64)>,
+    pub(crate) metronome: Metronome,
+    pub(crate) voice: Option<Voice>,
     /// During a count-in: where playback starts. `pos` runs up to it.
-    count_in_to: Option<i64>,
+    pub(crate) count_in_to: Option<i64>,
     /// The count-in's clicks: one steady tempo and time signature, made
     /// up front so a count-in never allocates. Timeline frame `f` is
     /// frame `f - count_offset` on it.
-    count_map: TempoMap,
-    count_offset: i64,
+    pub(crate) count_map: TempoMap,
+    pub(crate) count_offset: i64,
     /// Clicks for the current block, preallocated.
-    click_buf: Vec<f32>,
+    pub(crate) click_buf: Vec<f32>,
     /// Per-block track levels, preallocated.
-    levels: Vec<Level>,
+    pub(crate) levels: Vec<Level>,
     /// Mean squares behind [`Status::track_rms`], then the master's.
-    mean_sq: Vec<(f32, f32)>,
-    meter_tap: Option<Tap>,
+    pub(crate) mean_sq: Vec<(f32, f32)>,
+    pub(crate) meter_tap: Option<Tap>,
     /// A tapped track's block, preallocated.
-    tap_buf: [Vec<f32>; 2],
-    to_meter: Producer<f32>,
-    recording: bool,
+    pub(crate) tap_buf: [Vec<f32>; 2],
+    pub(crate) to_meter: Producer<f32>,
+    pub(crate) recording: bool,
     /// See [`Command::SetPunch`].
-    punch: Option<(i64, i64)>,
-    stop_at: Option<i64>,
-    capture: bool,
-    to_recorder: Producer<RecBlock>,
-    tuner_input: Option<usize>,
-    to_tuner: Producer<f32>,
-    speed: f64,
-    semitones: f64,
+    pub(crate) punch: Option<(i64, i64)>,
+    pub(crate) stop_at: Option<i64>,
+    pub(crate) capture: bool,
+    pub(crate) to_recorder: Producer<RecBlock>,
+    pub(crate) tuner_input: Option<usize>,
+    pub(crate) to_tuner: Producer<f32>,
+    pub(crate) speed: f64,
+    pub(crate) semitones: f64,
     /// While recording at a practice speed: the `at` of the next block
     /// recorded, if it continues the take (see [`crate::record`]).
-    slow_at: Option<i64>,
+    pub(crate) slow_at: Option<i64>,
     /// While stretching: the play position, fractional, and the same in
     /// unwrapped play time (not sent back round the loop).
-    posf: f64,
-    u: f64,
+    pub(crate) posf: f64,
+    pub(crate) u: f64,
     /// The stretchers must start afresh at `u`.
-    stretch_reset: bool,
+    pub(crate) stretch_reset: bool,
     /// Headphone mixes, talkback and the speakers' controls.
-    monitor: Monitor,
+    pub(crate) monitor: Monitor,
     /// Notes from MIDI devices, and this callback's, at frame 0.
-    live: Consumer<LiveEvent>,
-    live_buf: Vec<Event>,
+    pub(crate) live: Consumer<LiveEvent>,
+    pub(crate) live_buf: Vec<Event>,
     /// Notes for MIDI outputs, and live notes for the UI to record.
-    to_midi: Producer<OutEvent>,
-    to_capture: Producer<Captured>,
-    preview: preview::Voice,
+    pub(crate) to_midi: Producer<OutEvent>,
+    pub(crate) to_capture: Producer<Captured>,
+    pub(crate) preview: preview::Voice,
+    /// Whole, or one side of a split (see [`crate::ahead`]).
+    pub(crate) side: Side,
 }
 
 /// Live note events in flight each way: plenty for a performance
 /// between callbacks, and for the UI between frames.
-const MIDI_QUEUE: usize = 4096;
+pub(crate) const MIDI_QUEUE: usize = 4096;
+
+/// Which part of the work an engine does.
+pub(crate) enum Side {
+    /// All of it.
+    Whole,
+    /// The worker of a split engine (see [`crate::ahead`]).
+    Ahead(Box<AheadSide>),
+    /// The device callback's half of a split engine.
+    Live(Box<LiveSide>),
+}
 
 /// Commands that fit in the queue before `send` refuses more.
 const QUEUE: usize = 1024;
@@ -568,6 +608,21 @@ const RMS_TIME: f32 = 0.3;
 /// Creates a connected controller and engine. `max_block` is the largest
 /// block the audio callback will ask for; larger ones are split.
 pub fn new(max_block: usize) -> (Controller, Engine) {
+    pair(max_block, false)
+}
+
+/// An engine with queues to nowhere, sharing `status`: the start of the
+/// worker half of a split one.
+pub(crate) fn blank(max_block: usize, status: Arc<Status>) -> Engine {
+    let mut e = pair(max_block, true).1;
+    e.status = status;
+    e
+}
+
+/// [`new`]; `small` makes the queues tiny, for an engine whose queues
+/// are swapped for real ones.
+fn pair(max_block: usize, small: bool) -> (Controller, Engine) {
+    let size = |n: usize| if small { 1 } else { n };
     let (cmd_tx, cmd_rx) = RingBuffer::new(QUEUE);
     // Room for every graph that could be in flight at once.
     let (ret_tx, ret_rx) = RingBuffer::new(QUEUE + 1);
@@ -575,20 +630,20 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
     let (prev_tx, prev_rx) = RingBuffer::new(QUEUE + 1);
     let status = Arc::new(Status::new());
     let max_block = max_block.max(1);
-    let (disk_tx, disk_rx) = RingBuffer::new(DISK_QUEUE);
-    let (back_tx, back_rx) = RingBuffer::new(DISK_QUEUE * 2);
+    let (disk_tx, disk_rx) = RingBuffer::new(size(DISK_QUEUE));
+    let (back_tx, back_rx) = RingBuffer::new(size(DISK_QUEUE * 2));
     let placements = Arc::new(Mutex::new(Vec::new()));
     let streamer = Streamer::new(disk_tx, back_rx, status.clone(), placements.clone());
-    let (rec_tx, rec_rx) = RingBuffer::new(REC_QUEUE);
+    let (rec_tx, rec_rx) = RingBuffer::new(size(REC_QUEUE));
     let record_dir = Arc::new(Mutex::new(std::env::temp_dir().join("daw-takes")));
     let record_rate = Arc::new(Mutex::new(48_000));
     let takes = Arc::new(Mutex::new(Vec::new()));
     let capture = Arc::new(CaptureShared::default());
-    let (tuner_tx, tuner_rx) = RingBuffer::new(TUNER_QUEUE);
-    let (meter_tx, meter_rx) = RingBuffer::new(METER_QUEUE);
-    let (live_tx, live_rx) = RingBuffer::new(MIDI_QUEUE);
-    let (midi_tx, midi_rx) = RingBuffer::new(MIDI_QUEUE);
-    let (cap_tx, cap_rx) = RingBuffer::new(MIDI_QUEUE);
+    let (tuner_tx, tuner_rx) = RingBuffer::new(size(TUNER_QUEUE));
+    let (meter_tx, meter_rx) = RingBuffer::new(size(METER_QUEUE));
+    let (live_tx, live_rx) = RingBuffer::new(size(MIDI_QUEUE));
+    let (midi_tx, midi_rx) = RingBuffer::new(size(MIDI_QUEUE));
+    let (cap_tx, cap_rx) = RingBuffer::new(size(MIDI_QUEUE));
     let recorder = Recorder::new(
         rec_rx,
         status.clone(),
@@ -660,6 +715,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             to_midi: midi_tx,
             to_capture: cap_tx,
             preview: preview::Voice::default(),
+            side: Side::Whole,
         },
     )
 }
@@ -694,6 +750,14 @@ impl Engine {
 
     fn apply_commands(&mut self) {
         while let Ok(cmd) = self.commands.pop() {
+            if let Some(cmd) = self.forward(cmd) {
+                self.apply_command(cmd);
+            }
+        }
+    }
+
+    pub(crate) fn apply_command(&mut self, cmd: Command) {
+        {
             match cmd {
                 Command::Play => self.playing = true,
                 Command::CountIn { bars } => {
@@ -738,6 +802,7 @@ impl Engine {
                 Command::QueueLoop(l) => {
                     self.next_loop = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
                 }
+                Command::SetGraph(g) if self.ahead() => self.set_graph_ahead(g),
                 Command::SetGraph(mut g) => {
                     if let Some(old) = &mut self.graph {
                         let to_disk = &mut self.to_disk;
@@ -850,6 +915,10 @@ impl Engine {
         mut click: Option<&mut [f32]>,
     ) {
         debug_assert_eq!(left.len(), right.len());
+        if matches!(self.side, Side::Live(_)) {
+            self.process_live(input, channels, left, right, click);
+            return;
+        }
         self.apply_commands();
         self.apply_disk();
         self.take_live();
@@ -860,19 +929,7 @@ impl Engine {
         }
         let n = left.len().min(right.len());
         self.monitor.begin(n);
-        if let Some(ch) = self.tuner_input.filter(|&c| c < channels) {
-            // Whatever doesn't fit is dropped: the tuner only wants the
-            // newest audio.
-            let frames = (input.len() / channels).min(n);
-            let take = frames.min(self.to_tuner.slots());
-            if let Ok(mut chunk) = self.to_tuner.write_chunk(take) {
-                let (a, b) = chunk.as_mut_slices();
-                for (k, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
-                    *slot = input[(frames - take + k) * channels + ch];
-                }
-                chunk.commit_all();
-            }
-        }
+        self.send_tuner(input, channels, n);
         let inp = |range: std::ops::Range<usize>| InputBlock {
             data: input
                 .get(range.start * channels..(range.end * channels).min(input.len()))
@@ -888,10 +945,7 @@ impl Engine {
         }
         if self.playing && self.stretching() {
             self.play_stretched(input, channels, left, right, click);
-            self.mix_preview(left, right);
-            self.monitor
-                .finish(input, channels, left, right, &self.status.monitor);
-            self.publish();
+            self.finish(input, channels, left, right);
             return;
         }
         let mut done = 0;
@@ -913,6 +967,19 @@ impl Engine {
             }
             let range = done..done + len;
             let block = inp(range.clone());
+            let seg = Seg {
+                len,
+                pos: self.pos,
+                posf: self.pos as f64,
+                looping: self.looping,
+                play: !counting,
+                rate: None,
+                record: Some(counting),
+                slow: false,
+                playing: true,
+                counting_in: counting,
+                wrapped: false,
+            };
             self.render(
                 block,
                 range.start,
@@ -921,13 +988,19 @@ impl Engine {
                 !counting,
                 None,
             );
-            self.record(block, len, counting);
+            let ahead = self.ahead();
+            if !ahead {
+                self.record(block, len, counting);
+            }
             if counting || self.metronome.enabled {
                 self.clicks(len);
                 let clicks = &self.click_buf[..len];
-                self.monitor.add_click(range.start, clicks);
+                if !ahead {
+                    self.monitor.add_click(range.start, clicks);
+                }
                 match click.as_deref_mut() {
-                    Some(c) if self.metronome.separate_output => {
+                    // The worker hands its clicks over on their own.
+                    Some(c) if self.metronome.separate_output || ahead => {
                         for (o, x) in c[range].iter_mut().zip(clicks) {
                             *o += x;
                         }
@@ -944,6 +1017,7 @@ impl Engine {
                     }
                 }
             }
+            self.emit(done, seg, left, right, click.as_deref());
             self.pos += len as i64;
             done += len;
             if self.count_in_to == Some(self.pos) {
@@ -964,8 +1038,30 @@ impl Engine {
                     self.pos = next.0;
                     self.stretch_reset = true;
                 }
+                self.went_round();
+            }
+        }
+        self.finish(input, channels, left, right);
+    }
+
+    /// Counts a time round the loop; the worker leaves it to the
+    /// callback, which hears it later.
+    fn went_round(&mut self) {
+        match &mut self.side {
+            Side::Ahead(a) => a.wrapped = true,
+            _ => {
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
+        }
+    }
+
+    /// Ends a callback: the preview, the monitor section, and the
+    /// transport shared with the UI. The worker leaves all of that to the
+    /// callback, and only says where it is.
+    fn finish(&mut self, input: &[f32], channels: usize, left: &mut [f32], right: &mut [f32]) {
+        if self.ahead() {
+            self.publish_ahead();
+            return;
         }
         self.mix_preview(left, right);
         self.monitor
@@ -973,8 +1069,25 @@ impl Engine {
         self.publish();
     }
 
+    /// Sends this callback's input on the tuner's channel to the tuner.
+    pub(crate) fn send_tuner(&mut self, input: &[f32], channels: usize, n: usize) {
+        if let Some(ch) = self.tuner_input.filter(|&c| c < channels) {
+            // Whatever doesn't fit is dropped: the tuner only wants the
+            // newest audio.
+            let frames = (input.len() / channels).min(n);
+            let take = frames.min(self.to_tuner.slots());
+            if let Ok(mut chunk) = self.to_tuner.write_chunk(take) {
+                let (a, b) = chunk.as_mut_slices();
+                for (k, slot) in a.iter_mut().chain(b.iter_mut()).enumerate() {
+                    *slot = input[(frames - take + k) * channels + ch];
+                }
+                chunk.commit_all();
+            }
+        }
+    }
+
     /// Adds the preview voice to the main output, and shares where it is.
-    fn mix_preview(&mut self, left: &mut [f32], right: &mut [f32]) {
+    pub(crate) fn mix_preview(&mut self, left: &mut [f32], right: &mut [f32]) {
         if self.preview.mix(left, right) {
             self.retire_preview();
         }
@@ -1010,7 +1123,7 @@ impl Engine {
 
     /// Takes this callback's notes from the MIDI devices, all at frame
     /// 0, and tells the UI about each with where the transport is.
-    fn take_live(&mut self) {
+    pub(crate) fn take_live(&mut self) {
         self.live_buf.clear();
         let playing = self.playing && self.count_in_to.is_none();
         while let Ok(e) = self.live.pop() {
@@ -1059,6 +1172,8 @@ impl Engine {
                 false,
                 None,
             );
+            let seg = Seg::stopped(self.pos, r.len(), self.looping);
+            self.emit(r.start, seg, left, right, None);
             done = r.end;
         }
     }
@@ -1067,7 +1182,7 @@ impl Engine {
     /// to the recording thread: what is inside the punch range (all of
     /// it without one) to be recorded, unless counting in, and the rest
     /// for retrospective capture if that is on.
-    fn record(&mut self, input: InputBlock, len: usize, counting: bool) {
+    pub(crate) fn record(&mut self, input: InputBlock, len: usize, counting: bool) {
         let (pos, end) = (self.pos, self.pos + len as i64);
         let (lo, hi) = match self.punch {
             _ if counting || !self.recording => (end, end),
@@ -1151,7 +1266,7 @@ impl Engine {
         }
     }
 
-    fn input_meters(&mut self, input: InputBlock) {
+    pub(crate) fn input_meters(&mut self, input: InputBlock) {
         let Some(g) = &self.graph else { return };
         if input.channels == 0 {
             return;
@@ -1176,7 +1291,7 @@ impl Engine {
     }
 
     /// Shares the transport state with the UI.
-    fn publish(&self) {
+    pub(crate) fn publish(&self) {
         self.status.position.store(self.pos, Ordering::Relaxed);
         self.status.playing.store(self.playing, Ordering::Relaxed);
         if let Some((a, b)) = self.looping {
@@ -1246,6 +1361,19 @@ impl Engine {
                 semitones: self.semitones,
                 reset: std::mem::take(&mut self.stretch_reset),
             });
+            let seg = Seg {
+                len,
+                pos: self.pos,
+                posf: self.posf,
+                looping: self.looping,
+                play: !counting,
+                rate,
+                record: None,
+                slow: true,
+                playing: true,
+                counting_in: counting,
+                wrapped: false,
+            };
             self.render(
                 block,
                 range.start,
@@ -1254,7 +1382,9 @@ impl Engine {
                 !counting,
                 rate,
             );
-            self.record_stretched(block, len, counting);
+            if !matches!(self.side, Side::Ahead(_)) {
+                self.record_stretched(block, len, counting);
+            }
             if counting || self.metronome.enabled {
                 let buf = &mut self.click_buf[..len];
                 buf.fill(0.0);
@@ -1274,17 +1404,20 @@ impl Engine {
                     );
                 }
                 let clicks = &self.click_buf[..len];
-                self.monitor.add_click(range.start, clicks);
+                let ahead = matches!(self.side, Side::Ahead(_));
+                if !ahead {
+                    self.monitor.add_click(range.start, clicks);
+                }
                 match click.as_deref_mut() {
-                    Some(c) if self.metronome.separate_output => {
-                        for (o, x) in c[range].iter_mut().zip(clicks) {
+                    Some(c) if self.metronome.separate_output || ahead => {
+                        for (o, x) in c[range.clone()].iter_mut().zip(clicks) {
                             *o += x;
                         }
                     }
                     _ => {
                         for ((l, r), x) in left[range.clone()]
                             .iter_mut()
-                            .zip(&mut right[range])
+                            .zip(&mut right[range.clone()])
                             .zip(clicks)
                         {
                             *l += x;
@@ -1293,6 +1426,7 @@ impl Engine {
                     }
                 }
             }
+            self.emit(range.start, seg, left, right, click.as_deref());
             let step = len as f64 * speed;
             self.posf += step;
             self.u += step;
@@ -1324,7 +1458,7 @@ impl Engine {
                     self.looping = Some(next);
                     self.stretch_reset = true;
                 }
-                self.status.loops.fetch_add(1, Ordering::Relaxed);
+                self.went_round();
                 self.slow_at = None;
             }
             self.pos = self.posf.floor() as i64;
@@ -1339,7 +1473,7 @@ impl Engine {
     /// timeline as played (not moved by the round trip, which at a
     /// practice speed is a few milliseconds of the song either way).
     /// Retrospective capture is not kept at a practice speed.
-    fn record_stretched(&mut self, input: InputBlock, len: usize, counting: bool) {
+    pub(crate) fn record_stretched(&mut self, input: InputBlock, len: usize, counting: bool) {
         if counting || !self.recording {
             self.slow_at = None;
             return;
@@ -1370,7 +1504,7 @@ impl Engine {
         }
     }
 
-    fn clicks(&mut self, len: usize) {
+    pub(crate) fn clicks(&mut self, len: usize) {
         let buf = &mut self.click_buf[..len];
         buf.fill(0.0);
         if let Some(g) = &self.graph {
@@ -1383,7 +1517,7 @@ impl Engine {
     }
 
     /// Renders one block, `at` frames into the callback's.
-    fn render(
+    pub(crate) fn render(
         &mut self,
         input: InputBlock,
         at: usize,
@@ -1405,8 +1539,22 @@ impl Engine {
         // Live notes go with the callback's first block.
         let live: &[Event] = if at == 0 { &self.live_buf } else { &[] };
         let to_midi = &mut self.to_midi;
+        // The worker's notes wait for the callback to play their frame.
+        let made = self.status.ahead.made_so_far();
+        let mut ahead_midi = match &mut self.side {
+            Side::Ahead(a) => Some(&mut a.midi),
+            _ => None,
+        };
         let mut midi_out = |port: usize, e: &Event| {
-            let _ = to_midi.push(OutEvent { port, event: *e });
+            let event = OutEvent { port, event: *e };
+            match ahead_midi.as_mut() {
+                Some(q) => {
+                    let _ = q.push((made + e.frame as u64, event));
+                }
+                None => {
+                    let _ = to_midi.push(event);
+                }
+            }
         };
         let missing = g.render(
             self.pos,
@@ -1436,10 +1584,20 @@ impl Engine {
             status.rms[i][0].store(ms.0.max(0.0).sqrt().to_bits(), Ordering::Relaxed);
             status.rms[i][1].store(ms.1.max(0.0).sqrt().to_bits(), Ordering::Relaxed);
         };
+        let part = g.part.as_deref();
         for (i, l) in self.levels[..tracks].iter().enumerate() {
+            // Split, each side meters the tracks it plays.
+            if part.is_some_and(|p| !p.mode[i].plays()) {
+                continue;
+            }
             raise(&status.track_peaks[i][0], l.peak.0);
             raise(&status.track_peaks[i][1], l.peak.1);
             rms(i, l.sq, &mut self.mean_sq[i]);
+        }
+        if part.is_some_and(|p| p.ahead) {
+            // The tapped track's block goes to the callback with the
+            // rest; the master is the callback's to meter.
+            return;
         }
         let (mut ml, mut mr, mut sl, mut sr) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for (a, b) in left.iter().zip(right.iter()) {

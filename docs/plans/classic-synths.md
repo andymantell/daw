@@ -13,7 +13,7 @@ The poly-synth (`crates/instruments/src/synth.rs`) is clean and correct,
 and that is the problem. What a classic synth adds, and ours lacks:
 
 | Classic synths | Ours |
-|---|---
+|---|---|---
 | A 4-pole filter whose stages saturate; resonance "sings" and the sound thickens as the input gets hotter | One linear 2-pole state-variable filter; no saturation anywhere in the path |
 | Mixer and amplifier stages that overdrive gently | Linear mixer and amplifier |
 | Oscillators that drift slightly and sit at random phases, so voices never line up | Exactly stable pitch, fixed unison phases |
@@ -71,19 +71,20 @@ each piece against its known response.
 
 ### The synths (one thread each)
 
-| # | Synth (by architecture) | What it is for | Key features |
-|---|---|---|---|
-| S1 | **Three-oscillator ladder monosynth** (1970, American) | Bass, leads | 3 oscillators (osc 3 doubles as an LFO), triangle/shark-tooth/saw/three pulse widths, six footages, white and pink noise, mixer overdrive, 24 dB ladder with 0/⅓/⅔/full key tracking, two ADS(D) contours, glide, low/high/last priority |
-| S2 | **Acid bass line synth** (1982, Japanese) | Acid and techno bass | Saw or square, 24 dB diode ladder, AD filter envelope, fixed-decay amplifier envelope, accent (shorter decay, louder, filter sweep that piles up on consecutive accents), slide from overlapping notes. Accent = velocity over a threshold, slide = overlapping notes, so patterns and note clips drive it |
-| S3 | **One-oscillator bass/lead monosynth** (1982, Japanese) | Bass, leads, classic house | Saw + pulse with PWM from envelope/LFO/manual, sub-oscillator (−1 oct, −2 oct, −2 oct narrow pulse), noise, 24 dB cascade filter to self-oscillation, one ADSR, LFO with triangle/square/random/noise, envelope or gate amplifier, portamento |
-| S4 | **Six-voice DCO polysynth with chorus** (1984, Japanese) | Pads, chords, house stabs, bass | Saw + pulse (PWM) + square sub + noise, 4-step high-pass, 24 dB self-oscillating low-pass, one invertible ADSR to filter and amp, triangle LFO with delay, stereo bucket-brigade chorus I / II / both, poly, unison |
-| S5 | **Two-oscillator analogue polysynth with two filter boards** (1978–81, American) | Brass, pads, leads, bass | 2 VCOs (saw/tri/pulse, PWM), hard sync, poly-mod (filter env and osc 2 → osc 1 pitch, pulse width, cutoff), noise, filter board A: 4-pole cascade; board B: 2-pole state-variable (low/notch/high/band), two ADSRs with velocity, LFO with saw/tri/square all at once, unison stacking, poly glide, a "vintage" amount |
-| S6 | **Eight-voice two-channel touch polysynth** (1977, Japanese) | Big pads, brass, expressive leads | Two full channels per voice (saw, square with PW/PWM, noise; sine added after the filter), resonant high-pass and low-pass per channel with a 12/24 dB switch, ADR filter envelope with initial and attack levels, amp ADSR, velocity and polyphonic aftertouch to level and cutoff, ribbon (pitch bend from first touch), ring modulator with its own envelope, chorus and tremolo |
-| S7 | **Semi-modular dual-filter monosynth** (1978, Japanese) | Aggressive leads and bass, drones, and running guitar through its filters | 2 VCOs (triangle/saw/pulse/noise; saw/square/narrow pulse/ring mod), 12 dB high-pass into 12 dB low-pass, both self-oscillating and distorting, delay-attack-release and hold-ADSR envelopes, modulation generator with a shape control, an external input (the guitar) through the filters, a small patch matrix |
-| S8 | **Six-operator FM synth** (1983, Japanese) | Electric pianos, bells, FM bass, brass, plucks | 6 sine operators, 32 algorithms, feedback, 8-value rate/level envelope per operator, frequency ratio or fixed, key level and rate scaling, velocity per operator, LFO to pitch and amplitude, pitch envelope. Reads the public bank format for the owner's own patches; ships no factory banks |
-| S9 | **Eight-bit wavetable synth with an analogue filter** (1981, German) | Glassy pads, bells, 80s digital | Tables of 64 single-cycle waves made in code, 8-bit with the aliasing kept as a switch, position swept by envelope, LFO and key, two oscillators per voice, 24 dB cascade filter, ADSR envelopes |
+| # | Name | Synth (by architecture) | What it is for | Key features |
+|---|---|---|---|---|
+| S1 | **Model Mono** | **Three-oscillator ladder monosynth** (1970, American) | Bass, leads | 3 oscillators (osc 3 doubles as an LFO), triangle/shark-tooth/saw/three pulse widths, six footages, white and pink noise, mixer overdrive, 24 dB ladder with 0/⅓/⅔/full key tracking, two ADS(D) contours, glide, low/high/last priority |
+| S2 | **Acid Three** | **Acid bass line synth** (1982, Japanese) | Acid and techno bass | Saw or square, 24 dB diode ladder, AD filter envelope, fixed-decay amplifier envelope, accent (shorter decay, louder, filter sweep that piles up on consecutive accents), slide from overlapping notes. Accent = velocity over a threshold, slide = overlapping notes, so patterns and note clips drive it |
+| S3 | **Oh-One** | **One-oscillator bass/lead monosynth** (1982, Japanese) | Bass, leads, classic house | Saw + pulse with PWM from envelope/LFO/manual, sub-oscillator (−1 oct, −2 oct, −2 oct narrow pulse), noise, 24 dB cascade filter to self-oscillation, one ADSR, LFO with triangle/square/random/noise, envelope or gate amplifier, portamento |
+| S4 | **June** | **Six-voice DCO polysynth with chorus** (1984, Japanese) | Pads, chords, house stabs, bass | Saw + pulse (PWM) + square sub + noise, 4-step high-pass, 24 dB self-oscillating low-pass, one invertible ADSR to filter and amp, triangle LFO with delay, stereo bucket-brigade chorus I / II / both, poly, unison |
+| S5 | **Oracle** | **Two-oscillator analogue polysynth with two filter boards** (1978–81, American) | Brass, pads, leads, bass | 2 VCOs (saw/tri/pulse, PWM), hard sync, poly-mod (filter env and osc 2 → osc 1 pitch, pulse width, cutoff), noise, filter board A: 4-pole cascade; board B: 2-pole state-variable (low/notch/high/band), two ADSRs with velocity, LFO with saw/tri/square all at once, unison stacking, poly glide, a "vintage" amount |
+| S6 | **Eighty** | **Eight-voice two-channel touch polysynth** (1977, Japanese) | Big pads, brass, expressive leads | Two full channels per voice (saw, square with PW/PWM, noise; sine added after the filter), resonant high-pass and low-pass per channel with a 12/24 dB switch, ADR filter envelope with initial and attack levels, amp ADSR, velocity and polyphonic aftertouch to level and cutoff, ribbon (pitch bend from first touch), ring modulator with its own envelope, chorus and tremolo |
+| S7 | **Patch Twenty** | **Semi-modular dual-filter monosynth** (1978, Japanese) | Aggressive leads and bass, drones, and running guitar through its filters | 2 VCOs (triangle/saw/pulse/noise; saw/square/narrow pulse/ring mod), 12 dB high-pass into 12 dB low-pass, both self-oscillating and distorting, delay-attack-release and hold-ADSR envelopes, modulation generator with a shape control, an external input (the guitar) through the filters, a small patch matrix |
+| S8 | **Lucky Seven** | **Six-operator FM synth** (1983, Japanese) | Electric pianos, bells, FM bass, brass, plucks | 6 sine operators, 32 algorithms, feedback, 8-value rate/level envelope per operator, frequency ratio or fixed, key level and rate scaling, velocity per operator, LFO to pitch and amplitude, pitch envelope. Reads the public bank format for the owner's own patches; ships no factory banks |
+| S9 | **Blue Wave** | **Eight-bit wavetable synth with an analogue filter** (1981, German) | Glassy pads, bells, 80s digital | Tables of 64 single-cycle waves made in code, 8-bit with the aliasing kept as a switch, position swept by envelope, LFO and key, two oscillators per voice, 24 dB cascade filter, ADSR envelopes |
 
-Each synth ships with a set of sounds made in code across bass, pad,
+The names hint at each synth's heritage without naming it. Each synth
+ships with a set of sounds made in code across bass, pad,
 lead and keys (the content browser already lists "made:" sounds), a
 review-queue file, and screenshots.
 
@@ -114,9 +115,15 @@ the note editor if there is none.
   no borrowed code, tables or samples. The Sources appendix lists what
   each piece is based on, and each is a paper, book or specification,
   not a code base.
-- The AI rule: commands in the shared table, an assistant tool, `// ai:`
-  marks on the controls, an end-to-end test through the assistant
-  interface that adds the synth, voices a bass or pad, and renders it.
+- Built for the AI command layer from the start: an `add-<name>-track`
+  command and every setting in the shared command table, so
+  `get_instrument` lists each setting with its choices and
+  `set_parameter`, `set_parameters` and automation reach all of them;
+  `// ai:` marks on every control so the coverage check passes; and an
+  end-to-end test through the assistant interface that adds the synth,
+  voices a bass or pad from the settings, plays notes and renders it.
+  A synth is not done until an assistant can make a sound on it without
+  the UI.
 - A golden render test per synth (a fixed patch renders to a known
   spectrum), so a later change to the toolkit can't silently alter it.
 - CPU budget: a 16-voice poly at 2× oversampling must stay under a few

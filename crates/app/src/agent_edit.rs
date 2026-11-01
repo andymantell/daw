@@ -159,7 +159,11 @@ impl App {
             "add_effect" => self.add_effect_tool(args),
             "edit_effect" => self.edit_effect_tool(args),
             "remove_effect" => self.remove_effect_tool(args),
-            _ => return self.arrange_tool(name, args),
+            _ => {
+                return self
+                    .arrange_tool(name, args)
+                    .or_else(|| self.files_tool(ctx, name, args));
+            }
         })
     }
 

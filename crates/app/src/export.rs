@@ -362,6 +362,25 @@ impl Export {
         Ok(())
     }
 
+    /// The mix of the whole song, as the window is set otherwise (its
+    /// file type, folder, stems and play-along), without the video.
+    pub fn mix_request(&self) -> Request {
+        Request {
+            loop_only: false,
+            stems: self.stems,
+            bus_stems: self.bus_stems,
+            format: self.format(),
+            folder: self.dir().to_path_buf(),
+            mix: true,
+            video: false,
+            only: None,
+            bars: None,
+            package: None,
+            sections: Vec::new(),
+            play_along: self.play_along,
+        }
+    }
+
     /// What Export the video with the mix asks for: only that, as the
     /// window is set otherwise.
     pub fn video_request(&self) -> Request {

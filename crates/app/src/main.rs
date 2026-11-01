@@ -1003,9 +1003,12 @@ impl App {
         for t in &mut self.tracks {
             for c in &mut t.clips {
                 if c.tempo.is_some() {
-                    if retime {
+                    // A clip already inside its beat's tick stays where it
+                    // is, so reloading the project doesn't pull clips
+                    // placed between ticks onto the tick grid.
+                    if retime && map.ticks_at(Frames(c.start)).0 != c.beat {
                         c.start = map.frames_at(daw_engine::time::Ticks(c.beat)).0;
-                    } else {
+                    } else if !retime {
                         c.beat = map.ticks_at(Frames(c.start)).0;
                     }
                 }

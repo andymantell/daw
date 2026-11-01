@@ -1515,6 +1515,40 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_that_follows_tempo_stays_put_when_something_else_changes() {
+        let mut d = Driver::new();
+        let c = take(48_000, &[12_000]);
+        let key = c.key.clone();
+        let app = d.app();
+        app.tracks.push(Track::new("Hook".into()));
+        app.tracks[0].clips.push(c);
+        app.rebuild();
+        d.call(
+            "stretch_clips",
+            json!({"clips": [key], "follow_tempo": true, "tempo": 120}),
+        )
+        .unwrap();
+        // 5.6116 s falls between ticks (a tick is about 0.5 ms here).
+        d.call("edit_clip", json!({"clip": key, "seconds": 5.6116}))
+            .unwrap();
+        let start = |d: &mut Driver| {
+            d.project()["tracks"][0]["clips"][0]["start_seconds"]
+                .as_f64()
+                .unwrap()
+        };
+        let before = start(&mut d);
+        assert!(
+            (before - 5.6116).abs() < 0.00003,
+            "where it was put: {before}"
+        );
+        d.call("edit_clip", json!({"clip": key, "transpose_semitones": 1}))
+            .unwrap();
+        d.call("edit_clip", json!({"clip": key, "gain_db": -2}))
+            .unwrap();
+        assert_eq!(start(&mut d), before, "the clip didn't move");
+    }
+
+    #[test]
     fn the_tempo_comes_from_a_steady_performance() {
         let mut d = Driver::new();
         // Notes every 0.6 s: 100 bpm.

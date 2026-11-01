@@ -10,8 +10,10 @@ use std::sync::Arc;
 use daw_engine::midi::{Event, Instrument, Kind};
 
 use crate::dsp::{Adsr, Env, Mode, SVF_ZERO, Svf, db};
+use crate::library::Library;
 use crate::params::{Param, Params, Unit};
 use crate::sample::{Player, Sample};
+use crate::sfz_player::{Knobs, SfzPlayer};
 
 const FILTERS: &[&str] = &["Low-pass", "Band-pass", "High-pass"];
 
@@ -44,10 +46,13 @@ pub mod zone {
     pub const LOOP: usize = 8;
     pub const LOOP_START: usize = 9;
     pub const LOOP_END: usize = 10;
+    /// Its turn in a round robin: zones on the same notes with turns
+    /// take turns, one each note; 0 always plays.
+    pub const ROBIN: usize = 11;
 }
 
 /// Settings per zone.
-pub const ZONE: usize = 11;
+pub const ZONE: usize = 12;
 
 /// The settings for `zones` zones, the whole instrument's first.
 pub fn params(zones: usize) -> Vec<Param> {
@@ -78,9 +83,59 @@ pub fn params(zones: usize) -> Vec<Param> {
             Param::new(k("loop"), "Loop", 0.0, 1.0, 0.0, Switch),
             Param::new(k("loop_start"), "Loop start", 0.0, 1.0, 0.0, Amount),
             Param::new(k("loop_end"), "Loop end", 0.0, 1.0, 1.0, Amount),
+            Param::new(k("robin"), "Round robin turn", 0.0, 16.0, 0.0, Count),
         ]);
     }
     v
+}
+
+/// The settings an SFZ library adds after the zones': normalising its
+/// level, the key-switch, and a setting for each controller it names or
+/// listens to (its mic levels, a hi-hat pedal, and so on).
+pub fn sfz_params(lib: &Library) -> Vec<Param> {
+    use Unit::*;
+    let mut v = vec![Param::new("normalise", "Normalise", 0.0, 1.0, 1.0, Switch)];
+    let switches = lib.sfz.key_switches();
+    if let Some(first) = switches.first() {
+        let d = lib.sfz.sw_default.unwrap_or(first.0);
+        v.push(Param::new(
+            "keyswitch",
+            "Articulation",
+            0.0,
+            127.0,
+            d as f64,
+            Note,
+        ));
+    }
+    for c in lib.sfz.controllers() {
+        let name =
+            (lib.sfz.cc_labels.get(&c).cloned()).unwrap_or_else(|| format!("Controller {c}"));
+        let d = lib.sfz.cc_start.get(&c).copied().unwrap_or(0.0);
+        v.push(Param::new(
+            format!("cc{c}"),
+            name,
+            0.0,
+            127.0,
+            d as f64,
+            Count,
+        ));
+    }
+    v
+}
+
+/// Where the SFZ player's settings are in `p`.
+pub fn knobs(p: &Params) -> Knobs {
+    Knobs {
+        level: at::LEVEL,
+        normalise: p.index("normalise"),
+        keyswitch: p.index("keyswitch"),
+        cc: (p.list().iter().enumerate())
+            .filter_map(|(i, x)| {
+                let c = x.key.strip_prefix("cc")?.parse::<u8>().ok()?;
+                Some((c, i))
+            })
+            .collect(),
+    }
 }
 
 /// A note name in a file name ("Piano C#4.wav", "bass_f2"), as a note
@@ -137,6 +192,29 @@ pub fn note_in_name(name: &str) -> Option<u8> {
         }
     }
     found
+}
+
+/// A velocity layer ("_vl2", "vel3") and a round robin turn ("_rr1")
+/// in a file name, if it has them.
+pub fn layer_in_name(name: &str) -> (Option<u32>, Option<u32>) {
+    let lower = name.to_ascii_lowercase();
+    let words = lower.split(|c: char| !c.is_ascii_alphanumeric());
+    let (mut layer, mut turn) = (None, None);
+    for w in words {
+        let tag = |prefix: &str| -> Option<u32> {
+            let rest = w.strip_prefix(prefix)?;
+            (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+                .then(|| rest.parse().ok())
+                .flatten()
+        };
+        if let Some(n) = tag("vl").or_else(|| tag("vel")) {
+            layer = Some(n);
+        }
+        if let Some(n) = tag("rr") {
+            turn = Some(n.min(16));
+        }
+    }
+    (layer, turn)
 }
 
 /// Spreads zones with these root notes over the keyboard: each from
@@ -217,6 +295,10 @@ pub struct Sampler {
     bend: f32,
     pedal: bool,
     clock: u64,
+    /// Each key's count of notes, for zones' round robins.
+    turns: [u32; 128],
+    /// An SFZ library playing, if one is loaded.
+    sfz: Option<SfzPlayer>,
 }
 
 impl Sampler {
@@ -229,7 +311,22 @@ impl Sampler {
             bend: 0.0,
             pedal: false,
             clock: 0,
+            turns: [0; 128],
+            sfz: None,
         }
+    }
+
+    /// The sampler playing `lib` too.
+    pub fn with_library(mut self, rate: u32, lib: Arc<Library>, offline: bool) -> Sampler {
+        let knobs = knobs(&self.params);
+        let p = SfzPlayer::new(rate, lib, self.params.clone(), knobs);
+        self.sfz = Some(if offline { p.offline() } else { p });
+        self
+    }
+
+    /// The library's voices sounding now.
+    pub fn library_voices(&self) -> usize {
+        self.sfz.as_ref().map_or(0, SfzPlayer::sounding)
     }
 
     fn z(&self, zone: usize, k: usize) -> f32 {
@@ -239,7 +336,32 @@ impl Sampler {
     fn note_on(&mut self, channel: u8, note: u8, velocity: u8) {
         let sens = self.params.read(at::VELOCITY);
         let vel = 1.0 - sens + sens * velocity.clamp(1, 127) as f32 / 127.0;
+        // Round robins: the turn this note plays, of as many turns as
+        // the zones on it have.
+        let fits = |s: &Sampler, zi: usize| {
+            let (n, v) = (note as f32, velocity as f32);
+            n >= s.z(zi, zone::LO)
+                && n <= s.z(zi, zone::HI)
+                && v >= s.z(zi, zone::VEL_LO)
+                && v <= s.z(zi, zone::VEL_HI)
+        };
+        let turns = (0..self.zones.len())
+            .filter(|&zi| fits(self, zi))
+            .map(|zi| self.z(zi, zone::ROBIN) as u32)
+            .max()
+            .unwrap_or(0);
+        let turn = if turns > 0 {
+            let t = self.turns[note.min(127) as usize];
+            self.turns[note.min(127) as usize] = t.wrapping_add(1);
+            t % turns + 1
+        } else {
+            0
+        };
         for zi in 0..self.zones.len() {
+            let robin = self.z(zi, zone::ROBIN) as u32;
+            if robin > 0 && robin != turn {
+                continue;
+            }
             let Some(s) = self.zones[zi].clone() else {
                 continue;
             };
@@ -295,6 +417,9 @@ impl Sampler {
     }
 
     fn event(&mut self, e: &Event) {
+        if let Some(p) = &mut self.sfz {
+            p.event(e);
+        }
         match e.kind {
             Kind::NoteOn {
                 pitch, velocity, ..
@@ -321,6 +446,9 @@ impl Sampler {
     }
 
     fn run(&mut self, from: usize, to: usize, left: &mut [f32], right: &mut [f32]) {
+        if let Some(p) = &mut self.sfz {
+            p.run(from, to, left, right);
+        }
         let mut at = from;
         while at < to {
             let end = (at + CHUNK).min(to);

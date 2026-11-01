@@ -174,6 +174,9 @@ pub(crate) enum Cmd {
     InstrumentWindow,
     SliceNotes,
     PadBuses,
+    LoadSfz,
+    UnloadSfz,
+    NormaliseZones,
     InstrumentOutputBuses,
     KeepNotes,
     QuantiseNotes,
@@ -645,6 +648,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("On the loop slicer's track: a note clip that plays its slices in order, at the song's tempo")
     .words("slicer loop tempo chop"),
+    info(
+        Cmd::LoadSfz,
+        "load-sfz",
+        "Edit",
+        "Load an SFZ sample library…",
+        &[],
+    )
+    .hint("Plays an SFZ library (the open format most free sample libraries use) on the sampler, or on a new sampler track")
+    .words("sfz sampler library kit drums multisample instrument import"),
+    info(
+        Cmd::UnloadSfz,
+        "unload-sfz",
+        "Edit",
+        "Back to the sampler's own zones",
+        &[],
+    )
+    .hint("On the sampler's track: stops playing its SFZ library")
+    .words("sfz sampler library unload remove"),
+    info(
+        Cmd::NormaliseZones,
+        "normalise-zones",
+        "Edit",
+        "Normalise the sampler's zones",
+        &[],
+    )
+    .hint("On the sampler's track: sets each zone's level so its loudest moment peaks at -6 dB")
+    .words("sampler zones level gain loudness normalize"),
     info(
         Cmd::PadBuses,
         "pad-buses",
@@ -3094,6 +3124,25 @@ impl App {
             }
             Cmd::PadBuses => {
                 if let Err(e) = self.pad_buses() {
+                    self.message = Some(e);
+                }
+            }
+            Cmd::LoadSfz => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Load an SFZ sample library")
+                    .add_filter("SFZ library", &["sfz"])
+                    .pick_file();
+                if let Some(p) = picked {
+                    self.message = Some(self.load_sfz(&p).unwrap_or_else(|e| e));
+                }
+            }
+            Cmd::UnloadSfz => {
+                if let Err(e) = self.unload_sfz() {
+                    self.message = Some(e);
+                }
+            }
+            Cmd::NormaliseZones => {
+                if let Err(e) = self.normalise_zones() {
                     self.message = Some(e);
                 }
             }

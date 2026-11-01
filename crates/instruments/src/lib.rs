@@ -24,14 +24,24 @@ pub mod drum_machine;
 pub mod drum_sampler;
 pub mod drum_voice;
 pub mod dsp;
+pub mod library;
 pub mod made;
 pub mod params;
 pub mod sample;
 pub mod sampler;
+pub mod sfz;
+pub mod sfz_player;
 pub mod slicer;
+pub mod stream;
 pub mod synth;
 
+pub use library::Library;
 pub use params::{Param, Params, Unit};
+
+/// The sampler's slot for an SFZ library: its file's full path. The
+/// library stays where it is, as a plugin's sounds do; it isn't copied
+/// into the project.
+pub const SFZ_SLOT: &str = "sfz";
 pub use sample::{Loaded, Sample};
 
 /// Which instrument.
@@ -111,6 +121,8 @@ pub struct Builtin {
     samples: Vec<(String, Arc<Loaded>)>,
     /// A drum machine's pads' effects, each pad's in order.
     pub fx: Vec<PadFx>,
+    /// The sampler's SFZ library, when one is loaded.
+    library: Option<Arc<Library>>,
 }
 
 /// Reads a sound file into memory.
@@ -177,6 +189,7 @@ impl Builtin {
             params: Arc::new(Params::new(list)),
             samples,
             fx: Vec::new(),
+            library: None,
         }
     }
 
@@ -205,15 +218,35 @@ impl Builtin {
             };
             a.max(b)
         };
+        let mut problems = Vec::new();
+        // A sampler's library, read before its settings, which it adds to.
+        let mut library = None;
+        let mut samples: Vec<(String, String)> = samples.to_vec();
+        let mut sfz = None;
+        if kind == Kind::Sampler
+            && let Some(i) = samples.iter().position(|(k, _)| k == SFZ_SLOT)
+        {
+            let (_, path) = samples.remove(i);
+            match library::open(Path::new(&path)) {
+                Ok(l) => library = Some(l),
+                Err(e) => problems.push(e),
+            }
+            sfz = Some(path);
+        }
         let list = match kind {
             Kind::Synth => synth::params(),
-            Kind::Sampler => sampler::params(count("zone", true)),
+            Kind::Sampler => {
+                let mut v = sampler::params(count("zone", true));
+                if let Some(l) = &library {
+                    v.extend(sampler::sfz_params(l));
+                }
+                v
+            }
             Kind::DrumSampler => drum_sampler::params(),
             Kind::DrumMachine => drum_machine::params(),
             Kind::Slicer => slicer::params(count("slice", false)),
         };
-        let mut problems = Vec::new();
-        let loaded = (samples.iter())
+        let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
                 let l = load(r, read).unwrap_or_else(|e| {
                     problems.push(e);
@@ -222,11 +255,15 @@ impl Builtin {
                 (k.clone(), Arc::new(l))
             })
             .collect();
+        if let Some(path) = sfz {
+            loaded.push((SFZ_SLOT.into(), Arc::new(Loaded::new(path, None))));
+        }
         let b = Builtin {
             kind,
             params: Arc::new(Params::new(list)),
             samples: loaded,
             fx,
+            library,
         };
         b.params.load(values);
         (b, problems)
@@ -286,8 +323,74 @@ impl Builtin {
 
     pub fn zones(&self) -> usize {
         match self.kind {
-            Kind::Sampler => (self.params.len() - sampler::at::ZONES) / sampler::ZONE,
+            Kind::Sampler => (self.params.list().iter())
+                .filter(|p| p.key.starts_with("zone") && p.key.ends_with(".root"))
+                .count(),
             _ => 0,
+        }
+    }
+
+    /// The sampler's settings for `zones` zones and its library.
+    fn sampler_list(&self, zones: usize) -> Vec<Param> {
+        let mut v = sampler::params(zones);
+        if let Some(l) = &self.library {
+            v.extend(sampler::sfz_params(l));
+        }
+        v
+    }
+
+    /// The sampler's SFZ library, if one is loaded.
+    pub fn library(&self) -> Option<&Arc<Library>> {
+        self.library.as_ref()
+    }
+
+    /// The SFZ file the sampler plays, loaded or not.
+    pub fn sfz_path(&self) -> Option<&str> {
+        self.sample(SFZ_SLOT).map(|l| l.reference.as_str())
+    }
+
+    /// Plays the SFZ library `lib` (read from `path`) in place of the
+    /// sampler's zones, keeping its sound settings.
+    pub fn set_library(&mut self, path: &str, lib: Arc<Library>) {
+        self.library = Some(lib);
+        self.samples.clear();
+        self.samples
+            .push((SFZ_SLOT.into(), Arc::new(Loaded::new(path.into(), None))));
+        let list = self.sampler_list(0);
+        self.reshape(list, |k| (!k.starts_with("zone")).then(|| k.to_string()));
+    }
+
+    /// Stops playing the library.
+    pub fn clear_library(&mut self) {
+        self.library = None;
+        self.samples.retain(|(k, _)| k != SFZ_SLOT);
+        let list = self.sampler_list(self.zones());
+        self.reshape(list, |k| Some(k.to_string()));
+    }
+
+    /// Sets the zones' levels so the loudest on each note peaks at
+    /// −6 dBFS. Zones on the same note (velocity layers, round robins)
+    /// share one gain, so a soft layer stays softer than a hard one.
+    pub fn normalise_zones(&mut self) {
+        let n = self.zones();
+        let root = |b: &Builtin, z: usize| b.params.get(zone_at(z, sampler::zone::ROOT)) as u8;
+        let peak = |b: &Builtin, z: usize| {
+            (b.sample(&format!("zone{z}")))
+                .and_then(|l| l.sample.as_ref())
+                .map_or(0.0, |s| s.peak())
+        };
+        for z in 0..n {
+            let r = root(self, z);
+            let loudest = (0..n)
+                .filter(|&o| root(self, o) == r)
+                .map(|o| peak(self, o))
+                .fold(0.0f32, f32::max);
+            if loudest <= 1e-6 || peak(self, z) <= 0.0 {
+                continue;
+            }
+            let level = -6.0 - 20.0 * loudest.log10();
+            self.params
+                .set(zone_at(z, sampler::zone::LEVEL), level as f64);
         }
     }
 
@@ -297,7 +400,9 @@ impl Builtin {
     pub fn add_zones(&mut self, sounds: Vec<(String, Loaded)>) {
         let first = self.zones();
         let n = first + sounds.len();
-        self.reshape(sampler::params(n), |k| Some(k.to_string()));
+        let list = self.sampler_list(n);
+        self.reshape(list, |k| Some(k.to_string()));
+        let mut tags: Vec<(usize, u8, Option<u32>, Option<u32>)> = Vec::new();
         let mut next = 60u8;
         for z in 0..first {
             let root = self.params.get(zone_at(z, sampler::zone::ROOT)) as u8;
@@ -312,7 +417,34 @@ impl Builtin {
             });
             self.params
                 .set(zone_at(z, sampler::zone::ROOT), root as f64);
+            let (layer, turn) = sampler::layer_in_name(&name);
+            tags.push((z, root, layer, turn));
             self.set_sample(&format!("zone{z}"), Some(s));
+        }
+        // Velocity layers ("_vl2") split the velocities between them on
+        // each note, softest first; round robins ("_rr3") take turns.
+        for &(z, root, _, turn) in &tags {
+            let mut layers: Vec<u32> = (tags.iter())
+                .filter(|t| t.1 == root)
+                .filter_map(|t| t.2)
+                .collect();
+            layers.sort_unstable();
+            layers.dedup();
+            if let Some(l) = tags.iter().find(|t| t.0 == z).and_then(|t| t.2)
+                && layers.len() > 1
+            {
+                let j = layers.iter().position(|x| *x == l).unwrap_or(0);
+                let n = layers.len();
+                let lo = 1 + 127 * j / n;
+                let hi = 127 * (j + 1) / n;
+                self.params
+                    .set(zone_at(z, sampler::zone::VEL_LO), lo as f64);
+                self.params
+                    .set(zone_at(z, sampler::zone::VEL_HI), hi as f64);
+            }
+            if let Some(t) = turn {
+                self.params.set(zone_at(z, sampler::zone::ROBIN), t as f64);
+            }
         }
         self.spread_zones();
     }
@@ -322,7 +454,14 @@ impl Builtin {
         let roots: Vec<u8> = (0..self.zones())
             .map(|z| self.params.get(zone_at(z, sampler::zone::ROOT)) as u8)
             .collect();
-        for (z, (lo, hi)) in sampler::spread(&roots).into_iter().enumerate() {
+        // Zones on the same root (layers, round robins) share its keys.
+        let mut unique = roots.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        let ranges = sampler::spread(&unique);
+        for (z, root) in roots.iter().enumerate() {
+            let k = unique.iter().position(|u| u == root).unwrap_or(0);
+            let (lo, hi) = ranges[k];
             self.params.set(zone_at(z, sampler::zone::LO), lo as f64);
             self.params.set(zone_at(z, sampler::zone::HI), hi as f64);
         }
@@ -346,7 +485,8 @@ impl Builtin {
                 std::cmp::Ordering::Greater => Some(format!("zone{}{tail}", i - 1)),
             }
         };
-        self.reshape(sampler::params(n - 1), renumber);
+        let list = self.sampler_list(n - 1);
+        self.reshape(list, renumber);
         self.samples = std::mem::take(&mut self.samples)
             .into_iter()
             .filter_map(|(k, l)| renumber(&k).map(|k| (k, l)))
@@ -414,13 +554,27 @@ impl Builtin {
     /// settings. Allocates, and may convert sounds to the rate; not for
     /// the audio thread.
     pub fn make(&self, rate: u32) -> Box<dyn Instrument> {
+        self.make_for(rate, false)
+    }
+
+    /// As [`make`](Self::make), for rendering offline: a sampler playing
+    /// a library from disk waits for the disk instead of holding still.
+    pub fn make_offline(&self, rate: u32) -> Box<dyn Instrument> {
+        self.make_for(rate, true)
+    }
+
+    fn make_for(&self, rate: u32, offline: bool) -> Box<dyn Instrument> {
         let at = |slot: &str| self.sample(slot).and_then(|l| l.at(rate));
         let p = self.params.clone();
         match self.kind {
             Kind::Synth => Box::new(synth::Synth::new(rate, p)),
             Kind::Sampler => {
                 let zones = (0..self.zones()).map(|z| at(&format!("zone{z}"))).collect();
-                Box::new(sampler::Sampler::new(rate, p, zones))
+                let s = sampler::Sampler::new(rate, p, zones);
+                match &self.library {
+                    Some(l) => Box::new(s.with_library(rate, l.clone(), offline)),
+                    None => Box::new(s),
+                }
             }
             Kind::DrumSampler => Box::new(drum_sampler::DrumSampler::new(rate, p, at("sample"))),
             Kind::DrumMachine => {

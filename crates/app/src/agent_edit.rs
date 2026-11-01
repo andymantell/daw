@@ -152,7 +152,12 @@ pub(crate) const TOOLS: &[Tool] = &[
                       it: shorten it with its decay); the \
                       sampler's zones, \"zone0\" on (a new zone after the last; its root \
                       note and key range are then set with set_parameter, as \
-                      instrument.zone0.root, .lo and .hi). The sound \
+                      instrument.zone0.root, .lo and .hi, with velocity layers by \
+                      .vel_lo and .vel_hi and round robins by .robin); or the sampler's \
+                      \"sfz\": a full path to an SFZ sample library, played in place of \
+                      its zones (its mic levels and other controls are then settings, \
+                      instrument.ccN, its articulation instrument.keyswitch; \
+                      get_instrument describes it). The sound \
                       is a full path to a sound file (wav, flac, mp3, ogg, opus, aiff, \
                       m4a), or one the app makes: made:keys, made:pluck, made:kick, \
                       made:snare, made:hat, made:loop; empty to clear the slot.",
@@ -391,15 +396,23 @@ impl App {
                 daw_instruments::Kind::Slicer => {
                     return Err("The loop slicer's loop is chosen in its window for now.".into());
                 }
-                daw_instruments::Kind::Sampler => slot
-                    .strip_prefix("zone")
-                    .and_then(|n| n.parse::<usize>().ok())
-                    .is_some(),
+                daw_instruments::Kind::Sampler => {
+                    slot == daw_instruments::SFZ_SLOT
+                        || slot
+                            .strip_prefix("zone")
+                            .and_then(|n| n.parse::<usize>().ok())
+                            .is_some()
+                }
                 daw_instruments::Kind::DrumMachine => pad_layer(&slot).is_some(),
                 daw_instruments::Kind::Synth => false,
             };
             if !fits {
                 return Err(format!("A {} has no sound slot {slot}.", kind.name()));
+            }
+            if slot == daw_instruments::SFZ_SLOT && !sound.is_empty() {
+                // A library plays in place of the zones.
+                e.samples.clear();
+                e.params.retain(|(k, _)| !k.starts_with("zone"));
             }
             e.samples.retain(|(k, _)| *k != slot);
             if !sound.is_empty() {

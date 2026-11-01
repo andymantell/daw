@@ -1278,6 +1278,8 @@ version = "0.0.0"
 dependencies = [
  "daw-effects",
  "daw-engine",
+ "hound",
+ "rtrb",
 ]
 
 [[package]]

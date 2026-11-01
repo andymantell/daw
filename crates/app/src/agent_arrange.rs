@@ -43,7 +43,10 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "edit_clip",
         description: "Changes a clip. Either kind: where it starts (bar or seconds), the \
                       track it is on, mute or name. An audio clip: its length or offset \
-                      into its file (seconds), gain and fades (seconds). A note clip: its \
+                      into its file (seconds), gain and fades (seconds), and its \
+                      transpose (semitones, fractions for cents, within 12 either way; \
+                      0 for its own pitch), which keeps its timing and works with \
+                      follow tempo; its formants stay put unless move_formants. A note clip: its \
                       length and offset into its notes (beats), its own key (\"none\" \
                       for the song's), the pattern it plays, pattern_unique (a copy of \
                       its pattern of its own) or pattern_to_notes (its notes, no longer \
@@ -60,6 +63,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                     "gain_db": {"type": "number"},
                     "fade_in_seconds": {"type": "number"},
                     "fade_out_seconds": {"type": "number"},
+                    "transpose_semitones": {"type": "number", "description": "Audio clips: -12 to 12, such as -6 or 2.5 (2 semitones 50 cents)."},
+                    "move_formants": {"type": "boolean", "description": "Audio clips: true moves the formants with the pitch (like tape sped up); false (the default) keeps a voice sounding like the same person."},
                     "muted": {"type": "boolean"},
                     "name": {"type": "string"},
                     "len_beats": {"type": "number", "description": "Note clips."},
@@ -369,8 +374,24 @@ impl App {
             if let Some(n) = args["name"].as_str() {
                 c.name = n.into();
             }
+            if let Some(st) = args.get("transpose_semitones").filter(|v| !v.is_null()) {
+                let st = st
+                    .as_f64()
+                    .filter(|s| s.is_finite())
+                    .ok_or("transpose_semitones is a number.")?;
+                let cents = (st * 100.0).round() as i64;
+                if cents.abs() > daw_project::MAX_TRANSPOSE_CENTS {
+                    return Err("Transpose a clip by at most 12 semitones either way.".into());
+                }
+                c.cents = cents;
+            }
+            if let Some(m) = args["move_formants"].as_bool() {
+                c.move_formants = m;
+            }
             Ok(json!({"clip": id, "start_seconds": c.start as f64 / rate,
-                      "len_seconds": c.len as f64 / rate}))
+                      "len_seconds": c.len as f64 / rate,
+                      "transpose_semitones": c.cents as f64 / 100.0,
+                      "move_formants": c.move_formants}))
         })
         .map(|v| (v, Some("Change a clip".into())))
     }

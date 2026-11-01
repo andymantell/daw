@@ -290,6 +290,8 @@ impl App {
                 tempo: c.tempo,
                 beat: c.beat,
                 markers: c.markers.clone(),
+                cents: c.cents as i64,
+                move_formants: c.move_formants,
             })
             .collect();
         clips.extend(
@@ -667,6 +669,8 @@ impl App {
                     })
                     .filter(|m| m.frame > c.offset as i64 && m.frame < (c.offset + c.len) as i64)
                     .collect();
+                c.cents = crate::transpose::clamp(pc.cents);
+                c.move_formants = pc.move_formants;
                 t.clips.push(c);
             }
             self.restore_fx(&pt.id, &mut t.fx, &pt.effects, &mut problems);

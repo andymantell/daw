@@ -92,6 +92,12 @@ pub struct Clip {
     /// audio between two is stretched evenly; past the last it plays at
     /// the clip's own tempo.
     pub markers: Vec<StretchMarker>,
+    /// The clip's own transpose in cents (100 to a semitone), within an
+    /// octave either way; see [`crate::transpose`].
+    pub cents: i32,
+    /// A transpose moves the formants with the pitch instead of keeping
+    /// them where they were.
+    pub move_formants: bool,
     /// How many timeline frames the clip takes once stretched; `len`
     /// for a clip that isn't. Kept up to date by [`Clip::retime`].
     pub span: usize,
@@ -174,6 +180,8 @@ impl Clip {
             tempo: None,
             beat: 0,
             markers: Vec::new(),
+            cents: 0,
+            move_formants: false,
             span: 0,
             out_unit: 0.0,
         };
@@ -3765,6 +3773,9 @@ impl Timeline {
                 if let Some(bpm) = c.tempo {
                     name = format!("{name} ♩{bpm:.0}");
                 }
+                if c.cents != 0 {
+                    name = format!("{name} {}", crate::transpose::label(c.cents));
+                }
                 let at = r.left_top() + vec2(4.0 + HANDLE, 2.0);
                 let font = look.font(look.small);
                 if c.muted {
@@ -3996,6 +4007,11 @@ impl Timeline {
                 }
                 if ui.button("Clip tempo…").clicked() {
                     out.command = Some(Cmd::ClipTempo);
+                    ui.close();
+                }
+                // ai: transpose-clips
+                if ui.button("Transpose…").clicked() {
+                    out.command = Some(Cmd::TransposeClips);
                     ui.close();
                 }
                 if let Zone::Marker(i) = zone {

@@ -1195,6 +1195,8 @@ impl App {
                             "take": c.take,
                             "tempo": c.tempo,
                             "beat": c.tempo.is_some().then_some(c.beat),
+                            "transpose_semitones": c.cents as f64 / 100.0,
+                            "move_formants": c.move_formants,
                             "markers": c.markers.iter().map(|m| json!({"frame": m.frame, "at": m.at})).collect::<Vec<_>>(),
                         })
                     })

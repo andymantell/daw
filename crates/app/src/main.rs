@@ -89,6 +89,7 @@ mod theme;
 mod timeline;
 mod timing;
 mod trainer;
+mod transpose;
 mod tuner;
 mod update;
 mod versions;
@@ -320,9 +321,11 @@ struct Import {
 }
 
 /// How the engine plays a clip under the song's tempo map: through the
-/// stretcher along its warp when it follows tempo or has markers.
+/// stretcher along its warp when it follows tempo or has markers, or
+/// when it is transposed.
 fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
     let warp = c.warp(map).map(Arc::new);
+    let stretched = warp.is_some() || c.cents != 0;
     ClipSpec {
         offset: c.offset,
         len: Some(c.len),
@@ -330,8 +333,10 @@ fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
         fade_in: c.fade_in,
         fade_out: c.fade_out,
         envelope: c.envelope.as_slice().into(),
-        tag: if warp.is_some() { c.id } else { 0 },
+        tag: if stretched { c.id } else { 0 },
         warp,
+        semitones: c.semitones(),
+        formants: !c.move_formants,
         ..ClipSpec::new(Frames(c.start), c.source.clone())
     }
 }
@@ -480,6 +485,7 @@ struct App {
     timing: timing::Timing,
     /// Audio that follows tempo: its windows and settings.
     stretch: stretch::Stretch,
+    transpose: transpose::Transpose,
     takes_ui: comping::TakesPane,
     /// Automation lanes: their pane, modes and the passes being written.
     automation: automation::Automation,
@@ -647,6 +653,7 @@ impl App {
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
             stretch: stretch::Stretch::default(),
+            transpose: transpose::Transpose::default(),
             takes_ui: comping::TakesPane::default(),
             automation: automation::Automation::default(),
             comments: Vec::new(),
@@ -2849,6 +2856,7 @@ impl eframe::App for App {
                     for c in [
                         Cmd::FollowTempo,
                         Cmd::ClipTempo,
+                        Cmd::TransposeClips,
                         Cmd::StretchMarkersFromAttacks,
                         Cmd::AddStretchMarker,
                         Cmd::ClearStretchMarkers,
@@ -3271,6 +3279,7 @@ impl eframe::App for App {
         self.arrangement_tick();
         self.timing_window(&ctx);
         self.stretch_windows(&ctx);
+        self.transpose_window(&ctx);
         self.remote_tick(&ctx);
         self.assistants_tick(&ctx);
         self.listen_tick(&ctx);

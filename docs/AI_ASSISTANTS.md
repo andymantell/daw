@@ -142,7 +142,9 @@ assistant finds them for itself. In outline:
   (quantise, humanise, legato, fit to scale, apply or make a groove,
   each with its settings), `list_grooves`, `get_patterns` and
   `edit_pattern` (the step sequencer: patterns, lanes and steps).
-  `edit_clip` moves, resizes, mutes and keys note clips too.
+  `edit_clip` moves, resizes, mutes and keys note clips too, and
+  transposes audio clips (`transpose_semitones`, fractions for cents,
+  with `move_formants`).
   `add_note_clip` and `edit_notes` take chords by name (`Dm9`, `G/B`)
   or several pitches at once, and `select_clips` picks a note clip.
 - **Automation:** `get_automation` (each track's mode, lanes and

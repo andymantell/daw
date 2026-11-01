@@ -23,7 +23,7 @@ layers.rs 14
 lessons.rs 0
 main.rs 29
 meters.rs 4
-mixer.rs 33
+mixer.rs 1
 monitor.rs 0
 notation.rs 8
 note_tools.rs 26

@@ -301,7 +301,7 @@ impl Layout {
     }
 
     /// The mixer large, the timeline small above it.
-    fn mixing() -> Layout {
+    pub(crate) fn mixing() -> Layout {
         Layout {
             dock: Node::split(
                 false,
@@ -1749,11 +1749,8 @@ impl Host for crate::App {
         self.listening.drawn.push(at);
         match pane {
             Pane::Timeline => self.timeline(ui),
-            Pane::Mixer => {
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| self.mixer(ui));
-            }
+            // The desk scrolls its own strips, with the master pinned.
+            Pane::Mixer => self.mixer(ui),
             Pane::Monitor => {
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])

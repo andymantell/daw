@@ -43,6 +43,7 @@ mod commands;
 mod comments;
 mod comping;
 mod crash;
+mod desk;
 mod export;
 mod freeze;
 mod fretboard;
@@ -531,6 +532,8 @@ struct App {
     /// Named commands, their keys, and their windows.
     commands: commands::Commands,
     simple: simple_mode::Simple,
+    /// How the mixer desk is shown: narrow strips, and which are selected.
+    desk: mixer::DeskView,
     proj: project::Proj,
     latency: latency::Latency,
     /// The guided audio setup.
@@ -696,6 +699,7 @@ impl App {
             simple: simple_mode::Simple::new(
                 (!cfg!(test)).then(|| config_dir().join("simple.txt")),
             ),
+            desk: mixer::DeskView::default(),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
             audio_setup: audio_setup::AudioSetup::new(

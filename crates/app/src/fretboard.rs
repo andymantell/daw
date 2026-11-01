@@ -1297,7 +1297,13 @@ mod tests {
         // The playhead moved on by a grid step, so it isn't playing now;
         // back at the start it is.
         h.state_mut().send(Command::Seek(Frames(0)));
-        h.run();
+        // Wait for the engine to move the playhead there, which can take
+        // a moment on a slow runner.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !h.state().fretboard_view().mark(2, 3).playing && std::time::Instant::now() < end {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let v = h.state().fretboard_view();
         assert!(v.mark(2, 3).playing, "the note under the playhead");
         assert_eq!(v.playing, ["D4 (string 2, fret 2)"]);

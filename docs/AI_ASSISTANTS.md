@@ -98,7 +98,9 @@ assistant finds them for itself. In outline:
   be tried before it is made. `render_audio` (a WAV file);
   `get_picture` (the window or one pane). `get_project` with `summary`
   gives each track's clips as a count and a span, for a first look at a
-  big project.
+  big project. `hear_value` plays a pan, level, setting or automation
+  lane to the person as a short sound and says it in words, as Hear the
+  value does.
 - **Following the person:** `wait_for_change` answers when the project
   next changes, by anyone.
 - **Tracks, routing and effects:** `add_track`, `edit_track`,
@@ -238,3 +240,13 @@ A feature is not done until an assistant can use it. In practice:
   shows up in `get_project`.
 - Test a feature end to end through the same calls, with the test
   `Driver` in `agent::driver`.
+- A new pane goes in `workspace::PANES`, and the test
+  `a11y::every_pane_names_its_controls_and_says_its_values` then checks
+  it: every control has a name in words (not only a symbol, so give an
+  icon button `.accessible_name(...)`), and every slider says its value
+  with its unit through `spoken::value`, `spoken::level` or
+  `spoken::pan` (a bare 0.3 tells a screen reader nothing). Things drawn
+  by hand that a person picks out (clips, notes, lanes) are focusable
+  entries with a spoken name, as in the timeline, note editor and
+  automation pane. Controls keep their places as state changes
+  (`a11y::controls_stay_in_place`).

@@ -13,7 +13,7 @@ use daw_engine::graph::{GroupSpec, Output, Session, TrackSpec};
 use daw_project::{ControlGroup, Send, TrackKind};
 use eframe::egui::{self, RichText, vec2};
 
-use crate::{App, Track, meters, theme};
+use crate::{App, Track, meters, spoken, theme};
 
 /// Takes a track spec out of its routing, for rendering it on its own
 /// (a stem, or frozen audio): straight to the master, with no sends,
@@ -278,6 +278,7 @@ impl App {
                     {
                         self.meters.show(Some(t.key.clone()));
                     }
+                    let first = spoken::start(ui);
                     ui.name_inputs(format!("{name} volume"), |ui| {
                         ui.add(
                             egui::Slider::new(&mut t.mix.gain_db, -60.0..=12.0)
@@ -285,9 +286,12 @@ impl App {
                                 .step_by(0.1),
                         )
                     });
+                    spoken::level(ui, first, t.mix.gain_db as f64);
+                    let first = spoken::start(ui);
                     ui.add(egui::Slider::new(&mut t.mix.pan, -1.0..=1.0).show_value(false))
                         .accessible_name(format!("{name} pan"))
                         .on_hover_text("Pan");
+                    spoken::pan(ui, first, t.mix.pan as f64);
                     ui.toggle_value(&mut t.mix.mute, "Mute")
                         .accessible_name(format!("Mute {name}"));
                     ui.horizontal(|ui| {
@@ -382,6 +386,7 @@ impl App {
                     self.meters.show(None);
                 }
                 let before = self.master.mix.gain_db;
+                let first = spoken::start(ui);
                 // ai: set_parameter
                 ui.name_inputs("Master volume", |ui| {
                     ui.add(
@@ -390,6 +395,7 @@ impl App {
                             .step_by(0.1),
                     )
                 });
+                spoken::level(ui, first, self.master.mix.gain_db as f64);
                 if self.master.mix.gain_db != before {
                     actions.push(Action::MasterGain(self.master.mix.gain_db));
                 }
@@ -488,6 +494,7 @@ impl App {
                         let before = (g.gain_db, g.mute);
                         ui.add(egui::TextEdit::singleline(&mut g.name).desired_width(100.0))
                             .accessible_name(format!("Name of control group {}", gi + 1));
+                        let first = spoken::start(ui);
                         ui.name_inputs(format!("{} volume", g.name), |ui| {
                             ui.add(
                                 egui::Slider::new(&mut g.gain_db, -60.0..=12.0)
@@ -495,6 +502,7 @@ impl App {
                                     .step_by(0.1),
                             )
                         });
+                        spoken::level(ui, first, g.gain_db);
                         ui.toggle_value(&mut g.mute, "Mute")
                             .accessible_name(format!("Mute {}", g.name));
                         if ui
@@ -693,12 +701,14 @@ fn sends_menu(
             ui.horizontal(|ui| {
                 ui.label(RichText::new(to).strong());
                 let before = (s.gain_db, s.mute, s.pre_fader);
+                let first = spoken::start(ui);
                 ui.add(
                     egui::Slider::new(&mut s.gain_db, -60.0..=12.0)
                         .suffix(" dB")
                         .step_by(0.1),
                 )
                 .accessible_name(format!("Send to {to} level"));
+                spoken::level(ui, first, s.gain_db);
                 ui.toggle_value(&mut s.pre_fader, "Pre")
                     .accessible_name(format!("Send to {to} before the fader"))
                     .on_hover_text("Pre-fader: the track's volume leaves this send alone");

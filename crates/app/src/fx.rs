@@ -27,6 +27,8 @@ use daw_plugins::scan::{self, Available, PluginList};
 use daw_plugins::{Host, Layout, Library, Plugin, PluginState, Processor, Sandbox};
 use eframe::egui::{self, RichText};
 
+use crate::spoken;
+
 /// One effect in a track's chain.
 pub struct FxSlot {
     /// Matches the engine's insert id.
@@ -1678,6 +1680,8 @@ impl Effects {
                         if ui
                             // ai: edit_effect
                             .add_enabled(up.is_some(), egui::Button::new("▲"))
+                            .on_hover_text("Earlier in the chain")
+                            .accessible_name(format!("Move {} up", s.name))
                             .clicked()
                         {
                             swap = up.map(|u| (u, i));
@@ -1685,12 +1689,19 @@ impl Effects {
                         if ui
                             // ai: edit_effect
                             .add_enabled(down.is_some(), egui::Button::new("▼"))
+                            .on_hover_text("Later in the chain")
+                            .accessible_name(format!("Move {} down", s.name))
                             .clicked()
                         {
                             swap = down.map(|d| (i, d));
                         }
                         // ai: remove_effect
-                        if ui.button("✖").on_hover_text("Remove").clicked() {
+                        if ui
+                            .button("✖")
+                            .on_hover_text("Remove")
+                            .accessible_name(format!("Remove {}", s.name))
+                            .clicked()
+                        {
                             remove = Some(i);
                         }
                     });
@@ -2497,15 +2508,24 @@ pub(crate) fn builtin_params(
                     r.changed()
                 } else {
                     let text = |x: f64, _| p.text(x);
-                    ui.add(
-                        // ai: set_parameter
-                        egui::Slider::new(&mut v, p.min..=p.max)
-                            .logarithmic(p.log)
-                            .custom_formatter(text)
-                            .min_decimals(1),
-                    )
-                    .accessible_name(p.name)
-                    .changed()
+                    let first = spoken::start(ui);
+                    let changed = ui
+                        .add(
+                            // ai: set_parameter
+                            egui::Slider::new(&mut v, p.min..=p.max)
+                                .logarithmic(p.log)
+                                .custom_formatter(text)
+                                .min_decimals(1),
+                        )
+                        .accessible_name(p.name)
+                        .changed();
+                    let hear = if p.unit == daw_effects::Unit::Db {
+                        spoken::Hear::Level(v)
+                    } else {
+                        spoken::steady(v, p.min, p.max)
+                    };
+                    spoken::hearable(ui, first, p.text(v), hear);
+                    changed
                 };
                 if changed {
                     b.set(i, v);
@@ -2670,15 +2690,19 @@ fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
                     continue;
                 };
                 ui.label(&p.title);
+                let first = spoken::start(ui);
                 if ui
                     // ai: set_parameter
                     .add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false))
+                    .accessible_name(&p.title)
                     .changed()
                 {
                     plugin.set_param(p.id, v);
                 }
                 let text = plugin.param_text(p.id, v).unwrap_or_default();
-                ui.label(format!("{text} {}", p.units).trim().to_string());
+                let text = format!("{text} {}", p.units).trim().to_string();
+                spoken::value(ui, first, &text);
+                ui.label(text);
                 ui.end_row();
             }
         });

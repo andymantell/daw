@@ -83,6 +83,7 @@ mod sections;
 mod share;
 mod simple_mode;
 mod snapshots;
+mod spoken;
 mod start;
 mod stretch;
 mod switch;
@@ -426,6 +427,8 @@ struct App {
     loop_bars: (i64, i64),
     master_meter: (f32, f32),
     message: Option<String>,
+    /// The words of the value last heard (Phase 4 D3).
+    said: spoken::Said,
     /// The device stopped (unplugged, say): when to look for it again.
     reconnect: Option<Instant>,
     /// The mix buffer last turned on, for turning it on again.
@@ -607,6 +610,7 @@ impl App {
             loop_bars: (1, 5),
             master_meter: (0.0, 0.0),
             message: None,
+            said: spoken::Said::default(),
             retime: false,
             reconnect: None,
             last_mix_buffer: None,
@@ -1812,9 +1816,13 @@ impl App {
     fn transport(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let playing = self.ctl.status().playing();
+            // As wide playing or not, so the controls after it stay put.
+            // ai: play
+            let play = egui::Button::new(if playing { "⏹ Stop" } else { "▶ Play" })
+                .min_size(egui::vec2(64.0, 0.0));
             if ui
                 // ai: play
-                .button(if playing { "⏹ Stop" } else { "▶ Play" })
+                .add(play)
                 .on_hover_text(self.commands.hover(Cmd::PlayStop))
                 .clicked()
             {
@@ -1858,7 +1866,15 @@ impl App {
                 format!("{bb}   {:.2} s", map.seconds(pos))
             };
             let font = theme::look(ui.ctx()).numerals_font();
-            ui.label(RichText::new(label).font(font));
+            let clock = ui.label(RichText::new(label).font(font));
+            // Room for the clock as it counts, so the controls after it
+            // stay put.
+            let room = if self.shown_clock().is_some() {
+                300.0
+            } else {
+                170.0
+            };
+            ui.add_space((room - clock.rect.width()).max(0.0));
             ui.separator();
 
             ui.label("Tempo");
@@ -1917,9 +1933,11 @@ impl App {
                 .response
                 .accessible_name("Clicks per beat");
             ui.label("Click level");
+            let first = spoken::start(ui);
             // ai: set_practice
             ui.add(egui::Slider::new(&mut m.level_db, -40.0..=0.0).suffix(" dB"))
                 .accessible_name("Click level");
+            spoken::level(ui, first, m.level_db as f64);
             if m != self.metronome {
                 self.metronome = m;
                 self.send(Command::SetMetronome(m));
@@ -3174,6 +3192,7 @@ impl eframe::App for App {
         self.audio_setup_update(&ctx);
         self.effects.manager_window(&ctx);
         self.effects.credits_window(&ctx);
+        self.said.show(&ctx);
         self.poll_freezing(&ctx);
         self.poll_renders(&ctx);
         self.export.poll();

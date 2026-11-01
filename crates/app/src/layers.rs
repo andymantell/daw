@@ -26,6 +26,7 @@ use eframe::egui;
 use crate::App;
 use crate::fx::FxSlot;
 use crate::instrument::{Ctx, Reader, Shown, Slot};
+use crate::spoken;
 
 /// Layer ids, unique for the life of the process, kept apart from the
 /// effects' ids since effects name a layer as their container.
@@ -371,6 +372,7 @@ pub fn controls(
                 ui.end_row();
                 ui.label("Level");
                 let mut db = c.gain_db();
+                let first = spoken::start(ui);
                 if ui
                     .add(egui::Slider::new(&mut db, -60.0..=12.0).suffix(" dB"))
                     .accessible_name(format!("{title} level"))
@@ -378,9 +380,11 @@ pub fn controls(
                 {
                     c.set_gain_db(db);
                 }
+                spoken::level(ui, first, db as f64);
                 ui.end_row();
                 ui.label("Pan");
                 let mut pan = c.pan();
+                let first = spoken::start(ui);
                 if ui
                     .add(egui::Slider::new(&mut pan, -1.0..=1.0))
                     .accessible_name(format!("{title} pan"))
@@ -388,6 +392,7 @@ pub fn controls(
                 {
                     c.set_pan(pan);
                 }
+                spoken::pan(ui, first, pan as f64);
                 ui.end_row();
                 ui.label("Notes");
                 let (mut lo, mut hi) = c.keys();

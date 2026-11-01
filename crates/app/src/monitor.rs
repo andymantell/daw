@@ -18,7 +18,7 @@ use daw_engine::monitor::{
 use daw_project::{CUE_OFF_DB, CueLevel, CueMix};
 use eframe::egui::{self, RichText, vec2};
 
-use crate::{App, meters};
+use crate::{App, meters, spoken};
 
 /// The pane's state: the project's headphone mixes, and the speakers'
 /// controls.
@@ -282,6 +282,7 @@ impl App {
                 .response
                 .accessible_name("Speakers listen to")
                 .on_hover_text("Hear a performer's headphone mix on the speakers");
+            let first = spoken::start(ui);
             ui.name_inputs("Speaker level", |ui| {
                 ui.add(
                     // ai: set_monitor
@@ -290,6 +291,7 @@ impl App {
                         .step_by(0.5),
                 )
             });
+            spoken::level(ui, first, c.gain_db as f64);
             // ai: set_monitor
             ui.toggle_value(&mut c.dim, "Dim")
                 .on_hover_text(format!("Turn the speakers down {} dB", c.dim_db));
@@ -339,6 +341,7 @@ impl App {
             {
                 c.talk = false;
             }
+            let first = spoken::start(ui);
             ui.name_inputs("Talkback level", |ui| {
                 ui.add(
                     // ai: set_monitor
@@ -347,6 +350,7 @@ impl App {
                         .step_by(0.5),
                 )
             });
+            spoken::level(ui, first, c.talk_db as f64);
         });
         if before
             != (
@@ -414,6 +418,7 @@ impl App {
                         )
                         .on_hover_text("Peak level in these headphones");
                         let mut db = m.gain_db as f32;
+                        let first = spoken::start(ui);
                         let r = ui.name_inputs(format!("{} level", m.name), |ui| {
                             ui.add(
                                 // ai: edit_headphone_mixes
@@ -422,6 +427,7 @@ impl App {
                                     .step_by(0.5),
                             )
                         });
+                        spoken::level(ui, first, db as f64);
                         if r.changed() {
                             m.gain_db = db as f64;
                             actions.push(Action::Buses);
@@ -492,6 +498,7 @@ impl App {
                             }
                             if let Some(db) = &mut m.click_db {
                                 let mut v = *db as f32;
+                                let first = spoken::start(ui);
                                 let r = ui.name_inputs(format!("Click level in {name}"), |ui| {
                                     ui.add(
                                         // ai: edit_headphone_mixes
@@ -500,6 +507,7 @@ impl App {
                                             .step_by(0.5),
                                     )
                                 });
+                                spoken::level(ui, first, v as f64);
                                 if r.changed() {
                                     *db = v as f64;
                                     actions.push(Action::Buses);
@@ -562,6 +570,7 @@ impl App {
             .show(ui, |ui| {
                 ui.label("Main outputs");
                 ui.weak(format!("{} and {}", main.0 + 1, main.1 + 1));
+                let first = spoken::start(ui);
                 ui.name_inputs("Main speakers trim", |ui| {
                     ui.add(
                         // ai: set_monitor
@@ -570,6 +579,7 @@ impl App {
                             .step_by(0.5),
                     )
                 });
+                spoken::value(ui, first, format!("{:+.1} dB trim", m.main_trim_db));
                 ui.label("");
                 ui.end_row();
                 let mut remove = None;
@@ -584,6 +594,7 @@ impl App {
                     {
                         s.out = pr;
                     }
+                    let first = spoken::start(ui);
                     ui.name_inputs(format!("{before} trim"), |ui| {
                         ui.add(
                             // ai: set_monitor
@@ -592,6 +603,7 @@ impl App {
                                 .step_by(0.5),
                         )
                     });
+                    spoken::value(ui, first, format!("{:+.1} dB trim", s.trim_db));
                     if ui
                         // ai: set_monitor
                         .small_button("Remove")
@@ -648,6 +660,7 @@ impl App {
             });
         let room = (c.dim_db, c.talk_dim_db);
         ui.horizontal(|ui| {
+            let first = spoken::start(ui);
             ui.name_inputs("Dim by", |ui| {
                 ui.add(
                     // ai: set_monitor
@@ -656,6 +669,8 @@ impl App {
                         .suffix(" dB"),
                 )
             });
+            spoken::value(ui, first, format!("{:.0} dB", c.dim_db));
+            let first = spoken::start(ui);
             ui.name_inputs("Talkback dims the speakers by", |ui| {
                 ui.add(
                     // ai: set_monitor
@@ -664,6 +679,7 @@ impl App {
                         .suffix(" dB"),
                 )
             });
+            spoken::value(ui, first, format!("{:.0} dB", c.talk_dim_db));
         });
         if *m != before {
             actions.push(Action::Device);
@@ -785,6 +801,7 @@ fn level_cell(ui: &mut egui::Ui, mix: &str, track: &str, l: &mut CueLevel) -> bo
     ui.horizontal(|ui| {
         let off = l.gain_db <= CUE_OFF_DB;
         let mut db = if off { -60.0 } else { l.gain_db as f32 };
+        let first = spoken::start(ui);
         let r = ui.name_inputs(format!("{track} in {mix}"), |ui| {
             ui.add(
                 // ai: edit_headphone_mixes
@@ -799,11 +816,13 @@ fn level_cell(ui: &mut egui::Ui, mix: &str, track: &str, l: &mut CueLevel) -> bo
                     .step_by(0.5),
             )
         });
+        spoken::level(ui, first, db as f64);
         if r.changed() {
             l.gain_db = if db <= -60.0 { CUE_OFF_DB } else { db as f64 };
             changed = true;
         }
         let mut pan = l.pan as f32;
+        let first = spoken::start(ui);
         if ui
             // ai: edit_headphone_mixes
             .add(egui::Slider::new(&mut pan, -1.0..=1.0).show_value(false))
@@ -814,6 +833,7 @@ fn level_cell(ui: &mut egui::Ui, mix: &str, track: &str, l: &mut CueLevel) -> bo
             l.pan = pan as f64;
             changed = true;
         }
+        spoken::pan(ui, first, pan as f64);
         changed |= ui
             // ai: edit_headphone_mixes
             .toggle_value(&mut l.mute, "M")

@@ -648,3 +648,385 @@ fn a_fade_is_dragged_from_its_handle() {
         c.fade_in.len
     );
 }
+
+/// What a screen reader would find wrong with the controls on screen: a
+/// control with no name or only symbols for one, and a slider or number
+/// whose value is read without its unit.
+fn problems(h: &Harness<'_, App>) -> Vec<String> {
+    use egui::accesskit::Role;
+    let mut out = Vec::new();
+    for n in h.root().children_recursive() {
+        let node = n.accesskit_node();
+        let role = node.role();
+        if !egui::accessibility::is_input(role) {
+            continue;
+        }
+        let label = node.label().unwrap_or_default();
+        if !label.chars().any(char::is_alphanumeric) {
+            out.push(format!("{role:?} named {label:?}"));
+        }
+        if role == Role::Slider && node.value().is_none() {
+            out.push(format!("{label}: value without its unit"));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// A project with something in every pane: an audio track with every
+/// built-in effect and a volume lane, an instrument track with a note
+/// clip, and a bus.
+fn full_project() -> crate::agent::driver::Driver {
+    use serde_json::json;
+    let mut d = crate::agent::driver::Driver::new();
+    let id = |v: serde_json::Value, k: &str| v[k].as_str().unwrap().to_string();
+    let audio = id(
+        d.call("add_track", json!({"kind": "audio"})).unwrap(),
+        "track",
+    );
+    for k in daw_effects::Kind::ALL {
+        d.call("add_effect", json!({"track": audio, "effect": k.id()}))
+            .unwrap();
+    }
+    d.call(
+        "edit_automation",
+        json!({"track": audio, "param": "gain", "add": [
+            {"bar": 1, "value": -20.0}, {"bar": 3, "value": -6.0}
+        ]}),
+    )
+    .unwrap();
+    let inst = id(
+        d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+        "track",
+    );
+    let clip = id(
+        d.call("add_note_clip", json!({"track": inst, "bar": 1, "bars": 2}))
+            .unwrap(),
+        "clip",
+    );
+    d.call(
+        "edit_notes",
+        json!({"clip": clip, "add": [{"pitch": 60, "beat": 0, "beats": 1}]}),
+    )
+    .unwrap();
+    d.call("add_track", json!({"kind": "bus"})).unwrap();
+    d
+}
+
+/// Every pane, each shown full size, and the effects and instrument
+/// windows: every control has a name in words and every slider says its
+/// value with its unit. A new pane is added to `workspace::PANES`, so it
+/// is checked here before it merges.
+#[test]
+fn every_pane_names_its_controls_and_says_its_values() {
+    let mut d = full_project();
+    let h = &mut d.h;
+    h.run();
+    let mut found = Vec::new();
+    let mut check = |h: &Harness<'_, App>, what: &str| {
+        found.extend(problems(h).into_iter().map(|p| format!("{what}: {p}")));
+    };
+    check(h, "the main window");
+    h.state_mut().effects.open_track = Some(0);
+    h.run();
+    check(h, "the effects window");
+    h.state_mut().effects.open_track = None;
+    h.state_mut().instrument_open = Some(1);
+    h.run();
+    check(h, "the instrument window");
+    h.state_mut().instrument_open = None;
+    let clip = h.state().tracks[1].note_clips[0].id.clone();
+    h.state_mut().notes_editor.edit(&clip);
+    for p in crate::workspace::PANES {
+        h.state_mut().workspace.open(p);
+        h.state_mut().workspace.full = Some(p);
+        h.run();
+        h.run();
+        check(h, p.title());
+    }
+    assert_eq!(found, Vec::<String>::new());
+}
+
+/// The value a screen reader reads for the control named `name`.
+fn value_of(h: &Harness<'_, App>, name: &str) -> Option<String> {
+    use egui::accesskit::Role;
+    h.query_all_by_label(name)
+        .find(|n| matches!(n.accesskit_node().role(), Role::Slider | Role::SpinButton))
+        .and_then(|n| n.accesskit_node().value())
+}
+
+#[test]
+fn values_are_read_with_their_units() {
+    let mut h = with_tracks();
+    let app = h.state_mut();
+    app.tracks[1].mix.pan = -0.3;
+    app.tracks[1].mix.gain_db = -6.0;
+    app.workspace.open(crate::workspace::Pane::Mixer);
+    h.run();
+    h.run();
+    assert_eq!(value_of(&h, "Bass pan").as_deref(), Some("30% left"));
+    assert_eq!(value_of(&h, "Bass volume").as_deref(), Some("-6.0 dB"));
+
+    // A built-in effect's settings, as its panel shows them.
+    let mut d = crate::agent::driver::Driver::new();
+    let t = d
+        .call("add_track", serde_json::json!({"kind": "audio"}))
+        .unwrap()["track"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    d.call(
+        "add_effect",
+        serde_json::json!({"track": t, "effect": "compressor"}),
+    )
+    .unwrap();
+    d.h.state_mut().effects.open_track = Some(0);
+    d.h.run();
+    let ratio = value_of(&d.h, "Ratio").unwrap();
+    assert!(ratio.ends_with(":1"), "{ratio}");
+    let attack = value_of(&d.h, "Attack").unwrap();
+    assert!(attack.ends_with("ms"), "{attack}");
+}
+
+/// The note editor with a clip of two notes on an instrument track.
+fn with_notes() -> Harness<'static, App> {
+    let mut d = full_project();
+    let clip = d.h.state().tracks[1].note_clips[0].id.clone();
+    d.call(
+        "edit_notes",
+        serde_json::json!({"clip": clip, "add": [{"pitch": 64, "beat": 4, "beats": 2}]}),
+    )
+    .unwrap();
+    let mut h = d.h;
+    h.state_mut().notes_editor.edit(&clip);
+    h.state_mut()
+        .workspace
+        .open(crate::workspace::Pane::NotesEditor);
+    h.run();
+    h.run();
+    h
+}
+
+fn notes(h: &Harness<'_, App>) -> Vec<(u8, i64)> {
+    let c = &h.state().tracks[1].note_clips[0];
+    c.notes.iter().map(|n| (n.pitch, n.start)).collect()
+}
+
+#[test]
+fn notes_are_read_and_edited_from_the_keyboard() {
+    use daw_project::PPQ;
+    let mut h = with_notes();
+    assert!(
+        h.query_by_label("C4 at bar 1, 1 beat long, velocity 100")
+            .is_some(),
+        "{:?}",
+        names(&h)
+    );
+    assert!(
+        h.query_by_label("E4 at bar 2, 2 beats long, velocity 100")
+            .is_some()
+    );
+    focus(&mut h, "C4 at bar 1");
+    h.key_press(Key::ArrowUp);
+    h.run();
+    assert_eq!(notes(&h)[0], (61, 0), "Up: a semitone");
+    h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowUp);
+    h.run();
+    assert_eq!(notes(&h)[0], (73, 0), "Shift+Up: an octave");
+    h.key_press(Key::ArrowRight);
+    h.run();
+    let moved = notes(&h)[0].1;
+    assert!(
+        moved > 0 && moved % (PPQ / 4) == 0,
+        "Right: a grid step, {moved}"
+    );
+    assert!(
+        h.query_by_label_contains("C#5 at bar 1 beat").is_some(),
+        "the name follows the note: {:?}",
+        names(&h)
+    );
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().notes_editor.selected.len(), 1, "Enter selects");
+    h.key_press(Key::Delete);
+    h.run();
+    assert_eq!(notes(&h), vec![(64, 4 * PPQ)], "Delete removes it");
+}
+
+#[test]
+fn an_automation_lane_is_read_heard_and_set_from_the_keyboard() {
+    let mut d = full_project();
+    let h = &mut d.h;
+    h.state_mut()
+        .workspace
+        .open(crate::workspace::Pane::Automation);
+    h.run();
+    h.run();
+    let words = "Volume lane: -20.0 dB at bar 1, rising to -6.0 dB at bar 3";
+    assert!(h.query_by_label(words).is_some(), "{:?}", names(h));
+    h.get_by_label(words).focus();
+    h.run();
+    h.run();
+    // Heard: a tone that rises with the lane, its words at the foot.
+    let ctx = h.ctx.clone();
+    h.state_mut().run(&ctx, Cmd::HearValue);
+    h.run();
+    assert_eq!(h.state().said.text(), Some(words));
+    assert!(
+        wait_for(h, |a| a.ctl.status().preview().is_some()),
+        "it plays"
+    );
+    // Up at the playhead (bar 1) raises the lane there.
+    h.key_press(Key::ArrowUp);
+    h.run();
+    let first = h.state().tracks[0].automation[0].points[0].value;
+    assert!(first > -20.0 && first < -18.0, "{first}");
+    assert!(
+        h.query_by_label_contains("Volume lane: -18.6 dB at bar 1")
+            .is_some(),
+        "{:?}",
+        names(h)
+    );
+}
+
+/// Hear the value plays the control with the keyboard, or the one last
+/// moved, and says it; with neither it says what to do.
+#[test]
+fn the_focused_value_is_heard_and_said() {
+    let mut h = with_tracks();
+    h.state_mut().workspace.open(crate::workspace::Pane::Mixer);
+    h.run();
+    h.run();
+    let ctx = h.ctx.clone();
+    h.state_mut().run(&ctx, Cmd::HearValue);
+    h.run();
+    assert!(
+        h.state()
+            .said
+            .text()
+            .unwrap()
+            .starts_with("Nothing to hear")
+    );
+    // Moved by something other than the person: still nothing.
+    h.state_mut().tracks[1].mix.pan = 0.5;
+    h.run();
+    h.state_mut().run(&ctx, Cmd::HearValue);
+    h.run();
+    assert!(
+        h.state()
+            .said
+            .text()
+            .unwrap()
+            .starts_with("Nothing to hear")
+    );
+
+    h.query_all_by_label("Bass pan")
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Slider)
+        .unwrap()
+        .focus();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::H);
+    // (Not run: the short tone may be over by the time the frames settle.)
+    assert!(wait_for(&mut h, |a| a.ctl.status().preview().is_some()));
+    assert_eq!(h.state().said.text(), Some("50% right"));
+    h.run();
+    assert!(
+        h.query_by_label("50% right").is_some(),
+        "the words are on screen for a screen reader"
+    );
+}
+
+/// An assistant hears a value as the person does, and gets its words.
+#[test]
+fn an_assistant_plays_a_value_to_the_person() {
+    use serde_json::json;
+    let mut d = full_project();
+    let t = d.h.state().tracks[0].key.clone();
+    d.call(
+        "set_parameter",
+        json!({"track": t, "param": "pan", "value": -1.0}),
+    )
+    .unwrap();
+    let r = d
+        .call("hear_value", json!({"track": t, "param": "pan"}))
+        .unwrap();
+    assert_eq!(r["text"], "Audio 1 pan, 100% left");
+    assert!(wait_for(&mut d.h, |a| a.ctl.status().preview().is_some()));
+    let r = d
+        .call("hear_value", json!({"track": t, "lane": true}))
+        .unwrap();
+    assert_eq!(
+        r["text"],
+        "Audio 1, Volume lane: -20.0 dB at bar 1, rising to -6.0 dB at bar 3"
+    );
+    let r = d.call("hear_value", json!({"track": "master"})).unwrap();
+    assert_eq!(r["text"], "Master volume, 0 dB");
+    assert!(
+        d.call(
+            "hear_value",
+            json!({"track": t, "param": "pan", "lane": true})
+        )
+        .is_err()
+    );
+    assert!(d.call("hear_value", json!({"track": "nope"})).is_err());
+    // A read-only assistant may: it changes nothing.
+    d.access = crate::agent::Access::Read;
+    assert!(d.call("hear_value", json!({"track": "master"})).is_ok());
+}
+
+/// Controls stay where they are as things change, so someone who finds
+/// them by position (with a magnifier, or from memory) finds them again:
+/// arming, muting, soloing, adding effects, recording, looping and
+/// playing move nothing in the mixer or on the transport bar.
+#[test]
+fn controls_stay_in_place() {
+    let mut h = with_tracks();
+    h.state_mut().workspace.open(crate::workspace::Pane::Mixer);
+    h.run();
+    h.run();
+    let watched = [
+        "Arm Guitar for recording",
+        "Guitar pan",
+        "Mute Guitar",
+        "Effects on Guitar",
+        "Bass pan",
+        "Solo Bass",
+        "Effects on Bass",
+        "Back to the start",
+        "⏺ Record",
+        "Click level",
+        "Tempo",
+        "Undo",
+    ];
+    let places = |h: &Harness<'_, App>| -> Vec<egui::Rect> {
+        watched
+            .iter()
+            .map(|n| h.query_all_by_label(n).next().unwrap().rect())
+            .collect()
+    };
+    let before = places(&h);
+    let app = h.state_mut();
+    app.tracks[0].arm = true;
+    app.tracks[0].mix.mute = true;
+    app.tracks[1].mix.solo = true;
+    for _ in 0..12 {
+        let slot = app.effects.create_builtin(daw_effects::Kind::Eq, app.rate);
+        app.tracks[0].fx.push(slot);
+    }
+    app.rebuild();
+    h.run();
+    h.key_press(Key::L);
+    h.key_press(Key::K);
+    h.key_press(Key::Space);
+    assert!(wait_for(&mut h, playing));
+    h.step();
+    h.step();
+    let after = places(&h);
+    for ((n, a), b) in watched.iter().zip(&before).zip(&after) {
+        assert!(
+            (a.min - b.min).length() < 0.5,
+            "{n} moved from {a:?} to {b:?}"
+        );
+    }
+}

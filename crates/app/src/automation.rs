@@ -389,6 +389,66 @@ pub(crate) fn text_of(t: &Track, param: &str, v: f64) -> String {
     }
 }
 
+/// How far Up and Down move a lane's value, as a share of its range.
+const LANE_STEP: f64 = 0.02;
+
+/// A lane as a screen reader should say it: "Volume lane: -20.0 dB at
+/// bar 1, rising to -6.0 dB at bar 3".
+pub(crate) fn lane_words(
+    t: &Track,
+    buses: &[(String, String)],
+    l: &Lane,
+    map: &daw_engine::time::TempoMap,
+) -> String {
+    const MOST: usize = 8;
+    let name = name_of(t, buses, &l.param);
+    let Some(first) = l.points.first() else {
+        return format!("{name} lane, no points");
+    };
+    let at = |p: &AutoPoint| timeline::spoken(map, p.at);
+    let mut words = format!(
+        "{name} lane: {} at {}",
+        text_of(t, &l.param, first.value),
+        at(first)
+    );
+    for w in l.points.windows(2).take(MOST - 1) {
+        let how = if w[1].value > w[0].value + 1e-9 {
+            "rising to"
+        } else if w[1].value < w[0].value - 1e-9 {
+            "falling to"
+        } else {
+            "level to"
+        };
+        words += &format!(
+            ", {how} {} at {}",
+            text_of(t, &l.param, w[1].value),
+            at(&w[1])
+        );
+    }
+    if l.points.len() > MOST {
+        words += &format!(", and {} more points", l.points.len() - MOST);
+    }
+    words
+}
+
+/// A lane's line from its first point to its last, each value 0 (the
+/// bottom of its range) to 1 (the top), to be heard.
+pub(crate) fn lane_line(t: &Track, l: &Lane) -> Vec<f64> {
+    const STEPS: usize = 64;
+    let (Some(first), Some(last), Some(g)) =
+        (l.points.first(), l.points.last(), range(t, &l.param))
+    else {
+        return Vec::new();
+    };
+    let span = (last.at - first.at).max(1);
+    (0..=STEPS)
+        .map(|k| {
+            let at = first.at + span * k as i64 / STEPS as i64;
+            g.fraction(l.value_at(at).unwrap_or(first.value))
+        })
+        .collect()
+}
+
 /// Every setting of the track a lane can be on, the track's own first.
 pub(crate) fn choices(t: &Track, buses: &[(String, String)]) -> Vec<Choice> {
     choices_up_to(t, buses, MOST_PLUGIN_PARAMS)
@@ -1182,6 +1242,67 @@ impl crate::App {
                         [pos2(x, rect.top()), pos2(x, rect.bottom())],
                         Stroke::new(1.5, tc.playhead),
                     );
+                }
+
+                // Each lane for the keyboard and a screen reader: read as
+                // its points, heard as a tone that follows it (Hear the
+                // value), and Up, Down or Enter set it at the playhead.
+                let mut nudge: Option<(usize, f64)> = None;
+                for (i, l) in t.automation.iter().enumerate() {
+                    let words = lane_words(t, &buses, l, &map);
+                    let r = ui.interact(
+                        body(i),
+                        ui.scope_id().with(("automation-lane", i)),
+                        Sense::focusable_noninteractive(),
+                    );
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Group, true, &words));
+                    crate::spoken::keep(
+                        ui.ctx(),
+                        r.id,
+                        crate::spoken::Heard {
+                            text: words,
+                            hear: crate::spoken::Hear::Line(lane_line(t, l)),
+                        },
+                    );
+                    if r.has_focus() {
+                        // Up and Down stay with the lane.
+                        let arrows = egui::EventFilter {
+                            vertical_arrows: true,
+                            ..Default::default()
+                        };
+                        ui.memory_mut(|m| m.set_focus_lock_filter(r.id, arrows));
+                        painter.rect_stroke(
+                            body(i).shrink(1.0),
+                            0.0,
+                            ui.visuals().selection.stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                        let (up, down, enter) = ui.input(|k| {
+                            (
+                                k.key_pressed(egui::Key::ArrowUp),
+                                k.key_pressed(egui::Key::ArrowDown),
+                                k.key_pressed(egui::Key::Enter),
+                            )
+                        });
+                        let by = if up {
+                            Some(LANE_STEP)
+                        } else if down {
+                            Some(-LANE_STEP)
+                        } else {
+                            enter.then_some(0.0)
+                        };
+                        nudge = by.map(|by| (i, by));
+                    }
+                }
+                if let Some((i, by)) = nudge {
+                    let t = &mut self.tracks[ti];
+                    if let Some(g) = ranges[i]
+                        && let Some(now) = (t.automation[i].value_at(playhead))
+                            .or_else(|| control(t, &t.automation[i].param))
+                    {
+                        t.automation[i].put(playhead, g.value(g.fraction(now) + by));
+                        changed = true;
+                    }
                 }
                 if self.automation.drag.is_some() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

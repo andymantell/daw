@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
+use crate::spoken;
 use daw_engine::engine::Command;
 use daw_engine::import;
 use daw_engine::preview::{self, PreviewSound};
@@ -679,6 +680,7 @@ impl Browser {
                 .on_hover_text("Stretch loops to the project's tempo, keeping their pitch");
             ui.checkbox(&mut self.looped, "Loop");
             ui.checkbox(&mut self.auto_play, "Play on click");
+            let first = spoken::start(ui);
             ui.add(
                 egui::Slider::new(&mut self.level_db, -40.0..=6.0)
                     .suffix(" dB")
@@ -686,6 +688,7 @@ impl Browser {
                     .text("Level"),
             )
             .accessible_name("Preview level");
+            spoken::level(ui, first, self.level_db as f64);
         });
         ui.horizontal(|ui| {
             if let Some((path, speed)) = &self.playing

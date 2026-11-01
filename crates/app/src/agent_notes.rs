@@ -57,6 +57,18 @@ fn note_fields(mut props: Value) -> Value {
     props
 }
 
+/// Notes to add: one pitch, several, or a chord by name.
+fn new_notes() -> Value {
+    json!({"type": "array", "description": "Each needs a beat, beats and a pitch, pitches or a chord.",
+    "items": {"type": "object", "properties": note_fields(json!({
+        "pitches": {"type": "array", "items": {"type": "integer"},
+                    "description": "Several notes at once, all alike."},
+        "chord": {"type": "string", "description": "Such as Dm9, Cmaj7, A7b9, Em7b5, G/B or Fsus4: \
+                  its notes, the root in the octave given."},
+        "octave": {"type": "integer", "description": "For chord: 4 (the octave of middle C) if left out."}
+    }))}})
+}
+
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_note_clip",
@@ -75,7 +87,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "duplicate_clip",
         description: "Copies an audio clip or a note clip, straight after it unless a bar \
-                      or seconds is given. A copy of a pattern clip plays the same \
+                      or seconds is given, as many times as asked, back to back (a 4-bar \
+                      riff 8 times fills 32 bars). A copy of a pattern clip plays the same \
                       pattern (linked: editing the pattern changes both) unless linked is \
                       false, when it gets a copy of the pattern of its own. Gives the new \
                       clip's id.",
@@ -84,8 +97,25 @@ pub(crate) const TOOLS: &[Tool] = &[
             json!({"type": "object", "properties": clip_props(json!({
                 "clip": {"type": "string"},
                 "track": {"type": "string", "description": "Put the copy on this track."},
-                "linked": {"type": "boolean", "description": "Pattern clips: true if left out."}
+                "linked": {"type": "boolean", "description": "Pattern clips: true if left out."},
+                "times": {"type": "integer", "description": "How many copies; 1 if left out."}
             })), "required": ["clip"]})
+        },
+    },
+    Tool {
+        name: "add_note_clip",
+        description: "Adds a note clip to an instrument track, starting on a bar, some \
+                      bars long, with the notes given (as edit_notes adds them, chords \
+                      too). Gives its id.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string"},
+                "bar": {"type": "integer", "description": "From 1."},
+                "bars": {"type": "integer", "description": "How long; 1 if left out."},
+                "name": {"type": "string"},
+                "notes": new_notes()
+            }, "required": ["track", "bar"]})
         },
     },
     Tool {
@@ -103,9 +133,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "clip": {"type": "string"},
                 "clear": {"type": "boolean"},
                 "remove": {"type": "array", "items": {"type": "string"}},
-                "add": {"type": "array", "items": {"type": "object",
-                    "properties": note_fields(json!({})),
-                    "required": ["beat", "beats", "pitch"]}},
+                "add": new_notes(),
                 "change": {"type": "array", "items": {"type": "object",
                     "properties": note_fields(json!({"id": {"type": "string"}})),
                     "required": ["id"]}},
@@ -439,11 +467,120 @@ fn find_lane(p: &Pattern, key: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("The pattern has no lane {key}."))
 }
 
+/// The notes a list of new notes gives: each a pitch, pitches or a
+/// chord.
+fn notes_of(v: &Value) -> Result<Vec<Note>, String> {
+    let mut out = Vec::new();
+    for n in v.as_array().into_iter().flatten() {
+        let (Some(beat), Some(len)) = (n["beat"].as_f64(), n["beats"].as_f64()) else {
+            return Err("Each note needs a beat and beats (how long).".into());
+        };
+        let pitches: Vec<i64> = if let Some(c) = n["chord"].as_str() {
+            let octave = n["octave"].as_i64().unwrap_or(4);
+            chord(c)?.iter().map(|p| p + 12 * (octave + 1)).collect()
+        } else if let Some(ps) = n["pitches"].as_array() {
+            ps.iter()
+                .map(|p| p.as_i64().ok_or("Pitches are whole numbers."))
+                .collect::<Result<_, _>>()?
+        } else {
+            vec![
+                n["pitch"]
+                    .as_i64()
+                    .ok_or("Each note needs a pitch, pitches or a chord.")?,
+            ]
+        };
+        for p in pitches {
+            if !(0..=127).contains(&p) {
+                return Err(format!("Pitch {p} is outside 0 to 127."));
+            }
+            let mut note = Note::new(beats(beat.max(0.0)), beats(len).max(1), p as u8, 100);
+            let mut rest = n.clone();
+            rest["pitch"] = Value::Null;
+            change_note(&mut note, &rest)?;
+            out.push(note);
+        }
+    }
+    Ok(out)
+}
+
+/// A chord's notes as semitones from C of octave -1 plus the root, for
+/// a name such as "Dm9", "Bbmaj7", "A7b9" or "G/B" (the bass below).
+fn chord(name: &str) -> Result<Vec<i64>, String> {
+    let bad = || format!("{name} isn't a chord this knows, such as Dm9, Cmaj7, A7b9 or G/B.");
+    let (body, bass) = match name.trim().split_once('/') {
+        Some((b, s)) => (b, Some(s)),
+        None => (name.trim(), None),
+    };
+    let note = |s: &str| -> Option<(i64, usize)> {
+        let mut c = s.chars();
+        let base = match c.next()?.to_ascii_uppercase() {
+            'C' => 0,
+            'D' => 2,
+            'E' => 4,
+            'F' => 5,
+            'G' => 7,
+            'A' => 9,
+            'B' => 11,
+            _ => return None,
+        };
+        match c.next() {
+            Some('#') => Some((base + 1, 2)),
+            Some('b') if s.len() > 1 => Some((base - 1, 2)),
+            _ => Some((base, 1)),
+        }
+    };
+    let (root, used) = note(body).ok_or_else(bad)?;
+    let quality = &body[used..];
+    let steps: &[i64] = match quality {
+        "" | "maj" | "M" => &[0, 4, 7],
+        "m" | "min" | "-" => &[0, 3, 7],
+        "dim" | "o" => &[0, 3, 6],
+        "aug" | "+" => &[0, 4, 8],
+        "5" => &[0, 7],
+        "sus2" => &[0, 2, 7],
+        "sus4" | "sus" => &[0, 5, 7],
+        "6" => &[0, 4, 7, 9],
+        "m6" => &[0, 3, 7, 9],
+        "7" => &[0, 4, 7, 10],
+        "maj7" | "M7" => &[0, 4, 7, 11],
+        "m7" | "min7" | "-7" => &[0, 3, 7, 10],
+        "mmaj7" => &[0, 3, 7, 11],
+        "m7b5" | "ø" => &[0, 3, 6, 10],
+        "dim7" | "o7" => &[0, 3, 6, 9],
+        "7sus4" => &[0, 5, 7, 10],
+        "add9" => &[0, 4, 7, 14],
+        "madd9" => &[0, 3, 7, 14],
+        "9" => &[0, 4, 7, 10, 14],
+        "maj9" => &[0, 4, 7, 11, 14],
+        "m9" => &[0, 3, 7, 10, 14],
+        "7b9" => &[0, 4, 7, 10, 13],
+        "7#9" => &[0, 4, 7, 10, 15],
+        "11" => &[0, 7, 10, 14, 17],
+        "m11" => &[0, 3, 7, 10, 14, 17],
+        "13" => &[0, 4, 10, 14, 21],
+        "maj13" => &[0, 4, 11, 14, 21],
+        "m13" => &[0, 3, 10, 14, 21],
+        _ => return Err(bad()),
+    };
+    let mut out: Vec<i64> = steps.iter().map(|s| root + s).collect();
+    if let Some(b) = bass {
+        let (b, used) = note(b).ok_or_else(bad)?;
+        if used != bass.map_or(0, str::len) {
+            return Err(bad());
+        }
+        // The bass goes below the root.
+        let below = (root - b).rem_euclid(12);
+        out.insert(0, root - if below == 0 { 12 } else { below });
+    }
+    Ok(out)
+}
+
 impl App {
     /// Runs one of the tools here, or `None` if `name` isn't one.
     pub(crate) fn notes_tool(&mut self, name: &str, args: &Value) -> Option<Done> {
         Some(match name {
             "duplicate_clip" => self.duplicate_clip_tool(args),
+            "add_note_clip" => self.add_note_clip_tool(args),
             "edit_notes" => self.edit_notes_tool(args),
             "edit_note_lanes" => self.edit_note_lanes_tool(args),
             "note_tool" => self.note_tool(args),
@@ -594,6 +731,7 @@ impl App {
         let at_frame = at_tick.map(|t| self.tempo_map().frames_at(Ticks(t)).0);
         let linked = args["linked"].as_bool().unwrap_or(true);
         let to = args["track"].as_str().map(String::from);
+        let times = args["times"].as_i64().unwrap_or(1).clamp(1, 256);
         self.edit_model(|p| {
             let dest = |p: &Project, i: usize, audio: bool| -> Result<usize, String> {
                 let Some(to) = &to else { return Ok(i) };
@@ -612,37 +750,46 @@ impl App {
                 Ok(ti)
             };
             for i in 0..p.tracks.len() {
-                if let Some(c) = p.tracks[i].clips.iter().find(|c| c.id == id) {
-                    let mut c = c.clone();
-                    c.id = daw_project::new_id();
-                    c.start = at_frame.unwrap_or(c.start + c.len);
-                    let new = c.id.clone();
+                if let Some(src) = p.tracks[i].clips.iter().find(|c| c.id == id).cloned() {
                     let ti = dest(p, i, true)?;
-                    p.tracks[ti].clips.push(c);
-                    return Ok(json!({"clip": new}));
-                }
-                if let Some(c) = p.tracks[i].note_clips.iter().find(|c| c.id == id) {
-                    let mut c = c.clone();
-                    c.id = daw_project::new_id();
-                    c.start = at_tick.unwrap_or(c.end());
-                    for n in &mut c.notes {
-                        n.id = daw_project::new_id();
+                    let first = at_frame.unwrap_or(src.start + src.len);
+                    let mut new = Vec::new();
+                    for k in 0..times {
+                        let mut c = src.clone();
+                        c.id = daw_project::new_id();
+                        c.start = first + k * src.len;
+                        new.push(c.id.clone());
+                        p.tracks[ti].clips.push(c);
                     }
+                    return Ok(json!({"clip": new[0], "clips": new}));
+                }
+                if let Some(src) = p.tracks[i].note_clips.iter().find(|c| c.id == id).cloned() {
+                    let ti = dest(p, i, false)?;
+                    let first = at_tick.unwrap_or(src.end());
+                    let mut new = Vec::new();
+                    let mut pattern = src.pattern.clone();
                     if !linked
-                        && let Some(src) = (c.pattern.as_ref())
+                        && let Some(pat) = (src.pattern.as_ref())
                             .and_then(|id| p.patterns.iter().find(|x| &x.id == id))
                     {
-                        let copy = src.copy(format!("{} copy", src.name));
-                        c.pattern = Some(copy.id.clone());
+                        // One copy of the pattern, shared by the new clips.
+                        let copy = pat.copy(format!("{} copy", pat.name));
+                        pattern = Some(copy.id.clone());
                         p.patterns.push(copy);
                     }
-                    let new = c.id.clone();
-                    let pattern = c.pattern.clone();
-                    let ti = dest(p, i, false)?;
-                    let clips = &mut p.tracks[ti].note_clips;
-                    clips.push(c);
-                    clips.sort_by_key(|c| c.start);
-                    return Ok(json!({"clip": new, "pattern": pattern}));
+                    for k in 0..times {
+                        let mut c = src.clone();
+                        c.id = daw_project::new_id();
+                        c.start = first + k * src.len;
+                        c.pattern = pattern.clone();
+                        for n in &mut c.notes {
+                            n.id = daw_project::new_id();
+                        }
+                        new.push(c.id.clone());
+                        p.tracks[ti].note_clips.push(c);
+                    }
+                    p.tracks[ti].note_clips.sort_by_key(|c| c.start);
+                    return Ok(json!({"clip": new[0], "clips": new, "pattern": pattern}));
                 }
             }
             Err(format!("There is no clip {id}."))
@@ -650,22 +797,44 @@ impl App {
         .map(|v| (v, Some("Duplicate a clip".into())))
     }
 
+    fn add_note_clip_tool(&mut self, args: &Value) -> Done {
+        let key = text(args, "track", "the track's id")?.to_string();
+        let bar = args["bar"]
+            .as_i64()
+            .ok_or("Give the bar it starts on.")?
+            .max(1);
+        let bars = args["bars"].as_i64().unwrap_or(1).max(1);
+        let map = self.tempo_map();
+        let (start, end) = (map.bar_start(bar).0, map.bar_start(bar + bars).0);
+        let name = args["name"].as_str().map(String::from);
+        let notes = notes_of(&args["notes"])?;
+        self.edit_model(|p| {
+            let t = (p.tracks.iter_mut())
+                .find(|t| t.id == key)
+                .ok_or_else(|| format!("There is no track {key}."))?;
+            if !t.kind.plays_notes() {
+                return Err(format!("{} isn't an instrument track.", t.name));
+            }
+            let id = daw_project::new_id();
+            let n = t.note_clips.len() + 1;
+            let name = name.unwrap_or_else(|| format!("{} {n}", t.name));
+            let mut c = NoteClip::new(id.clone(), name, start, end - start);
+            c.notes = notes;
+            c.sort_notes();
+            let count = c.notes.len();
+            t.note_clips.push(c);
+            t.note_clips.sort_by_key(|c| c.start);
+            Ok(
+                json!({"clip": id, "start_ticks": start, "len_ticks": end - start,
+                      "notes": count}),
+            )
+        })
+        .map(|v| (v, Some("Add a note clip".into())))
+    }
+
     fn edit_notes_tool(&mut self, args: &Value) -> Done {
         let id = text(args, "clip", "the clip's id")?.to_string();
-        let mut add = Vec::new();
-        for n in args["add"].as_array().into_iter().flatten() {
-            let (Some(beat), Some(len), Some(pitch)) =
-                (n["beat"].as_f64(), n["beats"].as_f64(), n["pitch"].as_u64())
-            else {
-                return Err("Each note needs a beat, beats (how long) and a pitch.".into());
-            };
-            if pitch > 127 {
-                return Err(format!("Pitch {pitch} is past 127."));
-            }
-            let mut note = Note::new(beats(beat.max(0.0)), beats(len).max(1), pitch as u8, 100);
-            change_note(&mut note, n)?;
-            add.push(note);
-        }
+        let add = notes_of(&args["add"])?;
         let remove = ids(&args["remove"]);
         let ungroup: HashSet<String> = ids(&args["ungroup"]).into_iter().collect();
         let clear = args["clear"].as_bool() == Some(true);
@@ -1168,6 +1337,79 @@ mod tests {
 
     fn clip(d: &mut Driver, c: &str) -> Value {
         d.call("get_note_clip", json!({"clip": c})).unwrap()
+    }
+
+    #[test]
+    fn chords_are_read_from_names() {
+        use super::chord;
+        assert_eq!(chord("C").unwrap(), [0, 4, 7]);
+        assert_eq!(chord("Dm9").unwrap(), [2, 5, 9, 12, 16]);
+        assert_eq!(chord("Bbmaj7").unwrap(), [10, 14, 17, 21]);
+        assert_eq!(chord("F#m7b5").unwrap(), [6, 9, 12, 16]);
+        assert_eq!(chord("A7b9").unwrap(), [9, 13, 16, 19, 22]);
+        // The bass below the root.
+        assert_eq!(chord("G/B").unwrap(), [-1, 7, 11, 14]);
+        assert_eq!(chord("C/C").unwrap(), [-12, 0, 4, 7]);
+        assert!(chord("H7").is_err());
+        assert!(chord("Cweird").is_err());
+    }
+
+    #[test]
+    fn a_clip_comes_with_its_chords_and_is_repeated_to_fill_a_section() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        let v = d
+            .call(
+                "add_note_clip",
+                json!({"track": t, "bar": 5, "bars": 2, "notes": [
+                    {"beat": 0, "beats": 4, "chord": "Dm9", "velocity": 70},
+                    {"beat": 4, "beats": 4, "chord": "Gm9", "octave": 3},
+                    {"beat": 0, "beats": 8, "pitches": [38, 50]},
+                ]}),
+            )
+            .unwrap();
+        assert_eq!(v["notes"], 12);
+        let c = id(v, "clip");
+        let notes = clip(&mut d, &c)["notes"].clone();
+        let at0: Vec<u64> = (notes.as_array().unwrap().iter())
+            .filter(|n| n["beat"] == 0.0 && n["beats"] == 4.0)
+            .map(|n| n["pitch"].as_u64().unwrap())
+            .collect();
+        assert_eq!(at0, [62, 65, 69, 72, 76]);
+        assert!(notes.as_array().unwrap().iter().any(|n| n["pitch"] == 55));
+
+        let v = d
+            .call("duplicate_clip", json!({"clip": c, "times": 3}))
+            .unwrap();
+        let copies: Vec<String> = (v["clips"].as_array().unwrap().iter())
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        let bars: Vec<f64> = (copies.iter())
+            .map(|k| clip(&mut d, k)["bar"].as_f64().unwrap())
+            .collect();
+        assert_eq!(bars, [7.0, 9.0, 11.0]);
+        assert_eq!(
+            clip(&mut d, &copies[2])["notes"].as_array().unwrap().len(),
+            12
+        );
+        // All in one step.
+        d.command("undo");
+        assert!(d.call("get_note_clip", json!({"clip": copies[0]})).is_err());
+
+        // A note clip can be picked, so commands act on it.
+        d.call("select_clips", json!({"clips": [c]})).unwrap();
+        let sel = d.call("get_selection", json!({})).unwrap();
+        assert_eq!(sel["note_clip"], json!(c));
+        assert!(
+            d.call(
+                "edit_notes",
+                json!({"clip": c, "add": [{"beat": 0, "beats": 1, "chord": "Xm"}]})
+            )
+            .is_err()
+        );
     }
 
     #[test]

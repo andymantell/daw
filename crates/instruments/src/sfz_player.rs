@@ -18,7 +18,7 @@ use daw_engine::midi::{Event, Kind};
 
 use crate::dsp::{Mode, SVF_ZERO, Svf, fall};
 use crate::library::{Library, Source};
-use crate::params::Params;
+use crate::params::Live;
 use crate::sample::hermite;
 use crate::sfz::{Fader, FilterKind, LoopMode, OffMode, Region, Target, Trigger};
 use crate::stream::{Cursor, Streams};
@@ -184,7 +184,7 @@ impl Voice {
 /// A library playing.
 pub struct SfzPlayer {
     lib: Arc<Library>,
-    params: Arc<Params>,
+    params: Live,
     knobs: Knobs,
     rate: f32,
     voices: Box<[Voice; VOICES]>,
@@ -217,7 +217,7 @@ pub struct SfzPlayer {
 impl SfzPlayer {
     /// Allocates (and starts the disk loader for a library that plays
     /// from disk); not for the audio thread.
-    pub fn new(rate: u32, lib: Arc<Library>, params: Arc<Params>, knobs: Knobs) -> SfzPlayer {
+    pub fn new(rate: u32, lib: Arc<Library>, params: impl Into<Live>, knobs: Knobs) -> SfzPlayer {
         let streams = lib.streamed.then(|| Streams::new(lib.clone(), VOICES));
         let mut cc = [0.0; 128];
         for (&c, &v) in &lib.sfz.cc_start {
@@ -227,7 +227,7 @@ impl SfzPlayer {
             seq: vec![0; lib.sfz.regions.len()],
             keyswitch: lib.sfz.sw_default,
             lib,
-            params,
+            params: params.into(),
             knobs,
             rate: rate.max(1) as f32,
             voices: Box::new([Voice::OFF; VOICES]),

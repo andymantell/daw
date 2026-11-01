@@ -309,3 +309,69 @@ fn reading_lanes_does_not_allocate() {
     }
     assert_eq!(rt_check::violations(), before);
 }
+
+/// An instrument that plays a steady level, its setting 0 (1.0 unless a
+/// lane sets it), so what it was set to shows in the audio.
+struct Level {
+    set: Option<f32>,
+}
+
+impl daw_engine::midi::Instrument for Level {
+    fn process(&mut self, _: &[daw_engine::midi::Event], left: &mut [f32], right: &mut [f32]) {
+        let v = self.set.unwrap_or(1.0);
+        for s in left.iter_mut().chain(right.iter_mut()) {
+            *s += v;
+        }
+    }
+
+    fn automate(&mut self, param: u32, value: f64) {
+        if param == 0 {
+            self.set = Some(value as f32);
+        }
+    }
+
+    fn clear_automation(&mut self) {
+        self.set = None;
+    }
+}
+
+#[test]
+fn an_instrument_lane_sets_the_instrument_before_it_plays() {
+    let mut s = session();
+    let mut t = TrackSpec::new(Vec::new());
+    t.instrument = Some(daw_engine::graph::InstrumentSpec { id: 1, latency: 0 });
+    // From 0.25 at the start to 0.75 at frame 2400, then held.
+    t.automation = vec![lane(Target::Instrument(0), vec![(0, 0.25), (2400, 0.75)])];
+    s.tracks.push(t);
+    let mut inst: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> =
+        vec![(1, Box::new(Level { set: None }))];
+    let g = s.compile_all(BLOCK, &mut Vec::new(), &mut inst).unwrap();
+    let [l, _] = engine::render_offline(g, Frames(0), LEN, BLOCK);
+    // Stereo, so the centre pan leaves it alone.
+    let level = |i: usize| l[i];
+    // The first block plays the lane's first value, not the control's:
+    // the lane is read before the instrument plays.
+    assert!((level(0) - 0.25).abs() < 1e-3, "{}", level(0));
+    // Each block takes the line's value at its start.
+    let at = 1200 / BLOCK * BLOCK;
+    let want = 0.25 + 0.5 * at as f32 / 2400.0;
+    assert!((level(at) - want).abs() < 1e-3, "{} {want}", level(at));
+    assert!((level(LEN - 1) - 0.75).abs() < 1e-3);
+}
+
+#[test]
+fn an_instrument_lane_being_written_leaves_the_control_in_charge() {
+    let mut s = session();
+    let mut t = TrackSpec::new(Vec::new());
+    t.instrument = Some(daw_engine::graph::InstrumentSpec { id: 1, latency: 0 });
+    let mut l = lane(Target::Instrument(0), vec![(0, 0.25)]);
+    l.live = true;
+    t.automation = vec![l];
+    s.tracks.push(t);
+    let mut inst: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> =
+        vec![(1, Box::new(Level { set: Some(0.5) }))];
+    let g = s.compile_all(BLOCK, &mut Vec::new(), &mut inst).unwrap();
+    let [l, _] = engine::render_offline(g, Frames(0), LEN, BLOCK);
+    // Cleared to the control's 1.0, as the lane plays nothing.
+    assert!((l[100] - 1.0).abs() < 1e-3, "{}", l[100]);
+}

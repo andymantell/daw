@@ -1270,6 +1270,39 @@ impl TrackNode {
                         fx.set_param(param, v as f64);
                     }
                 }
+                // Read before the instrument plays, by `read_instrument_lanes`.
+                Target::Instrument(_) => {}
+            }
+        }
+    }
+
+    /// Reads the instrument's lanes at `at` into it, before it plays
+    /// the block; a setting without a lane (or one being written) is its
+    /// control's.
+    fn read_instrument_lanes(&mut self, at: i64) {
+        let Some(InstrumentNode {
+            inst: Some(inst), ..
+        }) = &mut self.instrument
+        else {
+            return;
+        };
+        if !self
+            .automation
+            .iter()
+            .any(|l| matches!(l.target, Target::Instrument(_)))
+        {
+            return;
+        }
+        inst.clear_automation();
+        for lane in &self.automation {
+            let Target::Instrument(param) = lane.target else {
+                continue;
+            };
+            if lane.live {
+                continue;
+            }
+            if let Some(v) = lane.curve.at(at) {
+                inst.automate(param, v as f64);
             }
         }
     }
@@ -2545,12 +2578,17 @@ impl Graph {
                     sl,
                     sr,
                 );
-            } else if let Some(InstrumentNode {
-                inst: Some(inst), ..
-            }) = &mut t.instrument
-            {
-                let mut outs = Outputs::new(aux, &self.aux_routed[ti], n);
-                inst.process_outputs(&t.events, sl, sr, &mut outs);
+            } else if t.instrument.as_ref().is_some_and(|i| i.inst.is_some()) {
+                if !t.automation.is_empty() {
+                    t.read_instrument_lanes(pos);
+                }
+                if let Some(InstrumentNode {
+                    inst: Some(inst), ..
+                }) = &mut t.instrument
+                {
+                    let mut outs = Outputs::new(aux, &self.aux_routed[ti], n);
+                    inst.process_outputs(&t.events, sl, sr, &mut outs);
+                }
             }
 
             if t.widen {
@@ -2772,8 +2810,11 @@ impl Graph {
             // The old track the first instrument taken over came from.
             let mut from = None;
             if let Some(i) = t.instrument.as_mut().filter(|i| i.inst.is_none())
-                && let Some((k, inst)) = take_instrument(old, i.id, None)
+                && let Some((k, mut inst)) = take_instrument(old, i.id, None)
             {
+                // This graph's lanes set it from the next block; one
+                // taken away gives its setting back to the control.
+                inst.clear_automation();
                 i.inst = Some(inst);
                 from = Some(k);
             }

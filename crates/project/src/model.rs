@@ -698,6 +698,9 @@ impl Lane {
     /// A plugin's parameter: `plugin:`, the effect's id, `:` and the
     /// parameter's id.
     pub const PLUGIN: &'static str = "plugin:";
+    /// A setting of the track's built-in instrument: `instrument.` and
+    /// the setting's key (as assistants name it too).
+    pub const INSTRUMENT: &'static str = "instrument.";
 
     pub fn new(param: impl Into<String>) -> Lane {
         Lane {
@@ -725,6 +728,10 @@ impl Lane {
             && let Ok(id) = id.parse()
         {
             LaneTarget::Plugin { effect, id }
+        } else if let Some(key) = p.strip_prefix(Lane::INSTRUMENT)
+            && !key.is_empty()
+        {
+            LaneTarget::Instrument(key)
         } else {
             LaneTarget::Unknown
         }
@@ -815,6 +822,8 @@ pub enum LaneTarget<'a> {
         effect: &'a str,
         id: u32,
     },
+    /// A setting of the track's built-in instrument, by its key.
+    Instrument(&'a str),
     /// A setting this version doesn't know.
     Unknown,
 }
@@ -2282,6 +2291,15 @@ mod tests {
             }
         );
         assert_eq!(Lane::new("plugin:e2:x").target(), LaneTarget::Unknown);
+        assert_eq!(
+            Lane::new("instrument.cutoff").target(),
+            LaneTarget::Instrument("cutoff")
+        );
+        assert_eq!(
+            Lane::new("instrument.pad0.level").target(),
+            LaneTarget::Instrument("pad0.level")
+        );
+        assert_eq!(Lane::new("instrument.").target(), LaneTarget::Unknown);
         assert_eq!(Lane::new("fx:e1:threshold").effect(), Some("e1"));
         assert_eq!(Lane::new("pan").effect(), None);
     }

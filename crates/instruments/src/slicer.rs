@@ -11,7 +11,7 @@ use std::sync::Arc;
 use daw_engine::midi::{Event, Instrument, Kind};
 
 use crate::dsp::{Adsr, Env, Mode, SVF_ZERO, Svf, db};
-use crate::params::{Param, Params, Unit};
+use crate::params::{Live, Param, Params, Unit};
 use crate::sample::{Player, Sample};
 
 pub const MODES: &[&str] = &["Play the slice", "Stop with the note"];
@@ -187,7 +187,7 @@ struct Voice {
 }
 
 pub struct Slicer {
-    params: Arc<Params>,
+    params: Live,
     sample: Option<Arc<Sample>>,
     /// The slices' starts in frames of `sample`.
     slices: Vec<usize>,
@@ -199,7 +199,13 @@ pub struct Slicer {
 impl Slicer {
     /// `scale` turns the slices' frames (as `params` hold them) into
     /// frames of `sample`, which may be at another rate.
-    pub fn new(rate: u32, params: Arc<Params>, sample: Option<Arc<Sample>>, scale: f64) -> Slicer {
+    pub fn new(
+        rate: u32,
+        params: impl Into<Live>,
+        sample: Option<Arc<Sample>>,
+        scale: f64,
+    ) -> Slicer {
+        let params: Live = params.into();
         let slices = slices_in(&params)
             .into_iter()
             .map(|f| (f as f64 * scale) as usize)

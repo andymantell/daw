@@ -15,7 +15,7 @@ use daw_engine::midi::{Event, Instrument, Kind, Outputs};
 
 use crate::drum_voice::{Drum, Hit};
 use crate::dsp::{db, fall};
-use crate::params::{Param, Params, Unit};
+use crate::params::{Live, Param, Params, Unit};
 use crate::sample::{Player, Sample};
 
 pub const PADS: usize = 16;
@@ -222,7 +222,7 @@ struct Voice {
 
 /// The drum machine on the audio thread.
 pub struct DrumMachine {
-    params: Arc<Params>,
+    params: Live,
     /// Each layer's sample at the output's rate, `pad * LAYERS + layer`.
     samples: Vec<Option<Arc<Sample>>>,
     /// Each pad's effects, in order.
@@ -240,13 +240,13 @@ impl DrumMachine {
     /// lists, or fewer for pads with none.
     pub fn new(
         rate: u32,
-        params: Arc<Params>,
+        params: impl Into<Live>,
         samples: Vec<Option<Arc<Sample>>>,
         mut fx: Vec<Vec<Box<dyn Insert>>>,
     ) -> DrumMachine {
         fx.resize_with(PADS, Vec::new);
         DrumMachine {
-            params,
+            params: params.into(),
             samples,
             fx,
             rate: rate.max(1) as f32,

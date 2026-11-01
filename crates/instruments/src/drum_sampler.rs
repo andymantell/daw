@@ -10,7 +10,7 @@ use std::sync::Arc;
 use daw_engine::midi::{Event, Instrument, Kind};
 
 use crate::dsp::{Mode, SVF_ZERO, Svf, db, fall};
-use crate::params::{Param, Params, Unit};
+use crate::params::{Live, Param, Unit};
 use crate::sample::{Player, Sample};
 
 pub const MODES: &[&str] = &["Play to the end", "Stop with the note"];
@@ -97,7 +97,7 @@ const OFF: Voice = Voice {
 };
 
 pub struct DrumSampler {
-    params: Arc<Params>,
+    params: Live,
     sample: Option<Arc<Sample>>,
     rate: f32,
     voices: [Voice; VOICES],
@@ -105,9 +105,9 @@ pub struct DrumSampler {
 }
 
 impl DrumSampler {
-    pub fn new(rate: u32, params: Arc<Params>, sample: Option<Arc<Sample>>) -> DrumSampler {
+    pub fn new(rate: u32, params: impl Into<Live>, sample: Option<Arc<Sample>>) -> DrumSampler {
         DrumSampler {
-            params,
+            params: params.into(),
             sample,
             rate: rate.max(1) as f32,
             voices: [OFF; VOICES],
@@ -243,6 +243,7 @@ impl Instrument for DrumSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::Params;
 
     fn ramp() -> Arc<Sample> {
         Arc::new(Sample::mono(

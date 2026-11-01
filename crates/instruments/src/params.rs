@@ -3,6 +3,7 @@
 //! the audio thread: each a number in a range, stored as `f32` bits in
 //! an atomic, and saved by key.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// What a setting's number means, for showing it.
@@ -208,9 +209,101 @@ impl Params {
     }
 }
 
+/// An instrument's settings as it plays them: the controls (shared
+/// with the settings side), with what automation lanes set in their
+/// place. Clones share the lanes' values too, so an instrument's parts
+/// (the sampler's library player, say) hear the same.
+#[derive(Clone)]
+pub struct Live {
+    shared: Arc<Params>,
+    /// Per setting, a lane's value as `f32` bits, or [`NONE`] for the
+    /// control's.
+    auto: Arc<[AtomicU32]>,
+}
+
+/// No lane's value: a NaN no setting can hold.
+const NONE: u32 = 0x7fc0_dead;
+
+impl Live {
+    pub fn new(shared: Arc<Params>) -> Live {
+        let auto = (0..shared.len()).map(|_| AtomicU32::new(NONE)).collect();
+        Live { shared, auto }
+    }
+
+    /// The controls, as the settings side has them.
+    pub fn shared(&self) -> &Arc<Params> {
+        &self.shared
+    }
+
+    /// Setting `i`, as the audio thread plays it: a lane's value if one
+    /// set it, else the control's.
+    #[inline]
+    pub fn read(&self, i: usize) -> f32 {
+        match self.auto.get(i).map(|a| a.load(Ordering::Relaxed)) {
+            Some(bits) if bits != NONE => f32::from_bits(bits),
+            _ => self.shared.read(i),
+        }
+    }
+
+    pub fn get(&self, i: usize) -> f64 {
+        self.read(i) as f64
+    }
+
+    /// Plays setting `i` at `v` (kept in its range) in place of its
+    /// control, until [`clear_auto`](Self::clear_auto).
+    pub fn set_auto(&self, i: usize, v: f64) {
+        if let (Some(p), Some(slot)) = (self.shared.list.get(i), self.auto.get(i))
+            && v.is_finite()
+        {
+            slot.store((p.clamp(v) as f32).to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Gives every setting back to its control.
+    pub fn clear_auto(&self) {
+        for a in self.auto.iter() {
+            a.store(NONE, Ordering::Relaxed);
+        }
+    }
+}
+
+impl std::ops::Deref for Live {
+    type Target = Params;
+
+    fn deref(&self) -> &Params {
+        &self.shared
+    }
+}
+
+impl From<Arc<Params>> for Live {
+    fn from(p: Arc<Params>) -> Live {
+        Live::new(p)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lane_plays_in_place_of_the_control_until_cleared() {
+        let p = Arc::new(Params::new(vec![
+            Param::new("cutoff", "Cutoff", 30.0, 18_000.0, 2_500.0, Unit::Hz),
+            Param::new("level", "Level", -60.0, 6.0, 0.0, Unit::Db),
+        ]));
+        let live = Live::new(p.clone());
+        let part = live.clone();
+        live.set_auto(0, 99_999.0);
+        // Kept in range, heard by every clone, and the control is left
+        // alone.
+        assert_eq!(part.get(0), 18_000.0);
+        assert_eq!(p.get(0), 2_500.0);
+        assert_eq!(live.get(1), 0.0);
+        p.set(1, -6.0);
+        assert_eq!(live.get(1), -6.0);
+        live.clear_auto();
+        assert_eq!(part.get(0), 2_500.0);
+    }
 
     #[test]
     fn settings_stay_in_range_and_round_trip_by_key() {

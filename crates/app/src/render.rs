@@ -205,9 +205,14 @@ impl App {
                 spec.sends.clear();
                 spec.group = None;
                 // Before the fader: its volume, pan and send lanes go to
-                // the new track instead. Effects' lanes are rendered.
-                spec.automation
-                    .retain(|l| matches!(l.target, AutoTarget::Insert { .. }));
+                // the new track instead. Effects' and the instrument's lanes
+                // are rendered.
+                spec.automation.retain(|l| {
+                    matches!(
+                        l.target,
+                        AutoTarget::Insert { .. } | AutoTarget::Instrument(_)
+                    )
+                });
             } else if who.heard(i) {
                 // Sends kept keep their lanes, renumbered.
                 let kept: Vec<bool> = spec.sends.iter().map(|x| who.inside(x.to)).collect();

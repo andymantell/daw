@@ -1502,7 +1502,11 @@ impl App {
                 json!({"param": MUTE, "name": "Mute", "value": t.mix.mute as u8, "min": 0, "max": 1}),
                 json!({"param": SOLO, "name": "Solo", "value": t.mix.solo as u8, "min": 0, "max": 1}),
             ];
-            for c in crate::automation::choices_up_to(t, &buses, usize::MAX) {
+            // The instrument's are listed below, with its own names.
+            for c in crate::automation::choices_up_to(t, &buses, usize::MAX)
+                .into_iter()
+                .filter(|c| !c.param.starts_with(INSTRUMENT))
+            {
                 let (Some(v), Some(r)) = (
                     crate::automation::control(t, &c.param),
                     crate::automation::range(t, &c.param),
@@ -1537,9 +1541,11 @@ impl App {
             params.extend(crate::notefx::parameters(&t.note_fx));
             if let Some(slot) = &t.instrument {
                 for (k, name, v, min, max, text) in slot.settings() {
+                    let param = format!("{INSTRUMENT}{k}");
+                    let automated = t.automation.iter().any(|l| l.param == param);
                     let mut p = json!({
-                        "param": format!("{INSTRUMENT}{k}"), "name": name, "value": v,
-                        "text": text, "min": min, "max": max,
+                        "param": param, "name": name, "value": v,
+                        "text": text, "min": min, "max": max, "automated": automated,
                     });
                     let names = slot.choices(&k);
                     if !names.is_empty() {
@@ -1746,7 +1752,7 @@ fn narrow(mut v: Value, args: &Value) -> Value {
 /// `set_parameter` takes.
 const MUTE: &str = "mute";
 /// How an instrument's settings are named to assistants.
-const INSTRUMENT: &str = "instrument.";
+const INSTRUMENT: &str = daw_project::Lane::INSTRUMENT;
 const SOLO: &str = "solo";
 
 /// Drives the app headless through the tools, for end-to-end tests:

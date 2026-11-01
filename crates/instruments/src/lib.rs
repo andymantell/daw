@@ -36,7 +36,7 @@ pub mod stream;
 pub mod synth;
 
 pub use library::Library;
-pub use params::{Param, Params, Unit};
+pub use params::{Live, Param, Params, Unit};
 
 /// The sampler's slot for an SFZ library: its file's full path. The
 /// library stays where it is, as a plugin's sounds do; it isn't copied
@@ -564,8 +564,15 @@ impl Builtin {
     }
 
     fn make_for(&self, rate: u32, offline: bool) -> Box<dyn Instrument> {
+        let live = Live::new(self.params.clone());
+        Box::new(Automated {
+            inner: self.make_with(rate, offline, live.clone()),
+            live,
+        })
+    }
+
+    fn make_with(&self, rate: u32, offline: bool, p: Live) -> Box<dyn Instrument> {
         let at = |slot: &str| self.sample(slot).and_then(|l| l.at(rate));
-        let p = self.params.clone();
         match self.kind {
             Kind::Synth => Box::new(synth::Synth::new(rate, p)),
             Kind::Sampler => {
@@ -594,6 +601,41 @@ impl Builtin {
                 Box::new(slicer::Slicer::new(rate, p, at("loop"), scale))
             }
         }
+    }
+}
+
+/// An instrument from this crate with its settings open to automation
+/// lanes, by index among [`Builtin::params`].
+struct Automated {
+    inner: Box<dyn Instrument>,
+    live: Live,
+}
+
+impl Instrument for Automated {
+    fn process(&mut self, events: &[daw_engine::midi::Event], left: &mut [f32], right: &mut [f32]) {
+        self.inner.process(events, left, right);
+    }
+
+    fn process_outputs(
+        &mut self,
+        events: &[daw_engine::midi::Event],
+        left: &mut [f32],
+        right: &mut [f32],
+        outputs: &mut daw_engine::midi::Outputs,
+    ) {
+        self.inner.process_outputs(events, left, right, outputs);
+    }
+
+    fn latency(&self) -> u32 {
+        self.inner.latency()
+    }
+
+    fn automate(&mut self, param: u32, value: f64) {
+        self.live.set_auto(param as usize, value);
+    }
+
+    fn clear_automation(&mut self) {
+        self.live.clear_auto();
     }
 }
 

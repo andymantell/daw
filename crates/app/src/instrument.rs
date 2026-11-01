@@ -71,6 +71,35 @@ enum Inner {
     Missing(Box<daw_project::Effect>),
 }
 
+/// One of an instrument's settings, as an automation lane sees it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Setting {
+    /// Its index among the instrument's settings, as the engine's
+    /// lanes name it.
+    pub index: u32,
+    pub name: String,
+    pub min: f64,
+    pub max: f64,
+    /// Moves evenly in ratio (frequencies, times).
+    pub log: bool,
+    /// How many values it steps through, when it steps.
+    pub steps: Option<usize>,
+}
+
+/// The simple synth's setting `key` as a person reads it.
+fn simple_name(key: &str) -> String {
+    match key {
+        "wave" => "Wave".into(),
+        "level_db" => "Level".into(),
+        k => {
+            let mut c = k.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
 /// A track's instrument.
 pub struct Slot {
     /// Matches the engine's instrument id.
@@ -152,6 +181,98 @@ impl Slot {
                     .collect()
             }
             Inner::Plugin(_) | Inner::Missing(_) => Vec::new(),
+        }
+    }
+
+    /// One of its settings an automation lane can be on, by key. None
+    /// for a plugin, or a key it hasn't.
+    pub fn setting(&self, key: &str) -> Option<Setting> {
+        match &self.inner {
+            Inner::Simple(_) => {
+                let i = PARAMS.iter().position(|p| p.0 == key)?;
+                let (_, min, max, _) = PARAMS[i];
+                Some(Setting {
+                    index: i as u32,
+                    name: simple_name(key),
+                    min,
+                    max,
+                    log: matches!(key, "attack" | "decay" | "release" | "cutoff"),
+                    steps: (key == "wave").then_some(4),
+                })
+            }
+            Inner::Builtin(b) => {
+                let i = b.params().index(key)?;
+                let p = &b.params().list()[i];
+                (p.unit != Unit::Hidden).then(|| Setting {
+                    index: i as u32,
+                    name: p.name.clone(),
+                    min: p.min,
+                    max: p.max,
+                    log: p.log,
+                    steps: p
+                        .stepped()
+                        .then(|| (p.max - p.min).round().max(0.0) as usize + 1),
+                })
+            }
+            Inner::Plugin(_) | Inner::Missing(_) => None,
+        }
+    }
+
+    /// The keys of the settings a lane can be on, in order.
+    pub fn setting_keys(&self) -> Vec<String> {
+        match &self.inner {
+            Inner::Simple(_) => PARAMS.iter().map(|p| p.0.to_string()).collect(),
+            Inner::Builtin(b) => (b.params().list().iter())
+                .filter(|p| p.unit != Unit::Hidden)
+                .map(|p| p.key.clone())
+                .collect(),
+            Inner::Plugin(_) | Inner::Missing(_) => Vec::new(),
+        }
+    }
+
+    /// A setting's value now, as its control has it.
+    pub fn get_setting(&self, key: &str) -> Option<f64> {
+        self.setting(key)?;
+        match &self.inner {
+            Inner::Simple(p) => Some(p.get(key)),
+            Inner::Builtin(b) => b.params().get_key(key),
+            Inner::Plugin(_) | Inner::Missing(_) => None,
+        }
+    }
+
+    /// Sets a setting's control, kept in its range. Heard at once, as
+    /// moving the control is; the project takes it on its next sync.
+    pub fn set_setting(&self, key: &str, v: f64) {
+        match &self.inner {
+            Inner::Simple(p) => p.set(key, v),
+            Inner::Builtin(b) => b.params().set_key(key, v),
+            Inner::Plugin(_) | Inner::Missing(_) => {}
+        }
+    }
+
+    /// A setting's value for showing, with its unit.
+    pub fn setting_text(&self, key: &str, v: f64) -> Option<String> {
+        match &self.inner {
+            Inner::Simple(_) => {
+                self.setting(key)?;
+                Some(match key {
+                    "wave" => Wave::ALL
+                        .get(v.round().max(0.0) as usize)
+                        .map_or("?", |w| w.label())
+                        .into(),
+                    "cutoff" if v >= 1000.0 => format!("{:.2} kHz", v / 1000.0),
+                    "cutoff" => format!("{v:.0} Hz"),
+                    "level_db" => format!("{v:+.1} dB"),
+                    "sustain" => format!("{:.0}%", v * 100.0),
+                    _ if v < 1.0 => format!("{:.0} ms", v * 1000.0),
+                    _ => format!("{v:.2} s"),
+                })
+            }
+            Inner::Builtin(b) => {
+                let i = b.params().index(key)?;
+                Some(b.params().list()[i].text(v))
+            }
+            Inner::Plugin(_) | Inner::Missing(_) => None,
         }
     }
 

@@ -118,11 +118,16 @@ pub(crate) const TOOLS: &[Tool] = &[
                       note, and bars), its offset, mute, own key, the pattern it plays, \
                       its notes (with chance, group and play-one-at-random), each note's \
                       expression lines, and its controller lanes. Times inside are in \
-                      beats.",
+                      beats. With compact: true, notes that start together with the same \
+                      length and velocity come as one chord (pitches, low to high, with \
+                      their ids in the same order), and a note's chance, channel, group, \
+                      one_of and expression are given only where they aren't the usual \
+                      (chance 1, channel 1, no group, no expression).",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
-                "clip": {"type": "string"}
+                "clip": {"type": "string"},
+                "compact": {"type": "boolean", "description": "Notes as chords, the usual values left out."}
             }, "required": ["clip"]})
         },
     },
@@ -299,11 +304,16 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "The step-sequencer patterns: each with its name, bars, swing, the \
                       clips playing it, and its lanes (the note or drum pad each plays, \
                       rate, direction, mute) with every step (on, velocity, vary, pitch, \
-                      chance, repeats, offset, gate).",
+                      chance, repeats, offset, gate). With summary: true, each lane's steps \
+                      are a line such as \"x...x...x...x...\" (x on, . off), and only the \
+                      steps that differ from a plain hit (velocity 100, gate 0.5, no vary, \
+                      pitch, offset or repeats, chance 1) are listed, by step from 1, with \
+                      only what differs; clips is then how many clips play it.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
-                "pattern": {"type": "string", "description": "Just this one."}
+                "pattern": {"type": "string", "description": "Just this one."},
+                "summary": {"type": "boolean", "description": "Lanes as x... lines, and only the steps that differ."}
             }})
         },
     },
@@ -482,6 +492,75 @@ fn note_value(n: &Note) -> Value {
     })
 }
 
+/// Notes as `get_note_clip` gives them with compact: those alike that
+/// start together as one chord, and the usual values left out.
+fn compact_notes(notes: &[Note]) -> Vec<Value> {
+    let plain = |n: &Note| {
+        n.chance == 1.0
+            && n.channel == 0
+            && n.group.is_none()
+            && !n.one_of
+            && n.expression.iter().all(|l| l.points.is_empty())
+    };
+    let mut sorted: Vec<&Note> = notes.iter().collect();
+    sorted.sort_by_key(|n| (n.start, n.len, n.velocity, n.pitch));
+    // Each entry with where it sorts: plain notes alike gathered as one.
+    let mut out: Vec<((i64, i64, u8, bool), Value)> = Vec::new();
+    let mut chords: std::collections::HashMap<(i64, i64, u8), usize> = Default::default();
+    for n in sorted {
+        let key = (n.start, n.len, n.velocity);
+        if plain(n)
+            && let Some(&i) = chords.get(&key)
+        {
+            let v = &mut out[i].1;
+            v["pitches"]
+                .as_array_mut()
+                .expect("a chord")
+                .push(json!(n.pitch));
+            v["ids"].as_array_mut().expect("a chord").push(json!(n.id));
+            continue;
+        }
+        let mut v = json!({
+            "beat": in_beats(n.start),
+            "beats": in_beats(n.len),
+            "velocity": n.velocity,
+            "pitches": [n.pitch],
+            "ids": [n.id],
+        });
+        if plain(n) {
+            chords.insert(key, out.len());
+        } else {
+            if n.chance != 1.0 {
+                v["chance"] = json!(n.chance);
+            }
+            if n.channel != 0 {
+                v["channel"] = json!(n.channel + 1);
+            }
+            if let Some(g) = n.group {
+                v["group"] = json!(g);
+            }
+            if n.one_of {
+                v["one_of"] = json!(true);
+            }
+            let lines: Vec<Value> = (n.expression.iter())
+                .filter(|l| !l.points.is_empty())
+                .map(|l| {
+                    let mut x = lane_value(l, PPQ as f64);
+                    x["kind"] = json!(l.param);
+                    x
+                })
+                .collect();
+            if !lines.is_empty() {
+                v["expression"] = json!(lines);
+            }
+        }
+        out.push(((n.start, n.len, n.velocity, !plain(n)), v));
+    }
+    // Stable, so the odd notes keep their pitch order.
+    out.sort_by_key(|(k, _)| *k);
+    out.into_iter().map(|(_, v)| v).collect()
+}
+
 /// Changes note `n` by what `a` gives.
 fn change_note(n: &mut Note, a: &Value) -> Result<(), String> {
     if let Some(b) = a["beat"].as_f64() {
@@ -511,6 +590,39 @@ fn change_note(n: &mut Note, a: &Value) -> Result<(), String> {
 fn step_value(s: &Step) -> Value {
     json!({"on": s.on, "velocity": s.velocity, "vary": s.vary, "pitch": s.pitch,
            "chance": s.chance, "repeats": s.repeats, "offset": s.offset, "gate": s.gate})
+}
+
+/// A lane's steps as a line: x for on, . for off.
+fn step_line(steps: &[Step]) -> String {
+    steps.iter().map(|s| if s.on { 'x' } else { '.' }).collect()
+}
+
+/// The steps that are on and differ from a plain hit, by step from 1,
+/// with only what differs.
+fn odd_steps(steps: &[Step]) -> Vec<Value> {
+    let plain = Step::default();
+    (steps.iter().enumerate())
+        .filter(|(_, s)| s.on)
+        .filter_map(|(i, s)| {
+            let mut v = serde_json::Map::new();
+            let mut put = |k: &str, differs: bool, x: Value| {
+                if differs {
+                    v.insert(k.into(), x);
+                }
+            };
+            put("velocity", s.velocity != plain.velocity, json!(s.velocity));
+            put("vary", s.vary != plain.vary, json!(s.vary));
+            put("pitch", s.pitch != plain.pitch, json!(s.pitch));
+            put("chance", s.chance != plain.chance, json!(s.chance));
+            put("repeats", s.repeats != plain.repeats, json!(s.repeats));
+            put("offset", s.offset != plain.offset, json!(s.offset));
+            put("gate", s.gate != plain.gate, json!(s.gate));
+            (!v.is_empty()).then(|| {
+                v.insert("step".into(), json!(i + 1));
+                Value::Object(v)
+            })
+        })
+        .collect()
 }
 
 fn set_step(s: &mut Step, a: &Value) {
@@ -726,7 +838,11 @@ impl App {
             // its own steps); other clips loop only when asked.
             "loops": c.pattern.is_some() || c.looped().is_some(),
             "loop_beats": c.looped().map(in_beats),
-            "notes": c.notes.iter().map(note_value).collect::<Vec<_>>(),
+            "notes": if args["compact"].as_bool() == Some(true) {
+                compact_notes(&c.notes)
+            } else {
+                c.notes.iter().map(note_value).collect()
+            },
             "controllers": c.controllers.iter().filter(|l| !l.points.is_empty()).map(|l| {
                 let mut v = lane_value(l, PPQ as f64);
                 v["controller"] = json!(l.param);
@@ -1388,6 +1504,7 @@ impl App {
 
     fn patterns_value(&self, args: &Value) -> Result<Value, String> {
         let only = args["pattern"].as_str();
+        let summary = args["summary"].as_bool() == Some(true);
         if let Some(id) = only
             && !self.patterns.iter().any(|p| p.id == id)
         {
@@ -1408,7 +1525,7 @@ impl App {
                     "name": p.name,
                     "bars": p.len as f64 / bar as f64,
                     "swing": p.swing,
-                    "clips": clips,
+                    "clips": if summary { json!(clips.len()) } else { json!(clips) },
                     "lanes": p.lanes.iter().map(|l| json!({
                         "id": l.id,
                         "name": l.name,
@@ -1417,8 +1534,15 @@ impl App {
                         "rate": format!("1/{}", l.rate.name()),
                         "direction": l.direction.name(),
                         "muted": l.muted,
-                        "steps": l.steps.iter().map(step_value).collect::<Vec<_>>(),
-                    })).collect::<Vec<_>>(),
+                    })).zip(&p.lanes).map(|(mut v, l)| {
+                        if summary {
+                            v["line"] = json!(step_line(&l.steps));
+                            v["steps"] = json!(odd_steps(&l.steps));
+                        } else {
+                            v["steps"] = l.steps.iter().map(step_value).collect();
+                        }
+                        v
+                    }).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -1653,6 +1777,75 @@ mod tests {
             d.call("edit_notes", json!({"clip": a, "copy_to": ["nope"]}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_clip_is_read_in_short_as_chords() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        let c = id(
+            d.call(
+                "add_note_clip",
+                json!({"track": t, "bar": 1, "bars": 1, "notes": [
+                    {"beat": 0, "beats": 1, "chord": "Am", "velocity": 90},
+                    {"beat": 2, "beats": 1, "chord": "C"},
+                    {"beat": 2, "beats": 2, "pitch": 36},
+                ]}),
+            )
+            .unwrap(),
+            "clip",
+        );
+        // One note made odd: a chance of its own.
+        let full = clip(&mut d, &c);
+        let odd = (full["notes"].as_array().unwrap().iter())
+            .find(|n| n["pitch"] == 64 && n["beat"] == 2.0)
+            .unwrap()["id"]
+            .clone();
+        d.call(
+            "edit_notes",
+            json!({"clip": c, "change": [{"id": odd, "chance": 0.5}]}),
+        )
+        .unwrap();
+        let full = clip(&mut d, &c);
+        let short = d
+            .call("get_note_clip", json!({"clip": c, "compact": true}))
+            .unwrap();
+        let notes = short["notes"].as_array().unwrap();
+        assert_eq!(
+            notes[0],
+            json!({"beat": 0.0, "beats": 1.0, "velocity": 90, "pitches": [69, 72, 76],
+                   "ids": notes[0]["ids"]}),
+            "{short}"
+        );
+        assert_eq!(notes[0]["ids"].as_array().unwrap().len(), 3);
+        // At beat 2: the C chord without its odd E, the E alone with its
+        // chance, and the longer bass note.
+        let at2: Vec<&Value> = notes.iter().filter(|n| n["beat"] == 2.0).collect();
+        assert_eq!(at2.len(), 3, "{short}");
+        assert!(
+            at2.iter().any(|n| n["pitches"] == json!([60, 67])),
+            "{short}"
+        );
+        assert!(
+            at2.iter().any(|n| n["pitches"] == json!([64])
+                && n["chance"] == 0.5
+                && n["ids"] == json!([odd])),
+            "{short}"
+        );
+        assert!(
+            at2.iter()
+                .any(|n| n["pitches"] == json!([36]) && n["beats"] == 2.0)
+        );
+        // Every note is still there, by id.
+        let ids: usize = notes
+            .iter()
+            .map(|n| n["ids"].as_array().unwrap().len())
+            .sum();
+        assert_eq!(ids, full["notes"].as_array().unwrap().len());
+        assert!(short.to_string().len() < full.to_string().len(), "{short}");
     }
 
     #[test]
@@ -2212,6 +2405,20 @@ mod tests {
             json!({"on": true, "velocity": 60, "vary": 0, "pitch": 0, "chance": 0.5,
                    "repeats": 2, "offset": 0.5, "gate": 1.0})
         );
+        // In short: a line of steps, and only the odd one spelled out.
+        let short = d
+            .call("get_patterns", json!({"pattern": pat, "summary": true}))
+            .unwrap();
+        let k = &short["patterns"][0]["lanes"][1];
+        assert_eq!(k["line"], "xx..x...x...x...", "{short}");
+        assert_eq!(
+            k["steps"],
+            json!([{"step": 2, "velocity": 60, "chance": 0.5, "repeats": 2,
+                    "offset": 0.5, "gate": 1.0}]),
+            "{short}"
+        );
+        assert_eq!(short["patterns"][0]["clips"], 1);
+        assert!(short.to_string().len() < ps.to_string().len() / 2);
         // The clip plays it: four kicks, and step 2 twice.
         let notes = clip(&mut d, &pc)["notes"].as_array().unwrap().len();
         assert_eq!(notes, 6);

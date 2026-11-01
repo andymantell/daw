@@ -498,7 +498,13 @@ fn region_args() -> Value {
                  without changing them: to try a shift before making it."},
         "notes": {"type": "boolean", "description": "analyse only: also read the notes of one \
                  voice or instrument, one at a time: each note with its start, length and cents \
-                 off, seconds of each of the 12 notes, the overall tuning, and the key they fit."},
+                 off, seconds of each of the 12 notes, the overall tuning, and the key they fit. \
+                 200 notes are listed (every one with out_file); next_from says where the next \
+                 page starts."},
+        "notes_from": {"type": "integer", "description": "analyse with notes: list the notes \
+                 from this one, counted from 0 (0 if left out)."},
+        "notes_limit": {"type": "integer", "description": "analyse with notes: list at most \
+                 this many (200 if left out, or all with out_file)."},
         "beats": {"type": "boolean", "description": "analyse only: also find the beat grid of a \
                  voice alone or another sparse part, from its note starts: tempo candidates with \
                  confidence, where the first beat and first downbeat fall, and how far the beat \
@@ -530,6 +536,119 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
     all_tools().find(|t| t.name == name)
+}
+
+/// The tools whose answers can be big, which take `out_file`: the
+/// answer is written to a JSON file for a script to read, and the call
+/// answers with where it went.
+pub(crate) const OUT_FILE: &[&str] = &[
+    "analyse",
+    "get_project",
+    "get_note_clip",
+    "get_patterns",
+    "get_pitch_notes",
+    "list_parameters",
+    "stretch_clips",
+];
+
+/// A tool's arguments as an assistant is told them: its own, and
+/// `out_file` on those in [`OUT_FILE`].
+pub(crate) fn schema_of(t: &Tool) -> Value {
+    let mut s = (t.schema)();
+    if OUT_FILE.contains(&t.name)
+        && let Some(props) = s["properties"].as_object_mut()
+    {
+        props.insert(
+            "out_file".into(),
+            json!({"type": ["boolean", "string"], "description": "Write the whole answer \
+                   to a JSON file, for a script to read, and answer only with its path, \
+                   size and top-level keys. true puts it in the app's cache folder; a \
+                   full path ending .json puts it there (that needs the edit and export \
+                   permission)."}),
+        );
+    }
+    s
+}
+
+/// Where `out_file` asks an answer to go, checked before the tool runs.
+fn out_file_path(arg: &Value, access: Access) -> Result<Option<std::path::PathBuf>, String> {
+    match arg {
+        Value::Null | Value::Bool(false) => Ok(None),
+        Value::Bool(true) => {
+            let dir = crate::cache_dir().join("assistant");
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            Ok(Some(dir.join(format!("{}.json", daw_project::new_id()))))
+        }
+        Value::String(s) => {
+            let path = std::path::PathBuf::from(s);
+            if access < Access::EditExport {
+                return Err(format!(
+                    "Writing to a path of its own needs the {} permission; this assistant \
+                     has {}. out_file: true writes to the app's cache folder instead.",
+                    Access::EditExport.name(),
+                    access.name()
+                ));
+            }
+            if !path.is_absolute() || path.extension().is_none_or(|e| e != "json") {
+                return Err("out_file is a full path ending .json, or true.".into());
+            }
+            if !path.parent().is_some_and(|d| d.is_dir()) {
+                return Err(format!("There is no folder to put {s} in."));
+            }
+            Ok(Some(path))
+        }
+        _ => Err("out_file is a full path ending .json, or true.".into()),
+    }
+}
+
+/// Writes an answer to `path`, and says what is in it.
+fn write_out_file(path: &std::path::Path, v: &Value) -> Result<Value, String> {
+    let bytes = serde_json::to_vec(v).map_err(|e| e.to_string())?;
+    std::fs::write(path, &bytes)
+        .map_err(|e| format!("{} couldn't be written: {e}", path.display()))?;
+    // Enough to know what to look for in it.
+    let keys: serde_json::Map<String, Value> = match v {
+        Value::Object(o) => (o.iter())
+            .map(|(k, x)| {
+                let what = match x {
+                    Value::Array(a) => json!(format!("{} items", a.len())),
+                    Value::Object(o) => json!(format!("{} keys", o.len())),
+                    x => x.clone(),
+                };
+                (k.clone(), what)
+            })
+            .collect(),
+        Value::Array(a) => [("items".to_string(), json!(a.len()))]
+            .into_iter()
+            .collect(),
+        x => [("value".to_string(), x.clone())].into_iter().collect(),
+    };
+    Ok(json!({"out_file": path.display().to_string(), "bytes": bytes.len(), "contents": keys}))
+}
+
+/// The answer to a call with `out_file` goes to the file; the call is
+/// answered with where. Answers come from the UI thread or a render
+/// thread, so a small thread of its own waits for this one.
+fn reply_to_file(
+    path: std::path::PathBuf,
+    reply: Sender<Result<Value, String>>,
+) -> Sender<Result<Value, String>> {
+    let (tx, rx) = mpsc::channel::<Result<Value, String>>();
+    let spawned = std::thread::Builder::new()
+        .name("assistant-out-file".into())
+        .spawn({
+            let reply = reply.clone();
+            move || {
+                if let Ok(answer) = rx.recv() {
+                    let _ = reply.send(answer.and_then(|v| write_out_file(&path, &v)));
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => tx,
+        // No thread: answer in full, as without out_file.
+        Err(_) => reply,
+    }
 }
 
 /// The bars a call gives (from the start of `from_bar` to the end of
@@ -619,11 +738,27 @@ pub(crate) struct Agent {
     waiting: Vec<Waiting>,
     /// How many exports had finished when last looked.
     exported: usize,
+    /// `export_mix` calls waiting for their export to finish.
+    exports: Vec<ExportWait>,
 }
 
 /// A `wait_for_change` call: the revision seen, until when, and where
 /// its answer goes.
 type Waiting = (u64, std::time::Instant, Sender<Result<Value, String>>);
+
+/// The key in a tool's answer that asks the agent to hold the answer
+/// until an export finishes: the export's number (see
+/// [`crate::export::Export::numbered`]) and how long to wait.
+pub(crate) const WAIT_FOR_EXPORT: &str = "_wait_for_export";
+
+/// An `export_mix` call with wait: the export's number, until when, its
+/// answer so far, and where the answer goes.
+struct ExportWait {
+    number: u64,
+    until: std::time::Instant,
+    answer: Value,
+    reply: Sender<Result<Value, String>>,
+}
 
 impl Default for Agent {
     fn default() -> Agent {
@@ -635,6 +770,7 @@ impl Default for Agent {
             revision: 0,
             waiting: Vec::new(),
             exported: 0,
+            exports: Vec::new(),
         }
     }
 }
@@ -688,16 +824,38 @@ impl App {
         for (seen, _, reply) in done {
             let _ = reply.send(Ok(json!({"revision": rev, "changed": seen != rev})));
         }
-        if !self.agent.waiting.is_empty() {
+        for w in std::mem::take(&mut self.agent.exports) {
+            if self.export.finished_count() >= w.number {
+                let _ = w.reply.send(Ok(self.export_done_value(w.number, w.answer)));
+            } else if now >= w.until {
+                let mut v = w.answer;
+                v["finished"] = json!(false);
+                v["note"] = json!("It hasn't finished yet: get_exports says how far it has got.");
+                let _ = w.reply.send(Ok(v));
+            } else {
+                self.agent.exports.push(w);
+            }
+        }
+        if !self.agent.waiting.is_empty() || !self.agent.exports.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
-        while let Ok(req) = self.agent.requests.try_recv() {
+        while let Ok(mut req) = self.agent.requests.try_recv() {
             let Some(t) = tool(&req.tool) else {
                 let _ = req
                     .reply
                     .send(Err(format!("There is no tool {}.", req.tool)));
                 continue;
             };
+            if OUT_FILE.contains(&t.name) && req.access >= t.access {
+                match out_file_path(&req.args["out_file"], req.access) {
+                    Ok(Some(path)) => req.reply = reply_to_file(path, req.reply),
+                    Ok(None) => {}
+                    Err(e) => {
+                        let _ = req.reply.send(Err(e));
+                        continue;
+                    }
+                }
+            }
             if req.access < t.access {
                 let _ = req.reply.send(Err(format!(
                     "{} needs the {} permission; this assistant has {}.",
@@ -731,10 +889,24 @@ impl App {
             }
             // The user's own edits so far are theirs, not the assistant's.
             self.sync_doc(ctx, true);
-            let (result, label) = match self.edit_tool(ctx, t.name, &req.args, req.access) {
+            let (mut result, label) = match self.edit_tool(ctx, t.name, &req.args, req.access) {
                 Ok((v, label)) => (Ok(v), label),
                 Err(e) => (Err(e), None),
             };
+            let wait =
+                (result.as_mut().ok()).and_then(|v| v.as_object_mut()?.remove(WAIT_FOR_EXPORT));
+            if let (Some(wait), Ok(v)) = (wait, &result) {
+                let v = v.clone();
+                let secs = wait["seconds"].as_f64().unwrap_or(600.0).clamp(0.0, 3600.0);
+                self.agent.exports.push(ExportWait {
+                    number: wait["number"].as_u64().unwrap_or(0),
+                    until: now + std::time::Duration::from_secs_f64(secs),
+                    answer: v,
+                    reply: req.reply,
+                });
+                ctx.request_repaint();
+                continue;
+            }
             let until = (t.name == "seek")
                 .then(|| result.as_ref().ok()?["frames"].as_i64())
                 .flatten()
@@ -1180,6 +1352,28 @@ impl App {
             json!({"tracks": brought.tracks, "markers": brought.markers, "message": self.message.clone()}),
             None,
         ))
+    }
+
+    /// The answer to `export_mix` with wait, once export `number` has
+    /// finished: its folder and each file's full path.
+    fn export_done_value(&self, number: u64, mut v: Value) -> Value {
+        v["finished"] = json!(true);
+        v["revision"] = json!(self.agent.revision);
+        match self.export.numbered(number) {
+            Some((folder, lines)) => {
+                let files: Vec<Value> = (lines.iter())
+                    .map(|(name, r)| match r {
+                        Ok(w) => json!({"path": folder.join(name).display().to_string(),
+                                        "clipped": w.clipped()}),
+                        Err(e) => json!({"name": name, "error": e}),
+                    })
+                    .collect();
+                v["folder"] = json!(folder.display().to_string());
+                v["files"] = json!(files);
+            }
+            None => v["note"] = json!("It has finished: get_exports says where it went."),
+        }
+        v
     }
 
     fn exports_value(&self) -> Value {
@@ -1892,7 +2086,7 @@ mod tests {
         for t in all_tools() {
             assert!(names.insert(t.name), "{} twice", t.name);
             assert!(!t.description.is_empty(), "{}", t.name);
-            assert_eq!((t.schema)()["type"], "object", "{}", t.name);
+            assert_eq!(schema_of(t)["type"], "object", "{}", t.name);
         }
     }
 

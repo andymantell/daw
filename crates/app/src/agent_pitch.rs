@@ -64,8 +64,10 @@ pub(crate) const TOOLS: &[Tool] = &[
                       stretch more than 3×); drift_pct (0 to 100) and vibrato_pct (0 to 300) set how \
                       much of each is kept; formant_semitones (-12 to 12) moves the \
                       voice's character; reset: true takes every edit off first. Answers \
-                      with the notes as get_pitch_notes does, and with a snap how many \
-                      notes it moved (snapped) and to which key. One undo step.",
+                      with the notes it changed, as get_pitch_notes gives them, and count \
+                      (how many the clip has); with find: true or all: true, with every \
+                      note; and with a snap how many notes it moved (snapped) and to which \
+                      key. One undo step.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "required": ["clip"], "properties": {
@@ -83,6 +85,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                                          \"key\": the nearest note of the song's key."},
                 "min_cents": {"type": "number",
                               "description": "0 to 100: with snap, leave notes this close."},
+                "all": {"type": "boolean", "description": "Answer with every note, not only those changed."},
                 "move_seconds": {"type": "number"},
                 "resize_seconds": {"type": "number"},
                 "drift_pct": {"type": "number"},
@@ -329,7 +332,24 @@ impl App {
         if changed {
             self.rebuild();
         }
-        let mut v = notes_value(&self.tracks[l].clips[k], &self.tempo_map(), false);
+        let found = args["find"].as_bool() == Some(true);
+        let c = &self.tracks[l].clips[k];
+        let mut v = notes_value(c, &self.tempo_map(), false);
+        let count = c.pitch_notes.len();
+        if !found && args["all"].as_bool() != Some(true) {
+            // Only the notes that differ from before: a neighbour moved
+            // by a retime counts.
+            let after = &c.pitch_notes;
+            let differs = |i: usize| before.get(i) != after.get(i);
+            if let Some(list) = v["notes"].as_array_mut() {
+                let mut i = 0;
+                list.retain(|_| {
+                    i += 1;
+                    differs(i - 1)
+                });
+            }
+        }
+        v["count"] = json!(count);
         if let Some(to) = snap {
             v["snapped"] = json!(snapped);
             if let SnapTo::Key(s) = to {

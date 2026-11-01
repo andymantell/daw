@@ -22,11 +22,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use daw_engine::engine::Command;
 use daw_engine::time::{Frames, Ticks};
+use daw_project::Pick;
 use eframe::egui;
 use serde_json::{Value, json};
 
 use crate::App;
 use crate::commands::{COMMANDS, Cmd};
+use crate::import_project::StemOptions;
 
 /// What an assistant has been allowed to do, from least to most.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -166,6 +168,19 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "get_history",
+        description: "The undo list (this user's steps Undo would take back, next first, \
+                      each with what it changed), the redo list, and who changed what in \
+                      the project and when, newest first.",
+        access: Access::Read,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "runs": {"type": "integer",
+                         "description": "How many runs of activity to give; 20 if not said."}
+            }})
+        },
+    },
+    Tool {
         name: "run_command",
         description: "Runs a command by its id, as its menu entry or key would. \
                       list_commands gives the ids. Commands that save or write files need \
@@ -221,6 +236,18 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "undo_steps",
+        description: "Undoes several steps at once (undo), or redoes them (redo), as \
+                      choosing a step on the undo list does. Each stays a step of its own.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "undo": {"type": "integer", "minimum": 0},
+                "redo": {"type": "integer", "minimum": 0}
+            }})
+        },
+    },
+    Tool {
         name: "seek",
         description: "Moves the playhead to a bar (counted from 1) or to a time in seconds.",
         access: Access::Edit,
@@ -265,6 +292,67 @@ pub(crate) const TOOLS: &[Tool] = &[
             }, "required": ["path"]})
         },
     },
+    Tool {
+        name: "import_from_project",
+        description: "Brings tracks in from another project, with their audio, effects and \
+                      routing, as one undo step; and if asked its sections (markers), tempo \
+                      and time signature, key, tuning and loop, and lesson notes. Without \
+                      tracks, every track. get_project on the other project isn't possible, \
+                      so the answer lists the new tracks' ids.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "project": {"type": "string",
+                            "description": "The other project's folder: a full path, or a name in the projects folder."},
+                "tracks": {"type": "array", "items": {"type": "string"},
+                           "description": "Track names or ids in the other project."},
+                "routing": {"type": "boolean", "description": "Also the buses and folders they play through (default true)."},
+                "markers": {"type": "boolean"},
+                "tempo": {"type": "boolean"},
+                "settings": {"type": "boolean"},
+                "notes": {"type": "boolean"}
+            }, "required": ["project"]})
+        },
+    },
+    Tool {
+        name: "export_as_project",
+        description: "Saves chosen tracks (every track without a list), or bars of the \
+                      song, as a new project in the projects folder, with their audio and \
+                      the tempo. Bars run from the start of from_bar to the end of to_bar.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "name": {"type": "string", "description": "The new project's name."},
+                "tracks": {"type": "array", "items": {"type": "string"}, "description": "Track ids."},
+                "from_bar": {"type": "integer"},
+                "to_bar": {"type": "integer"},
+                "routing": {"type": "boolean"},
+                "markers": {"type": "boolean"},
+                "settings": {"type": "boolean"},
+                "notes": {"type": "boolean"}
+            }, "required": ["name"]})
+        },
+    },
+    Tool {
+        name: "export_stem_package",
+        description: "Writes chosen tracks (every track without a list) as a stem \
+                      package: each as audio, instrument tracks' notes as MIDI, and a page \
+                      with the tempo, in a new numbered folder beside the other exports, \
+                      or packed into one .tar file. Runs in the background.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "tracks": {"type": "array", "items": {"type": "string"}, "description": "Track ids."},
+                "from_bar": {"type": "integer"},
+                "to_bar": {"type": "integer"},
+                "audio": {"type": "boolean"},
+                "notes": {"type": "boolean"},
+                "mix": {"type": "boolean"},
+                "flac": {"type": "boolean"},
+                "archive": {"type": "boolean"}
+            }})
+        },
+    },
 ];
 
 fn region_args() -> Value {
@@ -278,6 +366,16 @@ fn region_args() -> Value {
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.name == name)
+}
+
+/// The bars a call gives (from the start of `from_bar` to the end of
+/// `to_bar`), or `None` for the whole song.
+fn bars_of(args: &Value) -> Result<Option<(i64, i64)>, String> {
+    match (args["from_bar"].as_i64(), args["to_bar"].as_i64()) {
+        (None, None) => Ok(None),
+        (Some(a), Some(b)) if a >= 1 && b >= a => Ok(Some((a, b + 1))),
+        _ => Err("Give from_bar and to_bar, from 1, with to_bar not before from_bar.".into()),
+    }
 }
 
 /// Commands that open the system's file chooser, which waits for a
@@ -312,7 +410,9 @@ pub(crate) fn command_access(cmd: Cmd) -> Access {
         | Cmd::ExportMusicXml
         | Cmd::ExportTextTab
         | Cmd::PrintNotation
-        | Cmd::ExportKit => Access::EditExport,
+        | Cmd::ExportKit
+        | Cmd::ExportParts
+        | Cmd::ExportStemPackage => Access::EditExport,
         _ => Access::Edit,
     }
 }
@@ -471,6 +571,7 @@ impl App {
             }
             "export_report" => Ok(crate::interchange::report_value(&self.interchange_report())),
             "get_meters" => Ok(self.meters_value()),
+            "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -560,6 +661,19 @@ impl App {
                 let (_, left_out) = self.save_preset(ctx, i, kind, name, &tags, about)?;
                 Ok((json!({"saved": name, "files_left_out": left_out}), None))
             }
+            "undo_steps" => {
+                let undo = args["undo"].as_u64().unwrap_or(0) as usize;
+                let redo = args["redo"].as_u64().unwrap_or(0) as usize;
+                if (undo == 0) == (redo == 0) {
+                    return Err("Give a number of steps to undo or to redo.".into());
+                }
+                let done = match undo {
+                    0 => self.redo_steps(ctx, redo),
+                    n => self.undo_steps(ctx, n),
+                };
+                // Undoing is no new step: it moves steps between the lists.
+                Ok((json!({"done": done}), None))
+            }
             "seek" => {
                 let map = self.tempo_map();
                 let at = match (args["bar"].as_f64(), args["seconds"].as_f64()) {
@@ -612,8 +726,108 @@ impl App {
                 self.timeline.selected = ids;
                 Ok((json!({"selected": keys.len()}), None))
             }
+            "import_from_project" => self.import_tool(ctx, args),
+            "export_as_project" => {
+                let name = args["name"].as_str().unwrap_or("").trim();
+                let pick = Pick {
+                    tracks: self.track_list(args)?,
+                    routing: args["routing"].as_bool().unwrap_or(true),
+                    markers: args["markers"].as_bool().unwrap_or(true),
+                    tempo: true,
+                    settings: args["settings"].as_bool().unwrap_or(true),
+                    notes: args["notes"].as_bool().unwrap_or(true),
+                };
+                if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+                {
+                    return Err("Give a name without / \\ : * ? \" < > |.".into());
+                }
+                let dir = crate::project::projects_dir().join(name);
+                let bars = bars_of(args)?;
+                self.export_as_project(ctx, &dir, &pick, bars)?;
+                Ok((
+                    json!({"saved": dir.display().to_string(), "message": self.message.clone()}),
+                    None,
+                ))
+            }
+            "export_stem_package" => {
+                let keys = self.track_list(args)?;
+                let d = StemOptions::default();
+                let opts = StemOptions {
+                    audio: args["audio"].as_bool().unwrap_or(d.audio),
+                    notes: args["notes"].as_bool().unwrap_or(d.notes),
+                    mix: args["mix"].as_bool().unwrap_or(d.mix),
+                    flac: args["flac"].as_bool().unwrap_or(d.flac),
+                    archive: args["archive"].as_bool().unwrap_or(d.archive),
+                };
+                let into = self.export.dir().to_path_buf();
+                self.export_stem_package(&into, &keys, bars_of(args)?, opts)?;
+                Ok((
+                    json!({"into": into.display().to_string(), "started": true}),
+                    None,
+                ))
+            }
             _ => Err(format!("There is no tool {name}.")),
         }
+    }
+
+    /// The tracks a call names by id, or every track.
+    fn track_list(&self, args: &Value) -> Result<Vec<String>, String> {
+        let Some(list) = args["tracks"].as_array() else {
+            return Ok(self.tracks.iter().map(|t| t.key.clone()).collect());
+        };
+        (list.iter())
+            .map(|k| {
+                let k = k.as_str().ok_or("Track ids are text.")?;
+                (self.tracks.iter().any(|t| t.key == k))
+                    .then(|| k.to_string())
+                    .ok_or_else(|| format!("There is no track {k}."))
+            })
+            .collect()
+    }
+
+    fn import_tool(
+        &mut self,
+        ctx: &egui::Context,
+        args: &Value,
+    ) -> Result<(Value, Option<String>), String> {
+        let name = args["project"]
+            .as_str()
+            .ok_or("Give the other project's folder.")?;
+        let path = match std::path::Path::new(name) {
+            p if p.is_absolute() => p.to_path_buf(),
+            _ => crate::project::projects_dir().join(name),
+        };
+        let (_, doc, _) = daw_collab::open_doc(&path, daw_project::new_peer())?;
+        let src = doc.get();
+        let tracks = match args["tracks"].as_array() {
+            None => src.tracks.iter().map(|t| t.id.clone()).collect(),
+            Some(list) => (list.iter())
+                .map(|k| {
+                    let k = k.as_str().ok_or("Tracks are given as text.")?;
+                    (src.tracks.iter())
+                        .find(|t| t.id == k || t.name == k)
+                        .map(|t| t.id.clone())
+                        .ok_or_else(|| format!("That project has no track {k}."))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        };
+        let pick = Pick {
+            tracks,
+            routing: args["routing"].as_bool().unwrap_or(true),
+            markers: args["markers"].as_bool().unwrap_or(false),
+            tempo: args["tempo"].as_bool().unwrap_or(false),
+            settings: args["settings"].as_bool().unwrap_or(false),
+            notes: args["notes"].as_bool().unwrap_or(false),
+        };
+        let label = "Assistant: Import from project".to_string();
+        self.proj.label = Some(label);
+        let brought = self.import_parts(ctx, &path, &pick);
+        self.proj.label = None;
+        let brought = brought?;
+        Ok((
+            json!({"tracks": brought.tracks, "markers": brought.markers, "message": self.message.clone()}),
+            None,
+        ))
     }
 
     fn commands_value(&self) -> Value {

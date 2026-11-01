@@ -11,12 +11,14 @@
 mod diff;
 mod doc;
 mod folder;
+mod history;
 mod identity;
 pub mod kit;
 mod lessons;
 pub mod midifile;
 mod model;
 pub mod noteops;
+mod parts;
 mod pattern;
 mod presets;
 mod scale;
@@ -28,6 +30,7 @@ mod timeshift;
 pub use diff::{Difference, differences};
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
+pub use history::{Activity, RUN_GAP, UndoStep, label};
 pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
 pub use lessons::{
     AssignmentProgress, DoneMark, Lesson, MAX_LESSON_TITLE, PracticeSession, progress,
@@ -40,6 +43,7 @@ pub use model::{
     Practice, Project, Send, StretchMarker, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
     TrackKind, TrainerSettings, VideoClip,
 };
+pub use parts::{Brought, Pick, Range, bar_ticks};
 pub use pattern::{
     DRUM_LANES, Direction, MAX_GATE, MAX_REPEATS, MAX_STEPS, MIN_GATE, Pattern, PatternLane, Roll,
     Step, StepRate, euclid, fill_pattern_clip, fill_pattern_clips, next_group,

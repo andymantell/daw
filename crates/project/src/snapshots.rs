@@ -23,7 +23,7 @@
 use loro::{Frontiers, LoroMap, LoroValue};
 
 use crate::doc::QUIET;
-use crate::{Difference, Project, ProjectDoc, differences};
+use crate::{Difference, Project, ProjectDoc, Track, differences};
 
 /// Where snapshots live in the document.
 const SNAPSHOTS: &str = "snapshots";
@@ -152,17 +152,7 @@ impl ProjectDoc {
     pub fn assets_in_use(&self) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
         let mut add = |p: &Project| {
-            v.extend(p.tracks.iter().flat_map(|t| {
-                (t.clips.iter().map(|c| c.asset.clone()))
-                    .chain(t.frozen.iter().map(|f| f.asset.clone()))
-                    .chain(t.effects.iter().flat_map(|e| e.assets()).map(String::from))
-                    .chain(
-                        (t.instrument.iter())
-                            .chain(t.layers.iter().map(|l| &l.instrument))
-                            .flat_map(|e| e.assets())
-                            .map(String::from),
-                    )
-            }));
+            v.extend(p.tracks.iter().flat_map(Track::assets));
             v.extend(p.videos.iter().map(|c| c.asset.clone()));
         };
         add(&self.get());

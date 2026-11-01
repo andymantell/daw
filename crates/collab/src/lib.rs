@@ -6,6 +6,7 @@
 //! merged into this one ([`ProjectDoc::merge`]), and audio arrives as
 //! files named by their content, checked before use.
 
+pub mod archive;
 pub mod bundle;
 pub mod watch;
 

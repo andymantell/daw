@@ -30,7 +30,9 @@ mod export;
 mod freeze;
 mod fx;
 mod groups;
+mod history;
 mod hitpoints;
+mod import_project;
 mod instrument;
 mod interchange;
 mod kits;
@@ -349,6 +351,8 @@ struct App {
     message: Option<String>,
     /// The device stopped (unplugged, say): when to look for it again.
     reconnect: Option<Instant>,
+    /// The mix buffer last turned on, for turning it on again.
+    last_mix_buffer: Option<u32>,
     /// Device settings kept between runs.
     saved: SavedProfiles,
     effects: Effects,
@@ -415,9 +419,13 @@ struct App {
     comment_ui: comments::Comments,
     /// The snapshots window.
     snapshot_ui: snapshots::Snapshots,
+    /// The undo list and activity window.
+    history: history::History,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
     preset_ui: presets::Presets,
+    /// The Import from project and Export parts windows.
+    parts: import_project::Parts,
     /// The start screen, and the recent projects it lists.
     start: start::Start,
     /// Named commands, their keys, and their windows.
@@ -517,6 +525,7 @@ impl App {
             message: None,
             retime: false,
             reconnect: None,
+            last_mix_buffer: None,
             saved,
             effects: Effects::new(config_dir().join("plugins.txt")),
             tuner: tuner::Tuner::new(rate),
@@ -568,8 +577,10 @@ impl App {
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
+            history: history::History::default(),
             template_ui: templates::Templates::default(),
             preset_ui: presets::Presets::default(),
+            parts: import_project::Parts::default(),
             start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
             simple: simple_mode::Simple::new(
@@ -651,11 +662,20 @@ impl App {
         // `start` consumes the engine even when it fails, so try with a
         // stand-in first only if needed: open directly, and fall back to a
         // fresh engine pair running silently.
-        match audio::start(p, eng) {
+        let mix = p.mix_buffer;
+        let started = match mix {
+            Some(b) => audio::start(p, audio::mix_ahead(eng, b)),
+            None => audio::start(p, eng),
+        };
+        match started {
             Ok(r) => Audio::Running(r),
             Err(e) => {
                 let eng = self.replace_engine();
-                Audio::Silent(audio::start_silent(self.rate, 256, eng), e)
+                let silent = match mix {
+                    Some(b) => audio::start_silent(self.rate, 256, audio::mix_ahead(eng, b)),
+                    None => audio::start_silent(self.rate, 256, eng),
+                };
+                Audio::Silent(silent, e)
             }
         }
     }
@@ -677,6 +697,38 @@ impl App {
         }
         let eng = self.replace_engine();
         self.audio = self.open_device(eng);
+        if self.ctl.wants_twin() {
+            // Split once started: send the graph again with the live
+            // tracks' copy.
+            self.rebuild();
+        }
+    }
+
+    /// Turns the big mix buffer on (at the size last used, or 2048) or
+    /// off, saving it with the device's settings, and restarts the audio.
+    pub(crate) fn toggle_mix_ahead(&mut self) {
+        let Some(p) = &mut self.profile else {
+            self.message = Some("Choose an audio device first.".into());
+            return;
+        };
+        p.mix_buffer = match p.mix_buffer {
+            Some(_) => None,
+            None => Some(self.last_mix_buffer.unwrap_or(2048)),
+        };
+        if let Some(b) = p.mix_buffer {
+            self.last_mix_buffer = Some(b);
+        }
+        let p = p.clone();
+        if let Some(d) = &mut self.draft
+            && (&d.host, &d.device) == (&p.host, &p.device)
+        {
+            d.mix_buffer = p.mix_buffer;
+        }
+        self.saved.use_profile(p);
+        if let Err(e) = save_settings(&self.saved) {
+            self.message = Some(format!("Could not save the device settings: {e}"));
+        }
+        self.restart_audio();
     }
 
     /// A fresh engine with this session, metronome, loop and position;
@@ -892,6 +944,14 @@ impl App {
             &mut self.pending_instruments,
         ) {
             Ok(g) => {
+                // Split, the live tracks play from a copy of their own.
+                let g = match self.ctl.wants_twin() {
+                    true => match s.compile(audio::MAX_BLOCK) {
+                        Ok(twin) => g.with_twin(twin),
+                        Err(_) => g,
+                    },
+                    false => g,
+                };
                 self.send_graph(g);
             }
             Err(e) => self.message = Some(e.to_string()),
@@ -1014,7 +1074,7 @@ impl App {
     }
 
     /// Renders the mix (and stems, if asked) to a file in the background.
-    fn start_export(&mut self, req: export::Request) -> Result<(), String> {
+    pub(crate) fn start_export(&mut self, req: export::Request) -> Result<(), String> {
         let map = self.tempo_map();
         let mut s = self.session();
         // The mix as it stands: no practice mute, no live input.
@@ -1069,7 +1129,12 @@ impl App {
         };
         let all: Vec<&Track> = self.tracks.iter().collect();
         let mix = graph(&s, &all, &mut plugins)?;
-        let (from, to) = if req.loop_only {
+        let (from, to) = if let Some((a, b)) = req.bars {
+            (
+                map.frames_at(map.bar_start(a)),
+                map.frames_at(map.bar_start(b)),
+            )
+        } else if req.loop_only {
             (
                 map.frames_at(map.bar_start(self.loop_bars.0)),
                 map.frames_at(map.bar_start(self.loop_bars.1)),
@@ -1086,6 +1151,7 @@ impl App {
             (Frames(0), Frames(mix.end().0 + tail))
         };
         let frames = (to.0 - from.0).max(0) as usize;
+        let wanted = |t: &Track| req.only.as_ref().is_none_or(|o| o.contains(&t.key));
         let mut parts = Vec::new();
         if req.video {
             // The whole film from its first frame: the picture can't be
@@ -1122,7 +1188,7 @@ impl App {
                 .tracks
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| !t.kind.is_bus())
+                .filter(|(_, t)| !t.kind.is_bus() && wanted(t))
             {
                 let mut one = Session::new(map.clone());
                 let mut spec = s.tracks[i].clone();
@@ -1145,7 +1211,7 @@ impl App {
                 .tracks
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| t.kind.is_bus())
+                .filter(|(_, t)| t.kind.is_bus() && wanted(t))
             {
                 let one = mixer::through_bus(&s, i);
                 parts.push(export::Part {
@@ -1157,7 +1223,11 @@ impl App {
                 });
             }
         }
-        self.export.start(&req.folder, parts, plugins, req.format)
+        if parts.is_empty() && req.package.as_ref().is_none_or(|p| p.files.is_empty()) {
+            return Err("There is nothing to export yet.".into());
+        }
+        self.export
+            .start(&req.folder, parts, plugins, req.format, req.package)
     }
 
     /// Exports the video at the playhead (or the one selected) with the
@@ -1879,6 +1949,7 @@ impl App {
                     measured_at: None,
                     direct_monitoring: false,
                     monitor: daw_audio_io::MonitorOutputs::default(),
+                    mix_buffer: None,
                 });
                 egui::Grid::new("device").num_columns(2).show(ui, |ui| {
                     ui.label("Driver");
@@ -1946,6 +2017,24 @@ impl App {
                         })
 .response
 .accessible_name("Buffer size");
+                    ui.end_row();
+
+                    ui.label("Mix buffer").on_hover_text(MIX_BUFFER_HINT);
+                    egui::ComboBox::from_id_salt("mix-buffer")
+                        .selected_text(mix_buffer_text(draft.mix_buffer, draft.rate))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut draft.mix_buffer, None, mix_buffer_text(None, draft.rate));
+                            for b in daw_engine::ahead::MIX_BLOCKS {
+                                ui.selectable_value(
+                                    &mut draft.mix_buffer,
+                                    Some(b),
+                                    mix_buffer_text(Some(b), draft.rate),
+                                );
+                            }
+                        })
+                        .response
+                        .on_hover_text(MIX_BUFFER_HINT)
+                        .accessible_name("Mix buffer");
                     ui.end_row();
 
                     let outs = dev.map_or(2, |d| d.output_channels as usize).max(1);
@@ -2068,6 +2157,9 @@ impl App {
                                 r.record_offset(p)
                             ));
                         }
+                        if let Some(line) = mix_ahead_line(self.ctl.status()) {
+                            ui.label(line);
+                        }
                     }
                     Audio::Stopped => {}
                     Audio::Silent(_, why) => {
@@ -2134,7 +2226,7 @@ impl App {
                 input,
             }),
             _ if draft.device.is_empty() => Err("Choose an audio device first.".into()),
-            _ => Ok(audio::latency::Target::Device(draft.clone())),
+            _ => Ok(audio::latency::Target::Device(Box::new(draft.clone()))),
         }
     }
 
@@ -2225,6 +2317,37 @@ fn save_settings(s: &SavedProfiles) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, s.to_text())?;
     std::fs::rename(tmp, path)
+}
+
+const MIX_BUFFER_HINT: &str = "Armed and monitored tracks, and the buses they play through, \
+    play at the buffer size above, so playing through an amp feels immediate. Everything else \
+    plays ahead at this bigger buffer, so a heavy mix has time to run. Play, stop and other \
+    changes reach your ears this much later.";
+
+/// A mix buffer as the device settings show it.
+fn mix_buffer_text(b: Option<u32>, rate: u32) -> String {
+    match b {
+        None => "Off: everything at the buffer size".into(),
+        Some(b) => format!(
+            "{b} samples ({:.0} ms)",
+            b as f64 * 1000.0 / rate.max(1) as f64
+        ),
+    }
+}
+
+/// How the mix running ahead is doing, for the device settings and the
+/// performance check.
+pub(crate) fn mix_ahead_line(s: &engine::Status) -> Option<String> {
+    let block = s.ahead.block()?;
+    let late = s.ahead.late();
+    let mut line = format!(
+        "The rest of the mix plays ahead in blocks of {block} samples, using {:.0}% of the time it has.",
+        s.ahead.load() * 100.0
+    );
+    if late > 0 {
+        line += &format!(" It fell behind for {late} samples, so the backing paused.");
+    }
+    Some(line)
 }
 
 fn new_engine() -> (Controller, engine::Engine, StreamerThread, RecorderThread) {
@@ -2481,6 +2604,14 @@ impl eframe::App for App {
                         app.menu_item(ui, c);
                     }
                     app.menu_gap();
+                    for c in [
+                        Cmd::ImportFromProject,
+                        Cmd::ExportParts,
+                        Cmd::ExportStemPackage,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
                     app.menu_item(ui, Cmd::Export);
                     app.menu_item(ui, Cmd::ExportVideo);
                     app.menu_item(ui, Cmd::ExportDawProject);
@@ -2492,6 +2623,8 @@ impl eframe::App for App {
                 self.top_menu(ui, "Edit", |app, ui| {
                     app.menu_item(ui, Cmd::Undo);
                     app.menu_item(ui, Cmd::Redo);
+                    app.menu_item(ui, Cmd::History);
+                    app.menu_item(ui, Cmd::Activity);
                     app.menu_gap();
                     app.menu_item(ui, Cmd::AddInstrumentTrack);
                     app.menu_gap();
@@ -2889,6 +3022,7 @@ impl eframe::App for App {
         self.interchange_windows(&ctx);
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
+        self.history_window(&ctx);
         self.tempo_window(&ctx);
         self.hit_points_window(&ctx);
         self.select_notes_window(&ctx);
@@ -2905,6 +3039,7 @@ impl eframe::App for App {
         self.listen_tick(&ctx);
         self.template_windows(&ctx);
         self.preset_windows(&ctx);
+        self.parts_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.log_practice(&ctx);
@@ -3004,4 +3139,67 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |_cc| Ok(Box::new(App::new(files)))),
     )
+}
+
+#[cfg(test)]
+mod mix_ahead_tests {
+    use crate::agent::driver::Driver;
+
+    /// A device that isn't there, so the app falls back to playing
+    /// silently, split or not as the profile says.
+    fn absent() -> DeviceProfile {
+        DeviceProfile {
+            host: "Test".into(),
+            device: "Not plugged in".into(),
+            rate: 48_000,
+            buffer: Some(64),
+            main: (0, 1),
+            click: None,
+            input: None,
+            record_offset: None,
+            measured_at: None,
+            direct_monitoring: false,
+            monitor: daw_audio_io::MonitorOutputs::default(),
+            mix_buffer: None,
+        }
+    }
+
+    use super::DeviceProfile;
+
+    #[test]
+    fn the_big_mix_buffer_turns_on_and_off_from_the_command_table() {
+        let mut d = Driver::new();
+        d.app().profile = Some(absent());
+        d.command("add-synth-track");
+        {
+            // A live track: armed, so it plays in the device callback.
+            let app = d.app();
+            app.tracks[0].arm = true;
+            app.rebuild();
+        }
+        assert!(!d.app().ctl.wants_twin());
+
+        d.command("mix-buffer");
+        let app = d.app();
+        assert_eq!(app.profile.as_ref().unwrap().mix_buffer, Some(2048));
+        assert!(app.ctl.wants_twin(), "split");
+        assert_eq!(app.ctl.status().ahead.block(), Some(2048));
+        // The mix thread keeps up, and the device settings say so.
+        let start = std::time::Instant::now();
+        while app.ctl.status().ahead.queued() == 0 && start.elapsed().as_secs() < 5 {
+            std::thread::yield_now();
+        }
+        assert!(app.ctl.status().ahead.queued() > 0, "the mix runs ahead");
+        let line = super::mix_ahead_line(app.ctl.status()).unwrap();
+        assert!(line.contains("blocks of 2048 samples"), "{line}");
+
+        d.command("mix-buffer");
+        let app = d.app();
+        assert_eq!(app.profile.as_ref().unwrap().mix_buffer, None);
+        assert!(!app.ctl.wants_twin());
+        assert!(super::mix_ahead_line(app.ctl.status()).is_none());
+        // Back on at the size last used.
+        d.command("mix-buffer");
+        assert_eq!(d.app().profile.as_ref().unwrap().mix_buffer, Some(2048));
+    }
 }

@@ -34,10 +34,15 @@ pub(crate) enum Cmd {
     ImportBundle,
     Snapshots,
     People,
+    ImportFromProject,
+    ExportParts,
+    ExportStemPackage,
     Export,
     ExportVideo,
     Undo,
     Redo,
+    History,
+    Activity,
     Split,
     Delete,
     Marker,
@@ -96,6 +101,7 @@ pub(crate) enum Cmd {
     Mixer,
     MonitorSection,
     Talkback,
+    MixAhead,
     Dim,
     Mono,
     TakeLanes,
@@ -396,6 +402,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::People, "people", "File", "People…", &[])
         .hint("Who has this project, and what they may change")
         .words("roles join name"),
+    info(
+        Cmd::ImportFromProject,
+        "import-from-project",
+        "File",
+        "Import from project…",
+        &[],
+    )
+    .hint("Bring tracks, sections, tempo or settings in from another project, with their audio")
+    .words("reuse lesson parts copy tracks markers merge"),
+    info(
+        Cmd::ExportParts,
+        "export-parts",
+        "File",
+        "Export tracks as a project…",
+        &[],
+    )
+    .hint("Chosen tracks, or a range of bars, as a new project with their audio")
+    .words("part range bars new project send out extract"),
+    info(
+        Cmd::ExportStemPackage,
+        "export-stem-package",
+        "File",
+        "Export stem package…",
+        &[],
+    )
+    .hint("Each chosen track as audio and its notes as MIDI, in a folder or a single file")
+    .words("stems midi archive tar send other program"),
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
         .words("render bounce stems wav flac mp3 opus ogg mixdown bus")
@@ -664,6 +697,12 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .repeat()
     .everyday(),
+    info(Cmd::History, "undo-list", "Edit", "Undo list…", &[])
+        .hint("Your changes by name, to go back several at a time")
+        .words("history steps undo redo jump back"),
+    info(Cmd::Activity, "activity", "Edit", "Activity…", &[])
+        .hint("Who changed what in the project, and when")
+        .words("history changes log who when"),
     info(
         Cmd::Split,
         "split",
@@ -1382,6 +1421,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Measure the round trip with a loopback cable, so recordings line up exactly")
     .words("loopback recording offset delay round trip"),
+    info(
+        Cmd::MixAhead,
+        "mix-buffer",
+        "Settings",
+        "Big mix buffer on or off",
+        &[],
+    )
+    .hint("Play live tracks at the small buffer and the rest of the mix at a big one")
+    .words("latency amp guitar monitoring low buffer cpu dropouts"),
     info(Cmd::Plugins, "plugins", "Settings", "Plugins…", &[]).words("effects scan"),
     info(
         Cmd::PerformanceCheck,
@@ -2459,6 +2507,8 @@ impl App {
             Cmd::Undo => self.can_undo(),
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
+            Cmd::ImportFromProject => self.may_edit_song(),
+            Cmd::ExportStemPackage => !self.export.busy(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
@@ -2561,10 +2611,15 @@ impl App {
             Cmd::ImportBundle => self.pick_bundle(),
             Cmd::Snapshots => self.snapshot_ui.open = true,
             Cmd::People => self.people.open = true,
+            Cmd::ImportFromProject => self.open_import(),
+            Cmd::ExportParts => self.open_export_parts(crate::import_project::Out::Project),
+            Cmd::ExportStemPackage => self.open_export_parts(crate::import_project::Out::Stems),
             Cmd::Export => self.export.open = true,
             Cmd::ExportVideo => self.export_video(),
             Cmd::Undo => self.undo(ctx),
             Cmd::Redo => self.redo(ctx),
+            Cmd::History => self.history.show(crate::history::View::Undo),
+            Cmd::Activity => self.history.show(crate::history::View::Activity),
             Cmd::PlayStop => self.toggle_play(),
             Cmd::ToStart => self.send(Command::Seek(Frames(0))),
             Cmd::Record => {
@@ -2743,6 +2798,7 @@ impl App {
                     self.latency.inputs = crate::input_channels(&d.host, d.input.as_deref());
                 }
             }
+            Cmd::MixAhead => self.toggle_mix_ahead(),
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::DrumKits

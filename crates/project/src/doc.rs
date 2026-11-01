@@ -42,6 +42,7 @@ use loro::{
     UpdateOptions, VersionVector,
 };
 
+use crate::history::{Steps, label, tag_steps};
 use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
@@ -49,7 +50,7 @@ use crate::{
     GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Notation,
     NotationView, Note, NoteClip, Practice, Project, Scale, Send, StretchMarker, TabBlock,
     Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, VideoClip,
-    is_asset_name,
+    differences, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -58,7 +59,7 @@ pub(crate) const QUIET: &str = "quiet";
 
 pub struct ProjectDoc {
     pub(crate) doc: LoroDoc,
-    undo: UndoManager,
+    pub(crate) undo: UndoManager,
     /// Whether the history may hold comment text that comments no longer
     /// show, so saving has to scrub it.
     scrub: bool,
@@ -69,6 +70,8 @@ pub struct ProjectDoc {
     scrubbed: RefCell<Option<(VersionVector, Vec<u8>)>>,
     /// Who is editing, once signed in (see [`crate::identity`]).
     pub(crate) me: Option<Me>,
+    /// What each undo and redo step changed (see `history.rs`).
+    pub(crate) steps: Steps,
 }
 
 impl ProjectDoc {
@@ -94,11 +97,14 @@ impl ProjectDoc {
     }
 
     pub(crate) fn wrap(doc: LoroDoc) -> ProjectDoc {
+        // When each change was made, for the activity history.
+        doc.set_record_timestamp(true);
         let mut undo = UndoManager::new(&doc);
         // One step per edit, however quickly they follow each other.
         undo.set_merge_interval(0);
         undo.set_max_undo_steps(500);
         undo.add_exclude_origin_prefix(QUIET);
+        tag_steps(&mut undo);
         ProjectDoc {
             doc,
             undo,
@@ -106,6 +112,7 @@ impl ProjectDoc {
             dropped: false,
             scrubbed: RefCell::new(None),
             me: None,
+            steps: Steps::default(),
         }
     }
 
@@ -207,17 +214,11 @@ impl ProjectDoc {
     /// Writes what differs from `p` as one undoable edit. True if
     /// anything did.
     pub fn set(&mut self, p: &Project) -> bool {
+        let before = self.get();
         let changed = self.write(p);
         self.doc.commit();
-        changed
-    }
-
-    /// Like [`set`](Self::set), with the edit's name kept in the
-    /// history as its commit message.
-    pub fn set_labelled(&mut self, p: &Project, label: &str) -> bool {
-        let changed = self.write(p);
-        self.doc.set_next_commit_message(label);
-        self.doc.commit();
+        let changes = differences(&before, &self.get());
+        self.note_step(&label(&changes), changes);
         changed
     }
 
@@ -242,11 +243,11 @@ impl ProjectDoc {
     /// Undoes this user's last edit (not other people's). True if there
     /// was one.
     pub fn undo(&mut self) -> bool {
-        self.undo.undo().unwrap_or(false)
+        self.undo_labelled()
     }
 
     pub fn redo(&mut self) -> bool {
-        self.undo.redo().unwrap_or(false)
+        self.redo_labelled()
     }
 
     fn song(&self) -> LoroMap {
@@ -342,7 +343,7 @@ impl ProjectDoc {
         self.doc.get_map("tabs")
     }
 
-    fn write(&mut self, p: &Project) -> bool {
+    pub(crate) fn write(&mut self, p: &Project) -> bool {
         let mut w = Writer::default();
         let song = self.song();
         w.put(&song, "rate", p.rate as i64);

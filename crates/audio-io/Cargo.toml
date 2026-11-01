@@ -20,3 +20,4 @@ rtrb = "0.4.1"
 # GPLv3 option, decision 0001) and needs libclang for bindgen.
 [target.'cfg(windows)'.dependencies]
 cpal = { version = "0.18.2", features = ["asio"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }

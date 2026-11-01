@@ -260,6 +260,9 @@ struct Running {
     label: Option<String>,
     /// The frame it acted in has to be followed by one more.
     frames: u8,
+    /// A seek waits for the engine to get there (or a second to pass),
+    /// so what is asked next sees the new place.
+    until: Option<(Frames, std::time::Instant)>,
 }
 
 /// The tools' side of the app: requests waiting, and those answered
@@ -289,6 +292,9 @@ impl Agent {
     }
 }
 
+/// How long a seek waits for the engine at most.
+const SEEK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 impl App {
     /// Called once a frame: answers requests that have had their frame,
     /// then starts those that came since.
@@ -298,8 +304,11 @@ impl App {
         }
         let (done, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.agent.running)
             .into_iter()
-            .partition(|r| r.frames == 0);
+            .partition(|r| r.frames == 0 && !self.waiting(r));
         self.agent.running = wait;
+        if !self.agent.running.is_empty() {
+            ctx.request_repaint();
+        }
         for r in done {
             if let Some(label) = r.label {
                 self.proj.label = Some(format!("Assistant: {label}"));
@@ -338,14 +347,29 @@ impl App {
                 Ok((v, label)) => (Ok(v), label),
                 Err(e) => (Err(e), None),
             };
+            let until = (t.name == "seek")
+                .then(|| result.as_ref().ok()?["frames"].as_i64())
+                .flatten()
+                .map(|f| (Frames(f), std::time::Instant::now() + SEEK_WAIT));
             self.agent.running.push(Running {
                 reply: req.reply,
                 result,
                 label,
                 frames: 1,
+                until,
             });
             ctx.request_repaint();
         }
+    }
+
+    /// The engine hasn't reached a seek's place yet.
+    fn waiting(&self, r: &Running) -> bool {
+        let Some((at, by)) = r.until else {
+            return false;
+        };
+        // Playing moves on from it, so near is there.
+        let near = (self.ctl.status().position().0 - at.0).abs() < self.rate as i64 / 4;
+        !near && std::time::Instant::now() < by
     }
 
     fn read_tool(&mut self, name: &str, args: &Value) -> Result<Value, String> {

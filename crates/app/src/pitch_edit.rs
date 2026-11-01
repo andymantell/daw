@@ -23,7 +23,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec
 use daw_engine::bend::{PitchBend, PitchLine};
 use daw_engine::pitch_line;
 use daw_engine::warp::{Warp, WarpPoint};
-use daw_project::{MAX_TRANSPOSE_CENTS, MAX_VIBRATO_PCT, PitchNote};
+use daw_project::{MAX_TRANSPOSE_CENTS, MAX_VIBRATO_PCT, PitchNote, Scale};
 
 use crate::App;
 use crate::commands::Cmd;
@@ -56,6 +56,9 @@ pub(crate) struct PitchEdit {
     /// A drag in progress: the notes as they were when it began, where
     /// it began, and what it moves.
     drag: Option<Drag>,
+    /// The snap commands leave notes this close (in cents) to where
+    /// they would go.
+    pub min_cents: i64,
 }
 
 struct Drag {
@@ -358,12 +361,42 @@ pub(crate) fn clamp_cents(c: i64) -> i64 {
     c.clamp(-MAX_TRANSPOSE_CENTS, MAX_TRANSPOSE_CENTS)
 }
 
-/// The shift that puts a note found at `cents`, moved by `shift`, on
-/// the nearest whole note. For a transposed clip, `cents` holds the
-/// clip's transpose too, so the note is snapped as it is heard.
-pub(crate) fn snapped(cents: i64, shift: i64) -> i64 {
-    let to = ((cents + shift) as f64 / 100.0).round() as i64 * 100;
-    clamp_cents(to - cents)
+/// Where a snap puts a note: on the nearest whole note, or on the
+/// nearest note of a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SnapTo {
+    Semitone,
+    Key(Scale),
+}
+
+/// The note of `scale` nearest `heard` (in cents above MIDI 0), in
+/// cents; between two equally near, the lower.
+fn nearest_in_key(scale: Scale, heard: i64) -> i64 {
+    let below = heard.div_euclid(100);
+    ((below - 6)..=(below + 7))
+        .filter(|m| (0..=127).contains(m) && scale.contains(*m as u8))
+        .map(|m| m * 100)
+        .min_by_key(|m| (m - heard).abs())
+        .unwrap_or(heard)
+}
+
+/// The shift that snaps a note found at `cents`, moved by `shift` and
+/// played `transpose` cents higher by its clip's transpose, onto the
+/// nearest note `to` allows, judged as it is heard. `None` when it is
+/// already within `min_cents` of that note, and so left alone.
+pub(crate) fn snap_shift(
+    cents: i64,
+    shift: i64,
+    transpose: i64,
+    to: SnapTo,
+    min_cents: i64,
+) -> Option<i64> {
+    let heard = cents + shift + transpose;
+    let target = match to {
+        SnapTo::Semitone => (heard as f64 / 100.0).round() as i64 * 100,
+        SnapTo::Key(s) => nearest_in_key(s, heard),
+    };
+    ((target - heard).abs() > min_cents).then(|| clamp_cents(target - transpose - cents))
 }
 
 impl App {
@@ -582,16 +615,11 @@ impl App {
                 let s = clamp_cents(n.shift - 100);
                 std::mem::replace(&mut n.shift, s) != s
             }),
-            Cmd::SnapPitchNotes => {
-                // Snapped as heard: with the clip's own transpose, which
-                // may hold cents.
-                let clip =
-                    (self.pitch_clip()).map_or(0, |(l, k)| self.tracks[l].clips[k].cents as i64);
-                self.each_pitch_note(|n| {
-                    let s = snapped(n.cents + clip, n.shift);
-                    std::mem::replace(&mut n.shift, s) != s
-                })
-            }
+            Cmd::SnapPitchNotes => self.snap_pitch_notes(SnapTo::Semitone),
+            Cmd::SnapPitchNotesToKey => match self.scale {
+                Some(s) => self.snap_pitch_notes(SnapTo::Key(s)),
+                None => return true,
+            },
             Cmd::FlattenPitchDrift => self.each_pitch_note(|n| {
                 let was = n.drift;
                 n.drift = 0;
@@ -605,6 +633,21 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Snaps the chosen notes of the shown clip (or all) `to` the
+    /// nearest whole note or note of the key, as heard, leaving those
+    /// within the pane's threshold.
+    fn snap_pitch_notes(&mut self, to: SnapTo) {
+        let Some((l, k)) = self.pitch_clip() else {
+            return;
+        };
+        let transpose = self.tracks[l].clips[k].cents as i64;
+        let min = self.pitch.min_cents;
+        self.each_pitch_note(|n| match snap_shift(n.cents, n.shift, transpose, to, min) {
+            Some(s) => std::mem::replace(&mut n.shift, s) != s,
+            None => false,
+        });
     }
 
     /// Whether a pitch command has notes to act on.
@@ -630,6 +673,7 @@ impl App {
         }
         let may_edit = self.may_edit_song();
         let mut run = None;
+        let mut min_cents = self.pitch.min_cents;
         ui.horizontal_wrapped(|ui| {
             let c = &self.tracks[l].clips[k];
             ui.label(RichText::new(c.name()).strong());
@@ -653,6 +697,28 @@ impl App {
                 ui.label("Finding notes…");
             }
             ui.add_enabled_ui(may_edit && !c.pitch_notes.is_empty(), |ui| {
+                // ai: snap-pitch-notes-to-key
+                let key = ui.add_enabled_ui(self.scale.is_some(), |ui| {
+                    ui.button("Snap to key").on_hover_text(match self.scale {
+                        Some(s) => format!(
+                            "{} ({})",
+                            self.commands.hover(Cmd::SnapPitchNotesToKey),
+                            s.label()
+                        ),
+                        None => "Set the song's key first".to_string(),
+                    })
+                });
+                if key.inner.clicked() {
+                    run = Some(Cmd::SnapPitchNotesToKey);
+                }
+                ui.label("leave within");
+                // ai: edit_pitch_notes
+                ui.add(
+                    egui::DragValue::new(&mut min_cents)
+                        .range(0..=100)
+                        .suffix(" ct"),
+                )
+                .on_hover_text("Snapping leaves notes this close to where they would go");
                 for (cmd, text) in [
                     (Cmd::SnapPitchNotes, "Snap to notes"),
                     (Cmd::PitchNotesUp, "Up a semitone"),
@@ -671,6 +737,7 @@ impl App {
                 }
             });
         });
+        self.pitch.min_cents = min_cents;
         if let Some(cmd) = run {
             self.run_pitch(cmd);
         }
@@ -1055,8 +1122,37 @@ pub(crate) mod tests {
         assert_eq!(note_name(6_900), "A4");
         assert_eq!(note_name(6_012), "C4 +12 ct");
         assert_eq!(note_name(6_088), "C♯4 −12 ct");
-        assert_eq!(snapped(6_012, 0), -12);
-        assert_eq!(snapped(6_012, 140), 188);
+        let semi = |c, s| snap_shift(c, s, 0, SnapTo::Semitone, 0);
+        assert_eq!(semi(6_012, 0), Some(-12));
+        assert_eq!(semi(6_012, 140), Some(188));
+        assert_eq!(semi(6_000, 0), None, "already there");
+    }
+
+    #[test]
+    fn snapping_to_the_key_goes_to_its_nearest_note_as_heard() {
+        use daw_project::ScaleKind;
+        let c_major = SnapTo::Key(Scale::new(0, ScaleKind::Major));
+        // C♯4 −45 ct: the nearest whole note is C♯, out of C major; the
+        // key's nearest is C.
+        assert_eq!(snap_shift(6_055, 0, 0, SnapTo::Semitone, 0), Some(45));
+        assert_eq!(snap_shift(6_055, 0, 0, c_major, 0), Some(-55));
+        // F♯4 sits between F and G, a semitone from each: the lower.
+        assert_eq!(snap_shift(6_600, 0, 0, c_major, 0), Some(-100));
+        assert_eq!(snap_shift(6_620, 0, 0, c_major, 0), Some(80));
+        // Judged as heard: sung at F♯4 +55 ct in a clip played 6
+        // semitones lower, it is heard at C♯4 −45 ct and goes to C4.
+        let s = snap_shift(6_655, 0, -600, c_major, 0).unwrap();
+        assert_eq!(6_655 + s - 600, 6_000);
+        // A note's own move counts: moved up onto D, it is left there.
+        assert_eq!(snap_shift(6_010, 190, 0, c_major, 0), None);
+        assert_eq!(snap_shift(6_010, 170, 0, c_major, 0), Some(190));
+        // Notes within the threshold are left alone; the rest move.
+        assert_eq!(snap_shift(6_010, 0, 0, c_major, 30), None);
+        assert_eq!(snap_shift(6_640, 0, 0, c_major, 30), Some(60));
+        // Wide gaps: A minor pentatonic has none between A and C.
+        let pent = SnapTo::Key(Scale::new(9, ScaleKind::MinorPentatonic));
+        assert_eq!(snap_shift(5_840, 0, 0, pent, 0), Some(-140));
+        assert_eq!(snap_shift(5_860, 0, 0, pent, 0), Some(140));
     }
 
     #[test]
@@ -1349,6 +1445,48 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn an_assistant_snaps_a_vocal_to_the_songs_key_leaving_notes_already_close() {
+            let mut d = Driver::new();
+            // A C♯ sung 45 cents flat, and an E 10 cents sharp.
+            let key = with_clip(&mut d, sung(&[(60.55, 0.4), (64.1, 0.4)], 0.0));
+            d.call("edit_pitch_notes", json!({"clip": key, "find": true}))
+                .unwrap();
+            let e = d
+                .call("edit_pitch_notes", json!({"clip": key, "snap": "key"}))
+                .unwrap_err();
+            assert!(e.contains("no key"), "{e}");
+            d.call("set_key", json!({"key": "C major"})).unwrap();
+            let e = d
+                .call("edit_pitch_notes", json!({"clip": key, "min_cents": 30}))
+                .unwrap_err();
+            assert!(e.contains("snap"), "{e}");
+            let v = d
+                .call(
+                    "edit_pitch_notes",
+                    json!({"clip": key, "snap": "key", "min_cents": 30}),
+                )
+                .unwrap();
+            assert_eq!(v["key"], "C major", "{v}");
+            assert_eq!(v["snapped"], 1, "{v}");
+            assert_eq!(v["notes"][0]["now"], "C4", "{v}");
+            assert_eq!(v["notes"][1]["shift_semitones"], 0.0, "within 30 ct: left");
+            // Heard: the first note now sounds at C, not C♯.
+            let out = render(&mut d);
+            let (first, _) = pitch_over(&out, 0.2, 0.4);
+            assert!((first - 60.0).abs() < 0.15, "{first}");
+            let (second, _) = pitch_over(&out, 0.7, 0.9);
+            assert!((second - 64.1).abs() < 0.15, "{second}");
+            // One undo step.
+            d.command("undo");
+            assert!(
+                d.app().tracks[0].clips[0]
+                    .pitch_notes
+                    .iter()
+                    .all(|n| n.shift == 0)
+            );
+        }
+
+        #[test]
         fn drift_and_vibrato_can_be_taken_out_and_notes_moved_in_time() {
             let mut d = Driver::new();
             let key = with_clip(&mut d, sung(&[(57.0, 0.6), (60.0, 0.4)], 0.5));
@@ -1406,6 +1544,7 @@ pub(crate) mod tests {
             for name in [
                 "Find notes again",
                 "Snap to notes",
+                "Snap to key",
                 "As sung",
                 "Pitch",
                 "Formants",
@@ -1449,6 +1588,18 @@ pub(crate) mod tests {
                     .iter()
                     .all(|n| !n.is_edited())
             );
+            // To the key: off until the song has one; the threshold
+            // leaves the first note (30 ct from C) where it is.
+            assert!(!d.app().can_run(crate::commands::Cmd::SnapPitchNotesToKey));
+            d.call("set_key", json!({"key": "F major"})).unwrap();
+            d.app().pitch.min_cents = 40;
+            d.command("snap-pitch-notes-to-key");
+            let n = d.app().tracks[0].clips[0].pitch_notes.clone();
+            assert_eq!((n[0].shift, n[1].shift), (0, 0), "both close enough");
+            d.app().pitch.min_cents = 0;
+            d.command("snap-pitch-notes-to-key");
+            let n = d.app().tracks[0].clips[0].pitch_notes.clone();
+            assert_eq!((n[0].shift, n[1].shift), (-30, 0));
         }
     }
 }

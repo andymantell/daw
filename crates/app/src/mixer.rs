@@ -559,9 +559,11 @@ impl App {
                     .on_disabled_hover_text("Direct monitoring is on (Settings → Audio device)");
                 });
                 if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
-                    ui.toggle_value(&mut t.practice_mute, "🎧")
+                    ui.toggle_value(&mut t.practice_mute, "P")
                         .accessible_name(format!("Practice mute {name}"))
-                        .on_hover_text("Practice mute: silence this part to play it yourself");
+                        .on_hover_text(
+                            "P: practice mute, to silence this part and play it yourself",
+                        );
                 }
             }
             // The insert effects.
@@ -571,7 +573,7 @@ impl App {
                     (0, _) => "FX".to_string(),
                     (n, false) => format!("FX ({n})"),
                     // Plays its frozen audio.
-                    (n, true) => format!("FX ({n}) ❄"),
+                    (n, true) => format!("Frozen ({n})"),
                 };
                 let open = self.effects.open_track == Some(i);
                 // ai: view
@@ -649,7 +651,7 @@ impl App {
                 // in a menu beside them, then arming.
                 rows.row(ui, ROW, |ui| {
                     rebuild |= self.strip_part(ui, i, Part::Fx, &r, actions);
-                    let menu = ui.menu_button("▾", |ui| {
+                    let menu = ui.menu_button("…", |ui| {
                         ui.set_min_width(200.0);
                         for &p in &parts {
                             ui.horizontal(|ui| {

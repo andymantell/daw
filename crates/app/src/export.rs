@@ -567,7 +567,7 @@ impl Export {
                     &mut self.play_along,
                     "Leave out the tracks muted for practice, to play along with",
                 )
-                .on_hover_text("Tracks with practice mute (🎧) on are not in the file");
+                .on_hover_text("Tracks with practice mute (P) on are not in the file");
                 ui.add_enabled_ui(!per_section, |ui| {
                     ui.checkbox(&mut self.stems, "Also each track on its own (stems)");
                     ui.add_enabled_ui(buses, |ui| {

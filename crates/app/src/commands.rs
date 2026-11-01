@@ -757,22 +757,22 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::NoteRepeat, "note-repeat", "Notes", "Note repeat on or off", &[])
         .hint("Keys and pads held down on the instrument track play again every sixteenth, until let go")
         .words("roll ratchet pads drums repeat"),
-    info(Cmd::AddNoteFx(0), "add-arpeggiator", "Notes", "Arpeggiator", &[])
+    info(Cmd::AddNoteFx(0), "add-arpeggiator", "Notes", "Add arpeggiator", &[])
         .hint("Add an arpeggiator to the instrument track: held keys play in turn, in time with the song")
         .words("arp arpeggio note effect midi effect pattern"),
-    info(Cmd::AddNoteFx(1), "add-chord-effect", "Notes", "Chord", &[])
+    info(Cmd::AddNoteFx(1), "add-chord-effect", "Notes", "Add chord effect", &[])
         .hint("Add a chord effect to the instrument track: each note plays a chord")
         .words("chords harmony triad note effect midi effect"),
-    info(Cmd::AddNoteFx(2), "add-note-length-effect", "Notes", "Note length", &[])
+    info(Cmd::AddNoteFx(2), "add-note-length-effect", "Notes", "Add note length effect", &[])
         .hint("Add a note length effect to the instrument track: notes a set length, or longer")
         .words("duration gate staccato note effect midi effect"),
-    info(Cmd::AddNoteFx(3), "add-velocity-effect", "Notes", "Velocity", &[])
+    info(Cmd::AddNoteFx(3), "add-velocity-effect", "Notes", "Add velocity effect", &[])
         .hint("Add a velocity effect to the instrument track: notes softer, harder or more even")
         .words("dynamics compress note effect midi effect"),
-    info(Cmd::AddNoteFx(4), "add-randomise-effect", "Notes", "Randomise", &[])
+    info(Cmd::AddNoteFx(4), "add-randomise-effect", "Notes", "Add randomise effect", &[])
         .hint("Add a randomise effect to the instrument track: pitch and velocity moved at random")
         .words("random randomize humanise chance note effect midi effect"),
-    info(Cmd::AddNoteFx(5), "add-scale-effect", "Notes", "Scale", &[])
+    info(Cmd::AddNoteFx(5), "add-scale-effect", "Notes", "Add scale effect", &[])
         .hint("Add a scale effect to the instrument track: notes kept on the song's key")
         .words("key quantise pitch correct note effect midi effect"),
     info(Cmd::NoteFxOnOff, "note-effects-on-off", "Notes", "Bypass note effects", &[])

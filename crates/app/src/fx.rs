@@ -450,7 +450,7 @@ pub struct Effects {
     check: Option<mpsc::Receiver<CheckMsg>>,
     /// The plugin being checked now, or where the last check's report
     /// went (or why it failed).
-    check_status: Option<Result<String, String>>,
+    pub(crate) check_status: Option<Result<String, String>>,
     /// Asked for from the effects window, for the app to act on.
     pub(crate) chain_ask: Option<ChainAsk>,
 }
@@ -641,7 +641,7 @@ impl Effects {
     }
 
     /// Takes in how the check is going. True while it runs.
-    fn poll_check(&mut self) -> bool {
+    pub(crate) fn poll_check(&mut self) -> bool {
         let Some(rx) = &self.check else {
             return false;
         };
@@ -668,7 +668,7 @@ impl Effects {
         }
     }
 
-    fn save(&self) -> std::io::Result<()> {
+    pub(crate) fn save(&self) -> std::io::Result<()> {
         if let Some(dir) = self.list_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -1217,6 +1217,7 @@ impl Effects {
                 ui.horizontal(|ui| {
                     let busy = self.scan.is_some();
                     if ui
+                        // ai: manage_plugins
                         .add_enabled(!busy, egui::Button::new("Rescan"))
                         .on_hover_text("Looks for new or updated plugins")
                         .clicked()
@@ -1233,6 +1234,7 @@ impl Effects {
                     if ui
                         .add_enabled(
                             !checking && self.scan.is_none() && self.helper.is_some(),
+                            // ai: manage_plugins
                             egui::Button::new("Check plugins"),
                         )
                         .on_hover_text(
@@ -1252,6 +1254,7 @@ impl Effects {
                     match &self.check_status {
                         Some(Ok(s)) => {
                             ui.label(s);
+                            // ai: view
                             if !checking && ui.small_button("Copy report").clicked() {
                                 let path = self.check_report_path();
                                 if let Ok(text) = std::fs::read_to_string(path) {
@@ -1270,6 +1273,7 @@ impl Effects {
                     ui.label("Plugin windows open at once:");
                     let r = ui
                         .add(
+                            // ai: manage_plugins
                             egui::DragValue::new(&mut cap)
                                 .range(0..=32)
                                 .custom_formatter(|v, _| {
@@ -1319,6 +1323,7 @@ impl Effects {
                                 for p in &plugins {
                                     let mut on = p.enabled;
                                     if ui
+                                        // ai: manage_plugins
                                         .checkbox(&mut on, "")
                                         .on_hover_text("Offer this plugin when adding effects")
                                         .changed()
@@ -1350,6 +1355,7 @@ impl Effects {
                                     .width(170.0)
                                     .show_ui(ui, |ui| {
                                         for choice in Sandbox::ALL {
+                                            // ai: manage_plugins
                                             ui.selectable_value(&mut sb, choice, choice.label());
                                         }
                                     })
@@ -1382,6 +1388,7 @@ impl Effects {
                                     if ui
                                         .add_enabled(
                                             self.scan.is_none(),
+                                            // ai: manage_plugins
                                             egui::Button::new("Try again"),
                                         )
                                         .clicked()
@@ -1547,6 +1554,7 @@ impl Effects {
                         ui.add_space(depth as f32 * 16.0);
                         let mut on = !s.bypass;
                         if ui
+                            // ai: edit_effect
                             .toggle_value(&mut on, "On")
                             .on_hover_text("Switch off to bypass this effect")
                             .changed()
@@ -1579,6 +1587,7 @@ impl Effects {
                         }
                         if s.is_plugin()
                             && ui
+                                // ai: view
                                 .button("Edit")
                                 .on_hover_text("Open the plugin's own window")
                                 .clicked()
@@ -1586,6 +1595,7 @@ impl Effects {
                         {
                             *message = Some(format!("{}: {e}", s.name));
                         }
+                        // ai: view
                         ui.toggle_value(&mut s.show_params, "Controls")
                             .on_hover_text("Show the effect's settings here");
                         if s.takes_key() {
@@ -1610,6 +1620,7 @@ impl Effects {
                             if ui
                                 .add_enabled(
                                     s.place.is_some(),
+                                    // ai: edit_effect
                                     egui::Button::new("To the track's own chain"),
                                 )
                                 .clicked()
@@ -1623,6 +1634,7 @@ impl Effects {
                                 }
                                 let here = s.place.as_ref() == Some(&(key.clone(), *branch));
                                 if ui
+                                    // ai: edit_effect
                                     .add_enabled(!here, egui::Button::new(format!("Into {label}")))
                                     .clicked()
                                 {
@@ -1634,17 +1646,20 @@ impl Effects {
                         .response
                         .accessible_name(format!("Move {}", s.name));
                         if ui
+                            // ai: edit_effect
                             .add_enabled(up.is_some(), egui::Button::new("▲"))
                             .clicked()
                         {
                             swap = up.map(|u| (u, i));
                         }
                         if ui
+                            // ai: edit_effect
                             .add_enabled(down.is_some(), egui::Button::new("▼"))
                             .clicked()
                         {
                             swap = down.map(|d| (i, d));
                         }
+                        // ai: remove_effect
                         if ui.button("✖").on_hover_text("Remove").clicked() {
                             remove = Some(i);
                         }
@@ -1691,12 +1706,14 @@ impl Effects {
                         })
                         .response
                         .accessible_name("Add effect");
+                    // ai: plugins
                     if ui.button("Plugins…").clicked() {
                         self.show_manager = true;
                     }
                 });
                 ui.horizontal(|ui| {
                     if ui
+                        // ai: save_preset
                         .button("Save as preset…")
                         .on_hover_text("Keep this chain to put on other tracks and projects")
                         .clicked()
@@ -1704,6 +1721,7 @@ impl Effects {
                         self.chain_ask = Some(ChainAsk::Save);
                     }
                     if ui
+                        // ai: add_preset
                         .button("Presets…")
                         .on_hover_text("Put a saved chain or track preset on this track")
                         .clicked()
@@ -1976,6 +1994,7 @@ enum Pick {
 /// The built-in effects, containers and plugins, filtered by `filter`.
 fn add_list(ui: &mut egui::Ui, filter: &mut String, effects: &[Available]) -> Option<Pick> {
     let mut pick = None;
+    // ai: view
     ui.add(egui::TextEdit::singleline(filter).hint_text("Search"));
     let f = filter.to_lowercase();
     let fits = |name: &str| f.is_empty() || name.to_lowercase().contains(&f);
@@ -1986,6 +2005,7 @@ fn add_list(ui: &mut egui::Ui, filter: &mut String, effects: &[Available]) -> Op
             .filter(|k| k.is_container() == containers && fits(k.name()))
         {
             if ui
+                // ai: add_effect
                 .selectable_label(false, k.name())
                 .on_hover_text(k.about())
                 .clicked()
@@ -1998,6 +2018,7 @@ fn add_list(ui: &mut egui::Ui, filter: &mut String, effects: &[Available]) -> Op
     ui.label(RichText::new("Plugins").small().weak());
     for p in effects.iter().filter(|p| fits(&p.class.name)) {
         if ui
+            // ai: add_effect
             .selectable_label(false, &p.class.name)
             .on_hover_text(&p.class.vendor)
             .clicked()
@@ -2053,6 +2074,7 @@ fn outputs_picker(ui: &mut egui::Ui, s: &mut FxSlot) -> bool {
                 name
             };
             if ui
+                // ai: edit_effect
                 .checkbox(&mut on, &name)
                 .on_hover_text("Mix this extra output of the plugin into the track")
                 .changed()
@@ -2083,8 +2105,10 @@ fn sidechain_picker(ui: &mut egui::Ui, s: &mut FxSlot, others: &[(String, String
         .width(110.0)
         .selected_text(format!("Listen: {}", name(&s.sidechain)))
         .show_ui(ui, |ui| {
+            // ai: edit_effect
             ui.selectable_value(&mut s.sidechain, None, "Own audio");
             for (key, n) in others {
+                // ai: edit_effect
                 ui.selectable_value(&mut s.sidechain, Some(key.clone()), n);
             }
         })
@@ -2134,6 +2158,7 @@ pub(crate) fn plugin_instrument_controls(
     });
     ui.horizontal(|ui| {
         if ui
+            // ai: view
             .button("Edit")
             .on_hover_text("Open the plugin's own window")
             .clicked()
@@ -2148,6 +2173,7 @@ pub(crate) fn plugin_instrument_controls(
         })
         .response
         .accessible_name(format!("Presets for {}", s.name));
+        // ai: view
         ui.toggle_value(&mut s.show_params, "Controls")
             .on_hover_text("Show the instrument's settings here");
     });
@@ -2218,12 +2244,14 @@ fn cabinet_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option
             ui.label(RichText::new("Made here").small().weak());
             for (i, name) in made.choices.iter().enumerate() {
                 let on = reference.is_empty() && b.get(0) as usize == i;
+                // ai: set_parameter
                 if ui.selectable_label(on, *name).clicked() {
                     pick = Some(RoomPick::Made(i));
                 }
             }
             ui.separator();
             if ui
+                // ai: edit_effect
                 .selectable_label(false, "Your own file…")
                 .on_hover_text("A cabinet's impulse response, as a WAV or other sound file")
                 .clicked()
@@ -2251,6 +2279,7 @@ fn capture_picker(ui: &mut egui::Ui, b: &daw_effects::Effect) -> Option<RoomPick
     ui.horizontal(|ui| {
         ui.label(now);
         if ui
+            // ai: edit_effect
             .button("Choose…")
             .on_hover_text("A capture file (.nam) of a real amp or pedal")
             .clicked()
@@ -2259,6 +2288,7 @@ fn capture_picker(ui: &mut egui::Ui, b: &daw_effects::Effect) -> Option<RoomPick
         }
         if !reference.is_empty()
             && ui
+                // ai: edit_effect
                 .button("Remove")
                 .on_hover_text("Take the capture away; the sound passes unchanged")
                 .clicked()
@@ -2292,6 +2322,7 @@ fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<Ro
             ui.label(RichText::new("Made here").small().weak());
             for (i, name) in made.choices.iter().enumerate() {
                 let on = reference.is_empty() && b.get(0) as usize == i;
+                // ai: set_parameter
                 if ui.selectable_label(on, *name).clicked() {
                     pick = Some(RoomPick::Made(i));
                 }
@@ -2302,6 +2333,7 @@ fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<Ro
                 for room in library::ROOMS {
                     let on = library::find(&reference).is_some_and(|r| r.id == room.id);
                     if ui
+                        // ai: edit_effect
                         .selectable_label(on, room.name)
                         .on_hover_text(room.credit())
                         .clicked()
@@ -2312,6 +2344,7 @@ fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<Ro
             }
             ui.separator();
             if ui
+                // ai: edit_effect
                 .selectable_label(false, "Your own file…")
                 .on_hover_text("A room's impulse response: WAV with 1, 2 or 4 (B-format) channels")
                 .clicked()
@@ -2419,6 +2452,7 @@ pub(crate) fn builtin_params(
                 ui.label(p.name);
                 let changed = if p.unit == daw_effects::Unit::Switch {
                     let mut on = v >= 0.5;
+                    // ai: set_parameter
                     let r = ui.checkbox(&mut on, "").accessible_name(p.name);
                     v = if on { 1.0 } else { 0.0 };
                     r.changed()
@@ -2433,6 +2467,7 @@ pub(crate) fn builtin_params(
                 } else {
                     let text = |x: f64, _| p.text(x);
                     ui.add(
+                        // ai: set_parameter
                         egui::Slider::new(&mut v, p.min..=p.max)
                             .logarithmic(p.log)
                             .custom_formatter(text)
@@ -2483,11 +2518,13 @@ fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String>
     let mut save = false;
     ui.horizontal(|ui| {
         ui.add(
+            // ai: plugin_preset
             egui::TextEdit::singleline(&mut s.preset_name)
                 .hint_text("New preset name")
                 .desired_width(150.0),
         )
         .labelled_by(ui.label("Save as").id);
+        // ai: plugin_preset
         save = ui.button("Save").clicked();
     });
     if save {
@@ -2509,10 +2546,12 @@ fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String>
         ui.label(RichText::new("Your presets").weak());
         for p in own {
             ui.horizontal(|ui| {
+                // ai: plugin_preset
                 if ui.button(&p.name).clicked() {
                     load = Some(p.clone());
                 }
                 if ui
+                    // ai: plugin_preset
                     .small_button("✖")
                     .on_hover_text("Delete this preset")
                     .accessible_name(format!("Delete preset {}", p.name))
@@ -2531,6 +2570,7 @@ fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String>
             .show(ui, |ui| {
                 for p in native {
                     if ui
+                        // ai: plugin_preset
                         .button(&p.name)
                         .on_hover_text(p.path.display().to_string())
                         .clicked()
@@ -2552,6 +2592,7 @@ fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String>
             .id_salt(("programs", l.id))
             .show(ui, |ui| {
                 for (i, name) in l.programs.iter().enumerate() {
+                    // ai: plugin_preset
                     if ui.button(name).clicked() {
                         pick = Some((l.clone(), i));
                     }
@@ -2599,6 +2640,7 @@ fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
                 };
                 ui.label(&p.title);
                 if ui
+                    // ai: set_parameter
                     .add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false))
                     .changed()
                 {

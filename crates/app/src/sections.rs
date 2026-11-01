@@ -626,7 +626,60 @@ impl App {
             Cmd::ClearPlayOrder => self.arrangement.clear(),
             Cmd::PlayOrder => self.play_order(),
             Cmd::WriteOrder => self.write_order(),
+            Cmd::ExportSections => {
+                let along = self.export.play_along();
+                self.export_sections(None, along, None);
+            }
+            Cmd::ExportThisSection => self.on_section_here(|a, s| {
+                let along = a.export.play_along();
+                a.export_sections(Some(std::slice::from_ref(&s.id)), along, None);
+            }),
+            Cmd::ClearExportQueue => self.export.clear_queue(),
             _ => {}
+        }
+    }
+
+    /// Exports a practice file for each section, or for those whose
+    /// marker id or name is in `only`: now, or after the exports already
+    /// going. `play_along` leaves out the tracks muted for practice.
+    /// `format` is the window's file type unless given. Answers with
+    /// what was queued, or says why not.
+    pub(crate) fn export_sections(
+        &mut self,
+        only: Option<&[String]>,
+        play_along: bool,
+        format: Option<daw_engine::export::Format>,
+    ) -> Option<String> {
+        let spans: Vec<crate::export::Span> = (self.sections().into_iter())
+            .filter(|s| only.is_none_or(|o| o.iter().any(|k| *k == s.id || *k == s.name)))
+            .map(|s| crate::export::Span {
+                name: s.name,
+                from: s.from,
+                to: s.to,
+            })
+            .collect();
+        if spans.is_empty() {
+            self.message = Some(if self.markers.is_empty() {
+                "There are no sections to export: mark one with M (Mark a section).".into()
+            } else {
+                "None of those sections are in the song.".into()
+            });
+            return None;
+        }
+        let mut req = self.export.sections_request(spans, play_along);
+        if let Some(f) = format {
+            req.format = f;
+        }
+        let label = req.label();
+        match self.export_or_queue(req) {
+            Ok(()) => {
+                self.export.open = true;
+                Some(label)
+            }
+            Err(e) => {
+                self.message = Some(e);
+                None
+            }
         }
     }
 }

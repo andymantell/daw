@@ -39,6 +39,9 @@ pub(crate) enum Cmd {
     ExportStemPackage,
     Export,
     ExportVideo,
+    ExportSections,
+    ExportThisSection,
+    ClearExportQueue,
     Undo,
     Redo,
     History,
@@ -74,6 +77,12 @@ pub(crate) enum Cmd {
     Copy,
     Paste,
     Bounce,
+    TrackVersions,
+    NewVersion,
+    DuplicateVersion,
+    NextVersion,
+    PrevVersion,
+    DeleteVersion,
     EditGroups,
     FixTiming,
     FollowTempo,
@@ -108,6 +117,25 @@ pub(crate) enum Cmd {
     AutomationLanes,
     Browser,
     Video,
+    Fretboard,
+    FretboardView,
+    FretboardRootUp,
+    FretboardRootDown,
+    FretboardScale,
+    FretboardChord,
+    FretboardSongKey,
+    FretboardTuning,
+    FretboardCapoUp,
+    FretboardCapoDown,
+    FretboardLabels,
+    FretboardPositionUp,
+    FretboardPositionDown,
+    FretboardType,
+    FretLeft,
+    FretRight,
+    FretUp,
+    FretDown,
+    FretEnter,
     FullSize,
     SimpleMode,
     /// Recalls saved layout n, counted from 0.
@@ -296,6 +324,28 @@ impl Info {
     }
 }
 
+/// The fretboard's commands, in its menu.
+pub(crate) const FRETBOARD_MENU: [Cmd; 18] = [
+    Cmd::FretboardView,
+    Cmd::FretboardScale,
+    Cmd::FretboardChord,
+    Cmd::FretboardRootUp,
+    Cmd::FretboardRootDown,
+    Cmd::FretboardSongKey,
+    Cmd::FretboardTuning,
+    Cmd::FretboardCapoUp,
+    Cmd::FretboardCapoDown,
+    Cmd::FretboardPositionUp,
+    Cmd::FretboardPositionDown,
+    Cmd::FretboardLabels,
+    Cmd::FretboardType,
+    Cmd::FretLeft,
+    Cmd::FretRight,
+    Cmd::FretUp,
+    Cmd::FretDown,
+    Cmd::FretEnter,
+];
+
 /// Every command, in menu order.
 pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::NewProject, "new-project", "File", "New project", &[])
@@ -442,6 +492,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("A copy of the video with the mix as its sound; the picture is copied as it is")
     .words("film picture movie score scoring render mp4 mov soundtrack"),
+    info(
+        Cmd::ExportSections,
+        "export-sections",
+        "File",
+        "Export a practice file per section",
+        &[],
+    )
+    .hint("One file of the mix for each section, cut at its bars, as the Export window is set")
+    .words("practice practise sections verse chorus marker range split render bounce queue"),
+    info(
+        Cmd::ExportThisSection,
+        "export-this-section",
+        "File",
+        "Export this section as a practice file",
+        &[],
+    )
+    .hint("A file of the mix for the section the playhead is in, cut at its bars")
+    .words("practice practise section verse chorus marker range render bounce queue"),
+    info(
+        Cmd::ClearExportQueue,
+        "clear-export-queue",
+        "File",
+        "Clear the export queue",
+        &[],
+    )
+    .hint("Takes out the exports waiting their turn; the one running carries on")
+    .words("cancel queue waiting exports"),
     info(
         Cmd::ExportDawProject,
         "export-for-other-daws",
@@ -971,6 +1048,60 @@ pub(crate) const COMMANDS: &[Info] = &[
              it; they are muted where they are",
         )
         .words("render in place consolidate print"),
+    info(
+        Cmd::TrackVersions,
+        "track-versions",
+        "Edit",
+        "Track versions…",
+        &[],
+    )
+    .hint("Keep other versions of a track's clips and sound side by side, and switch between them")
+    .words("alternative alternate playlist arrangement take idea compare"),
+    info(
+        Cmd::NewVersion,
+        "new-track-version",
+        "Edit",
+        "New empty track version",
+        &[],
+    )
+    .hint("A version of the track with its instrument, effects and fader, and no clips, notes, takes and automation")
+    .words("alternative alternate playlist blank"),
+    info(
+        Cmd::DuplicateVersion,
+        "duplicate-track-version",
+        "Edit",
+        "Duplicate track version",
+        &[],
+    )
+    .hint("A copy of the version the track plays, to change and compare")
+    .words("alternative alternate playlist copy"),
+    info(
+        Cmd::NextVersion,
+        "next-track-version",
+        "Edit",
+        "Next track version",
+        &[],
+    )
+    .hint("Play the track's next version")
+    .words("alternative alternate playlist switch"),
+    info(
+        Cmd::PrevVersion,
+        "previous-track-version",
+        "Edit",
+        "Previous track version",
+        &[],
+    )
+    .hint("Play the track's previous version")
+    .words("alternative alternate playlist switch"),
+    info(
+        Cmd::DeleteVersion,
+        "delete-track-version",
+        "Edit",
+        "Delete track version",
+        &[],
+    )
+    .hint("Delete the version the track plays; the one before it plays instead")
+    .words("alternative alternate playlist remove"),
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
@@ -1197,6 +1328,142 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Video, "video", "View", "Video", &[])
         .hint("Show or hide the video at the playhead")
         .words("picture film movie score scoring clip frames watch"),
+    info(Cmd::Fretboard, "fretboard", "View", "Fretboard", &[])
+        .hint("Show or hide a guitar or bass neck with the notes playing, a scale or a chord")
+        .words("guitar bass neck frets strings scale mode chord arpeggio capo tuning")
+        .everyday(),
+    info(
+        Cmd::FretboardView,
+        "fretboard-view",
+        "Fretboard",
+        "Next fretboard view",
+        &[],
+    )
+    .hint("The notes playing, then a scale or mode, a chord shape, and the chord's arpeggio")
+    .words("guitar neck scale chord arpeggio"),
+    info(
+        Cmd::FretboardRootUp,
+        "fretboard-root-up",
+        "Fretboard",
+        "Fretboard root up a semitone",
+        &[],
+    )
+    .hint("Move the scale's or chord's root up")
+    .words("guitar neck key transpose"),
+    info(
+        Cmd::FretboardRootDown,
+        "fretboard-root-down",
+        "Fretboard",
+        "Fretboard root down a semitone",
+        &[],
+    )
+    .hint("Move the scale's or chord's root down")
+    .words("guitar neck key transpose"),
+    info(
+        Cmd::FretboardScale,
+        "fretboard-scale",
+        "Fretboard",
+        "Next scale or mode on the fretboard",
+        &[],
+    )
+    .hint("Show the next scale or mode on the same root")
+    .words("guitar neck pentatonic blues dorian mixolydian modes"),
+    info(
+        Cmd::FretboardChord,
+        "fretboard-chord",
+        "Fretboard",
+        "Next chord on the fretboard",
+        &[],
+    )
+    .hint("Show a chord, then the next kind of chord on the same root")
+    .words("guitar neck shape major minor seventh"),
+    info(
+        Cmd::FretboardSongKey,
+        "fretboard-song-key",
+        "Fretboard",
+        "Fretboard follows the song's key",
+        &[],
+    )
+    .hint("Show the song's key and scale again, after picking another")
+    .words("guitar neck project scale reset"),
+    info(
+        Cmd::FretboardTuning,
+        "fretboard-tuning",
+        "Fretboard",
+        "Next tuning on the fretboard",
+        &[],
+    )
+    .hint("The next guitar or bass tuning; a track with a tab lane changes the lane's")
+    .words("guitar bass drop d open seven eight strings"),
+    info(
+        Cmd::FretboardCapoUp,
+        "fretboard-capo-up",
+        "Fretboard",
+        "Capo up a fret",
+        &[],
+    )
+    .hint("Move the capo up the neck")
+    .words("guitar neck"),
+    info(
+        Cmd::FretboardCapoDown,
+        "fretboard-capo-down",
+        "Fretboard",
+        "Capo down a fret",
+        &[],
+    )
+    .hint("Move the capo down the neck, or take it off")
+    .words("guitar neck"),
+    info(
+        Cmd::FretboardLabels,
+        "fretboard-labels",
+        "Fretboard",
+        "Next fretboard labels",
+        &[],
+    )
+    .hint("Note names, steps from the root (1, b3, 5), or none")
+    .words("guitar neck degrees intervals names"),
+    info(
+        Cmd::FretboardPositionUp,
+        "fretboard-position-up",
+        "Fretboard",
+        "Hand position up a fret",
+        &[],
+    )
+    .hint("Show the scale, chord or arpeggio in the four frets from the next fret up")
+    .words("guitar neck box shape"),
+    info(
+        Cmd::FretboardPositionDown,
+        "fretboard-position-down",
+        "Fretboard",
+        "Hand position down a fret",
+        &[],
+    )
+    .hint("Move the hand down the neck; below the first fret shows the whole neck")
+    .words("guitar neck box shape"),
+    info(
+        Cmd::FretboardType,
+        "fretboard-type",
+        "Fretboard",
+        "Type on the fretboard",
+        &[],
+    )
+    .hint("Arrows move a box on the neck, Enter enters its note at the playhead, Escape stops")
+    .words("guitar neck enter notes keyboard"),
+    info(Cmd::FretLeft, "fret-left", "Fretboard", "Fretboard box down a fret", &[])
+        .hint("Move the fretboard's typing box towards the nut")
+        .words("guitar neck cursor"),
+    info(Cmd::FretRight, "fret-right", "Fretboard", "Fretboard box up a fret", &[])
+        .hint("Move the fretboard's typing box towards the body")
+        .words("guitar neck cursor"),
+    info(Cmd::FretUp, "fret-up", "Fretboard", "Fretboard box to the string above", &[])
+        .hint("Move the fretboard's typing box to the next higher string")
+        .words("guitar neck cursor"),
+    info(Cmd::FretDown, "fret-down", "Fretboard", "Fretboard box to the string below", &[])
+        .hint("Move the fretboard's typing box to the next lower string")
+        .words("guitar neck cursor"),
+    info(Cmd::FretEnter, "fret-enter", "Fretboard", "Enter the fretboard box's note", &[])
+        .hint("Enter the note under the fretboard's box at the playhead")
+        .words("guitar neck write"),
     info(
         Cmd::AutomationLanes,
         "automation-lanes",
@@ -1726,6 +1993,7 @@ impl Cmd {
                 | Cmd::AutomationLanes
                 | Cmd::Browser
                 | Cmd::Video
+                | Cmd::Fretboard
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -2460,8 +2728,10 @@ impl App {
     /// Runs the commands whose keys were pressed. Called before
     /// anything is drawn, so they come before the controls see the keys.
     pub(crate) fn command_keys(&mut self, ctx: &egui::Context) {
-        // Typing tab takes numbers and arrows first.
+        // Typing tab takes numbers and arrows first, then typing on
+        // the fretboard.
         self.notation_keys(ctx);
+        self.fretboard_keys(ctx);
         // A clip or marker holding the keyboard is not a text field.
         let typing = ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx);
         let (run, held) = self.commands.pressed(ctx, typing, self.simple.on);
@@ -2511,10 +2781,15 @@ impl App {
             Cmd::ExportStemPackage => !self.export.busy(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
+            Cmd::NextVersion | Cmd::PrevVersion | Cmd::DeleteVersion => self
+                .version_track()
+                .is_some_and(|i| !self.tracks[i].versions.is_empty()),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
             Cmd::ExportVideo => {
                 daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
             }
+            Cmd::ExportSections | Cmd::ExportThisSection => !self.markers.is_empty(),
+            Cmd::ClearExportQueue => self.export.queue().next().is_some(),
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
             Cmd::SaveTrackPreset | Cmd::SaveChainPreset => !self.tracks.is_empty(),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
@@ -2767,6 +3042,25 @@ impl App {
             Cmd::AutomationLanes => self.workspace.toggle(Pane::Automation),
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::Video => self.workspace.toggle(Pane::Video),
+            Cmd::Fretboard => self.workspace.toggle(Pane::Fretboard),
+            Cmd::FretboardView
+            | Cmd::FretboardRootUp
+            | Cmd::FretboardRootDown
+            | Cmd::FretboardScale
+            | Cmd::FretboardChord
+            | Cmd::FretboardSongKey
+            | Cmd::FretboardTuning
+            | Cmd::FretboardCapoUp
+            | Cmd::FretboardCapoDown
+            | Cmd::FretboardLabels
+            | Cmd::FretboardPositionUp
+            | Cmd::FretboardPositionDown
+            | Cmd::FretboardType
+            | Cmd::FretLeft
+            | Cmd::FretRight
+            | Cmd::FretUp
+            | Cmd::FretDown
+            | Cmd::FretEnter => self.fretboard_command(cmd),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::SimpleMode => self.toggle_simple(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),
@@ -2817,6 +3111,25 @@ impl App {
             }
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
+            Cmd::TrackVersions => {
+                self.versions_ui.track = self.version_track().map(|i| self.tracks[i].key.clone());
+                self.versions_ui.open = true;
+            }
+            Cmd::NewVersion => {
+                self.new_version(ctx, false);
+            }
+            Cmd::DuplicateVersion => {
+                self.new_version(ctx, true);
+            }
+            Cmd::NextVersion => {
+                self.step_version(ctx, false);
+            }
+            Cmd::PrevVersion => {
+                self.step_version(ctx, true);
+            }
+            Cmd::DeleteVersion => {
+                self.delete_playing_version(ctx);
+            }
             Cmd::FixTiming => self.timing.open = true,
             Cmd::FollowTempo
             | Cmd::ClipTempo
@@ -2846,7 +3159,10 @@ impl App {
             | Cmd::AddToPlayOrder
             | Cmd::PlayOrder
             | Cmd::WriteOrder
-            | Cmd::ClearPlayOrder => self.section_command(cmd),
+            | Cmd::ClearPlayOrder
+            | Cmd::ExportSections
+            | Cmd::ExportThisSection
+            | Cmd::ClearExportQueue => self.section_command(cmd),
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
             Cmd::TimecodeFromFilm => self.timecode_from_film(),
             Cmd::FrameForward => self.step_frame(1),

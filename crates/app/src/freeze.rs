@@ -264,10 +264,13 @@ impl App {
     /// Removes an old frozen file from the project's audio, unless
     /// something still plays it.
     fn forget_frozen(&mut self, asset: &str) {
-        let used = self.project().tracks.iter().any(|t| {
-            t.clips.iter().any(|c| c.asset == asset)
-                || t.frozen.as_ref().is_some_and(|f| f.asset == asset)
-        });
+        let p = self.project();
+        let used = (p.tracks.iter())
+            .flat_map(|t| std::iter::once(t).chain(t.stored_versions()))
+            .any(|t| {
+                t.clips.iter().any(|c| c.asset == asset)
+                    || t.frozen.as_ref().is_some_and(|f| f.asset == asset)
+            });
         if used {
             return;
         }

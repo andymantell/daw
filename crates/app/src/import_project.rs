@@ -396,6 +396,8 @@ impl App {
                 files,
                 archive: opts.archive,
             }),
+            sections: Vec::new(),
+            play_along: false,
         };
         // The mix is of the tracks chosen only.
         let muted: Vec<(usize, bool)> = (self.tracks.iter().enumerate())

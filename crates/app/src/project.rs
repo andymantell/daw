@@ -317,6 +317,8 @@ impl App {
             sends: t.sends.clone(),
             group: t.group.clone(),
             notation: t.notation.clone(),
+            versions: t.versions.clone(),
+            version: t.version.clone(),
             automation: (t.automation.iter())
                 .map(|l| daw_project::Lane {
                     param: l.param.clone(),
@@ -536,6 +538,13 @@ impl App {
             t.note_clips = pt.note_clips.clone();
             t.instrument_outputs = pt.instrument_outputs.clone();
             t.notation = pt.notation.clone();
+            t.versions = pt.versions.clone();
+            t.version = pt.version.clone();
+            if k != 1.0 {
+                let mut stored = pt.clone();
+                stored.scale_stored_versions(scale);
+                t.versions = stored.versions;
+            }
             match (&mut t.instrument, &pt.instrument) {
                 (Some(slot), Some(e)) if slot.same_shape(e) => slot.load(e),
                 (slot, Some(e)) => {
@@ -750,9 +759,17 @@ impl App {
         // Audio from outside the folder comes in.
         let takes = takes_dir();
         let outside: Vec<String> = {
+            // Other versions' clips too.
+            let stored = (self.tracks.iter())
+                .flat_map(|t| t.versions.iter().filter_map(|v| v.body.as_ref()))
+                .flat_map(|b| &b.clips)
+                .map(|c| &c.asset)
+                .filter(|a| Path::new(a).is_file());
             let mut v: Vec<String> = (self.tracks.iter().flat_map(|t| &t.clips))
-                .map(|c| c.asset.clone())
+                .map(|c| &c.asset)
+                .chain(stored)
                 .filter(|a| !folder.has_asset(a))
+                .cloned()
                 .collect();
             v.sort();
             v.dedup();
@@ -785,6 +802,13 @@ impl App {
                 .find(|c| c.asset == name)
             {
                 self.proj.sources.insert(name.clone(), s.source.clone());
+            }
+            for c in (self.tracks.iter_mut())
+                .flat_map(|t| t.versions.iter_mut().filter_map(|v| v.body.as_mut()))
+                .flat_map(|b| &mut b.clips)
+                .filter(|c| c.asset == old)
+            {
+                c.asset = name.clone();
             }
             self.proj.moved.insert(old, name);
         }

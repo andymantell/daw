@@ -41,7 +41,7 @@ pub use model::{
     Frozen, FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, InstrumentOutput, Lane,
     LaneTarget, Layer, Marker, MeterChange, MidiMap, Notation, NotationView, Note, NoteClip, PPQ,
     Practice, Project, Send, StretchMarker, TabBlock, Technique, TempoChange, TimecodeSetup, Track,
-    TrackKind, TrainerSettings, VideoClip,
+    TrackKind, TrackVersion, TrainerSettings, VideoClip,
 };
 pub use parts::{Brought, Pick, Range, bar_ticks};
 pub use pattern::{

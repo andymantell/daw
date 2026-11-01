@@ -28,6 +28,7 @@ mod comping;
 mod crash;
 mod export;
 mod freeze;
+mod fretboard;
 mod fx;
 mod groups;
 mod history;
@@ -73,6 +74,7 @@ mod timing;
 mod trainer;
 mod tuner;
 mod update;
+mod versions;
 mod video;
 mod workspace;
 
@@ -85,7 +87,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use commands::Cmd;
+use commands::{Cmd, FRETBOARD_MENU};
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running, SavedProfiles};
 use daw_engine::engine::{self, Command, Controller};
 use daw_engine::graph::{ClipSpec, Input, Mix, Output, Session, TrackSpec};
@@ -156,6 +158,10 @@ struct Track {
     automation: Vec<daw_project::Lane>,
     /// Its notes shown as tab or a staff under it (roadmap 3.8).
     notation: Option<daw_project::Notation>,
+    /// Its other versions, as the document has them, and the one playing
+    /// (see [`daw_project::Track::versions`]).
+    versions: Vec<daw_project::TrackVersion>,
+    version: Option<String>,
 }
 
 impl Track {
@@ -197,6 +203,8 @@ impl Track {
             group: None,
             automation: Vec::new(),
             notation: None,
+            versions: Vec::new(),
+            version: None,
         }
     }
 
@@ -421,6 +429,7 @@ struct App {
     snapshot_ui: snapshots::Snapshots,
     /// The undo list and activity window.
     history: history::History,
+    versions_ui: versions::Versions,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
     preset_ui: presets::Presets,
@@ -475,6 +484,8 @@ struct App {
     assistants: assistants::Assistants,
     /// Renders and pictures being made for assistants.
     listening: listen::Listening,
+    /// The fretboard pane's settings.
+    fretboard: fretboard::Fretboard,
 }
 
 /// How often to look for a lost device.
@@ -565,6 +576,7 @@ impl App {
             pending_instruments: Vec::new(),
             notes_editor: notes_editor::Editor::default(),
             patterns: Vec::new(),
+            fretboard: fretboard::Fretboard::default(),
             pattern_editor: patterns::Editor::default(),
             instrument_open: None,
             practice_log: practice::Logger::default(),
@@ -578,6 +590,7 @@ impl App {
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
             history: history::History::default(),
+            versions_ui: versions::Versions::default(),
             template_ui: templates::Templates::default(),
             preset_ui: presets::Presets::default(),
             parts: import_project::Parts::default(),
@@ -1077,9 +1090,10 @@ impl App {
     pub(crate) fn start_export(&mut self, req: export::Request) -> Result<(), String> {
         let map = self.tempo_map();
         let mut s = self.session();
-        // The mix as it stands: no practice mute, no live input.
+        // The mix as it stands: no practice mute (unless it is to play
+        // along with), no live input.
         for (spec, t) in s.tracks.iter_mut().zip(&self.tracks) {
-            spec.mix = t.mix;
+            spec.mix = if req.play_along { t.heard() } else { t.mix };
             spec.input = None;
             spec.arm = false;
             spec.monitor = false;
@@ -1129,11 +1143,9 @@ impl App {
         };
         let all: Vec<&Track> = self.tracks.iter().collect();
         let mix = graph(&s, &all, &mut plugins)?;
+        let at_bar = |b: i64| map.frames_at(map.bar_start(b.max(1)));
         let (from, to) = if let Some((a, b)) = req.bars {
-            (
-                map.frames_at(map.bar_start(a)),
-                map.frames_at(map.bar_start(b)),
-            )
+            (at_bar(a), at_bar(b))
         } else if req.loop_only {
             (
                 map.frames_at(map.bar_start(self.loop_bars.0)),
@@ -1153,6 +1165,18 @@ impl App {
         let frames = (to.0 - from.0).max(0) as usize;
         let wanted = |t: &Track| req.only.as_ref().is_none_or(|o| o.contains(&t.key));
         let mut parts = Vec::new();
+        // A practice file per section: cut at its bars, with no tail,
+        // so it loops cleanly.
+        for (i, sec) in req.sections.iter().enumerate() {
+            let (a, b) = (at_bar(sec.from), at_bar(sec.to));
+            parts.push(export::Part {
+                name: format!("{:02} {}", i + 1, export::file_name(&sec.name)),
+                graph: graph(&s, &all, &mut plugins)?,
+                from: a,
+                frames: (b.0 - a.0).max(1) as usize,
+                film: None,
+            });
+        }
         if req.video {
             // The whole film from its first frame: the picture can't be
             // cut without re-encoding it.
@@ -1226,8 +1250,38 @@ impl App {
         if parts.is_empty() && req.package.as_ref().is_none_or(|p| p.files.is_empty()) {
             return Err("There is nothing to export yet.".into());
         }
+        let word = if req.package.is_some() {
+            "Stems"
+        } else if req.sections.is_empty() {
+            "Mix"
+        } else {
+            "Sections"
+        };
         self.export
-            .start(&req.folder, parts, plugins, req.format, req.package)
+            .start(&req.folder, word, parts, plugins, req.format, req.package)
+    }
+
+    /// Starts `req` now, or queues it if an export is running. Any loop
+    /// is fixed to its bars now, so a queued export keeps them.
+    pub(crate) fn export_or_queue(&mut self, mut req: export::Request) -> Result<(), String> {
+        if req.loop_only && req.bars.is_none() {
+            req.bars = Some(self.loop_bars);
+        }
+        if self.export.busy() || self.export.queue().next().is_some() {
+            self.export.enqueue(req);
+            Ok(())
+        } else {
+            self.start_export(req)
+        }
+    }
+
+    /// Starts the next queued export once the one running finishes.
+    fn run_export_queue(&mut self) {
+        if let Some(q) = self.export.next_queued()
+            && let Err(e) = self.start_export(q.request)
+        {
+            self.export.failed(q.label, e);
+        }
     }
 
     /// Exports the video at the playhead (or the one selected) with the
@@ -1467,6 +1521,7 @@ impl App {
         let freeze: Vec<(bool, bool)> = (self.tracks.iter())
             .map(|t| (render::can_freeze(t), t.freeze))
             .collect();
+        let versions = self.lane_versions();
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -1480,6 +1535,7 @@ impl App {
             timecode: self.shown_clock(),
             hits: &hits,
             freeze: &freeze,
+            versions: &versions,
             can_paste: !self.renders.copied.is_empty(),
             bands: &[],
         };
@@ -1596,6 +1652,7 @@ impl App {
             Some((i, timeline::TrackAsk::SavePreset)) => {
                 self.ask_save_preset(Some(i), daw_project::PresetKind::Track)
             }
+            Some((i, timeline::TrackAsk::Version(ask))) => self.ask_version(ui.ctx(), i, ask),
             None => {}
         }
         if let Some(cmd) = out.command {
@@ -2613,6 +2670,7 @@ impl eframe::App for App {
                     }
                     app.menu_gap();
                     app.menu_item(ui, Cmd::Export);
+                    app.menu_item(ui, Cmd::ExportSections);
                     app.menu_item(ui, Cmd::ExportVideo);
                     app.menu_item(ui, Cmd::ExportDawProject);
                     app.menu_item(ui, Cmd::ImportDawProject);
@@ -2677,6 +2735,17 @@ impl eframe::App for App {
                     ] {
                         app.menu_item(ui, c);
                     }
+                    ui.separator();
+                    for c in [
+                        Cmd::TrackVersions,
+                        Cmd::DuplicateVersion,
+                        Cmd::NewVersion,
+                        Cmd::NextVersion,
+                        Cmd::PrevVersion,
+                        Cmd::DeleteVersion,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
                 });
                 self.top_menu(ui, "Notes", |app, ui| {
                     for c in [
@@ -2713,6 +2782,12 @@ impl eframe::App for App {
                     ] {
                         app.menu_item(ui, c);
                     }
+                    app.menu_gap();
+                    ui.menu_button("Fretboard", |ui| {
+                        for c in FRETBOARD_MENU {
+                            app.menu_item(ui, c);
+                        }
+                    });
                     app.menu_gap();
                     for c in [Cmd::PracticeMutePart, Cmd::ContinuousScroll] {
                         app.menu_item(ui, c);
@@ -2945,6 +3020,7 @@ impl eframe::App for App {
         self.poll_freezing(&ctx);
         self.poll_renders(&ctx);
         self.export.poll();
+        self.run_export_queue();
         if self.export.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -2957,9 +3033,22 @@ impl eframe::App for App {
         let buses = self.tracks.iter().any(|t| t.kind.is_bus());
         let at = self.ctl.status().position().0;
         let film = self.video.current(at).map(|c| c.name.clone());
-        if let Some(req) = self.export.window(&ctx, &loop_text, buses, film.as_deref())
-            && let Err(e) = self.start_export(req)
+        let sections = self.sections();
+        let r = match self
+            .export
+            .window(&ctx, &loop_text, buses, film.as_deref(), &sections)
         {
+            Some(export::Action::Export(req)) => self.export_or_queue(req),
+            Some(export::Action::Queue(mut req)) => {
+                if req.loop_only {
+                    req.bars = Some(self.loop_bars);
+                }
+                self.export.enqueue(req);
+                Ok(())
+            }
+            None => Ok(()),
+        };
+        if let Err(e) = r {
             self.message = Some(e);
         }
         self.browser_update(&ctx);
@@ -3023,6 +3112,7 @@ impl eframe::App for App {
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.history_window(&ctx);
+        self.versions_window(&ctx);
         self.tempo_window(&ctx);
         self.hit_points_window(&ctx);
         self.select_notes_window(&ctx);

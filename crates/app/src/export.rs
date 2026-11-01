@@ -7,7 +7,14 @@
 //! (roadmap 3.10): the mix is rendered for the length of the film from
 //! its first frame, and the system's media framework writes the copy
 //! without re-encoding the picture.
+//!
+//! A practice file can be made for each song section (Phase 4, B3): one
+//! file per section, cut exactly at its bars so it loops cleanly, and if
+//! asked without the tracks muted for practice, to play along with.
+//! Exports wait in a queue and run one after another, so several can be
+//! set going at once.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -60,6 +67,11 @@ pub struct Request {
     pub bars: Option<(i64, i64)>,
     /// A stem package, in place of an ordinary export.
     pub package: Option<Package>,
+    /// A file of the mix for each of these, in place of one mix.
+    pub sections: Vec<Span>,
+    /// Leave out the tracks muted for practice, so the file can be
+    /// played along with.
+    pub play_along: bool,
 }
 
 /// What a stem package adds to the audio files.
@@ -71,6 +83,54 @@ pub struct Package {
     /// Packed into one `.tar` file, in place of the folder.
     pub archive: bool,
 }
+
+/// A named run of bars: a song section, or the loop.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub name: String,
+    /// From the start of bar `from` to the start of bar `to`.
+    pub from: i64,
+    pub to: i64,
+}
+
+impl Request {
+    /// What the export is, in a few words, for the queue.
+    pub fn label(&self) -> String {
+        let what = match self.sections.as_slice() {
+            [] if self.video && !self.mix => "The video with the mix".to_string(),
+            [] => match self.bars {
+                Some((a, b)) => format!("Bars {a} to {b}"),
+                None if self.loop_only => "The loop".into(),
+                None => "The whole song".into(),
+            },
+            [one] => format!("“{}” (bars {} to {})", one.name, one.from, one.to),
+            many => format!("{} sections, a file each", many.len()),
+        };
+        let along = if self.play_along {
+            ", to play along with"
+        } else {
+            ""
+        };
+        format!("{what}{along}, {}", self.format.extension().to_uppercase())
+    }
+}
+
+/// An export waiting its turn.
+pub struct Queued {
+    pub label: String,
+    pub request: Request,
+}
+
+/// What the window asks for.
+pub enum Action {
+    /// Start this now (or as soon as the one running finishes).
+    Export(Request),
+    /// Put this at the end of the queue.
+    Queue(Request),
+}
+
+/// One export's folder, and how each of its files went.
+pub type Done = (PathBuf, Lines);
 
 struct Job {
     thread: JoinHandle<Lines>,
@@ -86,7 +146,6 @@ struct Job {
 #[derive(Default)]
 pub struct Export {
     pub open: bool,
-    loop_only: bool,
     stems: bool,
     bus_stems: bool,
     video: bool,
@@ -99,8 +158,27 @@ pub struct Export {
     /// A folder the user chose for this project instead.
     chosen: Option<PathBuf>,
     job: Option<Job>,
-    /// The last export's folder, and a line about each file.
-    result: Option<(PathBuf, Lines)>,
+    /// Each export finished since the queue last started from empty:
+    /// its folder, and a line about each file.
+    results: Vec<Done>,
+    /// Exports waiting for the one running to finish.
+    queue: VecDeque<Queued>,
+    /// What the window exports: the whole song, the loop, or a file per
+    /// section.
+    what: What,
+    /// Sections left out of a file-per-section export, by marker id.
+    skipped: std::collections::HashSet<String>,
+    play_along: bool,
+    /// The next start is the queue's, so it keeps the run's lines.
+    from_queue: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum What {
+    #[default]
+    Song,
+    Loop,
+    Sections,
 }
 
 /// The kinds of file offered, in the order shown.
@@ -149,7 +227,7 @@ const OPUS_USUAL: u32 = 160;
 
 /// A new numbered folder under `base`: `Mix 1`, `Mix 2`, … (or
 /// `Stems 1`, … for a stem package, with no archive of that name
-/// either).
+/// either, or `Sections 1`, … for practice files).
 fn next_folder(base: &Path, word: &str) -> PathBuf {
     (1..)
         .map(|n| base.join(format!("{word} {n}")))
@@ -183,6 +261,16 @@ impl Export {
         }
     }
 
+    /// Sets a folder chosen for this project, or goes back to the usual
+    /// one.
+    pub fn chosen(&self) -> Option<&Path> {
+        self.chosen.as_deref()
+    }
+
+    pub fn set_chosen(&mut self, dir: Option<PathBuf>) {
+        self.chosen = dir;
+    }
+
     pub fn dir(&self) -> &Path {
         self.chosen.as_deref().unwrap_or(&self.default_dir)
     }
@@ -191,17 +279,19 @@ impl Export {
         self.job.is_some()
     }
 
-    /// Starts writing `parts` into a new folder under `base`, and the
-    /// rest of a stem package if there is one.
+    /// Starts writing `parts` into a new folder under `base`, named
+    /// with `word` and a number, and the rest of a stem package if
+    /// there is one.
     pub fn start(
         &mut self,
         base: &Path,
+        word: &str,
         parts: Vec<Part>,
         plugins: Vec<Plugin>,
         format: Format,
         package: Option<Package>,
     ) -> Result<(), String> {
-        let folder = next_folder(base, if package.is_some() { "Stems" } else { "Mix" });
+        let folder = next_folder(base, word);
         std::fs::create_dir_all(&folder)
             .map_err(|e| format!("could not make {}: {e}", folder.display()))?;
         let done = Arc::new(AtomicU64::new(0));
@@ -257,7 +347,10 @@ impl Export {
             }
             out
         });
-        self.result = None;
+        if !std::mem::take(&mut self.from_queue) {
+            // A new run: the last run's lines go.
+            self.results.clear();
+        }
         self.job = Some(Job {
             thread,
             done,
@@ -283,14 +376,84 @@ impl Export {
             only: None,
             bars: None,
             package: None,
+            sections: Vec::new(),
+            play_along: false,
         }
+    }
+
+    /// A file of the mix for each of `sections`, in the window's file
+    /// type and folder.
+    pub fn sections_request(&self, sections: Vec<Span>, play_along: bool) -> Request {
+        Request {
+            loop_only: false,
+            stems: false,
+            bus_stems: false,
+            format: self.format(),
+            folder: self.dir().to_path_buf(),
+            mix: false,
+            video: false,
+            only: None,
+            bars: None,
+            package: None,
+            sections,
+            play_along,
+        }
+    }
+
+    /// Whether the window is set to leave out tracks muted for practice.
+    pub fn play_along(&self) -> bool {
+        self.play_along
+    }
+
+    /// Puts `request` at the end of the queue.
+    pub fn enqueue(&mut self, request: Request) {
+        let label = request.label();
+        self.queue.push_back(Queued { label, request });
+    }
+
+    /// The next export to start, if nothing is running.
+    pub fn next_queued(&mut self) -> Option<Queued> {
+        if self.busy() {
+            return None;
+        }
+        let q = self.queue.pop_front()?;
+        self.from_queue = true;
+        Some(q)
+    }
+
+    pub fn queue(&self) -> impl Iterator<Item = &Queued> {
+        self.queue.iter()
+    }
+
+    pub fn clear_queue(&mut self) {
+        self.queue.clear();
+    }
+
+    /// Notes a queued export that could not start.
+    pub fn failed(&mut self, label: String, error: String) {
+        if !std::mem::take(&mut self.from_queue) {
+            self.results.clear();
+        }
+        self.results
+            .push((PathBuf::new(), vec![(label, Err(error))]));
+    }
+
+    /// Each export finished in this run, oldest first.
+    pub fn results(&self) -> &[Done] {
+        &self.results
+    }
+
+    /// How far the running export has got, from 0 to 1.
+    pub fn progress(&self) -> Option<f32> {
+        let j = self.job.as_ref()?;
+        Some(j.done.load(Ordering::Relaxed) as f32 / j.total.max(1) as f32)
     }
 
     /// The last export's folder and its files, each with what went
     /// wrong if it did, once it has finished.
     #[cfg(all(test, any(target_os = "linux", windows)))]
     pub fn finished(&self) -> Option<(&Path, Vec<Outcome<'_>>)> {
-        let (folder, lines) = self.result.as_ref()?;
+        let (folder, lines) = self.results.last()?;
         let lines = (lines.iter())
             .map(|(n, r)| (n.as_str(), r.as_ref().err().map(String::as_str)))
             .collect();
@@ -305,7 +468,7 @@ impl Export {
                 .thread
                 .join()
                 .unwrap_or_else(|_| vec![("Export".into(), Err("the export stopped".into()))]);
-            self.result = Some((job.folder, lines));
+            self.results.push((job.folder, lines));
         }
     }
 
@@ -318,27 +481,68 @@ impl Export {
         }
     }
 
-    /// Draws the window. Returns a request when the user presses Export.
-    /// `buses` says whether the session has any buses to export.
-    /// `film` names the video the mix can go into a copy of, if there is
-    /// one.
+    /// Draws the window. Returns what the user asks for, if they press
+    /// Export or Add to queue. `buses` says whether the session has any
+    /// buses to export. `film` names the video the mix can go into a
+    /// copy of, if there is one. `sections` are the song's sections.
     pub fn window(
         &mut self,
         ctx: &egui::Context,
         loop_text: &str,
         buses: bool,
         film: Option<&str>,
-    ) -> Option<Request> {
+        sections: &[daw_project::Section],
+    ) -> Option<Action> {
         let mut open = self.open;
-        let mut request = None;
+        let mut action = None;
+        if sections.is_empty() && self.what == What::Sections {
+            self.what = What::Song;
+        }
         egui::Window::new("Export")
             .open(&mut open)
             .resizable(false)
             .default_width(360.0)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!self.busy(), |ui| {
-                    ui.radio_value(&mut self.loop_only, false, "The whole song");
-                    ui.radio_value(&mut self.loop_only, true, format!("The loop ({loop_text})"));
+                ui.radio_value(&mut self.what, What::Song, "The whole song");
+                ui.radio_value(
+                    &mut self.what,
+                    What::Loop,
+                    format!("The loop ({loop_text})"),
+                );
+                ui.add_enabled_ui(!sections.is_empty(), |ui| {
+                    ui.radio_value(
+                        &mut self.what,
+                        What::Sections,
+                        "A practice file for each section",
+                    )
+                    .on_hover_text(
+                        "One file per section, cut at its bars so it loops cleanly in any \
+                         player",
+                    )
+                    .on_disabled_hover_text("Mark sections first: M marks one at the playhead");
+                });
+                let per_section = self.what == What::Sections;
+                if per_section {
+                    ui.indent("export-sections", |ui| {
+                        for s in sections {
+                            let mut on = !self.skipped.contains(&s.id);
+                            let text = format!("{} (bars {} to {})", s.name, s.from, s.to);
+                            if ui.checkbox(&mut on, text).changed() {
+                                if on {
+                                    self.skipped.remove(&s.id);
+                                } else {
+                                    self.skipped.insert(s.id.clone());
+                                }
+                            }
+                        }
+                    });
+                }
+                ui.checkbox(
+                    &mut self.play_along,
+                    "Leave out the tracks muted for practice, to play along with",
+                )
+                .on_hover_text("Tracks with practice mute (🎧) on are not in the file");
+                ui.add_enabled_ui(!per_section, |ui| {
                     ui.checkbox(&mut self.stems, "Also each track on its own (stems)");
                     ui.add_enabled_ui(buses, |ui| {
                         ui.checkbox(
@@ -369,99 +573,146 @@ impl Export {
                                 "Not on this system yet"
                             });
                     });
-                    ui.horizontal(|ui| {
-                        let l = ui.label("File type");
-                        egui::ComboBox::from_id_salt("export-kind")
-                            .selected_text(self.kind.label())
+                });
+                ui.horizontal(|ui| {
+                    let l = ui.label("File type");
+                    egui::ComboBox::from_id_salt("export-kind")
+                        .selected_text(self.kind.label())
+                        .show_ui(ui, |ui| {
+                            for k in Kind::ALL {
+                                ui.selectable_value(&mut self.kind, k, k.label());
+                            }
+                        })
+                        .response
+                        .labelled_by(l.id);
+                    let rates = match self.kind {
+                        Kind::Mp3 => Some((&mut self.mp3_kbps, MP3_USUAL, &MP3_KBPS[..])),
+                        Kind::Opus => Some((&mut self.opus_kbps, OPUS_USUAL, &OPUS_KBPS[..])),
+                        _ => None,
+                    };
+                    if let Some((chosen, usual, rates)) = rates {
+                        let mut kbps = chosen.unwrap_or(usual);
+                        egui::ComboBox::from_id_salt("export-kbps")
+                            .selected_text(format!("{kbps} kbit/s"))
                             .show_ui(ui, |ui| {
-                                for k in Kind::ALL {
-                                    ui.selectable_value(&mut self.kind, k, k.label());
+                                for &r in rates {
+                                    ui.selectable_value(&mut kbps, r, format!("{r} kbit/s"));
                                 }
                             })
                             .response
+                            .on_hover_text("Bit rate: higher sounds better and makes a bigger file")
                             .labelled_by(l.id);
-                        let rates = match self.kind {
-                            Kind::Mp3 => Some((&mut self.mp3_kbps, MP3_USUAL, &MP3_KBPS[..])),
-                            Kind::Opus => Some((&mut self.opus_kbps, OPUS_USUAL, &OPUS_KBPS[..])),
-                            _ => None,
-                        };
-                        if let Some((chosen, usual, rates)) = rates {
-                            let mut kbps = chosen.unwrap_or(usual);
-                            egui::ComboBox::from_id_salt("export-kbps")
-                                .selected_text(format!("{kbps} kbit/s"))
-                                .show_ui(ui, |ui| {
-                                    for &r in rates {
-                                        ui.selectable_value(&mut kbps, r, format!("{r} kbit/s"));
-                                    }
-                                })
-                                .response
-                                .on_hover_text(
-                                    "Bit rate: higher sounds better and makes a bigger file",
-                                )
-                                .labelled_by(l.id);
-                            *chosen = Some(kbps);
-                        }
-                    });
-                    ui.label(
-                        RichText::new(format!(
-                            "{} Practice mute and the metronome are left out.",
-                            self.kind.note()
-                        ))
+                        *chosen = Some(kbps);
+                    }
+                });
+                let left_out = if self.play_along {
+                    "Tracks muted for practice and the metronome are left out."
+                } else {
+                    "Practice mute and the metronome are left out."
+                };
+                ui.label(
+                    RichText::new(format!("{} {left_out}", self.kind.note()))
                         .small()
                         .weak(),
-                    );
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(format!("Into {}", self.dir().display())).small());
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("Choose folder…").clicked()
-                            && let Some(d) = rfd::FileDialog::new()
-                                .set_title("Export into")
-                                .set_directory(self.dir())
-                                .pick_folder()
-                        {
-                            self.chosen = Some(d);
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!("Into {}", self.dir().display())).small());
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Choose folder…").clicked()
+                        && let Some(d) = rfd::FileDialog::new()
+                            .set_title("Export into")
+                            .set_directory(self.dir())
+                            .pick_folder()
+                    {
+                        self.chosen = Some(d);
+                    }
+                    if self.chosen.is_some() && ui.button("Back to the usual folder").clicked() {
+                        self.chosen = None;
+                    }
+                });
+                ui.add_space(6.0);
+                let chosen: Vec<Span> = (sections.iter())
+                    .filter(|s| !self.skipped.contains(&s.id))
+                    .map(|s| Span {
+                        name: s.name.clone(),
+                        from: s.from,
+                        to: s.to,
+                    })
+                    .collect();
+                let ready = !per_section || !chosen.is_empty();
+                let request = || Request {
+                    loop_only: self.what == What::Loop,
+                    stems: self.stems && !per_section,
+                    bus_stems: self.bus_stems && buses && !per_section,
+                    format: self.format(),
+                    folder: self.dir().to_path_buf(),
+                    mix: !per_section,
+                    video: self.video && film.is_some() && daw_video::CAN_WRAP && !per_section,
+                    only: None,
+                    bars: None,
+                    package: None,
+                    sections: if per_section {
+                        chosen.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    play_along: self.play_along,
+                };
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(ready, |ui| {
+                        if !self.busy() && ui.button("Export").clicked() {
+                            action = Some(Action::Export(request()));
                         }
-                        if self.chosen.is_some() && ui.button("Back to the usual folder").clicked()
+                        if ui
+                            .button("Add to queue")
+                            .on_hover_text(
+                                "Exports wait in the queue and run one after another, with \
+                                 the song as it is when each starts",
+                            )
+                            .clicked()
                         {
-                            self.chosen = None;
+                            action = Some(Action::Queue(request()));
                         }
                     });
                 });
-                ui.add_space(6.0);
-                match &self.job {
-                    Some(job) => {
+                if let Some(job) = &self.job {
+                    ui.horizontal(|ui| {
+                        let f = job.done.load(Ordering::Relaxed) as f32 / job.total.max(1) as f32;
+                        ui.add(
+                            egui::ProgressBar::new(f)
+                                .show_percentage()
+                                .desired_width(220.0),
+                        );
+                        if ui.button("Cancel").clicked() {
+                            job.cancel.store(true, Ordering::Relaxed);
+                        }
+                    });
+                }
+                if !self.queue.is_empty() {
+                    ui.separator();
+                    ui.label(RichText::new("Waiting to export").strong());
+                    let mut gone = None;
+                    for (i, q) in self.queue.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            let f =
-                                job.done.load(Ordering::Relaxed) as f32 / job.total.max(1) as f32;
-                            ui.add(
-                                egui::ProgressBar::new(f)
-                                    .show_percentage()
-                                    .desired_width(220.0),
-                            );
-                            if ui.button("Cancel").clicked() {
-                                job.cancel.store(true, Ordering::Relaxed);
+                            ui.label(format!("{}. {}", i + 1, q.label));
+                            if ui
+                                .small_button("✕")
+                                .on_hover_text("Take it out of the queue")
+                                .clicked()
+                            {
+                                gone = Some(i);
                             }
                         });
                     }
-                    None => {
-                        if ui.button("Export").clicked() {
-                            request = Some(Request {
-                                loop_only: self.loop_only,
-                                stems: self.stems,
-                                bus_stems: self.bus_stems && buses,
-                                format: self.format(),
-                                folder: self.dir().to_path_buf(),
-                                mix: true,
-                                video: self.video && film.is_some() && daw_video::CAN_WRAP,
-                                only: None,
-                                bars: None,
-                                package: None,
-                            });
-                        }
+                    if let Some(i) = gone {
+                        self.queue.remove(i);
+                    }
+                    if ui.button("Clear the queue").clicked() {
+                        self.queue.clear();
                     }
                 }
-                if let Some((folder, lines)) = &self.result {
+                for (folder, lines) in &self.results {
                     ui.separator();
                     for (name, r) in lines {
                         match r {
@@ -485,16 +736,18 @@ impl Export {
                             }
                         }
                     }
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(folder.display().to_string()).small());
-                        if ui.button("Open folder").clicked() {
-                            open_folder(folder);
-                        }
-                    });
+                    if !folder.as_os_str().is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(folder.display().to_string()).small());
+                            if ui.button("Open folder").clicked() {
+                                open_folder(folder);
+                            }
+                        });
+                    }
                 }
             });
         self.open = open;
-        request
+        action
     }
 }
 
@@ -507,4 +760,159 @@ pub(crate) fn open_folder(path: &Path) {
         "xdg-open"
     };
     let _ = std::process::Command::new(program).arg(path).spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+
+    use crate::agent::driver::Driver;
+
+    /// `secs` seconds of a tone, mono, at `rate`.
+    fn tone(dir: &Path, rate: u32, secs: u32) -> PathBuf {
+        let path = dir.join("band.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..rate * secs {
+            let x = (i as f32 * 220.0 * std::f32::consts::TAU / rate as f32).sin();
+            w.write_sample((x * 16_000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    /// Frames in a file, and its loudest sample.
+    fn read(path: &Path) -> (u32, i32) {
+        let mut r = hound::WavReader::open(path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+        let frames = r.duration();
+        let peak = (r.samples::<i32>())
+            .map(|s| s.unwrap().abs())
+            .max()
+            .unwrap_or(0);
+        (frames, peak)
+    }
+
+    /// Asks for the exports until none is running or waiting.
+    fn wait(d: &mut Driver) -> Value {
+        for _ in 0..2000 {
+            let v = d.call("get_exports", json!({})).unwrap();
+            if v["running"].is_null() && v["queue"].as_array().unwrap().is_empty() {
+                return v;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the exports did not finish");
+    }
+
+    #[test]
+    fn a_practice_file_per_section_through_the_agent_and_the_queue() {
+        let dir = std::env::temp_dir().join(format!("daw-sections-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut d = Driver::new();
+        let rate = d.app().rate;
+        // Four bars at 120 bpm in 4/4: two seconds a bar.
+        d.app().add_file(&tone(&dir, rate, 8));
+        for _ in 0..1000 {
+            if !d.app().tracks.is_empty() {
+                break;
+            }
+            d.h.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(d.app().tracks.len(), 1);
+        // Nothing to export per section until there are sections.
+        let e = d
+            .call("export_sections", json!({"folder": dir}))
+            .unwrap_err();
+        assert!(e.contains("no sections"), "{e}");
+        for (bar, name) in [(1, "Verse"), (3, "Chorus")] {
+            d.call("seek", json!({"bar": bar})).unwrap();
+            d.command("marker");
+            d.app().markers.last_mut().unwrap().name = name.into();
+        }
+        let out = dir.join("out");
+        // Every section; then the chorus alone, to play along with, which
+        // waits its turn.
+        // Both asked for in the same frame, so the second must wait.
+        let ask = |d: &mut Driver, args: Value| {
+            let (reply, answer) = std::sync::mpsc::channel();
+            let req = crate::agent::Request {
+                tool: "export_sections".into(),
+                args,
+                access: crate::agent::Access::EditExport,
+                reply,
+            };
+            d.app().agent.inbox.send(req).unwrap();
+            answer
+        };
+        let a = ask(&mut d, json!({"format": "wav", "folder": out}));
+        d.app().tracks[0].practice_mute = true;
+        let b = ask(
+            &mut d,
+            json!({"sections": ["Chorus"], "play_along": true, "format": "wav", "folder": out}),
+        );
+        d.h.step();
+        d.h.step();
+        let (a, b) = (a.recv().unwrap().unwrap(), b.recv().unwrap().unwrap());
+        assert_eq!(a["export"], "2 sections, a file each, WAV");
+        assert_eq!(a["queued"], false);
+        assert_eq!(
+            b["export"],
+            "“Chorus” (bars 3 to 5), to play along with, WAV"
+        );
+        assert_eq!(b["queued"], true);
+        // The folder given was for those exports only.
+        assert_ne!(d.app().export.dir(), out);
+
+        let v = wait(&mut d);
+        let done = v["finished"].as_array().unwrap();
+        assert_eq!(done.len(), 2, "{v}");
+        let files = |i: usize| -> Vec<String> {
+            (done[i]["files"].as_array().unwrap().iter())
+                .map(|f| {
+                    assert!(f["error"].is_null(), "{f}");
+                    f["name"].as_str().unwrap().to_string()
+                })
+                .collect()
+        };
+        assert_eq!(files(0), ["01 Verse.wav", "02 Chorus.wav"]);
+        assert_eq!(files(1), ["01 Chorus.wav"]);
+        let first = out.join("Sections 1");
+        let second = out.join("Sections 2");
+        assert_eq!(done[0]["folder"], first.display().to_string());
+        // Each is cut at its bars: two bars, four seconds.
+        let (frames, peak) = read(&first.join("01 Verse.wav"));
+        assert_eq!(frames, 4 * rate);
+        assert!(peak > 0);
+        assert_eq!(read(&first.join("02 Chorus.wav")).0, 4 * rate);
+        // To play along with: the practice-muted track is left out.
+        let (frames, peak) = read(&second.join("01 Chorus.wav"));
+        assert_eq!(frames, 4 * rate);
+        assert_eq!(peak, 0);
+
+        // The playhead's section, by command, in the window's file type.
+        d.app().tracks[0].practice_mute = false;
+        d.app().export.set_chosen(Some(out.clone()));
+        d.call("seek", json!({"bar": 1.5})).unwrap();
+        d.command("export-this-section");
+        let v = wait(&mut d);
+        let last = v["finished"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["files"][0]["name"], "01 Verse.wav");
+        assert!(out.join("Sections 3").join("01 Verse.wav").exists());
+        // Nothing waits, so the queue can't be cleared.
+        let e = d
+            .call("run_command", json!({"id": "clear-export-queue"}))
+            .unwrap_err();
+        assert!(e.contains("can't run now"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

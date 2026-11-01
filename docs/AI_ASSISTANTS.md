@@ -160,8 +160,19 @@ A feature is not done until an assistant can use it. In practice:
   phone remote and assistants all call the same thing.
 - A button, menu or control in a pane or window that changes the
   project runs a command, or does what an assistant tool also does.
-  The coverage tests can't see a button that changes things by itself,
-  so check new panes by hand.
+  Each control says which, in a comment on its line or one of the three
+  above it, and a test checks the name is a real command or tool:
+
+  ```rust
+  // ai: add-bus          (a command's id)
+  // ai: set_parameter    (an assistant tool)
+  // ai: view             (it only changes what is shown)
+  ```
+
+  Controls drawn before this rule are counted per file in
+  `crates/app/widgets-unmarked.txt`; a file's count may only go down
+  (`widget_check.rs`). The test prints the counts to copy in when
+  marking old controls lowers them.
 - The tests in `agent::coverage` run every command from an assistant
   with no one at the computer. A new command that can't run that way
   fails CI.

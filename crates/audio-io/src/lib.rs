@@ -86,6 +86,47 @@ impl Duplex for Engine {
     }
 }
 
+impl Duplex for daw_engine::ahead::Front {
+    fn process_duplex(
+        &mut self,
+        input: &[f32],
+        channels: usize,
+        left: &mut [f32],
+        right: &mut [f32],
+        click: Option<&mut [f32]>,
+    ) {
+        daw_engine::ahead::Front::process_duplex(self, input, channels, left, right, click);
+    }
+
+    fn main_out(&self) -> Option<(usize, usize)> {
+        daw_engine::ahead::Front::main_out(self).map(|(l, r)| (l as usize, r as usize))
+    }
+
+    fn each_extra_out(&self, f: &mut dyn FnMut(usize, &[f32])) {
+        self.each_cue_out(f);
+    }
+}
+
+/// Splits a new engine so the rest of the mix renders ahead in blocks
+/// of `block` frames on a thread of its own, while live tracks play at
+/// the device's buffer (see [`daw_engine::ahead`]). The thread runs at a
+/// raised priority where the system allows.
+pub fn mix_ahead(engine: Engine, block: u32) -> daw_engine::ahead::Front {
+    daw_engine::ahead::split(engine, block as usize, raise_priority)
+}
+
+/// Asks for this thread to run ahead of ordinary ones, as audio does.
+fn raise_priority() {
+    #[cfg(windows)]
+    // SAFETY: both calls only act on the current thread's own handle.
+    unsafe {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+        };
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    }
+}
+
 /// Which device to use and how.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceProfile {
@@ -115,6 +156,10 @@ pub struct DeviceProfile {
     /// Where the monitor section's speakers, headphone mixes and
     /// talkback microphone are plugged in.
     pub monitor: MonitorOutputs,
+    /// Frames per block for the rest of the mix while live tracks play
+    /// at `buffer` (see [`daw_engine::ahead`]); `None` plays everything
+    /// at `buffer`.
+    pub mix_buffer: Option<u32>,
 }
 
 /// The monitor section's outputs and talkback input on a device.
@@ -237,6 +282,7 @@ pub fn default_profile() -> Option<DeviceProfile> {
         measured_at: None,
         direct_monitoring: false,
         monitor: MonitorOutputs::default(),
+        mix_buffer: None,
     })
 }
 
@@ -809,6 +855,9 @@ impl SavedProfiles {
             if let Some(b) = p.buffer {
                 s += &format!("buffer = {b}\n");
             }
+            if let Some(b) = p.mix_buffer {
+                s += &format!("mix_buffer = {b}\n");
+            }
             s += &format!("main = {} {}\n", p.main.0, p.main.1);
             if let Some(c) = p.click {
                 s += &format!("click = {c}\n");
@@ -868,6 +917,7 @@ impl SavedProfiles {
                     measured_at: None,
                     direct_monitoring: false,
                     monitor: MonitorOutputs::default(),
+                    mix_buffer: None,
                 });
                 continue;
             }
@@ -880,6 +930,7 @@ impl SavedProfiles {
                 "device" => p.device = v.into(),
                 "rate" => p.rate = v.parse().unwrap_or(p.rate),
                 "buffer" => p.buffer = v.parse().ok(),
+                "mix_buffer" => p.mix_buffer = v.parse().ok(),
                 "main" => {
                     let mut it = v.split_whitespace().filter_map(|x| x.parse().ok());
                     if let (Some(l), Some(r)) = (it.next(), it.next()) {
@@ -956,6 +1007,7 @@ mod tests {
                 phones: vec![Some((4, 5)), None, Some((6, 7))],
                 talkback: Some(7),
             },
+            mix_buffer: Some(2048),
         }
     }
 

@@ -162,6 +162,7 @@ pub fn profile_for(
         measured_at: None,
         direct_monitoring: false,
         monitor: MonitorOutputs::default(),
+        mix_buffer: None,
     });
     if p.input.is_none() {
         p.input = c.input.clone();

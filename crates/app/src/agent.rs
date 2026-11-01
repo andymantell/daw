@@ -304,8 +304,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "select_clips",
-        description: "Selects these clips, by id, in place of the selection. An empty list \
-                      clears it. Commands such as split, delete and crossfade act on it.",
+        description: "Selects these clips, by id, in place of the selection: audio clips, \
+                      and at most one note clip. An empty list clears it. Commands such as \
+                      split, delete and crossfade act on it.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -932,14 +933,24 @@ impl App {
             "select_clips" => {
                 let keys = args["clips"].as_array().ok_or("Give a list of clip ids.")?;
                 let mut ids = std::collections::HashSet::new();
+                let mut note = None;
                 for k in keys {
                     let k = k.as_str().ok_or("Clip ids are text.")?;
-                    let c = (self.tracks.iter().flat_map(|t| &t.clips))
-                        .find(|c| c.key == k)
-                        .ok_or_else(|| format!("There is no clip {k}."))?;
-                    ids.insert(c.id);
+                    if let Some(c) =
+                        (self.tracks.iter().flat_map(|t| &t.clips)).find(|c| c.key == k)
+                    {
+                        ids.insert(c.id);
+                    } else if (self.tracks.iter().flat_map(|t| &t.note_clips)).any(|c| c.id == k) {
+                        if note.is_some() {
+                            return Err("Only one note clip can be picked at a time.".into());
+                        }
+                        note = Some(k.to_string());
+                    } else {
+                        return Err(format!("There is no clip {k}."));
+                    }
                 }
                 self.timeline.selected = ids;
+                self.timeline.note_sel = note;
                 Ok((json!({"selected": keys.len()}), None))
             }
             "import_from_project" => self.import_tool(ctx, args),

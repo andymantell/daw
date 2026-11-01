@@ -97,20 +97,6 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
-        name: "add_note_clip",
-        description: "Adds an empty note clip to an instrument track, starting on a bar, \
-                      some bars long. Gives its id; edit_notes fills it.",
-        access: Access::Edit,
-        schema: || {
-            json!({"type": "object", "properties": {
-                "track": {"type": "string"},
-                "bar": {"type": "integer", "description": "From 1."},
-                "bars": {"type": "integer", "description": "How long; 1 if left out."},
-                "name": {"type": "string"}
-            }, "required": ["track", "bar"]})
-        },
-    },
-    Tool {
         name: "edit_markers",
         description: "Adds section markers on bars, renames or moves them by id, or \
                       removes them.",
@@ -271,7 +257,6 @@ impl App {
             "edit_clip" => self.edit_clip_tool(args),
             "delete_clip" => self.delete_clip_tool(args),
             "import_audio" => self.import_audio_tool(args),
-            "add_note_clip" => self.add_note_clip_tool(args),
             "edit_markers" => self.edit_markers_tool(args),
             "set_tempo" => self.set_tempo_tool(args),
             "set_key" => self.set_key_tool(args),
@@ -415,38 +400,6 @@ impl App {
         self.add_file_at(&path, at);
         // The track comes when the file has opened, as a step of its own.
         Ok((json!({"importing": path.display().to_string()}), None))
-    }
-
-    fn add_note_clip_tool(&mut self, args: &Value) -> Done {
-        let key = text(args, "track", "the track's id")?.to_string();
-        let bar = args["bar"]
-            .as_i64()
-            .ok_or("Give the bar it starts on.")?
-            .max(1);
-        let bars = args["bars"].as_i64().unwrap_or(1).max(1);
-        let map = self.tempo_map();
-        let (start, end) = (map.bar_start(bar).0, map.bar_start(bar + bars).0);
-        let name = args["name"].as_str().map(String::from);
-        self.edit_model(|p| {
-            let t = (p.tracks.iter_mut())
-                .find(|t| t.id == key)
-                .ok_or_else(|| format!("There is no track {key}."))?;
-            if !t.kind.plays_notes() {
-                return Err(format!("{} isn't an instrument track.", t.name));
-            }
-            let id = daw_project::new_id();
-            let n = t.note_clips.len() + 1;
-            let name = name.unwrap_or_else(|| format!("{} {n}", t.name));
-            t.note_clips.push(daw_project::NoteClip::new(
-                id.clone(),
-                name,
-                start,
-                end - start,
-            ));
-            t.note_clips.sort_by_key(|c| c.start);
-            Ok(json!({"clip": id, "start_ticks": start, "len_ticks": end - start}))
-        })
-        .map(|v| (v, Some("Add a note clip".into())))
     }
 
     fn edit_markers_tool(&mut self, args: &Value) -> Done {

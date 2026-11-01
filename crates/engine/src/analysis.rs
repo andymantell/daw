@@ -171,7 +171,12 @@ fn chroma(left: &[f32], right: &[f32], rate: u32) -> [f32; 12] {
 
 /// The key that fits the notes heard best, by the key profiles.
 fn key(left: &[f32], right: &[f32], rate: u32) -> Option<KeyGuess> {
-    let c = chroma(left, right, rate);
+    key_of(&chroma(left, right, rate))
+}
+
+/// The key that fits `c`, how much of each of the twelve notes (C
+/// first) sounds, best by the key profiles.
+pub fn key_of(c: &[f32; 12]) -> Option<KeyGuess> {
     if c.iter().sum::<f32>() < 1e-3 {
         return None;
     }
@@ -182,7 +187,7 @@ fn key(left: &[f32], right: &[f32], rate: u32) -> Option<KeyGuess> {
             for (i, v) in rotated.iter_mut().enumerate() {
                 *v = profile[(i + 12 - root) % 12];
             }
-            scores.push((pearson(&c, &rotated), root as u8, minor));
+            scores.push((pearson(c, &rotated), root as u8, minor));
         }
     }
     scores.sort_by(|a, b| b.0.total_cmp(&a.0));

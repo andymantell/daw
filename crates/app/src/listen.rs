@@ -147,13 +147,18 @@ impl App {
         let (graph, plugins, from, frames) = self.region(args)?;
         let rate = self.rate;
         let what = describe(self, args);
+        let notes = args["notes"].as_bool().unwrap_or(false);
         let thread = std::thread::Builder::new()
             .name("assistant-render".into())
             .spawn(move || {
                 let [l, r] = render_offline(graph, from, frames, LANE_BLOCK);
                 let from_s = from.0 as f64 / rate as f64;
                 let answer = if analysing {
-                    Ok(report_value(&l, &r, rate, from_s, &what))
+                    let mut v = report_value(&l, &r, rate, from_s, &what);
+                    if notes {
+                        v["notes"] = notes_value(&l, &r, rate, from_s);
+                    }
+                    Ok(v)
                 } else {
                     write_audio(&l, &r, rate, from_s, &what)
                 };
@@ -183,10 +188,57 @@ impl App {
         };
         // The master is the mix: everything, through its effects and
         // fader.
-        let only = match args["track"].as_str() {
+        let mut only = match args["track"].as_str() {
             Some(k) if k == daw_project::Master::KEY => None,
             k => index(k)?,
         };
+        // One clip: its track, with only it playing.
+        let clip = match args["clip"].as_str() {
+            None => None,
+            Some(k) => {
+                let found = (self.tracks.iter().enumerate())
+                    .find_map(|(i, t)| t.clips.iter().position(|c| c.key == k).map(|j| (i, j)));
+                let Some((i, j)) = found else {
+                    let note = (self.tracks.iter()).any(|t| t.note_clips.iter().any(|c| c.id == k));
+                    return Err(if note {
+                        format!("{k} is a note clip: analyse its track over its bars instead.")
+                    } else {
+                        format!("There is no clip {k}.")
+                    });
+                };
+                if args["track"].is_string() && only != Some(i) {
+                    return Err(format!("Clip {k} isn't on that track."));
+                }
+                only = Some(i);
+                Some(j)
+            }
+        };
+        let shift = match args.get("transpose_semitones").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => {
+                let st = v
+                    .as_f64()
+                    .filter(|x| x.is_finite())
+                    .ok_or("transpose_semitones is a number.")?;
+                if st.abs() > 12.0 {
+                    return Err("Try a shift of at most 12 semitones either way.".into());
+                }
+                Some((st * 100.0).round() as i64)
+            }
+        };
+        if let Some(i) = only.filter(|_| clip.is_some() || shift.is_some()) {
+            if self.tracks[i].kind.is_bus() {
+                return Err("A bus has no clips to move: give a track or clip.".into());
+            }
+            if self.frozen_playing(&self.tracks[i]).is_some() {
+                return Err(format!(
+                    "{} is frozen: unfreeze it to hear a clip or a shift.",
+                    self.tracks[i].name
+                ));
+            }
+        } else if shift.is_some() {
+            return Err("Give the track or clip to hear moved.".into());
+        }
         if args["without"].as_str() == Some(daw_project::Master::KEY) {
             return Err("The mix can't be heard without the master.".into());
         }
@@ -208,6 +260,21 @@ impl App {
             Some(i) => {
                 let mut one = Session::new(self.tempo_map());
                 let mut spec = s.tracks[i].clone();
+                if clip.is_some() || shift.is_some() {
+                    let map = self.tempo_map();
+                    spec.clips = (self.tracks[i].clips.iter().enumerate())
+                        .filter(|(j, c)| {
+                            clip.map_or(!c.muted, |k| k == *j) && c.source.rate == self.rate
+                        })
+                        .map(|(_, c)| {
+                            let mut c = c.clone();
+                            if let Some(by) = shift {
+                                c.cents = crate::transpose::clamp(c.cents as i64 + by);
+                            }
+                            crate::clip_spec(&c, &map)
+                        })
+                        .collect();
+                }
                 spec.mix.mute = false;
                 spec.mix.solo = false;
                 crate::mixer::alone(&mut spec);
@@ -231,6 +298,11 @@ impl App {
                 .ok_or_else(|| format!("There is no section {name}."))?;
             from_at = Some(bar(sec.from));
             to_at = Some(bar(sec.to));
+        }
+        if let (Some(j), None, None) = (clip, from_at, to_at) {
+            let c = &self.tracks[only.expect("a clip's track")].clips[j];
+            from_at = Some(c.start);
+            to_at = Some(c.end());
         }
         let (from, to) = match (from_at, to_at) {
             (Some(a), Some(b)) => (a, b),
@@ -361,10 +433,71 @@ fn describe(app: &App, args: &Value) -> String {
         Some(k) => name(k),
         None => "The mix".into(),
     };
+    if let Some(k) = args["clip"].as_str() {
+        s = format!("Clip {k}");
+    }
     if let Some(k) = args["without"].as_str() {
         s.push_str(&format!(" without {}", name(k)));
     }
+    if let Some(st) = args["transpose_semitones"].as_f64() {
+        s.push_str(&format!(", heard {st:+} semitones moved"));
+    }
     s
+}
+
+/// The notes read from one voice or instrument, for `analyse`.
+fn notes_value(l: &[f32], r: &[f32], rate: u32, from: f64) -> Value {
+    /// Notes listed in full; the totals cover them all.
+    const MOST: usize = 200;
+    let m = daw_engine::melody::melody(l, r, rate);
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let name = |midi: i32| {
+        format!(
+            "{}{}",
+            NAMES[midi.rem_euclid(12) as usize],
+            midi.div_euclid(12) - 1
+        )
+    };
+    let round = |x: f64, by: f64| (x * by).round() / by;
+    let total: f64 = m.pitch_classes.iter().sum();
+    let mut classes: Vec<Value> = (0..12)
+        .filter(|&i| m.pitch_classes[i] > 0.0)
+        .map(|i| {
+            json!({"note": NAMES[i], "seconds": round(m.pitch_classes[i], 100.0),
+                   "share": round(m.pitch_classes[i] / total.max(1e-9), 1000.0)})
+        })
+        .collect();
+    classes.sort_by(|a, b| {
+        b["seconds"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .total_cmp(&a["seconds"].as_f64().unwrap_or(0.0))
+    });
+    json!({
+        "count": m.notes.len(),
+        "listed": m.notes.len().min(MOST),
+        "notes": m.notes.iter().take(MOST).map(|n| json!({
+            "note": name(n.midi),
+            "midi": n.midi,
+            "start_seconds": round(from + n.start, 1000.0),
+            "seconds": round(n.seconds, 1000.0),
+            "cents": n.cents.round(),
+        })).collect::<Vec<_>>(),
+        "pitch_classes": classes,
+        "tuning_cents": m.tuning_cents.round(),
+        "key": m.key.map(|k| json!({
+            "key": daw_project::Scale::new(
+                k.root,
+                if k.minor { daw_project::ScaleKind::Minor } else { daw_project::ScaleKind::Major },
+            ).label(),
+            "margin": (k.margin * 1000.0).round() / 1000.0,
+        })),
+        "note": "One note at a time: a voice or a single line. Chords and mixes read poorly. \
+                 tuning_cents is how far off the notes are as a whole; a shift that fixes the key \
+                 can take it into account (for example 0.7 semitones up for a singer 30 cents flat).",
+    })
 }
 
 fn report_value(l: &[f32], r: &[f32], rate: u32, from: f64, what: &str) -> Value {
@@ -533,6 +666,106 @@ mod tests {
         t.note_clips.push(c);
         a.rebuild();
         key
+    }
+
+    /// An audio track with two clips: E4 then G4 at `at` seconds, and
+    /// a low C two seconds later. Answers the first clip's id.
+    fn sung(d: &mut Driver, at: f64) -> String {
+        let rate = d.app().rate;
+        let tone = |notes: &[f32]| {
+            let dir = std::env::temp_dir().join(format!("daw-listen-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(format!("{}.wav", crate::timeline::next_id()));
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: rate,
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+            };
+            let mut w = hound::WavWriter::create(&path, spec).unwrap();
+            for &m in notes {
+                let hz = 440.0 * 2f32.powf((m - 69.0) / 12.0);
+                for i in 0..(rate as f32 * 0.4) as usize {
+                    let t = i as f32 / rate as f32;
+                    let x: f32 = (1..4)
+                        .map(|h| 0.2 / h as f32 * (std::f32::consts::TAU * hz * h as f32 * t).sin())
+                        .sum();
+                    w.write_sample(x).unwrap();
+                }
+            }
+            w.finalize().unwrap();
+            let src = daw_engine::stream::StreamSource::open(&path).unwrap();
+            crate::timeline::Clip::new(src, path, 0, Some(0))
+        };
+        let a = d.app();
+        a.tracks.push(crate::Track::new("Vocal".into()));
+        let mut c = tone(&[64.0, 67.0]);
+        c.start = (at * rate as f64) as i64;
+        let key = c.key.clone();
+        let mut low = tone(&[48.0]);
+        low.start = c.start + 2 * rate as i64;
+        a.tracks[0].clips.extend([c, low]);
+        a.rebuild();
+        key
+    }
+
+    #[test]
+    fn a_clip_is_read_note_by_note_and_heard_moved_before_it_is() {
+        let mut d = Driver::new();
+        let clip = sung(&mut d, 1.0);
+        let r = d
+            .call("analyse", json!({"clip": clip, "notes": true}))
+            .unwrap();
+        assert!(
+            (r["from_seconds"].as_f64().unwrap() - 1.0).abs() < 1e-3,
+            "{r}"
+        );
+        assert!((r["seconds"].as_f64().unwrap() - 0.8).abs() < 1e-3, "{r}");
+        let notes = r["notes"]["notes"].as_array().unwrap();
+        let names: Vec<&str> = notes.iter().map(|n| n["note"].as_str().unwrap()).collect();
+        assert_eq!(names, ["E4", "G4"], "only that clip: {r}");
+        let g = notes[1]["start_seconds"].as_f64().unwrap();
+        assert!((g - 1.4).abs() < 0.05, "on the timeline: {r}");
+
+        let up = d
+            .call(
+                "analyse",
+                json!({"clip": clip, "notes": true, "transpose_semitones": 1}),
+            )
+            .unwrap();
+        let names: Vec<&str> = (up["notes"]["notes"].as_array().unwrap().iter())
+            .map(|n| n["note"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["F4", "G#4"], "{up}");
+        assert_eq!(
+            d.project()["tracks"][0]["clips"][0]["transpose_semitones"],
+            0.0,
+            "the clip itself is left alone"
+        );
+        assert!(
+            d.call("analyse", json!({"transpose_semitones": 1}))
+                .is_err()
+        );
+        assert!(d.call("analyse", json!({"clip": "nope"})).is_err());
+    }
+
+    #[test]
+    fn the_project_is_read_in_short() {
+        let mut d = Driver::new();
+        sung(&mut d, 1.0);
+        let v = d.call("get_project", json!({"summary": true})).unwrap();
+        let t = &v["tracks"][0];
+        assert!(t.get("clips").is_none(), "{v}");
+        let s = &t["clips_summary"];
+        assert_eq!(s["count"], 2, "{v}");
+        assert!(
+            (s["from_seconds"].as_f64().unwrap() - 1.0).abs() < 1e-3,
+            "{v}"
+        );
+        assert!(
+            (s["to_seconds"].as_f64().unwrap() - 3.4).abs() < 1e-3,
+            "{v}"
+        );
     }
 
     #[test]

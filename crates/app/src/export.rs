@@ -141,6 +141,7 @@ struct Job {
     /// are shut down here rather than on the render thread.
     _plugins: Vec<Plugin>,
     folder: PathBuf,
+    started: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -358,6 +359,7 @@ impl Export {
             cancel,
             _plugins: plugins,
             folder,
+            started: std::time::Instant::now(),
         });
         Ok(())
     }
@@ -466,6 +468,11 @@ impl Export {
     pub fn progress(&self) -> Option<f32> {
         let j = self.job.as_ref()?;
         Some(j.done.load(Ordering::Relaxed) as f32 / j.total.max(1) as f32)
+    }
+
+    /// How long the running export has taken so far, in seconds.
+    pub fn elapsed(&self) -> Option<f64> {
+        Some(self.job.as_ref()?.started.elapsed().as_secs_f64())
     }
 
     /// The last export's folder and its files, each with what went
@@ -825,6 +832,12 @@ mod tests {
             let v = d.call("get_exports", json!({})).unwrap();
             if v["running"].is_null() && v["queue"].as_array().unwrap().is_empty() {
                 return v;
+            }
+            if !v["running"].is_null() {
+                assert!(
+                    v["running"]["seconds_so_far"].as_f64().unwrap() >= 0.0,
+                    "{v}"
+                );
             }
             std::thread::sleep(Duration::from_millis(10));
         }

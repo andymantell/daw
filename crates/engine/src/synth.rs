@@ -211,6 +211,9 @@ pub struct SimpleSynth {
     /// The vibrato's phase, 0 to 1.
     lfo: f32,
     clock: u64,
+    /// Settings automation lanes set, by index in [`PARAMS`], in place
+    /// of the controls'.
+    auto: [Option<f32>; PARAMS.len()],
 }
 
 impl SimpleSynth {
@@ -227,6 +230,7 @@ impl SimpleSynth {
             vibrato: [0.0; 16],
             lfo: 0.0,
             clock: 0,
+            auto: [None; PARAMS.len()],
         }
     }
 
@@ -364,14 +368,18 @@ impl SimpleSynth {
             return;
         }
         let p = &self.params;
-        let wave = Wave::from_index(p.read(&p.wave) as u32);
+        let auto = &self.auto;
+        // A setting, by its index in `PARAMS`: a lane's, else the
+        // control's.
+        let read = |i: usize, s: &AtomicU32| auto[i].unwrap_or_else(|| p.read(s));
+        let wave = Wave::from_index(read(0, &p.wave) as u32);
         let rate = self.rate;
-        let attack = 1.0 / (p.read(&p.attack).max(0.0005) * rate);
-        let decay = 1.0 / (p.read(&p.decay).max(0.0005) * rate);
-        let sustain = p.read(&p.sustain).clamp(0.0, 1.0);
-        let release = 1.0 / (p.read(&p.release).max(0.0005) * rate);
-        let cutoff = p.read(&p.cutoff);
-        let gain = 10f32.powf(p.read(&p.level_db) / 20.0);
+        let attack = 1.0 / (read(1, &p.attack).max(0.0005) * rate);
+        let decay = 1.0 / (read(2, &p.decay).max(0.0005) * rate);
+        let sustain = read(3, &p.sustain).clamp(0.0, 1.0);
+        let release = 1.0 / (read(4, &p.release).max(0.0005) * rate);
+        let cutoff = read(5, &p.cutoff);
+        let gain = 10f32.powf(read(6, &p.level_db) / 20.0);
         // The vibrato for this stretch, at 5.5 Hz, taken at its middle.
         let lfo = (self.lfo + 5.5 * (to - from) as f32 / rate / 2.0).fract();
         let wobble = (lfo * std::f32::consts::TAU).sin();
@@ -478,6 +486,20 @@ impl Instrument for SimpleSynth {
             self.event(e);
         }
         self.run(at, n, left, right);
+    }
+
+    fn automate(&mut self, param: u32, value: f64) {
+        if let (Some(slot), Some(&(_, lo, hi, _))) = (
+            self.auto.get_mut(param as usize),
+            PARAMS.get(param as usize),
+        ) && value.is_finite()
+        {
+            *slot = Some(value.clamp(lo, hi) as f32);
+        }
+    }
+
+    fn clear_automation(&mut self) {
+        self.auto = [None; PARAMS.len()];
     }
 }
 

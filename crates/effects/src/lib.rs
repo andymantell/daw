@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Effects that come with the app (roadmaps 2.5 and 3.5): EQ, compressor,
+//! Effects that come with the app (roadmaps 2.5 and 3.5): EQ, a resonant
+//! filter, compressor,
 //! gate, limiter, de-esser, multiband dynamics, transient shaper,
 //! saturation, delay, chorus, flanger, phaser, tremolo, an algorithmic
 //! reverb, a convolution reverb, a guitar amp, speaker cabinets, a
@@ -29,6 +30,7 @@ mod deesser;
 mod delay;
 mod dynamics;
 mod eq;
+mod filter;
 pub mod library;
 mod lofi;
 mod modulation;
@@ -53,6 +55,7 @@ const SMOOTH_SECONDS: f64 = 0.02;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Eq,
+    Filter,
     Compressor,
     Gate,
     Limiter,
@@ -83,8 +86,9 @@ pub enum Kind {
 
 impl Kind {
     /// In the order the effects list shows them.
-    pub const ALL: [Kind; 26] = [
+    pub const ALL: [Kind; 27] = [
         Kind::Eq,
+        Kind::Filter,
         Kind::Compressor,
         Kind::Gate,
         Kind::Limiter,
@@ -116,6 +120,7 @@ impl Kind {
     pub fn id(self) -> &'static str {
         match self {
             Kind::Eq => "eq",
+            Kind::Filter => "filter",
             Kind::Compressor => "compressor",
             Kind::Gate => "gate",
             Kind::Limiter => "limiter",
@@ -152,6 +157,7 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Eq => "EQ",
+            Kind::Filter => "Filter",
             Kind::Compressor => "Compressor",
             Kind::Gate => "Noise gate",
             Kind::Limiter => "Limiter",
@@ -209,6 +215,10 @@ impl Kind {
     pub fn about(self) -> &'static str {
         match self {
             Kind::Eq => "Cut or boost bass, middle and treble, and cut rumble or hiss",
+            Kind::Filter => {
+                "A resonant low-pass, high-pass, band-pass or notch filter from 20 Hz to \
+                 20 kHz, for filter sweeps"
+            }
             Kind::Compressor => "Evens out loud and quiet playing",
             Kind::Gate => "Silences hum and hiss between notes",
             Kind::Limiter => "Stops the level going over a ceiling, for the master or a loud part",
@@ -252,6 +262,7 @@ impl Kind {
     pub fn params(self) -> &'static [Param] {
         match self {
             Kind::Eq => eq::PARAMS,
+            Kind::Filter => filter::PARAMS,
             Kind::Compressor => dynamics::COMPRESSOR,
             Kind::Gate => dynamics::GATE,
             Kind::Limiter => dynamics::LIMITER,
@@ -613,6 +624,7 @@ impl Effect {
         let rate = rate.max(1) as f64;
         let dsp: Box<dyn Dsp> = match self.kind {
             Kind::Eq => Box::new(eq::Eq::new(rate)),
+            Kind::Filter => Box::new(filter::Filter::new(rate)),
             Kind::Compressor => Box::new(dynamics::Compressor::new(rate)),
             Kind::Gate => Box::new(dynamics::Gate::new(rate)),
             Kind::Limiter => Box::new(dynamics::Limiter::new(rate)),

@@ -227,6 +227,7 @@ pub(crate) fn control(t: &Track, param: &str) -> Option<f64> {
             Some(s.builtin()?.get(fx_index(s, key)?))
         }
         LaneTarget::Plugin { effect, id } => slot(t, effect)?.plugin()?.param(id),
+        LaneTarget::Instrument(key) => t.instrument.as_ref()?.get_setting(key),
         LaneTarget::Unknown => None,
     }
 }
@@ -254,6 +255,11 @@ pub(crate) fn set_control(t: &mut Track, param: &str, v: f64) {
                 p.set_param(id, v);
             }
         }
+        LaneTarget::Instrument(key) => {
+            if let Some(s) = &t.instrument {
+                s.set_setting(key, v);
+            }
+        }
         LaneTarget::Unknown => {}
     }
 }
@@ -278,6 +284,9 @@ pub(crate) fn step_control(t: &mut Track, param: &str) -> bool {
                 Some((p.max - p.min).round() as usize + 1)
             }
         }),
+        LaneTarget::Instrument(key) => (t.instrument.as_ref())
+            .and_then(|s| s.setting(key))
+            .and_then(|s| s.steps),
         _ => None,
     };
     let next = match choices {
@@ -307,6 +316,14 @@ pub(crate) fn range(t: &Track, param: &str) -> Option<Range> {
             })
         }
         LaneTarget::Plugin { .. } => Some(UNIT),
+        LaneTarget::Instrument(key) => {
+            let s = t.instrument.as_ref()?.setting(key)?;
+            Some(Range {
+                min: s.min,
+                max: s.max,
+                log: s.log && s.min > 0.0,
+            })
+        }
         LaneTarget::Unknown => None,
     }
 }
@@ -335,6 +352,9 @@ fn engine_target(t: &Track, sends: &[(&daw_project::Send, usize)], param: &str) 
                 param: id,
             })
         }
+        LaneTarget::Instrument(key) => Some(Target::Instrument(
+            t.instrument.as_ref()?.setting(key)?.index,
+        )),
         LaneTarget::Unknown => None,
     }
 }
@@ -368,6 +388,14 @@ pub(crate) fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> Str
             }
             None => format!("Missing plugin: #{id}"),
         },
+        LaneTarget::Instrument(key) => match &t.instrument {
+            Some(s) => format!(
+                "{}: {}",
+                s.name,
+                s.setting(key).map_or_else(|| key.to_string(), |x| x.name)
+            ),
+            None => format!("Missing instrument: {key}"),
+        },
         LaneTarget::Unknown => param.to_string(),
     }
 }
@@ -385,6 +413,9 @@ pub(crate) fn text_of(t: &Track, param: &str, v: f64) -> String {
         LaneTarget::Plugin { effect, id } => slot(t, effect)
             .and_then(|s| s.plugin()?.param_text(id, v))
             .unwrap_or_else(|| format!("{:.0}%", v * 100.0)),
+        LaneTarget::Instrument(key) => (t.instrument.as_ref())
+            .and_then(|s| s.setting_text(key, v))
+            .unwrap_or_else(|| format!("{v:.2}")),
         LaneTarget::Unknown => format!("{v:.2}"),
     }
 }
@@ -403,6 +434,9 @@ pub(crate) fn choice_names(t: &Track, param: &str) -> Vec<String> {
         .map(|p| p.choices.iter().map(|c| c.to_string()).collect())
         .unwrap_or_default()
 }
+
+/// The most instrument settings watched for a touch each frame.
+const MOST_WATCHED_INSTRUMENT: usize = 64;
 
 /// How far Up and Down move a lane's value, as a share of its range.
 const LANE_STEP: f64 = 0.02;
@@ -506,6 +540,15 @@ pub(crate) fn choices_up_to(t: &Track, buses: &[(String, String)], most: usize) 
                     name: format!("{}: {}", s.name, p.title),
                 });
             }
+        }
+    }
+    if let Some(s) = &t.instrument {
+        for key in s.setting_keys() {
+            let param = format!("{}{key}", Lane::INSTRUMENT);
+            out.push(Choice {
+                name: name_of(t, buses, &param),
+                param,
+            });
         }
     }
     out
@@ -817,6 +860,21 @@ impl crate::App {
                 .filter(|l| l.param.starts_with(Lane::PLUGIN))
                 .map(|l| l.param.clone()),
         );
+        // The instrument's settings, unless it has too many to ask
+        // after each frame (a drum machine's every pad and layer): then
+        // those with a lane.
+        if let Some(s) = &t.instrument {
+            let keys = s.setting_keys();
+            if keys.len() <= MOST_WATCHED_INSTRUMENT {
+                out.extend(keys.iter().map(|k| format!("{}{k}", Lane::INSTRUMENT)));
+            } else {
+                out.extend(
+                    (t.automation.iter())
+                        .filter(|l| l.param.starts_with(Lane::INSTRUMENT))
+                        .map(|l| l.param.clone()),
+                );
+            }
+        }
         out
     }
 
@@ -1415,6 +1473,49 @@ mod tests {
         let key = h.state().tracks[0].key.clone();
         h.state_mut().automation.set_mode(&key, Mode::Off);
         assert!(h.state().session().tracks[0].automation.is_empty());
+    }
+
+    #[test]
+    fn an_instrument_lane_reaches_the_engine_and_leaves_the_knob_alone() {
+        let mut h = harness();
+        let app = h.state_mut();
+        app.add_instrument_track(daw_instruments::Kind::Synth);
+        let i = app.tracks.len() - 1;
+        let param = format!("{}cutoff", Lane::INSTRUMENT);
+        let cutoff = |a: &App| {
+            let s = a.tracks[i].instrument.as_ref().unwrap();
+            s.get_setting("cutoff").unwrap()
+        };
+        let own = cutoff(app);
+        let app = h.state_mut();
+        let mut lane = Lane::new(param.clone());
+        lane.put(0, 200.0);
+        lane.put(48_000, 400.0);
+        app.tracks[i].automation.push(lane);
+        app.rebuild();
+        let s = app.session();
+        let index = daw_instruments::synth::params()
+            .iter()
+            .position(|p| p.key == "cutoff")
+            .unwrap() as u32;
+        assert_eq!(s.tracks[i].automation[0].target, Target::Instrument(index));
+        let t = &app.tracks[i];
+        assert_eq!(name_of(t, &[], &param), "Synth: Cutoff");
+        assert_eq!(text_of(t, &param, 200.0), "200 Hz");
+        assert!(range(t, &param).unwrap().log);
+
+        // Playing in Read: between frames the knob holds its own value,
+        // so the project sees no change from the lane.
+        app.toggle_play();
+        assert!(until(&mut h, 3, |a| a.ctl.status().position().0 > 4800));
+        assert_eq!(cutoff(h.state()), own);
+        let key = h.state().tracks[i].key.clone();
+        // Touch watches the synth's knobs for a move.
+        h.state_mut().automation.set_mode(&key, Mode::Touch);
+        let t = &h.state().tracks[i];
+        assert!(h.state().watched(t).contains(&param));
+        h.state_mut().toggle_play();
+        assert!(until(&mut h, 2, |a| !a.ctl.status().playing()));
     }
 
     #[test]

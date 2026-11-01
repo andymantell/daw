@@ -43,8 +43,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "edit_automation",
         description: "Automates a track setting so it changes over time as the song plays: \
-                      a volume ride or fade, a filter sweep, a pan move, a send or effect \
-                      setting rising or falling. Draws points on the setting's automation \
+                      a volume ride or fade, a filter sweep (a synth's instrument.cutoff, or \
+                      a Filter effect's cutoff), a pan move, a send, effect or built-in \
+                      instrument setting rising or falling. Draws points on the setting's automation \
                       lane, which the setting follows from point to point. It changes one \
                       lane: adds it (for any setting \
                       list_parameters names that can be automated; it starts level at the \
@@ -637,5 +638,191 @@ mod tests {
             d.call("set_automation_mode", json!({"track": t, "mode": "off"}))
                 .is_err()
         );
+    }
+
+    /// A synth track playing a bright note in each of two bars.
+    fn synth_note() -> (Driver, String) {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "poly-synth"})).unwrap(),
+            "track",
+        );
+        let c = id(
+            d.call("add_note_clip", json!({"track": t, "bar": 1, "bars": 2}))
+                .unwrap(),
+            "clip",
+        );
+        d.call(
+            "edit_notes",
+            // One a bar, as a render from bar 2 doesn't hear a note
+            // started before it.
+            json!({"clip": c, "add": [
+                {"beat": 0, "beats": 4, "pitch": 48},
+                {"beat": 4, "beats": 4, "pitch": 48}
+            ]}),
+        )
+        .unwrap();
+        for (param, value) in [
+            ("instrument.cutoff", 18_000.0),
+            ("instrument.filter_env", 0.0),
+        ] {
+            d.call(
+                "set_parameter",
+                json!({"track": t, "param": param, "value": value}),
+            )
+            .unwrap();
+        }
+        (d, t)
+    }
+
+    /// The level above 2 kHz of the track over its second half (the
+    /// second bar), in dB.
+    fn highs(d: &mut Driver, t: &str) -> f64 {
+        let r = d
+            .call("analyse", json!({"track": t, "from_bar": 2, "to_bar": 3}))
+            .unwrap();
+        let power: f64 = (r["third_octave_bands"].as_array().unwrap().iter())
+            .filter(|b| b["hz"].as_f64().unwrap() >= 2000.0)
+            .map(|b| 10f64.powf(b["db"].as_f64().unwrap() / 10.0))
+            .sum();
+        10.0 * power.max(1e-12).log10()
+    }
+
+    /// The wish from the third song test: a synth's own filter swept
+    /// down by a lane, which the export (here, analyse) follows.
+    #[test]
+    fn a_synths_cutoff_can_be_swept_by_a_lane() {
+        let (mut d, t) = synth_note();
+        let open = highs(&mut d, &t);
+        let listed = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": "instrument.cutoff"}),
+            )
+            .unwrap();
+        assert_eq!(listed[0]["params"][0]["automated"], false);
+
+        d.call(
+            "edit_automation",
+            json!({"track": t, "param": "instrument.cutoff", "add": [
+                {"bar": 1, "value": 18_000.0},
+                {"bar": 2, "value": 200.0}
+            ]}),
+        )
+        .unwrap();
+        let l = lanes(&mut d, &t);
+        assert_eq!(l[0]["param"], "instrument.cutoff");
+        assert_eq!(l[0]["missing"], false);
+        assert!(l[0]["name"].as_str().unwrap().ends_with(": Cutoff"), "{l}");
+        assert_eq!(l[0]["points"][1]["text"], "200 Hz");
+        let listed = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": "instrument.cutoff"}),
+            )
+            .unwrap();
+        assert_eq!(listed[0]["params"][0]["automated"], true);
+
+        // The second bar plays at 200 Hz: far less above 2 kHz, though
+        // the control itself still says 18 kHz.
+        let swept = highs(&mut d, &t);
+        assert!(swept < open - 30.0, "{open} {swept}");
+        let s = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": "instrument.cutoff"}),
+            )
+            .unwrap();
+        assert_eq!(s[0]["params"][0]["value"], 18_000.0);
+
+        // With the mode off, the lane is ignored again; and an undo
+        // takes the lane away.
+        d.call("set_automation_mode", json!({"track": t, "mode": "off"}))
+            .unwrap();
+        assert!((highs(&mut d, &t) - open).abs() < 1.0);
+        d.call("set_automation_mode", json!({"track": t, "mode": "read"}))
+            .unwrap();
+        d.call("undo_steps", json!({"undo": 1})).unwrap();
+        assert!(lanes(&mut d, &t).as_array().unwrap().is_empty());
+        assert!((highs(&mut d, &t) - open).abs() < 1.0);
+
+        // A setting the instrument hasn't is refused.
+        let err = d
+            .call(
+                "edit_automation",
+                json!({"track": t, "param": "instrument.nothing", "add_lane": true}),
+            )
+            .unwrap_err();
+        assert!(err.contains("list_parameters"), "{err}");
+    }
+
+    /// The simple synth's settings can be automated too.
+    #[test]
+    fn the_simple_synths_cutoff_can_be_automated() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        d.call(
+            "edit_automation",
+            json!({"track": t, "param": "instrument.cutoff", "add": [{"bar": 1, "value": 300.0}]}),
+        )
+        .unwrap();
+        let l = lanes(&mut d, &t);
+        assert_eq!(l[0]["points"][0]["text"], "300 Hz");
+        let app = d.app();
+        let track = app.tracks.iter().find(|x| x.key == t).unwrap();
+        assert_eq!(
+            app.lane_specs(track)[0].target,
+            daw_engine::automation::Target::Instrument(5)
+        );
+    }
+
+    /// The filter effect sweeps from 20 kHz down to 20 Hz, the whole
+    /// range the third song test missed on the EQ's cuts.
+    #[test]
+    fn the_filter_effect_reaches_the_whole_range_and_can_be_swept() {
+        let (mut d, t) = synth_note();
+        let kinds = d.call("list_effect_kinds", json!({})).unwrap();
+        assert!(
+            (kinds["builtin"].as_array().unwrap().iter()).any(|k| k["id"] == "filter"),
+            "{kinds}"
+        );
+        let open = highs(&mut d, &t);
+        let fx = id(
+            d.call("add_effect", json!({"track": t, "effect": "filter"}))
+                .unwrap(),
+            "effect",
+        );
+        let cutoff = format!("fx:{fx}:cutoff");
+        let p = d
+            .call("list_parameters", json!({"track": t, "prefix": cutoff}))
+            .unwrap();
+        let p = &p[0]["params"][0];
+        assert_eq!(
+            (p["min"].as_f64(), p["max"].as_f64()),
+            (Some(20.0), Some(20_000.0))
+        );
+        let mode = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": format!("fx:{fx}:mode")}),
+            )
+            .unwrap();
+        assert_eq!(
+            mode[0]["params"][0]["choices"],
+            json!(["Low-pass", "High-pass", "Band-pass", "Notch"])
+        );
+        d.call(
+            "edit_automation",
+            json!({"track": t, "param": cutoff, "add": [
+                {"bar": 1, "value": 20_000.0},
+                {"bar": 2, "value": 300.0}
+            ]}),
+        )
+        .unwrap();
+        let swept = highs(&mut d, &t);
+        assert!(swept < open - 30.0, "{open} {swept}");
     }
 }

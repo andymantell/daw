@@ -197,7 +197,10 @@ assistant finds them for itself. In outline:
   points), `edit_automation` (add or remove a lane for any setting
   `list_parameters` names, clear it, and add, move or delete points;
   points are joined by straight lines), `set_automation_mode` (Off,
-  Read, Touch, Latch or Write).
+  Read, Touch, Latch or Write). A built-in instrument's settings
+  (`instrument.cutoff` on a synth, say) take lanes too, and the
+  `filter` effect (low-pass, high-pass, band-pass or notch, 20 Hz to
+  20 kHz, with resonance) is made for sweeps.
 - **Lessons:** `get_lessons` (the lesson notes, tab blocks,
   assignments with who has done them, lessons and the practice log),
   `edit_lesson_notes` (the notes' text, and tab blocks pinned to a

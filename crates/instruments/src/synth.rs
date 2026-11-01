@@ -5,12 +5,10 @@
 //! key tracking, and an LFO on pitch, filter and level. Sixteen voices,
 //! or one that glides from note to note.
 
-use std::sync::Arc;
-
 use daw_engine::midi::{Event, Instrument, Kind};
 
 use crate::dsp::{Adsr, Env, Mode, Noise, Svf, Wave, db, hz, osc};
-use crate::params::{Param, Params, Unit};
+use crate::params::{Live, Param, Unit};
 
 const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Square", "Random"];
 const FILTERS: &[&str] = &["Low-pass", "Band-pass", "High-pass"];
@@ -146,7 +144,7 @@ impl Voice {
 
 /// The synth on the audio thread.
 pub struct Synth {
-    params: Arc<Params>,
+    params: Live,
     rate: f32,
     voices: [Voice; VOICES],
     bend: f32,
@@ -161,9 +159,9 @@ pub struct Synth {
 }
 
 impl Synth {
-    pub fn new(rate: u32, params: Arc<Params>) -> Synth {
+    pub fn new(rate: u32, params: impl Into<Live>) -> Synth {
         Synth {
-            params,
+            params: params.into(),
             rate: rate.max(1) as f32,
             voices: [Voice::OFF; VOICES],
             bend: 0.0,
@@ -462,7 +460,9 @@ impl Instrument for Synth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::Params;
     use daw_engine::midi::Event;
+    use std::sync::Arc;
 
     fn synth() -> Synth {
         Synth::new(48_000, Arc::new(Params::new(params())))

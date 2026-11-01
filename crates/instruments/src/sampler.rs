@@ -11,7 +11,7 @@ use daw_engine::midi::{Event, Instrument, Kind};
 
 use crate::dsp::{Adsr, Env, Mode, SVF_ZERO, Svf, db};
 use crate::library::Library;
-use crate::params::{Param, Params, Unit};
+use crate::params::{Live, Param, Params, Unit};
 use crate::sample::{Player, Sample};
 use crate::sfz_player::{Knobs, SfzPlayer};
 
@@ -287,7 +287,7 @@ impl Voice {
 
 /// The sampler on the audio thread.
 pub struct Sampler {
-    params: Arc<Params>,
+    params: Live,
     /// Each zone's sound at the output's rate, if it has one.
     zones: Vec<Option<Arc<Sample>>>,
     rate: f32,
@@ -302,9 +302,9 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn new(rate: u32, params: Arc<Params>, zones: Vec<Option<Arc<Sample>>>) -> Sampler {
+    pub fn new(rate: u32, params: impl Into<Live>, zones: Vec<Option<Arc<Sample>>>) -> Sampler {
         Sampler {
-            params,
+            params: params.into(),
             zones,
             rate: rate.max(1) as f32,
             voices: [Voice::OFF; VOICES],

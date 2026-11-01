@@ -68,6 +68,8 @@ pub enum Target {
     Send(usize),
     /// A setting of the insert with this id, by the setting's index.
     Insert { id: u64, param: u32 },
+    /// A setting of the track's instrument, by the setting's index.
+    Instrument(u32),
 }
 
 /// One lane as the engine plays it.

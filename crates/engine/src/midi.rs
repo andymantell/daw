@@ -357,6 +357,18 @@ pub trait Instrument: Send {
     fn latency(&self) -> u32 {
         0
     }
+
+    /// Plays setting `param` (by its index among the instrument's
+    /// settings) at `value` from the next block on, in place of its
+    /// control, as an automation lane does. An instrument without
+    /// settings it can be told so ignores it.
+    fn automate(&mut self, param: u32, value: f64) {
+        let _ = (param, value);
+    }
+
+    /// Gives every setting [`automate`](Self::automate) set back to its
+    /// control.
+    fn clear_automation(&mut self) {}
 }
 
 /// A frequency, in Hz, for a pitch, with the A above middle C at

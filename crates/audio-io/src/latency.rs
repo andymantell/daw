@@ -318,7 +318,7 @@ pub fn combine(runs: Vec<Run>, rate: u32) -> Measured {
 /// What to measure on.
 #[derive(Clone, Debug)]
 pub enum Target {
-    Device(DeviceProfile),
+    Device(Box<DeviceProfile>),
     /// No device: the silent stand-in, which loops its output back with
     /// [`SilentInput::Loopback`]. For testing without an interface.
     Silent {

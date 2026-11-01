@@ -98,6 +98,7 @@ pub(crate) enum Cmd {
     Mixer,
     MonitorSection,
     Talkback,
+    MixAhead,
     Dim,
     Mono,
     TakeLanes,
@@ -1388,6 +1389,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Measure the round trip with a loopback cable, so recordings line up exactly")
     .words("loopback recording offset delay round trip"),
+    info(
+        Cmd::MixAhead,
+        "mix-buffer",
+        "Settings",
+        "Big mix buffer on or off",
+        &[],
+    )
+    .hint("Play live tracks at the small buffer and the rest of the mix at a big one")
+    .words("latency amp guitar monitoring low buffer cpu dropouts"),
     info(Cmd::Plugins, "plugins", "Settings", "Plugins…", &[]).words("effects scan"),
     info(
         Cmd::PerformanceCheck,
@@ -2732,6 +2742,7 @@ impl App {
                     self.latency.inputs = crate::input_channels(&d.host, d.input.as_deref());
                 }
             }
+            Cmd::MixAhead => self.toggle_mix_ahead(),
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::DrumKits

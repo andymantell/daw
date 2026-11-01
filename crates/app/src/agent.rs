@@ -1027,8 +1027,17 @@ mod tests {
         // Two bars of 4/4 at 120 bpm: four seconds.
         let rate = d.app().rate as i64;
         assert_eq!(at, 4 * rate);
-        d.h.run();
-        let t = d.call("get_transport", json!({})).unwrap();
+        // The engine moves on its own thread: give it a moment, as a
+        // slow machine may not have run a block yet.
+        let mut t = Value::Null;
+        for _ in 0..100 {
+            d.h.run();
+            t = d.call("get_transport", json!({})).unwrap();
+            if t["bar"] == json!(3) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!((t["bar"].clone(), t["beat"].clone()), (json!(3), json!(1)));
     }
 }

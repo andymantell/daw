@@ -160,13 +160,20 @@ assistant finds them for itself. In outline:
   `edit_pattern` (the step sequencer: patterns, lanes and steps).
   `edit_clip` moves, resizes, mutes and keys note clips too, and
   transposes audio clips (`transpose_semitones`, fractions for cents,
-  with `move_formants`).
+  with `move_formants`). An audio clip's `offset_seconds` and
+  `len_seconds` are in the file's own seconds; for a clip that follows
+  tempo or has stretch markers, `end_seconds` says where it ends on the
+  timeline.
   Pitch editing of a single voice or single-note line: `edit_pitch_notes`
   finds an audio clip's notes (`find: true`) and edits them one by one
-  or together (`to_midi`, `shift_semitones`, `by_semitones`, `snap`,
-  `move_seconds`, `resize_seconds`, `drift_pct`, `vibrato_pct`,
-  `formant_semitones`, `reset`); `get_pitch_notes` reads them back,
-  with each note's pitch line when asked (`line: true`).
+  or together (`to_midi`, `to_plays_midi`, `shift_semitones`,
+  `by_semitones`, `snap`, `move_seconds`, `resize_seconds`, `drift_pct`,
+  `vibrato_pct`, `formant_semitones`, `reset`); `get_pitch_notes` reads
+  them back, with each note's pitch line when asked (`line: true`).
+  Each note gives its pitch in the file (`pitch`, `now`) and as heard
+  with the clip's transpose (`plays`, `plays_midi`), and its time in the
+  file's seconds (`start_seconds`) and on the timeline
+  (`timeline_seconds`, `timeline_end_seconds`).
   `add_note_clip` and `edit_notes` take chords by name (`Dm9`, `G/B`)
   or several pitches at once, and `select_clips` picks a note clip.
 - **Automation:** `get_automation` (each track's mode, lanes and

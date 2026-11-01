@@ -80,7 +80,10 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "The project: tempo and time signature, loop, markers, and each track \
                       with its mix, routing, effects and clips. Times are given in frames \
                       at the project's rate and in seconds; note positions in ticks (960 \
-                      to a quarter note).",
+                      to a quarter note). An audio clip's start and end_seconds are on \
+                      the timeline; its offset and len are in the file's own audio, so \
+                      a clip that follows tempo or has stretch markers can end before or \
+                      after start + len.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -1243,6 +1246,14 @@ impl App {
         }
     }
 
+    /// Where audio clip `id` ends on the timeline, in frames: after
+    /// any follow-tempo stretch, so it can differ from start + len.
+    pub(crate) fn clip_end(&self, id: &str) -> Option<i64> {
+        (self.tracks.iter().flat_map(|t| &t.clips))
+            .find(|c| c.key == id)
+            .map(|c| c.end())
+    }
+
     fn project_value(&self, notes: bool) -> Value {
         let p = self.project();
         let rate = p.rate.max(1) as f64;
@@ -1272,6 +1283,8 @@ impl App {
                             "len": c.len,
                             "len_seconds": secs(c.len),
                             "offset": c.offset,
+                            "offset_seconds": secs(c.offset),
+                            "end_seconds": self.clip_end(&c.id).map(secs),
                             "muted": c.muted,
                             "gain_db": c.gain_db,
                             "take": c.take,

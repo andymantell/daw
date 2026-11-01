@@ -42,8 +42,11 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "edit_clip",
         description: "Changes a clip. Either kind: where it starts (bar or seconds), the \
-                      track it is on, mute or name. An audio clip: its length or offset \
-                      into its file (seconds), gain and fades (seconds), and its \
+                      track it is on, mute or name. An audio clip: its length and offset \
+                      into its file, in seconds of the file's own audio (so for a \
+                      clip that follows tempo or has stretch markers, not the time \
+                      it takes on the timeline: the answer's end_seconds gives where \
+                      it ends there), gain and fades (seconds), and its \
                       transpose (semitones, fractions for cents, within 12 either way; \
                       0 for its own pitch), which keeps its timing and works with \
                       follow tempo; its formants stay put unless move_formants. A note clip: its \
@@ -58,8 +61,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                 json!({
                     "clip": {"type": "string"},
                     "track": {"type": "string", "description": "Move it to this track."},
-                    "len_seconds": {"type": "number"},
-                    "offset_seconds": {"type": "number"},
+                    "len_seconds": {"type": "number", "description": "Audio clips: how much of the file plays, in the file's own seconds (before any stretch)."},
+                    "offset_seconds": {"type": "number", "description": "Audio clips: where in the file it starts playing, in the file's own seconds."},
                     "gain_db": {"type": "number"},
                     "fade_in_seconds": {"type": "number"},
                     "fade_out_seconds": {"type": "number"},
@@ -390,10 +393,14 @@ impl App {
             }
             Ok(json!({"clip": id, "start_seconds": c.start as f64 / rate,
                       "len_seconds": c.len as f64 / rate,
+                      "offset_seconds": c.offset as f64 / rate,
                       "transpose_semitones": c.cents as f64 / 100.0,
                       "move_formants": c.move_formants}))
         })
-        .map(|v| (v, Some("Change a clip".into())))
+        .map(|mut v| {
+            v["end_seconds"] = json!(self.clip_end(&id).map(|e| e as f64 / rate));
+            (v, Some("Change a clip".into()))
+        })
     }
 
     fn delete_clip_tool(&mut self, args: &Value) -> Done {

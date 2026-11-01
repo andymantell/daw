@@ -11,6 +11,7 @@ use crate::App;
 use crate::agent::{Access, Tool};
 use crate::pitch_edit::{MIN_SECONDS, clamp_cents, note_name, retime, snapped};
 use crate::timeline::Clip;
+use daw_engine::time::TempoMap;
 
 /// What the tools here answer: a value, and the undo step's name.
 type Done = Result<(Value, Option<String>), String>;
@@ -20,11 +21,17 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "get_pitch_notes",
         description: "The notes found in an audio clip for pitch editing (one voice or a \
                       single-note line), in order: each one's index, where it starts and \
-                      how long it is (seconds from the clip's start, in its own audio), the \
-                      pitch it was sung at (midi with cents as the fraction, and its name), \
-                      and its edits: shift_semitones, moved_seconds, resized_seconds, \
-                      drift_pct and vibrato_pct (how much of each is kept; 100 as sung) and \
-                      formant_semitones. 'now' names the pitch it plays at. With line: true, \
+                      how long it is (start_seconds and seconds: seconds of the file's own \
+                      audio, from where the clip starts in it; timeline_seconds and \
+                      timeline_end_seconds: where it is heard on the timeline, after any \
+                      follow-tempo stretch and its own move), the pitch it was sung at in \
+                      the file (midi with cents as the fraction, and its name), and its \
+                      edits: shift_semitones, moved_seconds, resized_seconds, drift_pct and \
+                      vibrato_pct (how much of each is kept; 100 as sung) and \
+                      formant_semitones. 'now' names the note's pitch in the file with its \
+                      shift, before the clip's transpose; 'plays' and plays_midi are what \
+                      is heard, with the clip's transpose_semitones added (the same as \
+                      'now' when the clip isn't transposed). With line: true, \
                       each note also gives its pitch line as sung, a midi number every 50 \
                       ms (null where there was no clear pitch). found is false until \
                       edit_pitch_notes with find: true has run.",
@@ -43,11 +50,14 @@ pub(crate) const TOOLS: &[Tool] = &[
                       rendered. find: true finds its notes first (again keeps the pitch \
                       edits of the notes the new ones replace). notes picks them by index \
                       (all when left out). Then, for each: to_midi puts it on that pitch \
-                      (fractions for cents), shift_semitones sets its move, by_semitones \
-                      adds to it, snap: true puts it on the nearest whole note; \
-                      move_seconds and resize_seconds set how far it is moved in time and \
-                      made longer (they stop where the audio around it would stretch more \
-                      than 3×); drift_pct (0 to 100) and vibrato_pct (0 to 300) set how \
+                      in the file, as midi and 'now' read (fractions for cents), \
+                      to_plays_midi so that it is heard at that pitch, with the clip's \
+                      transpose (as plays_midi reads), shift_semitones sets its move, \
+                      by_semitones adds to it, snap: true puts it on the nearest whole \
+                      note as heard (with the clip's transpose); move_seconds and \
+                      resize_seconds, in the file's own seconds, set how far it is moved \
+                      in time and made longer (they stop where the audio around it would \
+                      stretch more than 3×); drift_pct (0 to 100) and vibrato_pct (0 to 300) set how \
                       much of each is kept; formant_semitones (-12 to 12) moves the \
                       voice's character; reset: true takes every edit off first. Answers \
                       with the notes as get_pitch_notes does. One undo step.",
@@ -59,7 +69,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "notes": {"type": "array", "items": {"type": "integer"},
                           "description": "Indexes from get_pitch_notes, from 0."},
                 "reset": {"type": "boolean"},
-                "to_midi": {"type": "number"},
+                "to_midi": {"type": "number", "description": "The pitch in the file, before the clip's transpose."},
+                "to_plays_midi": {"type": "number", "description": "The pitch heard, after the clip's transpose."},
                 "shift_semitones": {"type": "number", "description": "-12 to 12."},
                 "by_semitones": {"type": "number"},
                 "snap": {"type": "boolean"},
@@ -86,9 +97,14 @@ fn within(v: &Value, what: &str, lo: f64, hi: f64) -> Result<Option<f64>, String
 }
 
 /// The notes of `c` as an assistant reads them.
-pub(crate) fn notes_value(c: &Clip, with_line: bool) -> Value {
+pub(crate) fn notes_value(c: &Clip, map: &TempoMap, with_line: bool) -> Value {
     let rate = c.source.rate.max(1) as f64;
     let secs = |f: i64| ((f as f64 / rate) * 1000.0).round() / 1000.0;
+    let out_rate = map.sample_rate().max(1) as f64;
+    // Where source frame `f` is heard, in timeline seconds.
+    let heard =
+        |f: i64| ((c.out_of_frame(map, f as f64) as f64 / out_rate) * 1000.0).round() / 1000.0;
+    let clip_cents = c.cents as i64;
     let notes: Vec<Value> = (c.pitch_notes.iter().enumerate())
         .map(|(i, n)| {
             let mut v = json!({
@@ -98,6 +114,10 @@ pub(crate) fn notes_value(c: &Clip, with_line: bool) -> Value {
                 "midi": n.cents as f64 / 100.0,
                 "pitch": note_name(n.cents),
                 "now": note_name(n.cents + n.shift),
+                "plays": note_name(n.cents + n.shift + clip_cents),
+                "plays_midi": (n.cents + n.shift + clip_cents) as f64 / 100.0,
+                "timeline_seconds": heard(n.start + n.moved),
+                "timeline_end_seconds": heard(n.end + n.moved + n.resized),
                 "shift_semitones": n.shift as f64 / 100.0,
                 "moved_seconds": secs(n.moved),
                 "resized_seconds": secs(n.resized),
@@ -121,7 +141,8 @@ pub(crate) fn notes_value(c: &Clip, with_line: bool) -> Value {
             v
         })
         .collect();
-    json!({"clip": c.key, "found": !c.pitch_notes.is_empty(), "notes": notes})
+    json!({"clip": c.key, "found": !c.pitch_notes.is_empty(),
+           "transpose_semitones": clip_cents as f64 / 100.0, "notes": notes})
 }
 
 impl App {
@@ -141,6 +162,7 @@ impl App {
             }
             Ok(notes_value(
                 &self.tracks[l].clips[k],
+                &self.tempo_map(),
                 args["line"].as_bool() == Some(true),
             ))
         })
@@ -169,6 +191,10 @@ impl App {
         let (l, k) = self.pitch_audio_clip(args)?;
         // Check everything before changing anything.
         let to_midi = within(&args["to_midi"], "to_midi", 0.0, 127.0)?;
+        let to_plays = within(&args["to_plays_midi"], "to_plays_midi", 0.0, 127.0)?;
+        if to_midi.is_some() && to_plays.is_some() {
+            return Err("Give to_midi or to_plays_midi, not both.".into());
+        }
         let shift = within(&args["shift_semitones"], "shift_semitones", -12.0, 12.0)?;
         let by = within(&args["by_semitones"], "by_semitones", -24.0, 24.0)?;
         let moved = within(&args["move_seconds"], "move_seconds", -60.0, 60.0)?;
@@ -226,6 +252,7 @@ impl App {
         let rate = self.tracks[l].clips[k].source.rate as f64;
         let frames = |s: f64| (s * rate).round() as i64;
         let c = &mut self.tracks[l].clips[k];
+        let clip_cents = c.cents as i64;
         let range = (c.offset as i64, (c.offset + c.len) as i64);
         let min_len = frames(MIN_SECONDS);
         for &i in &targets {
@@ -236,6 +263,9 @@ impl App {
             if let Some(m) = to_midi {
                 n.shift = clamp_cents((m * 100.0).round() as i64 - n.cents);
             }
+            if let Some(m) = to_plays {
+                n.shift = clamp_cents((m * 100.0).round() as i64 - clip_cents - n.cents);
+            }
             if let Some(s) = shift {
                 n.shift = clamp_cents((s * 100.0).round() as i64);
             }
@@ -243,7 +273,7 @@ impl App {
                 n.shift = clamp_cents(n.shift + (b * 100.0).round() as i64);
             }
             if snap {
-                n.shift = snapped(n.cents, n.shift);
+                n.shift = snapped(n.cents + clip_cents, n.shift);
             }
             if let Some(d) = drift {
                 n.drift = d.round() as i64;
@@ -272,7 +302,7 @@ impl App {
         if changed {
             self.rebuild();
         }
-        let v = notes_value(&self.tracks[l].clips[k], false);
+        let v = notes_value(&self.tracks[l].clips[k], &self.tempo_map(), false);
         Ok((v, changed.then(|| "Edit pitch notes".to_string())))
     }
 }

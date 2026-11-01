@@ -359,7 +359,8 @@ pub(crate) fn clamp_cents(c: i64) -> i64 {
 }
 
 /// The shift that puts a note found at `cents`, moved by `shift`, on
-/// the nearest whole note.
+/// the nearest whole note. For a transposed clip, `cents` holds the
+/// clip's transpose too, so the note is snapped as it is heard.
 pub(crate) fn snapped(cents: i64, shift: i64) -> i64 {
     let to = ((cents + shift) as f64 / 100.0).round() as i64 * 100;
     clamp_cents(to - cents)
@@ -581,10 +582,16 @@ impl App {
                 let s = clamp_cents(n.shift - 100);
                 std::mem::replace(&mut n.shift, s) != s
             }),
-            Cmd::SnapPitchNotes => self.each_pitch_note(|n| {
-                let s = snapped(n.cents, n.shift);
-                std::mem::replace(&mut n.shift, s) != s
-            }),
+            Cmd::SnapPitchNotes => {
+                // Snapped as heard: with the clip's own transpose, which
+                // may hold cents.
+                let clip =
+                    (self.pitch_clip()).map_or(0, |(l, k)| self.tracks[l].clips[k].cents as i64);
+                self.each_pitch_note(|n| {
+                    let s = snapped(n.cents + clip, n.shift);
+                    std::mem::replace(&mut n.shift, s) != s
+                })
+            }
             Cmd::FlattenPitchDrift => self.each_pitch_note(|n| {
                 let was = n.drift;
                 n.drift = 0;
@@ -1244,6 +1251,101 @@ pub(crate) mod tests {
             );
             d.command("undo");
             assert_eq!(d.app().tracks[0].clips[0].pitch_notes[1].shift, 0);
+        }
+
+        #[test]
+        fn a_transposed_clip_that_follows_tempo_reads_as_heard_and_on_the_timeline() {
+            let mut d = Driver::new();
+            let notes = [(60.0, 0.4), (62.0, 0.4), (64.0, 0.4), (65.0, 0.4)];
+            let key = with_clip(&mut d, sung(&notes, 0.0));
+            // Two semitones down; played at 60 bpm and heard at the song's
+            // 120, so twice as fast; placed at 2 s.
+            d.call("edit_clip", json!({"clip": key, "transpose_semitones": -2}))
+                .unwrap();
+            d.call(
+                "stretch_clips",
+                json!({"clips": [key], "follow_tempo": true, "tempo": 60}),
+            )
+            .unwrap();
+            d.call("edit_clip", json!({"clip": key, "seconds": 2.0}))
+                .unwrap();
+            let v = d
+                .call("edit_pitch_notes", json!({"clip": key, "find": true}))
+                .unwrap();
+            assert_eq!(v["transpose_semitones"], -2.0, "{v}");
+            let n = &v["notes"][1];
+            assert!(n["pitch"].as_str().unwrap().starts_with("D4"), "{v}");
+            assert!(n["now"].as_str().unwrap().starts_with("D4"), "{v}");
+            assert!(n["plays"].as_str().unwrap().starts_with("C4"), "heard: {v}");
+            assert!(
+                (n["plays_midi"].as_f64().unwrap() - 60.0).abs() < 0.1,
+                "{v}"
+            );
+            // 0.6 s into the file, heard 0.3 s after the clip's start.
+            let s = n["start_seconds"].as_f64().unwrap();
+            assert!((s - 0.6).abs() < 0.03, "file seconds: {v}");
+            let t = n["timeline_seconds"].as_f64().unwrap();
+            assert!((t - 2.3).abs() < 0.02, "timeline seconds: {v}");
+            let e = n["timeline_end_seconds"].as_f64().unwrap();
+            let len = n["seconds"].as_f64().unwrap();
+            assert!((e - t - len / 2.0).abs() < 0.01, "heard twice as fast: {v}");
+            // Put on a heard D: two up in the file, so it plays at D.
+            let v = d
+                .call(
+                    "edit_pitch_notes",
+                    json!({"clip": key, "notes": [1], "to_plays_midi": 62}),
+                )
+                .unwrap();
+            let n = &v["notes"][1];
+            assert!(n["now"].as_str().unwrap().starts_with("E4"), "{v}");
+            assert!(n["plays"].as_str().unwrap().starts_with("D4"), "{v}");
+            assert!(
+                d.call(
+                    "edit_pitch_notes",
+                    json!({"clip": key, "to_midi": 60, "to_plays_midi": 60})
+                )
+                .is_err(),
+                "one or the other"
+            );
+            // A transpose with cents: snapping lands the heard pitch on a
+            // whole note, not the file's.
+            d.call(
+                "edit_clip",
+                json!({"clip": key, "transpose_semitones": -1.5}),
+            )
+            .unwrap();
+            let v = d
+                .call(
+                    "edit_pitch_notes",
+                    json!({"clip": key, "notes": [2], "snap": true}),
+                )
+                .unwrap();
+            let heard = v["notes"][2]["plays_midi"].as_f64().unwrap();
+            assert!(
+                (heard - heard.round()).abs() < 0.005,
+                "on a whole note: {v}"
+            );
+            // The clip's offset and length are in the file's own seconds; it
+            // ends on the timeline after half of that.
+            let v = d
+                .call(
+                    "edit_clip",
+                    json!({"clip": key, "offset_seconds": 0.5, "len_seconds": 1.0}),
+                )
+                .unwrap();
+            assert_eq!(v["offset_seconds"], 0.5, "{v}");
+            assert_eq!(v["len_seconds"], 1.0, "{v}");
+            assert!(
+                (v["end_seconds"].as_f64().unwrap() - 2.5).abs() < 0.001,
+                "{v}"
+            );
+            let p = d.project();
+            let c = &p["tracks"][0]["clips"][0];
+            assert_eq!(c["offset_seconds"], 0.5, "{c}");
+            assert!(
+                (c["end_seconds"].as_f64().unwrap() - 2.5).abs() < 0.001,
+                "{c}"
+            );
         }
 
         #[test]

@@ -2517,7 +2517,7 @@ impl eframe::App for App {
                         Cmd::QuantiseAudio,
                         Cmd::TempoFromClip,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
                 self.top_menu(ui, "Notes", |app, ui| {

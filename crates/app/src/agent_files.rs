@@ -370,6 +370,8 @@ mod tests {
                 .is_err()
         );
         assert!(d.call("export_mix", json!({"format": "aiff"})).is_err());
+        // Waiting for a change hears the export finish.
+        let rev = d.call("wait_for_change", json!({})).unwrap()["revision"].clone();
         let r = d
             .call(
                 "export_mix",
@@ -377,6 +379,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r["started"], true);
+        let woke = d
+            .call(
+                "wait_for_change",
+                json!({"revision": rev, "timeout_seconds": 30}),
+            )
+            .unwrap();
+        assert_eq!(woke["changed"], true, "{woke}");
         let mut done = serde_json::Value::Null;
         for _ in 0..500 {
             done = d.call("get_exports", json!({})).unwrap();

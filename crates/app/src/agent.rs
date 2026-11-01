@@ -117,12 +117,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Every setting of a track that can be set by value (volume, pan, \
                       mute, solo, sends, each effect's settings, and its built-in \
                       instrument's, named instrument.<key>), with its value, range and \
-                      how it reads. Without a track, every track's; a drum machine has \
-                      hundreds, so ask for one track.",
+                      how it reads. Without a track, every track's. A drum machine has \
+                      hundreds: give a prefix such as \"instrument.pad0.\".",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
-                "track": {"type": "string", "description": "A track's id."}
+                "track": {"type": "string", "description": "A track's id."},
+                "prefix": {"type": "string", "description": "Only the settings whose param \
+                           starts so, such as \"instrument.pad0.\" or \"fx:\"."}
             }})
         },
     },
@@ -154,8 +156,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                       RMS, integrated and short-term loudness, loudness range, stereo \
                       correlation, the level in each third-octave band from 20 Hz to \
                       20 kHz, and the key and tempo it sounds in, when it can tell. Of one track or bus on its own (after its fader), or of the \
-                      mix, maybe without one track. Without times: the loop if it is on, \
-                      else the whole song (at most 10 minutes).",
+                      mix, maybe without one track. Over a section, bars or seconds; \
+                      without any: the loop if it is on, else the whole song (at most 10 \
+                      minutes). get_meters gives each track's level as it plays.",
         access: Access::Read,
         schema: region_args,
     },
@@ -194,7 +197,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "wait_for_change",
         description: "Waits until the project changes (by the person, another member, or an \
-                      assistant), then answers with its new revision; or answers at once \
+                      assistant) or an export finishes, then answers with its new \
+                      revision; or answers at once \
                       with the revision now if none is given. Give the revision last seen \
                       to hear of the next change, and get_history or get_project for what \
                       it was. Waits up to timeout_seconds (30 if left out, at most 60).",
@@ -432,7 +436,11 @@ fn region_args() -> Value {
         "track": {"type": "string", "description": "A track or bus id: it alone. Left out: the mix."},
         "without": {"type": "string", "description": "A track id to leave out of the mix."},
         "from_seconds": {"type": "number"},
-        "to_seconds": {"type": "number"}
+        "to_seconds": {"type": "number"},
+        "from_bar": {"type": "integer", "description": "From the start of this bar (from 1)."},
+        "to_bar": {"type": "integer", "description": "To the start of this bar."},
+        "section": {"type": "string", "description": "A section by its marker's name or id: \
+                    from its marker to the next."}
     }})
 }
 
@@ -532,6 +540,8 @@ pub(crate) struct Agent {
     pub(crate) revision: u64,
     /// `wait_for_change` calls waiting.
     waiting: Vec<Waiting>,
+    /// How many exports had finished when last looked.
+    exported: usize,
 }
 
 /// A `wait_for_change` call: the revision seen, until when, and where
@@ -547,6 +557,7 @@ impl Default for Agent {
             running: Vec::new(),
             revision: 0,
             waiting: Vec::new(),
+            exported: 0,
         }
     }
 }
@@ -583,6 +594,13 @@ impl App {
                 self.proj.label = None;
             }
             let _ = r.reply.send(r.result);
+        }
+        // An export finishing counts as a change, so an assistant can
+        // wait for one.
+        let exported = self.export.results().len();
+        if exported != self.agent.exported {
+            self.agent.exported = exported;
+            self.agent.revision += 1;
         }
         let now = std::time::Instant::now();
         let rev = self.agent.revision;
@@ -672,7 +690,19 @@ impl App {
             "get_transport" => Ok(self.transport_value()),
             "get_selection" => Ok(self.selection_value()),
             "get_fretboard" => Ok(self.fretboard_value()),
-            "list_parameters" => self.parameters_value(args["track"].as_str()),
+            "list_parameters" => {
+                let mut v = self.parameters_value(args["track"].as_str())?;
+                if let Some(pre) = args["prefix"].as_str()
+                    && let Some(tracks) = v.as_array_mut()
+                {
+                    for t in tracks {
+                        if let Some(ps) = t["params"].as_array_mut() {
+                            ps.retain(|p| p["param"].as_str().is_some_and(|x| x.starts_with(pre)));
+                        }
+                    }
+                }
+                Ok(v)
+            }
             "list_presets" => {
                 let (list, _) = crate::presets::all_presets(self.preset_ui.dir.as_deref());
                 Ok(Value::Array(

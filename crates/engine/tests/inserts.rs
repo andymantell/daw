@@ -277,3 +277,89 @@ fn latency_longer_than_the_loop_still_plays_in_time() {
         assert_eq!(got[i], want[i], "output frame {i}");
     }
 }
+
+#[test]
+fn the_master_chain_runs_on_the_mix_before_the_fader() {
+    let mut s = session();
+    s.tracks
+        .push(hard_left(vec![ClipSpec::new(Ticks(0), counting(1000))]));
+    s.master_db = -6.0;
+    s.master_inserts = vec![InsertSpec {
+        id: 21,
+        ..Default::default()
+    }];
+    let mut fx = vec![(21, DelayGain::make(0, 0.5).0)];
+    let g = s.compile_with(64, &mut fx).unwrap();
+    assert!(fx.is_empty(), "the graph took the master's effect");
+    let [l, _] = engine::render_offline(g, Frames(0), 1000, 64);
+    let fader = daw_engine::graph::db_to_gain(-6.0);
+    for (i, x) in l.iter().enumerate() {
+        let want = (i + 1) as f32 / 1e6 * 0.5 * fader;
+        assert!((x - want).abs() < 1e-9, "frame {i}: {x} vs {want}");
+    }
+}
+
+#[test]
+fn the_master_chains_latency_is_read_ahead_so_the_mix_stays_in_time() {
+    let mut s = session();
+    s.tracks
+        .push(hard_left(vec![ClipSpec::new(Ticks(0), counting(2000))]));
+    let plain = engine::render_offline(s.compile(256).unwrap(), Frames(0), 1500, 256);
+    s.master_inserts = vec![InsertSpec {
+        id: 22,
+        latency: 100,
+        ..Default::default()
+    }];
+    let mut fx = vec![(22, DelayGain::make(100, 1.0).0)];
+    let g = s.compile_with(256, &mut fx).unwrap();
+    let [l, _] = engine::render_offline(g, Frames(0), 1500, 256);
+    // The effect's first 100 frames are its empty delay line; after
+    // that the mix is where it would be without it.
+    assert!(l[..100].iter().all(|&x| x == 0.0));
+    for i in 100..1500 {
+        assert!(
+            (l[i] - plain[0][i]).abs() < 1e-9,
+            "frame {i}: {} vs {}",
+            l[i],
+            plain[0][i]
+        );
+    }
+    // A bypassed master effect is no delay at all.
+    s.master_inserts[0].bypass = true;
+    let [l, _] = engine::render_offline(s.compile(256).unwrap(), Frames(0), 1500, 256);
+    assert_eq!(l, plain[0]);
+}
+
+#[test]
+fn master_effects_carry_over_when_the_graph_changes() {
+    let mut s = session();
+    s.tracks
+        .push(hard_left(vec![ClipSpec::new(Ticks(0), counting(10_000))]));
+    s.master_inserts = vec![InsertSpec {
+        id: 23,
+        ..Default::default()
+    }];
+    let (fx, processed) = DelayGain::make(0, 1.0);
+    let (mut ctl, mut eng) = engine::new(128);
+    ctl.set_graph(s.compile_with(128, &mut vec![(23, fx)]).unwrap())
+        .ok()
+        .unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let mut buf = [vec![0.0; 128], vec![0.0; 128]];
+    let [l, r] = &mut buf;
+    eng.process(l, r);
+    assert_eq!(processed.load(Ordering::Relaxed), 128);
+    s.master_db = -3.0;
+    ctl.set_graph(s.compile(128).unwrap()).ok().unwrap();
+    let before = rt_check::violations();
+    {
+        let _rt = rt_check::RtGuard::enter();
+        eng.process(l, r);
+    }
+    assert_eq!(rt_check::violations(), before);
+    assert_eq!(processed.load(Ordering::Relaxed), 256);
+    s.master_inserts.clear();
+    ctl.set_graph(s.compile(128).unwrap()).ok().unwrap();
+    eng.process(l, r);
+    assert_eq!(processed.load(Ordering::Relaxed), 256);
+}

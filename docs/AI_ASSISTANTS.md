@@ -106,6 +106,10 @@ assistant finds them for itself. In outline:
   the `file` a convolution reverb, speaker cabinet or amp capture
   player uses. `plugin_preset` loads, saves or deletes a plugin's
   presets and picks its programs.
+  The master channel (the whole mix's effects and fader, after every
+  track and bus) is the track `master` to `add_effect`, `edit_effect`,
+  `remove_effect`, `list_parameters`, `set_parameter` and `analyse`, and
+  `get_project` shows it as `master`.
 - **Instruments and layers:** `set_instrument` (a built-in or plugin
   instrument, for a track or one layer), `edit_layer` (add, remove,
   reorder, switch on or off, instrument, level, pan, note and velocity

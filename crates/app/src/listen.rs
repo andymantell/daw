@@ -181,7 +181,15 @@ impl App {
                     .ok_or_else(|| format!("There is no track {k}.")),
             }
         };
-        let only = index(args["track"].as_str())?;
+        // The master is the mix: everything, through its effects and
+        // fader.
+        let only = match args["track"].as_str() {
+            Some(k) if k == daw_project::Master::KEY => None,
+            k => index(k)?,
+        };
+        if args["without"].as_str() == Some(daw_project::Master::KEY) {
+            return Err("The mix can't be heard without the master.".into());
+        }
         let without = index(args["without"].as_str())?;
         let mut s = self.session();
         // The mix as it stands: no practice mute, no live input.
@@ -290,6 +298,7 @@ impl App {
                 }
             }
         }
+        self.fresh_master_fx(&mut s, plugins, &mut fx)?;
         s.compile_all(daw_audio_io::MAX_BLOCK, &mut fx, &mut instruments)
             .map_err(|e| e.to_string())
     }
@@ -348,6 +357,7 @@ fn describe(app: &App, args: &Value) -> String {
             .map_or(k.to_string(), |i| app.tracks[i].name.clone())
     };
     let mut s = match args["track"].as_str() {
+        Some(k) if k == daw_project::Master::KEY => "The mix".into(),
         Some(k) => name(k),
         None => "The mix".into(),
     };
@@ -568,6 +578,64 @@ mod tests {
         );
         assert_eq!(by_section["seconds"], by_bars["seconds"]);
         assert!(d.call("analyse", json!({"section": "Chorus"})).is_err());
+    }
+
+    #[test]
+    fn analysis_of_the_master_goes_through_its_fader_and_effects() {
+        let mut d = Driver::new();
+        synth(&mut d);
+        let range = |t: Option<&str>| {
+            let mut a = json!({"from_seconds": 0.0, "to_seconds": 1.0});
+            if let Some(t) = t {
+                a["track"] = json!(t);
+            }
+            a
+        };
+        let mix = d.call("analyse", range(None)).unwrap();
+        let master = d.call("analyse", range(Some("master"))).unwrap();
+        assert_eq!(mix["rms_dbfs"], master["rms_dbfs"], "the master is the mix");
+        d.call(
+            "set_parameter",
+            json!({"track": "master", "param": "gain", "value": -20.0}),
+        )
+        .unwrap();
+        let quieter = d.call("analyse", range(Some("master"))).unwrap();
+        let drop = mix["rms_dbfs"].as_f64().unwrap() - quieter["rms_dbfs"].as_f64().unwrap();
+        assert!((drop - 20.0).abs() < 0.5, "{mix} {quieter}");
+        // A limiter on the master with its ceiling down holds the peak.
+        let lim = d
+            .call(
+                "add_effect",
+                json!({"track": "master", "effect": "limiter"}),
+            )
+            .unwrap();
+        let lim = lim["effect"].as_str().unwrap().to_string();
+        let params = d
+            .call("list_parameters", json!({"track": "master"}))
+            .unwrap();
+        let ceiling = (params[0]["params"].as_array().unwrap().iter())
+            .map(|p| p["param"].as_str().unwrap().to_string())
+            .find(|p| p.contains(&lim) && p.ends_with("ceiling"))
+            .expect("the limiter's ceiling");
+        d.call(
+            "set_parameter",
+            json!({"track": "master", "param": "gain", "value": 12.0}),
+        )
+        .unwrap();
+        d.call(
+            "set_parameter",
+            json!({"track": "master", "param": ceiling, "value": -12.0}),
+        )
+        .unwrap();
+        let limited = d.call("analyse", range(Some("master"))).unwrap();
+        let peak = |v: &Value| v["sample_peak_dbfs"].as_f64().unwrap();
+        assert!(peak(&limited) < -11.0, "{limited}");
+        assert!(peak(&mix) + 12.0 > -11.0, "{mix}");
+        // A track on its own is heard before the master.
+        let key = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        let one = d.call("analyse", range(Some(&key))).unwrap();
+        assert!((peak(&one) - peak(&mix)).abs() < 0.5, "{one} {mix}");
+        assert!(d.call("analyse", json!({"without": "master"})).is_err());
     }
 
     #[test]

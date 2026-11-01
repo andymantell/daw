@@ -193,6 +193,20 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
             }
         }
     }
+    // The master channel.
+    if before.master.gain_db != after.master.gain_db {
+        say(
+            "Master",
+            format!(
+                "Volume {} → {}",
+                db(before.master.gain_db),
+                db(after.master.gain_db)
+            ),
+        );
+    }
+    for text in effect_changes(&before.master.effects, &after.master.effects) {
+        say("Master", text);
+    }
     for t in before
         .tracks
         .iter()
@@ -713,10 +727,16 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
         out.push(format!("Removed layer “{}”", l.instrument.name));
     }
 
-    // Effects.
-    let was: HashMap<&str, &Effect> = before.effects.iter().map(|e| (e.id.as_str(), e)).collect();
-    let now: HashSet<&str> = after.effects.iter().map(|e| e.id.as_str()).collect();
-    for e in &after.effects {
+    out.extend(effect_changes(&before.effects, &after.effects));
+    out
+}
+
+/// What changed in an effect chain.
+fn effect_changes(before: &[Effect], after: &[Effect]) -> Vec<String> {
+    let mut out = Vec::new();
+    let was: HashMap<&str, &Effect> = before.iter().map(|e| (e.id.as_str(), e)).collect();
+    let now: HashSet<&str> = after.iter().map(|e| e.id.as_str()).collect();
+    for e in after {
         match was.get(e.id.as_str()) {
             None => out.push(format!("Added effect “{}”", e.name)),
             Some(b) => {
@@ -740,15 +760,11 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             }
         }
     }
-    for e in before
-        .effects
-        .iter()
-        .filter(|e| !now.contains(e.id.as_str()))
-    {
+    for e in before.iter().filter(|e| !now.contains(e.id.as_str())) {
         out.push(format!("Removed effect “{}”", e.name));
     }
-    let order = |t: &Track| -> Vec<String> {
-        (t.effects.iter())
+    let order = |fx: &[Effect]| -> Vec<String> {
+        (fx.iter())
             .map(|e| e.id.clone())
             .filter(|id| was.contains_key(id.as_str()) && now.contains(id.as_str()))
             .collect()

@@ -182,7 +182,41 @@ struct Track {
     version: Option<String>,
 }
 
+/// Fresh copies of the master's effects in `master_fx` for the inserts
+/// `s` keeps, with the latency each reports (see
+/// [`App::fresh_master_fx`]).
+fn fresh_master_fx(
+    effects: &mut fx::Effects,
+    master_fx: &[FxSlot],
+    rate: u32,
+    s: &mut Session,
+    plugins: &mut Vec<daw_plugins::Plugin>,
+    fx: &mut Vec<(u64, Box<dyn daw_engine::graph::Insert>)>,
+) -> Result<(), String> {
+    for i in &mut s.master_inserts {
+        let Some(slot) = master_fx.iter().find(|f| f.id == i.id) else {
+            continue;
+        };
+        let (p, proc) = effects.fresh(slot, rate)?;
+        if let Some(p) = &p {
+            i.latency = p.latency();
+        }
+        plugins.extend(p);
+        fx.push((slot.id, proc));
+    }
+    Ok(())
+}
+
 impl Track {
+    /// The master channel as the app keeps it: a track by the id
+    /// assistants use, of which only the effects and fader count.
+    fn master() -> Track {
+        let mut t = Track::new("Master".into());
+        t.key = daw_project::Master::KEY.to_string();
+        t.kind = TrackKind::Bus;
+        t
+    }
+
     /// The mix the engine plays: the track's own, with practice mute.
     fn heard(&self) -> Mix {
         Mix {
@@ -339,6 +373,10 @@ enum Audio {
 
 struct App {
     tracks: Vec<Track>,
+    /// The master channel: the whole mix's effects and fader, kept as a
+    /// track so the effects window and settings work on it alike. Only
+    /// its `fx` and `mix.gain_db` count.
+    master: Track,
     /// Control groups: one fader and mute over several tracks.
     groups: Vec<daw_project::ControlGroup>,
     /// Headphone mixes and the speakers' controls.
@@ -529,6 +567,7 @@ impl App {
         let (ctl, eng, disk, recorder) = new_engine();
         let mut app = App {
             tracks: Vec::new(),
+            master: Track::master(),
             groups: Vec::new(),
             cues: monitor::Cues::default(),
             imports: Vec::new(),
@@ -1053,7 +1092,28 @@ impl App {
             spec.automation = self.lane_specs(t);
             s.tracks.push(spec);
         }
+        s.master_db = self.master.mix.gain_db;
+        s.master_inserts = fx::specs(&self.master.fx);
         s
+    }
+
+    /// Makes fresh copies of the master's effects for an offline render
+    /// of `s`, as `fresh` does for a track's, where `s` keeps them. The
+    /// copies add no helper process's block of delay.
+    fn fresh_master_fx(
+        &mut self,
+        s: &mut Session,
+        plugins: &mut Vec<daw_plugins::Plugin>,
+        fx: &mut Vec<(u64, Box<dyn daw_engine::graph::Insert>)>,
+    ) -> Result<(), String> {
+        fresh_master_fx(
+            &mut self.effects,
+            &self.master.fx,
+            self.rate,
+            s,
+            plugins,
+            fx,
+        )
     }
 
     /// The index of the track with this key.
@@ -1162,6 +1222,14 @@ impl App {
                     }
                 }
             }
+            fresh_master_fx(
+                &mut self.effects,
+                &self.master.fx,
+                rate,
+                &mut s,
+                plugins,
+                &mut fx,
+            )?;
             s.compile_all(audio::MAX_BLOCK, &mut fx, &mut instruments)
                 .map_err(|e| e.to_string())
         };
@@ -3101,6 +3169,25 @@ impl eframe::App for App {
         self.meters.update(&mut self.ctl, self.rate, playing);
         if self.meters.open {
             ctx.request_repaint_after(Duration::from_millis(30));
+        }
+        if self.effects.open_master {
+            let (_, missing) = self.frozen_note(&self.master);
+            let mut fx = std::mem::take(&mut self.master.fx);
+            let changed = self.effects.track_window(
+                &ctx,
+                "Master",
+                &mut fx,
+                &[],
+                &missing,
+                None,
+                self.rate,
+                &[],
+                &mut self.message,
+            );
+            self.master.fx = fx;
+            if changed {
+                self.rebuild();
+            }
         }
         if let Some(i) = self.effects.open_track {
             let note = self.tracks.get(i).map(|t| self.frozen_note(t));

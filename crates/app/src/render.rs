@@ -183,6 +183,9 @@ impl App {
     /// of tracks only there for their sends or sidechains.
     fn render_session(&self, targets: &[Target]) -> (Session, Involved) {
         let mut s = self.session();
+        // Before the master: what is rendered goes back into the mix.
+        s.master_inserts.clear();
+        s.master_db = 0.0;
         let who = Involved::new(self, &s, targets);
         let sink = s.tracks.len();
         for (i, spec) in s.tracks.iter_mut().enumerate() {

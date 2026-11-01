@@ -107,12 +107,13 @@ impl App {
         })
     }
 
-    /// Where `args` places an effect on track `ti`: `None` if they don't
-    /// say, else the container and chain (`None` for the track's own).
-    /// `moving` is the effect being moved, which can't go inside itself.
+    /// Where `args` places an effect on track `ti` (`None` for the master
+    /// channel): `None` if they don't say, else the container and chain
+    /// (`None` for the track's own). `moving` is the effect being moved,
+    /// which can't go inside itself.
     pub(crate) fn place_arg(
         &self,
-        ti: usize,
+        ti: Option<usize>,
         args: &Value,
         moving: Option<&str>,
     ) -> Result<Option<Option<(String, u32)>>, String> {
@@ -125,7 +126,7 @@ impl App {
         if c == "none" {
             return Ok(Some(None));
         }
-        let t = &self.tracks[ti];
+        let t = ti.map_or(&self.master, |ti| &self.tracks[ti]);
         let branch = args["branch"].as_u64().unwrap_or(0) as u32;
         if t.layers.iter().any(|l| l.key == c) {
             if branch != 0 {
@@ -145,7 +146,8 @@ impl App {
         }
         if let Some(m) = moving {
             let p = self.project();
-            let under = inside(&p.tracks[ti].effects, m);
+            let effects = ti.map_or(&p.master.effects, |ti| &p.tracks[ti].effects);
+            let under = inside(effects, m);
             if c == m || under.iter().any(|x| x == c) {
                 return Err("An effect can't go inside itself.".into());
             }
@@ -153,10 +155,11 @@ impl App {
         Ok(Some(Some((c.into(), branch))))
     }
 
-    /// Checks `edit_effect`'s wiring for effect `slot` on track `ti`.
+    /// Checks `edit_effect`'s wiring for effect `slot` on track `ti`
+    /// (`None` for the master channel).
     pub(crate) fn check_wiring(
         &self,
-        ti: usize,
+        ti: Option<usize>,
         slot: &FxSlot,
         args: &Value,
     ) -> Result<(), String> {
@@ -164,11 +167,14 @@ impl App {
             if !slot.takes_key() {
                 return Err(format!("{} doesn't listen to another track.", slot.name));
             }
+            if ti.is_none() && sc != "none" {
+                return Err("An effect on the master can't listen to a track.".into());
+            }
             if sc != "none" {
                 let j = self
                     .track_index(sc)
                     .ok_or_else(|| format!("There is no track {sc}."))?;
-                if j == ti {
+                if Some(j) == ti {
                     return Err("An effect listens to its own track's audio already.".into());
                 }
             }

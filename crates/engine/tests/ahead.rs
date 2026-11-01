@@ -592,3 +592,58 @@ fn recording_at_a_practice_speed_works_split() {
     assert_eq!(frames, (played.len() / CH) / 2);
     assert_eq!(f2, (p2.len() / CH) / 2);
 }
+
+/// [`mix`] with effects on the master: smoothing (it remembers, so
+/// running it on both sides, or losing it, shows) with latency.
+fn mastered() -> (Session, Effects) {
+    let (mut s, mut fx) = mix();
+    s.master_inserts = vec![insert(30, 0), insert(31, 21)];
+    fx.push((30, Box::new(Smooth([0.0; 2]))));
+    fx.push((31, delay(21)));
+    (s, fx)
+}
+
+#[test]
+fn the_master_chain_runs_once_on_the_whole_split_mix() {
+    let (a, b, _) = both(mastered, looping_with_clicks, 20_000);
+    assert_same(&a, &b, "mastered");
+}
+
+#[test]
+fn the_masters_effects_stay_as_graphs_come_and_go_split() {
+    // The master's effect adds a level; it is made once, so losing it on
+    // the way across would lose the level.
+    let mut sp = split();
+    let mut out = Vec::new();
+    for (k, &live) in [false, true, false, true].iter().enumerate() {
+        let mut s = session();
+        let mut t = TrackSpec::new(vec![]);
+        t.monitor = live;
+        t.input = Some(Input::stereo(4));
+        s.tracks = vec![t, TrackSpec::new(vec![])];
+        s.master_inserts = vec![insert(40, 0)];
+        let mut fx: Vec<(u64, Box<dyn Insert>)> = if k == 0 {
+            vec![(40, Box::new(Offset(0.25)))]
+        } else {
+            Vec::new()
+        };
+        let g = graph_for(&sp.ctl, &s, &mut fx);
+        sp.ctl.set_graph(g).ok().unwrap();
+        let [l, _] = run_split(&mut sp, 0, 4 * BIG, true);
+        out.extend(l);
+        sp.ctl.collect_garbage();
+    }
+    let n = 4 * BIG;
+    for (k, part) in out.chunks(n).enumerate() {
+        let tail = &part[n - BIG..];
+        assert!(
+            tail.iter().all(|x| (x - 0.25).abs() < 1e-6),
+            "stretch {k}: {:?}",
+            &tail[..4]
+        );
+        assert!(
+            part.iter()
+                .all(|x| (x - 0.25).abs() < 1e-6 || x.abs() < 1e-9)
+        );
+    }
+}

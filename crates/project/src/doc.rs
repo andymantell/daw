@@ -47,10 +47,10 @@ use crate::identity::Me;
 use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
-    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Notation,
-    NotationView, Note, NoteClip, NoteFx, Practice, Project, Scale, Send, StretchMarker, TabBlock,
-    Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion, TrainerSettings,
-    VideoClip, differences, is_asset_name,
+    GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, Master, MeterChange, MidiMap,
+    Notation, NotationView, Note, NoteClip, NoteFx, Practice, Project, Scale, Send, StretchMarker,
+    TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion,
+    TrainerSettings, VideoClip, differences, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -452,6 +452,14 @@ impl ProjectDoc {
             write_cue_mixes(&mut w, &self.doc, &p.cue_mixes);
         }
 
+        // The master channel, likewise only once it is set or has
+        // effects.
+        if p.master != Master::default() || self.doc.get_by_str_path("master").is_some() {
+            let m = self.doc.get_map("master");
+            w.put(&m, "gain_db", p.master.gain_db);
+            write_effects(&mut w, &m, &p.master.effects);
+        }
+
         // Video clips, likewise only once a project has one.
         if !p.videos.is_empty() || self.doc.get_by_str_path("videos").is_some() {
             let videos = self.doc.get_map("videos");
@@ -796,6 +804,14 @@ impl ProjectDoc {
             }
         }
         p.cue_mixes = read_cue_mixes(&root, &p.tracks);
+        if let Some(LoroValue::Map(m)) = root.get("master") {
+            p.master.gain_db = float(m, "gain_db").filter(|v| v.is_finite()).unwrap_or(0.0);
+            p.master.effects = read_effects(m);
+            // A master effect listens to no sidechain.
+            for e in &mut p.master.effects {
+                e.sidechain = None;
+            }
+        }
         if let Some(LoroValue::Map(vs)) = root.get("videos") {
             let mut videos: Vec<(i64, VideoClip)> = Vec::new();
             for (id, v) in vs.iter() {
@@ -1266,17 +1282,7 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
         }
     }
 
-    let fx = w.fixed(m, "fx");
-    let keep: HashSet<&str> = t.effects.iter().map(|e| e.id.as_str()).collect();
-    for id in keys(&fx) {
-        if !keep.contains(id.as_str()) {
-            w.delete(&fx, &id);
-        }
-    }
-    for e in &t.effects {
-        let em = w.child(&fx, &e.id);
-        write_effect(w, &em, e);
-    }
+    write_effects(w, m, &t.effects);
     // The instrument: one map, like an effect's. Tracks that never had
     // one gain no entry.
     match &t.instrument {
@@ -1305,11 +1311,56 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
     if t.freeze || m.get("freeze").is_some() {
         w.put(m, "freeze", t.freeze);
     }
+}
+
+/// Writes an effect chain into `m`: one map per effect under `fx`, in
+/// order in `fx_order`.
+fn write_effects(w: &mut Writer, m: &LoroMap, effects: &[Effect]) {
+    let fx = w.fixed(m, "fx");
+    let keep: HashSet<&str> = effects.iter().map(|e| e.id.as_str()).collect();
+    for id in keys(&fx) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&fx, &id);
+        }
+    }
+    for e in effects {
+        let em = w.child(&fx, &e.id);
+        write_effect(w, &em, e);
+    }
     let Ok(order_list) = m.ensure_mergeable_movable_list("fx_order") else {
         return;
     };
-    let ids: Vec<String> = t.effects.iter().map(|e| e.id.clone()).collect();
+    let ids: Vec<String> = effects.iter().map(|e| e.id.clone()).collect();
     w.order(&order_list, &ids);
+}
+
+/// An effect chain as [`write_effects`] keeps it, in order; effects
+/// missing from the order (added and reordered at once by two people)
+/// go at the end.
+fn read_effects(m: &LoroMapValue) -> Vec<Effect> {
+    let Some(LoroValue::Map(fx)) = m.get("fx") else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(LoroValue::List(order)) = m.get("fx_order") {
+        for v in order.iter() {
+            if let LoroValue::String(s) = v
+                && fx.contains_key(s.as_str())
+                && !ids.iter().any(|i| i == s.as_str())
+            {
+                ids.push(s.to_string());
+            }
+        }
+    }
+    let mut rest: Vec<&String> = fx.keys().filter(|k| !ids.contains(k)).collect();
+    rest.sort();
+    ids.extend(rest.into_iter().cloned());
+    ids.into_iter()
+        .filter_map(|eid| match fx.get(&eid) {
+            Some(LoroValue::Map(e)) => Some(read_effect(eid, e)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Writes an effect's (or instrument's) fields into its map.
@@ -2051,28 +2102,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
     track
         .clips
         .sort_by(|a, b| a.seq.cmp(&b.seq).then(a.id.cmp(&b.id)));
-    if let Some(LoroValue::Map(fx)) = t.get("fx") {
-        let mut ids: Vec<String> = Vec::new();
-        if let Some(LoroValue::List(order)) = t.get("fx_order") {
-            for v in order.iter() {
-                if let LoroValue::String(s) = v
-                    && fx.contains_key(s.as_str())
-                    && !ids.iter().any(|i| i == s.as_str())
-                {
-                    ids.push(s.to_string());
-                }
-            }
-        }
-        let mut rest: Vec<&String> = fx.keys().filter(|k| !ids.contains(k)).collect();
-        rest.sort();
-        ids.extend(rest.into_iter().cloned());
-        for eid in ids {
-            let Some(LoroValue::Map(e)) = fx.get(&eid) else {
-                continue;
-            };
-            track.effects.push(read_effect(eid, e));
-        }
-    }
+    track.effects = read_effects(t);
     if let Some(LoroValue::Map(im)) = t.get("instrument") {
         let id = string(im, "id").unwrap_or_else(|| "instrument".to_string());
         track.instrument = Some(read_effect(id, im));
@@ -2505,6 +2535,53 @@ mod tests {
     use super::*;
     use crate::{Articulation, Note, NoteClip, PPQ, Technique};
     use crate::{ControlGroup, Send, Track, TrackKind};
+
+    #[test]
+    fn the_master_channel_round_trips_and_older_projects_gain_no_entry() {
+        let mut d = ProjectDoc::new(1);
+        d.write(&Project::default());
+        assert!(
+            d.doc.get_by_str_path("master").is_none(),
+            "nothing to keep yet"
+        );
+        let mut p = Project::default();
+        p.master.gain_db = -2.5;
+        p.master.effects = vec![
+            Effect {
+                id: "m2".into(),
+                name: "Limiter".into(),
+                builtin: "limiter".into(),
+                params: vec![("ceiling".into(), -0.3)],
+                ..Effect::default()
+            },
+            Effect {
+                id: "m1".into(),
+                name: "EQ".into(),
+                builtin: "eq".into(),
+                bypass: true,
+                sidechain: Some("gone".into()),
+                ..Effect::default()
+            },
+        ];
+        assert!(d.write(&p));
+        let back = d.get();
+        assert_eq!(back.master.gain_db, -2.5);
+        let ids: Vec<&str> = back.master.effects.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["m2", "m1"], "in the order written");
+        assert!(back.master.effects[1].bypass);
+        assert_eq!(
+            back.master.effects[1].sidechain, None,
+            "no sidechain on the master"
+        );
+        assert_eq!(
+            back.master.effects[0].params,
+            vec![("ceiling".to_string(), -0.3)]
+        );
+        // Taking the effects off and the fader back leaves the entry,
+        // reading as the default.
+        d.write(&Project::default());
+        assert_eq!(d.get().master, Master::default());
+    }
 
     #[test]
     fn routing_is_kept_and_routes_to_missing_tracks_go_to_the_master() {

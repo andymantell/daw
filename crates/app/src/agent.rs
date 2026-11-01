@@ -117,13 +117,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Every setting of a track that can be set by value (volume, pan, \
                       mute, solo, sends, each effect's settings, and its built-in \
                       instrument's, named instrument.<key>), with its value, range and \
-                      how it reads, and whether it is automated. Without a track, every \
-                      track's; a drum machine has hundreds, so ask for one track, or give a \
-                      prefix such as \"instrument.pad0.\". Every parameter of a plugin is \
-                      listed: narrow them with effect, prefix or search, and page through \
-                      them with offset and limit (each track's list says how many it has in \
-                      all). To make a setting change over time as the song plays, use \
-                      edit_automation.",
+                      how it reads, and whether it is automated. The track \"master\" is \
+                      the master channel: its volume and its effects' settings. Without a \
+                      track, every track's and the master's; a drum machine has hundreds, \
+                      so ask for one track, or give a prefix such as \"instrument.pad0.\". \
+                      Every parameter of a plugin is listed: narrow them with effect, \
+                      prefix or search, and page through them with offset and limit (each \
+                      track's list says how many it has in all). To make a setting change \
+                      over time as the song plays, use edit_automation.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -165,7 +166,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                       RMS, integrated and short-term loudness, loudness range, stereo \
                       correlation, the level in each third-octave band from 20 Hz to \
                       20 kHz, and the key and tempo it sounds in, when it can tell. Of one track or bus on its own (after its fader), or of the \
-                      mix, maybe without one track. Over a section, bars or seconds; \
+                      mix (no track, or the track \"master\": through the master's \
+                      effects and fader), maybe without one track. Over a section, bars or seconds; \
                       without any: the loop if it is on, else the whole song (at most 10 \
                       minutes). get_meters gives each track's level as it plays.",
         access: Access::Read,
@@ -240,10 +242,11 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "set_parameter",
-        description: "Sets one track setting to a value, the same all through the song. \
-                      list_parameters gives each setting's param name and range. Mute and \
-                      solo take 0 or 1. For a setting that changes as the song plays (a \
-                      volume ride, fade, filter sweep or pan move), use edit_automation.",
+        description: "Sets one track setting to a value, the same all through the song, \
+                      or the master channel's (track \"master\"). list_parameters gives \
+                      each setting's param name and range. Mute and solo take 0 or 1. For \
+                      a setting that changes as the song plays (a volume ride, fade, filter \
+                      sweep or pan move), use edit_automation.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -1259,6 +1262,11 @@ impl App {
                 "id": m.id, "bar": m.bar, "name": m.name,
             })).collect::<Vec<_>>(),
             "tracks": tracks,
+            "master": {
+                "id": daw_project::Master::KEY,
+                "gain_db": p.master.gain_db,
+                "effects": p.master.effects.iter().map(effect).collect::<Vec<_>>(),
+            },
             "control_groups": p.control_groups.iter().map(|g| json!({
                 "id": g.id, "name": g.name, "gain_db": g.gain_db, "mute": g.mute,
             })).collect::<Vec<_>>(),
@@ -1304,7 +1312,33 @@ impl App {
         })
     }
 
+    /// The master channel's settings for `list_parameters`: its fader
+    /// and its effects'.
+    fn master_parameters(&self) -> Value {
+        let t = &self.master;
+        let params: Vec<Value> = (crate::automation::choices_up_to(t, &[], usize::MAX).iter())
+            .filter(|c| c.param != daw_project::Lane::PAN)
+            .filter_map(|c| {
+                let v = crate::automation::control(t, &c.param)?;
+                let r = crate::automation::range(t, &c.param)?;
+                Some(json!({
+                    "param": c.param,
+                    "name": c.name,
+                    "value": v,
+                    "text": crate::automation::text_of(t, &c.param, v),
+                    "min": r.min,
+                    "max": r.max,
+                    "automated": false,
+                }))
+            })
+            .collect();
+        json!({"track": t.key, "name": t.name, "params": params})
+    }
+
     fn parameters_value(&self, only: Option<&str>) -> Result<Value, String> {
+        if only == Some(daw_project::Master::KEY) {
+            return Ok(Value::Array(vec![self.master_parameters()]));
+        }
         if let Some(k) = only
             && self.track_index(k).is_none()
         {
@@ -1352,7 +1386,33 @@ impl App {
             }
             out.push(json!({"track": t.key, "name": t.name, "params": params}));
         }
+        if only.is_none() {
+            out.push(self.master_parameters());
+        }
         Ok(Value::Array(out))
+    }
+
+    /// Sets the master channel's fader or one of its effects' settings.
+    fn set_master_parameter(&mut self, param: &str, v: f64) -> Result<String, String> {
+        let t = &mut self.master;
+        let r = crate::automation::range(t, param)
+            .filter(|_| param != daw_project::Lane::PAN)
+            .filter(|_| crate::automation::control(t, param).is_some())
+            .ok_or_else(|| format!("The master has no setting {param}."))?;
+        let v = v.clamp(r.min, r.max);
+        crate::automation::set_control(t, param, v);
+        let label = format!(
+            "Set master {} to {}",
+            crate::automation::name_of(t, &[], param),
+            crate::automation::text_of(t, param, v)
+        );
+        if param == daw_project::Lane::GAIN {
+            let db = self.master.mix.gain_db;
+            self.send(Command::SetMasterGain(db));
+        } else {
+            self.rebuild();
+        }
+        Ok(label)
     }
 
     /// Sets one of a track's instrument's settings, through the project
@@ -1381,6 +1441,9 @@ impl App {
     fn set_parameter(&mut self, key: &str, param: &str, v: f64) -> Result<String, String> {
         if !v.is_finite() {
             return Err("The value has to be a number.".into());
+        }
+        if key == daw_project::Master::KEY {
+            return self.set_master_parameter(param, v);
         }
         let i = self
             .track_index(key)

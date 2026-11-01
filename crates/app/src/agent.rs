@@ -85,7 +85,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: || {
             json!({"type": "object", "properties": {
                 "notes": {"type": "boolean",
-                          "description": "Include every note of every note clip."}
+                          "description": "Include every note of every note clip (get_note_clip gives one clip's)."},
+                "track": {"type": "string", "description": "Only this track, by id."}
             }})
         },
     },
@@ -710,7 +711,19 @@ impl App {
     fn read_tool(&mut self, name: &str, args: &Value) -> Result<Value, String> {
         match name {
             "list_commands" => Ok(self.commands_value()),
-            "get_project" => Ok(self.project_value(args["notes"].as_bool().unwrap_or(false))),
+            "get_project" => {
+                let mut v = self.project_value(args["notes"].as_bool().unwrap_or(false));
+                if let Some(only) = args["track"].as_str() {
+                    let tracks = v["tracks"]
+                        .as_array_mut()
+                        .ok_or("The project has no tracks.")?;
+                    tracks.retain(|t| t["id"] == only);
+                    if tracks.is_empty() {
+                        return Err(format!("There is no track {only}."));
+                    }
+                }
+                Ok(v)
+            }
             "get_transport" => Ok(self.transport_value()),
             "get_selection" => Ok(self.selection_value()),
             "get_fretboard" => Ok(self.fretboard_value()),
@@ -1373,7 +1386,7 @@ impl App {
                 ) else {
                     continue;
                 };
-                params.push(json!({
+                let mut p = json!({
                     "param": c.param,
                     "name": c.name,
                     "value": v,
@@ -1381,15 +1394,31 @@ impl App {
                     "min": r.min,
                     "max": r.max,
                     "automated": t.automation.iter().any(|l| l.param == c.param),
-                }));
+                });
+                // A setting that picks one of a few named values (a
+                // waveform, a mode) lists their names, by value.
+                if r.min.fract() == 0.0 && r.max.fract() == 0.0 && r.max - r.min <= 16.0 {
+                    let names: Vec<String> = ((r.min as i64)..=(r.max as i64))
+                        .map(|i| crate::automation::text_of(t, &c.param, i as f64))
+                        .collect();
+                    if names.iter().all(|n| !n.chars().any(|c| c.is_ascii_digit())) {
+                        p["choices"] = json!(names);
+                    }
+                }
+                params.push(p);
             }
             params.extend(crate::notefx::parameters(&t.note_fx));
             if let Some(slot) = &t.instrument {
                 for (k, name, v, min, max, text) in slot.settings() {
-                    params.push(json!({
+                    let mut p = json!({
                         "param": format!("{INSTRUMENT}{k}"), "name": name, "value": v,
                         "text": text, "min": min, "max": max,
-                    }));
+                    });
+                    let names = slot.choices(&k);
+                    if !names.is_empty() {
+                        p["choices"] = json!(names);
+                    }
+                    params.push(p);
                 }
             }
             out.push(json!({"track": t.key, "name": t.name, "params": params}));
@@ -1746,6 +1775,40 @@ mod tests {
             )
             .unwrap_err();
         assert!(e.contains("no setting"), "{e}");
+    }
+
+    #[test]
+    fn the_project_is_read_for_one_track() {
+        let mut d = Driver::new();
+        d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let t = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let key = t["track"].as_str().unwrap();
+        let v = d.call("get_project", json!({"track": key})).unwrap();
+        let tracks = v["tracks"].as_array().unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0]["id"], key);
+        assert!(d.call("get_project", json!({"track": "nope"})).is_err());
+    }
+
+    #[test]
+    fn a_setting_that_picks_from_a_list_names_its_choices() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let key = t["track"].as_str().unwrap().to_string();
+        let list = d.call("list_parameters", json!({"track": key})).unwrap();
+        let params = list[0]["params"].as_array().unwrap();
+        let named: Vec<&Value> = params
+            .iter()
+            .filter(|p| p.get("choices").is_some())
+            .collect();
+        assert!(
+            named
+                .iter()
+                .any(|p| p["choices"].as_array().unwrap().iter().any(|c| c == "Saw")),
+            "an oscillator names its waves: {named:?}"
+        );
+        let gain = params.iter().find(|p| p["param"] == "gain").unwrap();
+        assert!(gain.get("choices").is_none(), "a level is a number");
     }
 
     #[test]

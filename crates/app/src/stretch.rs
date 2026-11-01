@@ -367,7 +367,13 @@ impl App {
                         continue;
                     }
                     let frame = c.frame_of_out(&map, from).round() as i64;
-                    let Some(i) = c.add_marker(frame) else {
+                    // An attack that already has a marker moves it: the
+                    // way back from the timeline can land a frame or two
+                    // off, and a second marker beside it would pin the
+                    // audio where it was.
+                    let near = (c.source.rate as i64 / 500).max(1);
+                    let found = (c.markers.iter()).position(|m| (m.frame - frame).abs() <= near);
+                    let Some(i) = found.or_else(|| c.add_marker(frame)) else {
                         continue;
                     };
                     let at = c.at_of_out(&map, to).round() as i64;

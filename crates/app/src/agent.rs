@@ -1426,7 +1426,7 @@ impl App {
             .filter_map(|c| {
                 let v = crate::automation::control(t, &c.param)?;
                 let r = crate::automation::range(t, &c.param)?;
-                Some(json!({
+                let mut p = json!({
                     "param": c.param,
                     "name": c.name,
                     "value": v,
@@ -1434,7 +1434,12 @@ impl App {
                     "min": r.min,
                     "max": r.max,
                     "automated": false,
-                }))
+                });
+                let named = crate::automation::choice_names(t, &c.param);
+                if !named.is_empty() {
+                    p["choices"] = json!(named);
+                }
+                Some(p)
             })
             .collect();
         json!({"track": t.key, "name": t.name, "params": params})
@@ -1480,8 +1485,12 @@ impl App {
                     "automated": t.automation.iter().any(|l| l.param == c.param),
                 });
                 // A setting that picks one of a few named values (a
-                // waveform, a mode) lists their names, by value.
-                if r.min.fract() == 0.0 && r.max.fract() == 0.0 && r.max - r.min <= 16.0 {
+                // waveform, a mode, a number of stages) lists their
+                // names, by value.
+                let named = crate::automation::choice_names(t, &c.param);
+                if !named.is_empty() {
+                    p["choices"] = json!(named);
+                } else if r.min.fract() == 0.0 && r.max.fract() == 0.0 && r.max - r.min <= 16.0 {
                     let names: Vec<String> = ((r.min as i64)..=(r.max as i64))
                         .map(|i| crate::automation::text_of(t, &c.param, i as f64))
                         .collect();
@@ -1893,6 +1902,35 @@ mod tests {
         );
         let gain = params.iter().find(|p| p["param"] == "gain").unwrap();
         assert!(gain.get("choices").is_none(), "a level is a number");
+    }
+
+    #[test]
+    fn effect_settings_read_back_without_rounding_and_name_their_choices() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "audio"})).unwrap();
+        let key = t["track"].as_str().unwrap().to_string();
+        let fx = d
+            .call("add_effect", json!({"track": key, "effect": "phaser"}))
+            .unwrap();
+        let fx = fx["effect"].as_str().unwrap().to_string();
+        let list = d.call("list_parameters", json!({"track": key})).unwrap();
+        let params = list[0]["params"].as_array().unwrap();
+        let get = |k: &str| {
+            let param = format!("fx:{fx}:{k}");
+            params
+                .iter()
+                .find(|p| p["param"] == param.as_str())
+                .cloned()
+                .unwrap()
+        };
+        // A slow speed reads as itself, not rounded to 0 Hz.
+        assert_eq!(get("rate")["text"], "0.40 Hz");
+        // Stages are a choice by index: the list says what each means.
+        let stages = get("stages");
+        assert_eq!(stages["value"], 1.0);
+        let choices = stages["choices"].as_array().unwrap();
+        assert_eq!(choices[1], stages["text"], "{stages}");
+        assert!(get("rate").get("choices").is_none());
     }
 
     #[test]

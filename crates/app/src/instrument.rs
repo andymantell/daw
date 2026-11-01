@@ -138,14 +138,8 @@ impl Slot {
             Inner::Simple(p) => (PARAMS.iter())
                 .map(|&(k, lo, hi, _)| {
                     let v = p.get(k);
-                    (
-                        k.to_string(),
-                        k.replace('_', " "),
-                        v,
-                        lo,
-                        hi,
-                        format!("{v:.3}"),
-                    )
+                    let (name, text) = simple_setting(k, v);
+                    (k.to_string(), name.to_string(), v, lo, hi, text)
                 })
                 .collect(),
             Inner::Builtin(b) => {
@@ -164,6 +158,9 @@ impl Slot {
     /// The names of a setting's values, by value from its lowest, when
     /// it picks one of a list (a waveform, a mode); empty otherwise.
     pub fn choices(&self, key: &str) -> Vec<String> {
+        if matches!(self.inner, Inner::Simple(_)) && key == "wave" {
+            return Wave::ALL.iter().map(|w| w.label().to_string()).collect();
+        }
         let Inner::Builtin(b) = &self.inner else {
             return Vec::new();
         };
@@ -602,7 +599,7 @@ impl Slot {
                     }
                     let text = match name {
                         "sustain" => format!("{:.0}%", v * 100.0),
-                        "level" => spoken::db_text(v),
+                        "level_db" => spoken::db_text(v),
                         _ => format!("{v:.3}{suffix}"),
                     };
                     spoken::hearable(ui, first, text, spoken::steady(v, lo, hi));
@@ -610,6 +607,38 @@ impl Slot {
                 }
             });
         changed
+    }
+}
+
+/// A simple synth setting's name and its value as text, with its unit:
+/// the wave by name ("Saw"), times in ms or s, the level in dB.
+fn simple_setting(key: &str, v: f64) -> (&'static str, String) {
+    match key {
+        "wave" => (
+            "Wave",
+            Wave::ALL
+                .get(v.max(0.0) as usize)
+                .map_or("?", |w| w.label())
+                .to_string(),
+        ),
+        "attack" | "decay" | "release" => {
+            let name = match key {
+                "attack" => "Attack",
+                "decay" => "Decay",
+                _ => "Release",
+            };
+            let text = if v < 1.0 {
+                format!("{:.0} ms", v * 1000.0)
+            } else {
+                format!("{v:.2} s")
+            };
+            (name, text)
+        }
+        "sustain" => ("Sustain", format!("{:.0}%", v * 100.0)),
+        "cutoff" if v >= 1000.0 => ("Cutoff", format!("{:.2} kHz", v / 1000.0)),
+        "cutoff" => ("Cutoff", format!("{v:.0} Hz")),
+        "level_db" => ("Level", format!("{v:+.1} dB")),
+        _ => ("?", format!("{v:.3}")),
     }
 }
 

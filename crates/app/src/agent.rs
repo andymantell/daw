@@ -258,6 +258,34 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "export_sections",
+        description: "Exports a practice file of the mix for each song section (the bars \
+                      from one marker to the next), cut at its bars, into a new numbered \
+                      'Sections' folder. Starts now, or waits in the export queue behind the \
+                      exports already going. Follow it with get_exports.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "sections": {"type": "array", "items": {"type": "string"},
+                             "description": "Only these sections, by marker id or name; every section if left out."},
+                "play_along": {"type": "boolean",
+                               "description": "Leave out the tracks muted for practice, to play along with. As the Export window is set if left out."},
+                "format": {"type": "string", "enum": ["wav", "flac", "mp3", "opus"],
+                           "description": "The file type; as the Export window is set if left out."},
+                "folder": {"type": "string",
+                           "description": "A full path to make the numbered folder in; the project's Exports folder if left out."}
+            }})
+        },
+    },
+    Tool {
+        name: "get_exports",
+        description: "The exports: how far the one running has got, those waiting in the \
+                      queue, and each one finished since the queue last started from empty, \
+                      with its folder and how each file went.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
         name: "import_project_file",
         description: "Opens a .dawproject file from another DAW, at a full path, as a new \
                       unsaved project in place of this one. Refused while this one has \
@@ -372,6 +400,8 @@ pub(crate) fn command_access(cmd: Cmd) -> Access {
         | Cmd::SaveAsTemplate
         | Cmd::Export
         | Cmd::ExportVideo
+        | Cmd::ExportSections
+        | Cmd::ExportThisSection
         | Cmd::ExportDawProject
         | Cmd::ExportBundle
         | Cmd::ExportMidi
@@ -513,6 +543,7 @@ impl App {
             }
             "export_report" => Ok(crate::interchange::report_value(&self.interchange_report())),
             "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
+            "get_exports" => Ok(self.exports_value()),
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -660,6 +691,41 @@ impl App {
                     None,
                 ))
             }
+            "export_sections" => {
+                let only: Option<Vec<String>> = match &args["sections"] {
+                    Value::Null => None,
+                    Value::Array(a) => Some(
+                        (a.iter())
+                            .map(|v| v.as_str().map(String::from))
+                            .collect::<Option<_>>()
+                            .ok_or("Sections are named by marker id or name, as text.")?,
+                    ),
+                    _ => return Err("Give the sections as a list.".into()),
+                };
+                use daw_engine::export::Format;
+                let format = match args["format"].as_str() {
+                    None => None,
+                    Some("wav") => Some(Format::Wav),
+                    Some("flac") => Some(Format::Flac),
+                    Some("mp3") => Some(Format::Mp3(320)),
+                    Some("opus") => Some(Format::Opus(160)),
+                    Some(f) => return Err(format!("There is no file type {f}.")),
+                };
+                let along = (args["play_along"].as_bool()).unwrap_or(self.export.play_along());
+                // A folder given is for this export only.
+                let before = self.export.chosen().map(std::path::Path::to_path_buf);
+                if let Some(f) = args["folder"].as_str() {
+                    self.export.set_chosen(Some(f.into()));
+                }
+                self.message = None;
+                let queued = self.export.busy();
+                let r = self.export_sections(only.as_deref(), along, format);
+                if args["folder"].is_string() {
+                    self.export.set_chosen(before);
+                }
+                let label = r.ok_or_else(|| self.message.clone().unwrap_or_default())?;
+                Ok((json!({"export": label, "queued": queued}), None))
+            }
             "import_project_file" => {
                 let path = args["path"].as_str().ok_or("Give the file's full path.")?;
                 if self.proj.dirty && self.proj.folder.is_none() && !self.tracks.is_empty() {
@@ -789,6 +855,26 @@ impl App {
             json!({"tracks": brought.tracks, "markers": brought.markers, "message": self.message.clone()}),
             None,
         ))
+    }
+
+    fn exports_value(&self) -> Value {
+        let done: Vec<Value> = (self.export.results().iter())
+            .map(|(folder, lines)| {
+                let files: Vec<Value> = (lines.iter())
+                    .map(|(name, r)| match r {
+                        Ok(w) => json!({"name": name, "clipped": w.clipped()}),
+                        Err(e) => json!({"name": name, "error": e}),
+                    })
+                    .collect();
+                json!({"folder": folder.display().to_string(), "files": files})
+            })
+            .collect();
+        let queue: Vec<&str> = self.export.queue().map(|q| q.label.as_str()).collect();
+        json!({
+            "running": self.export.progress().map(|p| json!({"done": p})),
+            "queue": queue,
+            "finished": done,
+        })
     }
 
     fn commands_value(&self) -> Value {

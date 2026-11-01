@@ -321,6 +321,7 @@ impl App {
                 cents: c.cents as i64,
                 move_formants: c.move_formants,
                 pitch_notes: c.pitch_notes.clone(),
+                link: c.link.clone(),
             })
             .collect();
         clips.extend(
@@ -398,9 +399,17 @@ impl App {
         if self.proj.loading() {
             return;
         }
-        let p = self.project();
+        let mut p = self.project();
         if p == self.proj.committed {
             return;
+        }
+        // An edit to one linked copy goes to all of them, in the same
+        // undo step.
+        if daw_project::sync_links(&self.proj.committed, &mut p) {
+            let before = self.proj.committed.clone();
+            self.apply(p.clone());
+            self.proj.committed = before;
+            p = self.project();
         }
         for c in self.tracks.iter().flat_map(|t| &t.clips) {
             self.proj
@@ -706,6 +715,7 @@ impl App {
                     .collect();
                 c.cents = crate::transpose::clamp(pc.cents);
                 c.move_formants = pc.move_formants;
+                c.link = pc.link.clone();
                 c.pitch_notes = (pc.pitch_notes.iter())
                     .map(|n| daw_project::PitchNote {
                         start: scale(n.start),

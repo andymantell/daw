@@ -44,7 +44,7 @@ stretch.rs 13
 templates.rs 9
 tempo.rs 12
 theme.rs 4
-timeline.rs 79
+timeline.rs 77
 timing.rs 6
 trainer.rs 0
 tuner.rs 2

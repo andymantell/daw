@@ -60,6 +60,7 @@ mod kits;
 mod latency;
 mod layers;
 mod lessons;
+mod linked;
 mod listen;
 mod lyrics;
 mod meters;
@@ -2907,7 +2908,7 @@ impl eframe::App for App {
                         app.menu_item(ui, c);
                     }
                     app.menu_gap();
-                    for c in [Cmd::Copy, Cmd::Paste, Cmd::Bounce] {
+                    for c in [Cmd::Copy, Cmd::Paste, Cmd::UnlinkClips, Cmd::Bounce] {
                         app.menu_item(ui, c);
                     }
                     app.menu_gap();

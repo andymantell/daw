@@ -80,6 +80,7 @@ pub(crate) enum Cmd {
     Copy,
     Paste,
     Bounce,
+    UnlinkClips,
     TrackVersions,
     NewVersion,
     DuplicateVersion,
@@ -1173,6 +1174,12 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Paste the copied clips at the playhead, each on the track it came from")
     .words("duplicate clipboard")
     .everyday(),
+    info(Cmd::UnlinkClips, "unlink-clips", "Edit", "Unlink clips", &[])
+        .hint(
+            "Break the selected clips off from their linked copies, so each can be changed on \
+             its own",
+        )
+        .words("make unique instance copy linked alias ghost independent"),
     info(Cmd::Bounce, "bounce", "Edit", "Bounce to a new track", &[])
         .hint(
             "The selected clips through their track's effects, as new audio on a track beside \
@@ -3105,6 +3112,7 @@ impl App {
             Cmd::ImportFromProject => self.may_edit_song(),
             Cmd::ExportStemPackage => !self.export.busy(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
+            Cmd::UnlinkClips => !self.selected_linked().is_empty(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::NextVersion | Cmd::PrevVersion | Cmd::DeleteVersion => self
                 .version_track()
@@ -3599,6 +3607,7 @@ impl App {
                 }
             }
             Cmd::Bounce => self.bounce_selection(),
+            Cmd::UnlinkClips => self.unlink_selected(),
             Cmd::NextTheme => self.themes.next(),
             Cmd::LightDark => self.themes.flip(ctx),
             Cmd::FindCommand => {

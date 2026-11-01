@@ -135,16 +135,20 @@ pub(crate) const TOOLS: &[Tool] = &[
                       chop on every 4th bar); or one copy on each of a list of bars or \
                       at_seconds, each at its own place (bars 9, 13.5 and 17 make three). \
                       To repeat a note clip without making copies, edit_clip loop makes it \
-                      play its notes over and over as it is lengthened. A copy of a pattern \
-                      clip plays the same pattern (linked: editing the pattern changes both) \
-                      unless linked is false, when the copies share a copy of the pattern \
-                      of their own. Gives the new clips' ids, in time order.",
+                      play its notes over and over as it is lengthened. Copies are linked \
+                      unless linked is false: instances of one clip, so editing one changes \
+                      them all (a note clip's notes, controller lanes, loop, key and name; an \
+                      audio clip's audio, name, gain, volume line, transpose and pitch edits), \
+                      while where each sits, its length, trim, fades and mute stay its own. \
+                      A copy of a pattern clip plays the same pattern; unlinked, the copies \
+                      share a copy of the pattern of their own. unlink_clip breaks one off. \
+                      Gives the new clips' ids, in time order, and their link.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": clip_props(json!({
                 "clip": {"type": "string"},
                 "track": {"type": "string", "description": "Put the copies on this track."},
-                "linked": {"type": "boolean", "description": "Pattern clips: true if left out."},
+                "linked": {"type": "boolean", "description": "Linked copies (instances of the clip); true if left out. false makes copies of their own."},
                 "times": {"type": "integer", "description": "How many copies; 1 if left out. Not with bars or at_seconds."},
                 "every_bars": {"type": "number", "description": "How far apart the copies start, in bars (from bar or seconds, or the clip's end); back to back if left out."},
                 "bars": {"type": "array", "items": {"type": "number"},
@@ -152,6 +156,22 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "at_seconds": {"type": "array", "items": {"type": "number"},
                                "description": "A copy starting at each of these times."}
             })), "required": ["clip"]})
+        },
+    },
+    Tool {
+        name: "unlink_clip",
+        description: "Breaks clips off from their linked copies, so each can be edited on \
+                      its own: it keeps what it holds now, and later edits to it or to the \
+                      others no longer go across. A copy left alone in its group stops being \
+                      linked too. get_project's linked_groups lists which clips are linked. \
+                      Pattern clips link through their pattern: edit_clip's pattern_unique \
+                      gives one its own.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "clip": {"type": "string"},
+                "clips": {"type": "array", "items": {"type": "string"}, "description": "Several at once."}
+            }})
         },
     },
     Tool {
@@ -640,6 +660,7 @@ impl App {
     pub(crate) fn notes_tool(&mut self, name: &str, args: &Value) -> Option<Done> {
         Some(match name {
             "duplicate_clip" => self.duplicate_clip_tool(args),
+            "unlink_clip" => self.unlink_clip_tool(args),
             "add_note_clip" => self.add_note_clip_tool(args),
             "edit_notes" => self.edit_notes_tool(args),
             "edit_note_lanes" => self.edit_note_lanes_tool(args),
@@ -694,6 +715,13 @@ impl App {
             "muted": c.muted,
             "key": c.scale.map(|s| s.label()),
             "pattern": c.pattern,
+            "link": c.link,
+            // The clips it is an instance of one clip with: editing it
+            // changes them too.
+            "linked_with": daw_project::link_groups(&p).into_iter()
+                .find(|g| g.notes && g.clips.iter().any(|x| x == &c.id))
+                .map(|g| g.clips.into_iter().filter(|x| x != &c.id).collect::<Vec<_>>())
+                .unwrap_or_default(),
             // Pattern clips play their pattern over and over (each lane
             // its own steps); other clips loop only when asked.
             "loops": c.pattern.is_some() || c.looped().is_some(),
@@ -849,6 +877,13 @@ impl App {
                 At::Tick(t) => t,
                 At::Seconds(s) => map.ticks_at(Frames((s.max(0.0) * rate).round() as i64)).0,
             };
+            // Linked copies share the clip's link (made now if it has
+            // none); pattern clips link through their pattern instead.
+            let link = if linked {
+                daw_project::link_of(p, &id)
+            } else {
+                None
+            };
             for i in 0..p.tracks.len() {
                 if let Some(src) = p.tracks[i].clips.iter().find(|c| c.id == id).cloned() {
                     let ti = dest(p, i, true)?;
@@ -858,12 +893,13 @@ impl App {
                         let mut c = src.clone();
                         c.id = daw_project::new_id();
                         c.start = start;
+                        c.link = link.clone();
                         // A clip that follows tempo is placed by its beat.
                         c.beat = map.ticks_at(Frames(c.start)).0;
                         new.push(c.id.clone());
                         p.tracks[ti].clips.push(c);
                     }
-                    return Ok(json!({"clip": new[0], "clips": new}));
+                    return Ok(json!({"clip": new[0], "clips": new, "link": link}));
                 }
                 if let Some(src) = p.tracks[i].note_clips.iter().find(|c| c.id == id).cloned() {
                     let ti = dest(p, i, false)?;
@@ -884,19 +920,54 @@ impl App {
                         c.id = daw_project::new_id();
                         c.start = start;
                         c.pattern = pattern.clone();
-                        for n in &mut c.notes {
-                            n.id = daw_project::new_id();
+                        c.link = link.clone();
+                        // A copy of its own gets notes of its own; linked
+                        // copies share theirs, ids and all.
+                        if link.is_none() {
+                            for n in &mut c.notes {
+                                n.id = daw_project::new_id();
+                            }
                         }
                         new.push(c.id.clone());
                         p.tracks[ti].note_clips.push(c);
                     }
                     p.tracks[ti].note_clips.sort_by_key(|c| c.start);
-                    return Ok(json!({"clip": new[0], "clips": new, "pattern": pattern}));
+                    return Ok(
+                        json!({"clip": new[0], "clips": new, "pattern": pattern, "link": link}),
+                    );
                 }
             }
             Err(format!("There is no clip {id}."))
         })
         .map(|v| (v, Some("Duplicate a clip".into())))
+    }
+
+    fn unlink_clip_tool(&mut self, args: &Value) -> Done {
+        let mut ids: Vec<String> = (args["clips"].as_array().into_iter().flatten())
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if let Some(id) = args["clip"].as_str() {
+            ids.push(id.to_string());
+        }
+        if ids.is_empty() {
+            return Err("Give the clip's id.".into());
+        }
+        self.edit_model(|p| {
+            let mut unlinked = Vec::new();
+            for id in &ids {
+                let known = (p.tracks.iter()).any(|t| {
+                    t.clips.iter().any(|c| &c.id == id) || t.note_clips.iter().any(|c| &c.id == id)
+                });
+                if !known {
+                    return Err(format!("There is no clip {id}."));
+                }
+                if daw_project::unlink(p, id) {
+                    unlinked.push(id.clone());
+                }
+            }
+            Ok(json!({"unlinked": unlinked}))
+        })
+        .map(|v| (v, Some("Unlink a clip".into())))
     }
 
     /// Where duplicate_clip puts its copies.

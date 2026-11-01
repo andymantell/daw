@@ -569,6 +569,21 @@ impl App {
         let Some(first) = self.renders.copied.iter().map(|(_, c)| c.start).min() else {
             return false;
         };
+        // Pasted clips are linked copies of the ones copied: they share
+        // a link with them (made now if they have none), kept with the
+        // copied clips so pasting again links those too.
+        for (_, c) in &mut self.renders.copied {
+            if c.link.is_none() {
+                let src = (self.tracks.iter_mut())
+                    .flat_map(|t| t.clips.iter_mut())
+                    .find(|s| s.key == c.key);
+                let link = match src {
+                    Some(s) => s.link.get_or_insert_with(daw_project::new_id).clone(),
+                    None => daw_project::new_id(),
+                };
+                c.link = Some(link);
+            }
+        }
         let mut selected = HashSet::new();
         for (key, c) in &self.renders.copied {
             let Some(i) = lane.or_else(|| self.track_index(key)) else {

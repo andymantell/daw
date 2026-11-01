@@ -15,6 +15,7 @@ mod history;
 mod identity;
 pub mod kit;
 mod lessons;
+mod links;
 pub mod midifile;
 mod model;
 pub mod noteops;
@@ -36,6 +37,7 @@ pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
 pub use lessons::{
     AssignmentProgress, DoneMark, Lesson, MAX_LESSON_TITLE, PracticeSession, progress,
 };
+pub use links::{LinkGroup, instances, link_groups, link_of, sync_links, unlink};
 pub use model::{
     Articulation, Assignment, AutoPoint, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup,
     Controller, CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade,

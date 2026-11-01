@@ -1319,6 +1319,15 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
         if !plain("move_formants", !c.move_formants) {
             w.put(&cm, "move_formants", c.move_formants);
         }
+        // Clips of their own, as all were before linked copies, gain no
+        // new entries.
+        if !plain("link", c.link.is_none()) {
+            w.put(
+                &cm,
+                "link",
+                c.link.as_deref().map_or(LoroValue::Null, LoroValue::from),
+            );
+        }
         // Clips whose notes were never found gain no new entries.
         if !plain("pitch_notes", c.pitch_notes.is_empty()) {
             let notes: Vec<LoroValue> = (c.pitch_notes.iter())
@@ -1634,6 +1643,13 @@ fn write_note_clips(w: &mut Writer, m: &LoroMap, t: &Track) {
             let lanes = w.fixed(&cm, "controllers");
             write_lines(w, &lanes, &c.controllers);
         }
+        if c.link.is_some() || cm.get("link").is_some() {
+            w.put(
+                &cm,
+                "link",
+                c.link.as_deref().map_or(LoroValue::Null, LoroValue::from),
+            );
+        }
         if c.loop_len.is_some() || cm.get("loop_len").is_some() {
             w.put(
                 &cm,
@@ -1774,6 +1790,7 @@ fn read_note_clips(t: &LoroMapValue) -> Vec<NoteClip> {
         clip.controllers = read_lines(c.get("controllers"));
         clip.pattern = string(c, "pattern");
         clip.loop_len = int(c, "loop_len").filter(|l| *l > 0);
+        clip.link = string(c, "link").filter(|l| !l.is_empty());
         if let Some(LoroValue::Map(notes)) = c.get("notes") {
             for (nid, n) in notes.iter() {
                 let LoroValue::Map(n) = n else { continue };
@@ -2152,6 +2169,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                     .clamp(-crate::MAX_TRANSPOSE_CENTS, crate::MAX_TRANSPOSE_CENTS),
                 move_formants: boolean(c, "move_formants").unwrap_or(false),
                 pitch_notes: read_pitch_notes(c),
+                link: string(c, "link").filter(|l| !l.is_empty()),
             });
         }
     }

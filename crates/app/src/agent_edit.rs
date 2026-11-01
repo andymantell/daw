@@ -276,6 +276,8 @@ impl App {
         let before = self.project();
         let mut p = before.clone();
         let v = f(&mut p)?;
+        // An edit to one linked copy goes to all of them.
+        daw_project::sync_links(&before, &mut p);
         if p != before {
             self.reload_changed_fx(&before, &p);
             self.apply(p);

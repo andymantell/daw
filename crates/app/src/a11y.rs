@@ -113,7 +113,10 @@ fn every_control_has_a_spoken_name() {
     let ctx = h.ctx.clone();
     h.state_mut().run(&ctx, Cmd::KeyCommands);
     h.state_mut().run(&ctx, Cmd::FindCommand);
-    h.run();
+    // The tuner and performance windows ask to be drawn again every few
+    // milliseconds while open, so on a slow machine the window never
+    // settles: a set number of frames instead.
+    h.run_steps(8);
     assert_eq!(unspoken(&h), Vec::<String>::new());
     for name in [
         "Driver",

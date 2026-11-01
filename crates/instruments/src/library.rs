@@ -141,13 +141,71 @@ impl Library {
             .unwrap_or_default()
     }
 
-    /// The gain that brings the loudest sound's peak to −6 dBFS.
+    /// The gain that brings a quiet library's loudest sound up to
+    /// −6 dBFS. It never turns a library down: one whose loudest sound
+    /// is already louder plays as recorded.
     pub fn normal_gain(&self) -> f32 {
         if self.peak > 1e-6 {
-            0.5 / self.peak
+            (0.5 / self.peak).max(1.0)
         } else {
             1.0
         }
+    }
+
+    /// A name for what key `k` plays: the file's `label_keyN`, else its
+    /// regions' labels, else what their sound files' folders and names
+    /// share ("snare 14 center" for `Samples/snare_14/center/top/
+    /// sn_center_vl3_rr1.flac` and its other mics). `None` when nothing
+    /// plays there or nothing names it.
+    pub fn key_name(&self, k: u8) -> Option<String> {
+        if let Some(l) = self.sfz.key_labels.get(&k) {
+            return Some(l.clone());
+        }
+        let regions = self.by_key.get(k as usize)?;
+        let mut labels: Vec<&str> = (regions.iter())
+            .filter_map(|&r| self.sfz.regions[r as usize].label.as_deref())
+            .collect();
+        if !labels.is_empty() {
+            labels.sort_unstable();
+            labels.dedup();
+            return Some(labels.join(", "));
+        }
+        let files: Vec<Vec<String>> = (regions.iter())
+            .map(|&r| &self.sfz.regions[r as usize].sample)
+            .filter(|s| !s.is_empty() && !s.starts_with('*'))
+            .map(|s| parts(s))
+            .collect();
+        let shared = common(&files);
+        // What every sound in the library shares ("Samples") says
+        // nothing about this key.
+        let every: Vec<Vec<String>> = (self.sfz.regions.iter())
+            .map(|r| &r.sample)
+            .filter(|s| !s.is_empty() && !s.starts_with('*'))
+            .map(|s| parts(s))
+            .collect();
+        let all = common(&every).len();
+        let mut words: Vec<String> = Vec::new();
+        let dirs = shared.len().min(files.first().map_or(0, |f| f.len() - 1));
+        for part in &shared[all.min(dirs)..dirs] {
+            words.extend(name_words(part));
+        }
+        // And the start the files' own names share.
+        let stems: Vec<Vec<String>> = (files.iter())
+            .map(|f| f.last().map(|n| name_words(stem(n))).unwrap_or_default())
+            .collect();
+        // Short ones ("sn", "k") are mostly the folder's name cut down.
+        for w in common(&stems) {
+            if w.len() > 3 && !words.iter().any(|x| x.starts_with(&w)) {
+                words.push(w);
+            }
+        }
+        let mut seen = Vec::new();
+        words.retain(|w| {
+            let new = !seen.contains(w);
+            seen.push(w.clone());
+            new
+        });
+        (!words.is_empty()).then(|| words.join(" "))
     }
 
     /// Reads `path` and its sounds, keeping what fits in `memory` bytes
@@ -363,6 +421,47 @@ pub fn open(path: &Path) -> Result<Arc<Library>, String> {
     Ok(lib)
 }
 
+/// A sound file's path as folders and its name, without `..` or `.`.
+fn parts(s: &str) -> Vec<String> {
+    (s.split(['/', '\\']))
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .map(str::to_string)
+        .collect()
+}
+
+fn stem(name: &str) -> &str {
+    name.rsplit_once('.').map_or(name, |(a, _)| a)
+}
+
+/// The start every list shares.
+fn common<T: Clone + PartialEq>(lists: &[Vec<T>]) -> Vec<T> {
+    let Some(first) = lists.first() else {
+        return Vec::new();
+    };
+    let mut n = first.len();
+    for l in &lists[1..] {
+        n = n.min(l.iter().zip(first).take_while(|(a, b)| a == b).count());
+    }
+    first[..n].to_vec()
+}
+
+/// A folder's or file's words, lower case, without the tags that only
+/// tell its layers and turns apart (`vl3`, `rr2`, `v127`).
+fn name_words(s: &str) -> Vec<String> {
+    s.split(['_', '-', ' ', '.'])
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .filter(|w| !tag(w))
+        .collect()
+}
+
+fn tag(w: &str) -> bool {
+    ["vl", "rr", "v", "vel", "seq"].iter().any(|t| {
+        w.strip_prefix(t)
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -394,6 +493,47 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn keys_are_named_from_the_file_or_its_sound_files() {
+        let dir = scratch("key-names");
+        for n in [
+            "Samples/snare_14/center/top/sn_center_vl1_rr1.wav",
+            "Samples/snare_14/center/oh/sn_center_vl1_rr1.wav",
+            "Samples/kick_24/kick/k_vl1_rr1.wav",
+            "Samples/kick_24/kick/k_vl1_rr2.wav",
+            "Samples/tom/t.wav",
+        ] {
+            let p = dir.join(n);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            wav(
+                p.parent().unwrap(),
+                p.file_name().unwrap().to_str().unwrap(),
+                100,
+                0.5,
+            );
+        }
+        std::fs::write(
+            dir.join("k.sfz"),
+            "<control> label_key50=Floor tom\n\
+             <group> key=38\n\
+             <region> sample=Samples/snare_14/center/top/sn_center_vl1_rr1.wav\n\
+             <region> sample=Samples/snare_14/center/oh/sn_center_vl1_rr1.wav\n\
+             <group> key=36\n\
+             <region> sample=Samples/kick_24/kick/k_vl1_rr1.wav\n\
+             <region> sample=Samples/kick_24/kick/k_vl1_rr2.wav\n\
+             <group> group_label=Low tom key=41\n\
+             <region> sample=Samples/tom/t.wav\n\
+             <region> sample=Samples/tom/t.wav key=50\n",
+        )
+        .unwrap();
+        let lib = Library::read(&dir.join("k.sfz"), usize::MAX).unwrap();
+        assert_eq!(lib.key_name(38).as_deref(), Some("snare 14 center"));
+        assert_eq!(lib.key_name(36).as_deref(), Some("kick 24"));
+        assert_eq!(lib.key_name(41).as_deref(), Some("Low tom"));
+        assert_eq!(lib.key_name(50).as_deref(), Some("Floor tom"));
+        assert_eq!(lib.key_name(60), None);
     }
 
     #[test]

@@ -326,7 +326,7 @@ impl App {
                 let keys: Vec<Value> = (0..128u8)
                     .filter(|&k| !l.by_key[k as usize].is_empty())
                     .map(|k| {
-                        let name = l.sfz.key_labels.get(&k).cloned();
+                        let name = l.key_name(k);
                         json!({"key": k, "name": name, "regions": l.by_key[k as usize].len()})
                     })
                     .collect();
@@ -938,7 +938,7 @@ mod sfz_tests {
         std::fs::write(
             dir.join("Drums.sfz"),
             "<control> label_cc70=Kick close set_cc70=127 label_cc71=Kick room set_cc71=127\n\
-             <global> loop_mode=one_shot\n\
+             <global> loop_mode=one_shot global_label=Kick\n\
              <region> key=36 sample=close.wav amplitude_cc70=100 locc70=1\n\
              <region> key=36 sample=room.wav amplitude_cc71=100 locc71=1\n",
         )
@@ -971,6 +971,7 @@ mod sfz_tests {
         let lib = &i["library"];
         assert_eq!(lib["regions"], 2, "{i}");
         assert_eq!(lib["keys"][0]["key"], 36);
+        assert_eq!(lib["keys"][0]["name"], "Kick", "{lib}");
         assert_eq!(lib["controls"][0]["param"], "instrument.cc70");
         assert_eq!(lib["controls"][1]["name"], "Kick room");
         // A kick on the first beat.

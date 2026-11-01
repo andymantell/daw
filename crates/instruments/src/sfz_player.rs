@@ -1095,6 +1095,22 @@ mod tests {
     }
 
     #[test]
+    fn normalising_never_turns_a_loud_library_down() {
+        // Big Rusty's loudest sounds peak near 0 dBFS: normalising
+        // used to take them to -6 dBFS and the drums came out quiet.
+        let text = "<region> sample=loud.wav key=60 loop_mode=one_shot amp_veltrack=0\n";
+        let (_d, b) = kit(
+            "normal-loud",
+            text,
+            &[("loud.wav", 48_000, 0.9)],
+            usize::MAX,
+        );
+        b.params().set_key("normalise", 1.0);
+        let mut i = b.make(48_000);
+        assert!((level(&mut i, &[on(60, 100)]) - 0.9).abs() < 1e-3);
+    }
+
+    #[test]
     fn normalising_brings_a_quiet_library_up() {
         let text = "<region> sample=quiet.wav key=60 loop_mode=one_shot amp_veltrack=0\n";
         let (_d, b) = kit("normal", text, &[("quiet.wav", 48_000, 0.01)], usize::MAX);

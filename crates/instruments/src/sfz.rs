@@ -261,6 +261,9 @@ pub struct Region {
     /// Plays only if the note before was this key.
     pub sw_previous: Option<u8>,
     pub sw_label: Option<String>,
+    /// Its name, from `region_label`, or its group's, master's or
+    /// global's label.
+    pub label: Option<String>,
     /// The sustain pedal's controller.
     pub sustain_cc: u8,
 }
@@ -327,6 +330,7 @@ impl Default for Region {
             sw_up: None,
             sw_previous: None,
             sw_label: None,
+            label: None,
             sustain_cc: 64,
         }
     }
@@ -1251,6 +1255,14 @@ fn region_of(
     r.sw_up = key8("sw_up");
     r.sw_previous = key8("sw_previous");
     r.sw_label = ops.get("sw_label").cloned();
+    r.label = [
+        "region_label",
+        "group_label",
+        "master_label",
+        "global_label",
+    ]
+    .iter()
+    .find_map(|k| ops.get(*k).filter(|v| !v.trim().is_empty()).cloned());
     r.sustain_cc = int(ops.get("sustain_cc")).map_or(64, |v| v.clamp(0, 127) as u8);
 
     // Crossfades.

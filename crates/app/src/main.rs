@@ -38,6 +38,7 @@ mod agent_takes;
 mod assistants;
 mod audio_setup;
 mod automation;
+mod beat_grid;
 mod browser;
 mod commands;
 mod comments;
@@ -2919,6 +2920,7 @@ impl eframe::App for App {
                         Cmd::ClearStretchMarkers,
                         Cmd::QuantiseAudio,
                         Cmd::TempoFromClip,
+                        Cmd::BeatGrid,
                         Cmd::AnchorToBeat,
                         Cmd::AnchorToBar,
                     ] {

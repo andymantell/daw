@@ -18,6 +18,11 @@ said nothing. The guess of which beat is the downbeat was unsure there
   line, and one undo puts it back.
 - [ ] Same with "nearest beat" on a note in the middle of a phrase.
   Pass: that note is on the beat line.
-- [ ] Decide whether the beat grid should also be in the app itself (for
-  example a "Guess from beats" button in the clip tempo window). For now
-  it is an assistant tool only.
+- [ ] Select an a cappella clip and choose "Find beat grid…" in its
+  right-click menu (or the Edit menu). Pass: after a few seconds it lists
+  tempos, the best one close to what you hear, with how sure it is.
+- [ ] In that window, "Use as clip's tempo", then change the song's
+  tempo. Pass: the vocal follows the song's tempo and stays in time.
+- [ ] "Put downbeat on nearest bar". Pass: the first strong sung note of
+  a phrase sits on a bar line (if it lands a beat off, the downbeat guess
+  was wrong: it says how sure it was).

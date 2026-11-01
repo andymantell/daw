@@ -114,6 +114,7 @@ pub(crate) enum Cmd {
     QuantiseAudioApply,
     TempoFromClip,
     TempoFromClipApply,
+    BeatGrid,
     AnchorToBeat,
     AnchorToBar,
     ZoomIn,
@@ -1434,6 +1435,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Set the song's tempo from the selected clip with the window's current settings")
     .words("tempo map detect"),
+    info(Cmd::BeatGrid, "beat-grid", "Edit", "Find beat grid…", &[])
+        .hint("The tempos the selected clip's notes fit, and where its downbeat falls: for a voice alone")
+        .words("tempo detect bpm a cappella vocal downbeat beat grid"),
     info(
         Cmd::AnchorToBeat,
         "anchor-to-beat",
@@ -3137,6 +3141,7 @@ impl App {
             | Cmd::QuantiseAudioApply
             | Cmd::TempoFromClip
             | Cmd::TempoFromClipApply
+            | Cmd::BeatGrid
             | Cmd::AnchorToBeat
             | Cmd::AnchorToBar => self.has_stretch_clips(),
             Cmd::PitchNotesUp
@@ -3537,6 +3542,7 @@ impl App {
             | Cmd::QuantiseAudioApply
             | Cmd::TempoFromClip
             | Cmd::TempoFromClipApply
+            | Cmd::BeatGrid
             | Cmd::AnchorToBeat
             | Cmd::AnchorToBar => {
                 self.run_stretch(cmd);

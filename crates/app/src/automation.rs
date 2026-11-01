@@ -505,16 +505,16 @@ pub(crate) fn choices(t: &Track, buses: &[(String, String)]) -> Vec<Choice> {
 
 /// As [`choices`], with at most `most` parameters of each plugin.
 pub(crate) fn choices_up_to(t: &Track, buses: &[(String, String)], most: usize) -> Vec<Choice> {
-    let mut out = vec![
-        Choice {
-            param: Lane::GAIN.into(),
-            name: "Volume".into(),
-        },
-        Choice {
+    let mut out = vec![Choice {
+        param: Lane::GAIN.into(),
+        name: "Volume".into(),
+    }];
+    if !is_master(t) {
+        out.push(Choice {
             param: Lane::PAN.into(),
             name: "Pan".into(),
-        },
-    ];
+        });
+    }
     for s in &t.sends {
         let param = format!("{}{}", Lane::SEND, s.to);
         out.push(Choice {
@@ -552,6 +552,37 @@ pub(crate) fn choices_up_to(t: &Track, buses: &[(String, String)], most: usize) 
         }
     }
     out
+}
+
+/// Whether `t` is the master channel, which has no pan or sends.
+pub(crate) fn is_master(t: &Track) -> bool {
+    t.key == daw_project::Master::KEY
+}
+
+/// The track at `ti` in the automation pane's list: the tracks, then
+/// the master.
+fn pick<'a>(tracks: &'a [Track], master: &'a Track, ti: usize) -> &'a Track {
+    tracks.get(ti).unwrap_or(master)
+}
+
+/// As [`pick`], for writing.
+fn pick_mut<'a>(tracks: &'a mut [Track], master: &'a mut Track, ti: usize) -> &'a mut Track {
+    match tracks.get_mut(ti) {
+        Some(t) => t,
+        None => master,
+    }
+}
+
+/// The track (or the master) by its key.
+fn find_mut<'a>(
+    tracks: &'a mut [Track],
+    master: &'a mut Track,
+    key: &str,
+) -> Option<&'a mut Track> {
+    if key == master.key {
+        return Some(master);
+    }
+    tracks.iter_mut().find(|t| t.key == key)
 }
 
 /// Drops points on a straight line between their neighbours, within a
@@ -608,7 +639,7 @@ impl crate::App {
         let at = self.ctl.status().position().0;
         let mut shown = std::mem::take(&mut self.automation.shown);
         shown.clear();
-        for t in &mut self.tracks {
+        for t in self.tracks.iter_mut().chain([&mut self.master]) {
             if self.automation.mode(&t.key) == Mode::Off {
                 continue;
             }
@@ -646,7 +677,7 @@ impl crate::App {
         // Shown values back, unless moved.
         let shown = std::mem::take(&mut self.automation.shown);
         for (key, param, own) in shown {
-            let Some(t) = self.tracks.iter_mut().find(|t| t.key == key) else {
+            let Some(t) = find_mut(&mut self.tracks, &mut self.master, &key) else {
                 continue;
             };
             let Some(lane) = t.automation.iter().find(|l| l.param == param) else {
@@ -664,7 +695,7 @@ impl crate::App {
         // Controls without a lane that moved under the pointer.
         let mut seen = std::mem::take(&mut self.automation.seen);
         let mut live: HashSet<(String, String)> = HashSet::new();
-        for t in &self.tracks {
+        for t in self.tracks.iter().chain([&self.master]) {
             let mode = self.automation.mode(&t.key);
             for param in self.watched(t) {
                 let plugin = param.starts_with(Lane::PLUGIN);
@@ -710,6 +741,7 @@ impl crate::App {
         // Write mode: every lane writes from the moment play starts.
         if playing && !self.automation.was_playing {
             let starts: Vec<(String, String, f64)> = (self.tracks.iter())
+                .chain([&self.master])
                 .filter(|t| self.automation.mode(&t.key) == Mode::Write)
                 .flat_map(|t| {
                     t.automation
@@ -744,7 +776,10 @@ impl crate::App {
         // Each pass takes the control's value now.
         let mut ended = Vec::new();
         for (i, p) in self.automation.passes.iter_mut().enumerate() {
-            let Some(t) = self.tracks.iter().find(|t| t.key == p.track) else {
+            let Some(t) = (self.tracks.iter())
+                .chain([&self.master])
+                .find(|t| t.key == p.track)
+            else {
                 ended.push(i);
                 continue;
             };
@@ -786,7 +821,7 @@ impl crate::App {
         // Plugins' own windows follow their lanes (the engine sets the
         // plugins themselves, block by block).
         let mut sets: Vec<(usize, String, u32, f64, String)> = Vec::new();
-        for (ti, t) in self.tracks.iter().enumerate() {
+        for (ti, t) in self.tracks.iter().chain([&self.master]).enumerate() {
             if self.automation.mode(&t.key) == Mode::Off {
                 continue;
             }
@@ -810,13 +845,14 @@ impl crate::App {
             }
         }
         for (ti, effect, id, v, param) in sets {
-            let t = &self.tracks[ti];
+            let t = pick(&self.tracks, &self.master, ti);
             if let Some(p) = slot(t, &effect).and_then(FxSlot::plugin) {
                 p.show_param(id, v);
                 self.automation.driven.insert((t.key.clone(), param), v);
             }
         }
         let keep: HashSet<(String, String)> = (self.tracks.iter())
+            .chain([&self.master])
             .flat_map(|t| {
                 t.automation
                     .iter()
@@ -842,7 +878,10 @@ impl crate::App {
         if !self.automation.mode(&t.key).writes() {
             return Vec::new();
         }
-        let mut out = vec![Lane::GAIN.to_string(), Lane::PAN.to_string()];
+        let mut out = vec![Lane::GAIN.to_string()];
+        if !is_master(t) {
+            out.push(Lane::PAN.to_string());
+        }
         out.extend(t.sends.iter().map(|s| format!("{}{}", Lane::SEND, s.to)));
         for s in &t.fx {
             if let Some(b) = s.builtin() {
@@ -893,10 +932,14 @@ impl crate::App {
 
     /// Tells the engine a lane is being written, or played again.
     fn set_live(&mut self, key: &str, param: &str, live: bool) {
-        let Some(ti) = self.tracks.iter().position(|t| t.key == key) else {
-            return;
+        let (ti, t) = if key == self.master.key {
+            (daw_engine::graph::MASTER, &self.master)
+        } else {
+            let Some(ti) = self.tracks.iter().position(|t| t.key == key) else {
+                return;
+            };
+            (ti, &self.tracks[ti])
         };
-        let t = &self.tracks[ti];
         let Some(target) = engine_target(t, &self.sends_of(t), param) else {
             return;
         };
@@ -911,7 +954,7 @@ impl crate::App {
     fn end_pass(&mut self, p: Pass, at: i64) -> bool {
         let key = p.track.clone();
         let param = p.param.clone();
-        let Some(t) = self.tracks.iter_mut().find(|t| t.key == key) else {
+        let Some(t) = find_mut(&mut self.tracks, &mut self.master, &key) else {
             return false;
         };
         let Some(range) = range(t, &param) else {
@@ -958,15 +1001,15 @@ impl crate::App {
             pane.track = selected.clone();
         }
         pane.followed = selected;
-        if !(pane.track.as_ref()).is_some_and(|k| self.tracks.iter().any(|t| &t.key == k)) {
+        // The tracks, then the master (at the index after the last track).
+        let all = || self.tracks.iter().chain([&self.master]);
+        if !(pane.track.as_ref()).is_some_and(|k| all().any(|t| &t.key == k)) {
             pane.track = (self.tracks.iter())
                 .find(|t| !t.automation.is_empty())
                 .or(self.tracks.first())
                 .map(|t| t.key.clone());
         }
-        let Some(ti) =
-            (pane.track.as_ref()).and_then(|k| self.tracks.iter().position(|t| &t.key == k))
-        else {
+        let Some(ti) = (pane.track.as_ref()).and_then(|k| all().position(|t| &t.key == k)) else {
             ui.label("Add a track to automate its settings here.");
             return;
         };
@@ -979,20 +1022,22 @@ impl crate::App {
         let mut add: Option<String> = None;
         let mut remove: Option<usize> = None;
         ui.horizontal(|ui| {
-            let mut pick = ti;
+            let pick_of = |i: usize| pick(&self.tracks, &self.master, i);
+            let mut chosen = ti;
+            // ai: get_automation
             egui::ComboBox::from_id_salt("automation-track")
-                .selected_text(&self.tracks[ti].name)
+                .selected_text(&pick_of(ti).name)
                 .show_ui(ui, |ui| {
-                    for (i, t) in self.tracks.iter().enumerate() {
-                        ui.selectable_value(&mut pick, i, &t.name);
+                    for (i, t) in self.tracks.iter().chain([&self.master]).enumerate() {
+                        ui.selectable_value(&mut chosen, i, &t.name);
                     }
                 })
                 .response
                 .accessible_name("Track whose automation is shown");
-            if pick != ti {
-                self.automation.track = Some(self.tracks[pick].key.clone());
+            if chosen != ti {
+                self.automation.track = Some(pick_of(chosen).key.clone());
             }
-            let key = self.tracks[ti].key.clone();
+            let key = pick_of(ti).key.clone();
             let mut mode = self.automation.mode(&key);
             let before = mode;
             egui::ComboBox::from_id_salt("automation-mode")
@@ -1010,7 +1055,7 @@ impl crate::App {
                 self.automation.set_mode(&key, mode);
                 changed = true;
             }
-            let t = &self.tracks[ti];
+            let t = pick(&self.tracks, &self.master, ti);
             let have: HashSet<&str> = t.automation.iter().map(|l| l.param.as_str()).collect();
             ui.menu_button("+ Lane", |ui| {
                 ui.set_min_width(240.0);
@@ -1032,7 +1077,7 @@ impl crate::App {
             }
         });
         if let Some(param) = add {
-            let t = &mut self.tracks[ti];
+            let t = pick_mut(&mut self.tracks, &mut self.master, ti);
             if !t.automation.iter().any(|l| l.param == param) {
                 let mut lane = Lane::new(param.clone());
                 // Starts level at the control's own value, so adding a
@@ -1050,7 +1095,7 @@ impl crate::App {
         let colour = tc.track(ti);
         let (scroll, pps) = self.timeline.x_view();
         let (grid, snapping) = (self.timeline.grid, self.timeline.snap);
-        let n = self.tracks[ti].automation.len();
+        let n = pick(&self.tracks, &self.master, ti).automation.len();
         if n == 0 {
             ui.label(RichText::new("No lanes yet. Add one with + Lane, or move a control while playing in Touch, Latch or Write.").weak());
             return;
@@ -1090,7 +1135,7 @@ impl crate::App {
                     let r = ((y - rect.top()) / ROW).floor();
                     (r >= 0.0 && (r as usize) < n).then_some(r as usize)
                 };
-                let t = &self.tracks[ti];
+                let t = pick(&self.tracks, &self.master, ti);
                 let ranges: Vec<Option<Range>> =
                     t.automation.iter().map(|l| range(t, &l.param)).collect();
                 let y_of = |i: usize, v: f64| {
@@ -1178,7 +1223,7 @@ impl crate::App {
                 });
 
                 // Edits, with the track borrowed again for writing.
-                let t = &mut self.tracks[ti];
+                let t = pick_mut(&mut self.tracks, &mut self.master, ti);
                 if let Some((i, j, f, v)) = edit
                     && let Some(l) = t.automation.get_mut(i)
                 {
@@ -1208,7 +1253,7 @@ impl crate::App {
                     changed = true;
                 }
 
-                let t = &self.tracks[ti];
+                let t = pick(&self.tracks, &self.master, ti);
                 let painter = ui.painter_at(rect);
                 let writing: Vec<bool> = (t.automation.iter())
                     .map(|l| self.automation.writing(&t.key, &l.param))
@@ -1368,7 +1413,7 @@ impl crate::App {
                     }
                 }
                 if let Some((i, by)) = nudge {
-                    let t = &mut self.tracks[ti];
+                    let t = pick_mut(&mut self.tracks, &mut self.master, ti);
                     if let Some(g) = ranges[i]
                         && let Some(now) = (t.automation[i].value_at(playhead))
                             .or_else(|| control(t, &t.automation[i].param))
@@ -1383,7 +1428,7 @@ impl crate::App {
             });
 
         if let Some(i) = remove {
-            let t = &mut self.tracks[ti];
+            let t = pick_mut(&mut self.tracks, &mut self.master, ti);
             if i < t.automation.len() {
                 let param = t.automation.remove(i).param;
                 self.automation
@@ -1673,6 +1718,50 @@ mod tests {
             .unwrap();
         assert!(!pan.points.is_empty());
         assert!(pan.points.iter().all(|p| (p.value - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn the_master_fader_writes_a_lane_and_shows_it() {
+        let mut h = harness();
+        let app = h.state_mut();
+        let key = daw_project::Master::KEY;
+        app.automation.set_mode(key, Mode::Touch);
+        // The master's settings have no pan.
+        let params: Vec<String> = (choices(&app.master, &[]).into_iter())
+            .map(|c| c.param)
+            .collect();
+        assert_eq!(params, [Lane::GAIN]);
+        assert_eq!(app.watched(&app.master), [Lane::GAIN]);
+
+        // A pass on the master fader is live in the engine while written,
+        // then a lane the engine plays.
+        let now = Instant::now();
+        app.start_pass(key, Lane::GAIN, 0, -6.0, now);
+        assert!(app.automation.writing(key, Lane::GAIN));
+        let p = app.automation.passes.remove(0);
+        assert!(app.end_pass(p, 48_000));
+        let s = app.session();
+        assert_eq!(s.master_automation.len(), 1);
+        assert_eq!(s.master_automation[0].target, Target::Gain);
+        assert!(!s.master_automation[0].live);
+
+        // Shown on the master fader while playing, its own value kept.
+        app.master.mix.gain_db = 0.0;
+        app.show_automation();
+        assert_eq!(app.master.mix.gain_db, -6.0);
+        let ctx = h.ctx.clone();
+        h.state_mut().automation_tick(&ctx);
+        assert_eq!(h.state().master.mix.gain_db, 0.0);
+
+        // The pane shows the master after the tracks.
+        h.state_mut().automation.track = Some(key.into());
+        (h.state_mut().workspace).open(crate::workspace::Pane::Automation);
+        h.run();
+        assert_eq!(h.state().automation.track.as_deref(), Some(key));
+        assert!(
+            h.query_by_label("Track whose automation is shown")
+                .is_some()
+        );
     }
 
     #[test]

@@ -207,6 +207,19 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
     for text in effect_changes(&before.master.effects, &after.master.effects) {
         say("Master", text);
     }
+    if before.master.automation != after.master.automation {
+        let n = (after.master.automation.iter())
+            .filter(|l| !l.points.is_empty())
+            .count();
+        say(
+            "Master",
+            match n {
+                0 => "Automation cleared".into(),
+                1 => "Automation changed (1 lane)".into(),
+                n => format!("Automation changed ({n} lanes)"),
+            },
+        );
+    }
     for t in before
         .tracks
         .iter()

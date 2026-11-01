@@ -266,7 +266,15 @@ impl App {
         }
         let all: Vec<usize> = (0..self.tracks.len()).collect();
         let (s, tracks) = match only {
-            Some(i) if self.tracks[i].kind.is_bus() => (crate::mixer::through_bus(&s, i), all),
+            // A bus or track heard on its own is heard before the
+            // master, as the track itself sounds.
+            Some(i) if self.tracks[i].kind.is_bus() => {
+                let mut one = crate::mixer::through_bus(&s, i);
+                one.master_inserts.clear();
+                one.master_db = 0.0;
+                one.master_automation.clear();
+                (one, all)
+            }
             Some(i) => {
                 let mut one = Session::new(self.tempo_map());
                 let mut spec = s.tracks[i].clone();

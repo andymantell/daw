@@ -1135,6 +1135,7 @@ impl App {
         }
         s.master_db = self.master.mix.gain_db;
         s.master_inserts = fx::specs(&self.master.fx);
+        s.master_automation = self.lane_specs(&self.master);
         s
     }
 
@@ -1351,9 +1352,13 @@ impl App {
                 let mut spec = s.tracks[i].clone();
                 spec.mix.mute = false;
                 spec.mix.solo = false;
-                // On its own: no bus, sends, group or sidechains.
+                // On its own: no bus, sends, group or sidechains, but
+                // through the master, as in the mix.
                 mixer::alone(&mut spec);
                 one.tracks.push(spec);
+                one.master_db = s.master_db;
+                one.master_inserts = s.master_inserts.clone();
+                one.master_automation = s.master_automation.clone();
                 parts.push(export::Part {
                     name: format!("{:02} {}", i + 1, export::file_name(&t.name)),
                     graph: graph(&one, &[t], &mut plugins)?,

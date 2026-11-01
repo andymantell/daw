@@ -654,8 +654,16 @@ pub struct Session {
     /// bypass work as on a track; sidechains are ignored. Its latency
     /// delays the whole mix, so every track reads ahead by it too.
     pub master_inserts: Vec<InsertSpec>,
+    /// The master channel's automation: its fader ([`Target::Gain`], in
+    /// dB) and its effects' settings ([`Target::Insert`]). Other
+    /// targets are ignored.
+    pub master_automation: Vec<LaneSpec>,
     pub groups: Vec<GroupSpec>,
 }
+
+/// The track index that names the master channel in
+/// `Command::SetAutoLive`.
+pub const MASTER: usize = usize::MAX;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CompileError {
@@ -1643,6 +1651,10 @@ pub struct Graph {
     pub(crate) master_chain: Vec<chain::Step>,
     /// The master chain's latency, which every track reads ahead by.
     pub(crate) master_latency: i64,
+    /// The master's lanes, and its fader's gain at the end of the last
+    /// block, which the next ramps from.
+    pub(crate) master_lanes: Vec<LaneSpec>,
+    pub(crate) master_last: f32,
     pub(crate) any_solo: bool,
     pub(crate) groups: Vec<GroupSpec>,
     /// Per-track scratch, two channels each, `max_block` long: the
@@ -1706,6 +1718,7 @@ impl Session {
             tracks: Vec::new(),
             master_db: 0.0,
             master_inserts: Vec::new(),
+            master_automation: Vec::new(),
             groups: Vec::new(),
         }
     }
@@ -2198,6 +2211,11 @@ impl Session {
             master_inserts,
             master_chain: master_built.steps,
             master_latency,
+            master_lanes: (self.master_automation.iter())
+                .filter(|l| matches!(l.target, Target::Gain | Target::Insert { .. }))
+                .cloned()
+                .collect(),
+            master_last: db_to_gain(self.master_db),
             any_solo: false,
             groups: self.groups.clone(),
             clicks: Clicks::new(rate),
@@ -2283,6 +2301,7 @@ impl Graph {
     /// Starts each track at the gains it has at `pos`, lanes read, so
     /// the graph does not fade in when it starts playing there.
     pub(crate) fn settle_at(&mut self, pos: i64) {
+        self.master_last = self.read_master_lanes(pos);
         let any_solo = self.any_solo;
         for ti in 0..self.tracks.len() {
             let t = &mut self.tracks[ti];
@@ -2308,6 +2327,12 @@ impl Graph {
     /// Marks a lane as being written (its control plays, not its line)
     /// or played again, without a new graph.
     pub(crate) fn set_auto_live(&mut self, track: usize, target: Target, live: bool) {
+        if track == MASTER {
+            for l in self.master_lanes.iter_mut().filter(|l| l.target == target) {
+                l.live = live;
+            }
+            return;
+        }
         if let Some(t) = self.tracks.get_mut(track) {
             for l in t.automation.iter_mut().filter(|l| l.target == target) {
                 l.live = live;
@@ -2674,9 +2699,9 @@ impl Graph {
                     out_l[i] += p.master[0][i];
                     out_r[i] += p.master[1][i];
                 }
-                self.run_master(out_l, out_r);
+                self.run_master(pos, out_l, out_r);
             }
-            None => self.run_master(out_l, out_r),
+            None => self.run_master(pos, out_l, out_r),
         }
         // Counted down here, so a note on a track the other side of a
         // split plays still ends.
@@ -2689,7 +2714,11 @@ impl Graph {
 
     /// The master channel over one block of the summed mix: its effects,
     /// then its fader.
-    fn run_master(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+    /// Its lanes are read at the block's end, as a track's are, and the
+    /// fader ramps there over the block.
+    fn run_master(&mut self, pos: i64, out_l: &mut [f32], out_r: &mut [f32]) {
+        let n = out_l.len();
+        let target = self.read_master_lanes(pos + n as i64);
         if !self.master_chain.is_empty() {
             let mut keys = chain::Keys {
                 edges: &mut self.edges,
@@ -2704,9 +2733,43 @@ impl Graph {
                 out_r,
             );
         }
-        for s in out_l.iter_mut().chain(out_r.iter_mut()) {
-            *s *= self.master;
+        let from = self.master_last;
+        if from == target {
+            for s in out_l.iter_mut().chain(out_r.iter_mut()) {
+                *s *= target;
+            }
+        } else {
+            for i in 0..n {
+                let g = from + (target - from) * (i + 1) as f32 / n as f32;
+                out_l[i] *= g;
+                out_r[i] *= g;
+            }
         }
+        self.master_last = target;
+    }
+
+    /// Sets the master's effects from their lanes at `at`, and gives the
+    /// master fader's gain there: its lane's, or the fader's own.
+    fn read_master_lanes(&mut self, at: i64) -> f32 {
+        let mut gain = self.master;
+        for lane in &self.master_lanes {
+            if lane.live {
+                continue;
+            }
+            let Some(v) = lane.curve.at(at) else { continue };
+            match lane.target {
+                Target::Gain => gain = db_to_gain(v),
+                Target::Insert { id, param } => {
+                    if let Some(i) = self.master_inserts.iter_mut().find(|i| i.id == id)
+                        && let Some(fx) = &mut i.effect
+                    {
+                        fx.set_param(param, v as f64);
+                    }
+                }
+                Target::Pan | Target::Send(_) => {}
+            }
+        }
+        gain
     }
 
     /// Moves the master channel's effects and chain out of `other` into
@@ -2716,6 +2779,8 @@ impl Graph {
         std::mem::swap(&mut self.master_inserts, &mut other.master_inserts);
         std::mem::swap(&mut self.master_chain, &mut other.master_chain);
         std::mem::swap(&mut self.master_latency, &mut other.master_latency);
+        std::mem::swap(&mut self.master_lanes, &mut other.master_lanes);
+        std::mem::swap(&mut self.master_last, &mut other.master_last);
     }
 
     /// Whether any of the master channel's effects is in this graph.

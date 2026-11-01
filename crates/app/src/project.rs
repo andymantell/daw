@@ -273,6 +273,7 @@ impl App {
             master: daw_project::Master {
                 gain_db: self.master.mix.gain_db as f64,
                 effects: self.chain_value(&self.master),
+                automation: self.master.automation.clone(),
             },
         }
     }
@@ -759,6 +760,17 @@ impl App {
         );
         self.master.fx = master_fx;
         self.master.mix.gain_db = p.master.gain_db as f32;
+        self.master.automation = (p.master.automation.iter())
+            .map(|l| daw_project::Lane {
+                param: l.param.clone(),
+                points: (l.points.iter())
+                    .map(|p| daw_project::AutoPoint {
+                        at: scale(p.at).max(0),
+                        value: p.value,
+                    })
+                    .collect(),
+            })
+            .collect();
         // Clips and effects no longer there go with the old graph.
         let ids: std::collections::HashSet<u64> = (self.tracks.iter())
             .flat_map(|t| t.clips.iter().map(|c| c.id))

@@ -421,4 +421,64 @@ mod tests {
         assert!(dir.exists(), "{done}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn stems_go_through_the_master() {
+        let mut d = Driver::new();
+        d.access = crate::agent::Access::EditExport;
+        d.command("add-synth-track");
+        let a = d.app();
+        let mut c = daw_project::NoteClip::new("n".into(), "Held".into(), 0, 4 * 960);
+        c.notes.push(daw_project::Note::new(0, 4 * 960, 57, 100));
+        a.tracks[0].note_clips.push(c);
+        a.rebuild();
+        d.call(
+            "set_parameter",
+            json!({"track": "master", "param": "gain", "value": -20.0}),
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("daw-export-stems-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        d.call(
+            "export_mix",
+            json!({"format": "wav", "from_bar": 1, "to_bar": 2, "stems": true, "folder": dir}),
+        )
+        .unwrap();
+        let mut done = serde_json::Value::Null;
+        for _ in 0..3000 {
+            done = d.call("get_exports", json!({})).unwrap();
+            if !done["finished"].as_array().is_none_or(|f| f.is_empty()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let folder = done["finished"][0]["folder"].as_str().expect("finished");
+        let mut peaks = Vec::new();
+        for e in std::fs::read_dir(folder).unwrap() {
+            let path = e.unwrap().path();
+            if path.extension().is_some_and(|x| x == "wav") {
+                let mut r = hound::WavReader::open(&path).unwrap();
+                let peak = match r.spec().sample_format {
+                    hound::SampleFormat::Float => (r.samples::<f32>())
+                        .map(|x| x.unwrap().abs())
+                        .fold(0.0, f32::max),
+                    hound::SampleFormat::Int => {
+                        let full = (1i64 << (r.spec().bits_per_sample - 1)) as f32;
+                        (r.samples::<i32>())
+                            .map(|x| (x.unwrap() as f32 / full).abs())
+                            .fold(0.0, f32::max)
+                    }
+                };
+                peaks.push((
+                    path.file_name().unwrap().to_string_lossy().to_string(),
+                    peak,
+                ));
+            }
+        }
+        assert_eq!(peaks.len(), 2, "the mix and one stem: {peaks:?}");
+        // One track alone through the master is the mix.
+        assert!(peaks[0].1 > 0.001, "{peaks:?}");
+        assert!((peaks[0].1 - peaks[1].1).abs() < 0.002, "{peaks:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

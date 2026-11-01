@@ -248,23 +248,9 @@ pub fn paste_bars(p: &mut Project, piece: &Project, at: &Bars, fresh: bool) {
             }
             to.parts.sort_by_key(|q| q.start);
         }
-        for lane in pt.automation.iter().filter(|l| !l.points.is_empty()) {
-            let i = match t.automation.iter().position(|l| l.param == lane.param) {
-                Some(i) => i,
-                None => {
-                    t.automation.push(crate::Lane::new(lane.param.clone()));
-                    t.automation.len() - 1
-                }
-            };
-            let to = &mut t.automation[i];
-            for q in lane.points.iter().filter(|q| q.at < at.frames) {
-                to.put(q.at + at.frame, q.value);
-            }
-            if let Some(v) = lane.value_at(at.frames - 1) {
-                to.put(at.frame + at.frames - 1, v);
-            }
-        }
+        paste_lanes(&mut t.automation, &pt.automation, at);
     }
+    paste_lanes(&mut p.master.automation, &piece.master.automation, at);
 
     let mut ids: HashMap<String, String> = HashMap::new();
     for c in &piece.comments {
@@ -277,6 +263,27 @@ pub fn paste_bars(p: &mut Project, piece: &Project, at: &Bars, fresh: bool) {
         c.start += at.frame;
         c.end = c.end.map(|e| e + at.frame);
         p.comments.push(c);
+    }
+}
+
+/// Pastes a piece's lanes into `lanes` at `at`, each held to the
+/// piece's end.
+fn paste_lanes(lanes: &mut Vec<crate::Lane>, from: &[crate::Lane], at: &Bars) {
+    for lane in from.iter().filter(|l| !l.points.is_empty()) {
+        let i = match lanes.iter().position(|l| l.param == lane.param) {
+            Some(i) => i,
+            None => {
+                lanes.push(crate::Lane::new(lane.param.clone()));
+                lanes.len() - 1
+            }
+        };
+        let to = &mut lanes[i];
+        for q in lane.points.iter().filter(|q| q.at < at.frames) {
+            to.put(q.at + at.frame, q.value);
+        }
+        if let Some(v) = lane.value_at(at.frames - 1) {
+            to.put(at.frame + at.frames - 1, v);
+        }
     }
 }
 
@@ -298,6 +305,9 @@ pub fn flatten(p: &Project, clock: Clock, order: &[String], end: i64) -> Project
         for l in &mut t.automation {
             l.points.clear();
         }
+    }
+    for l in &mut out.master.automation {
+        l.points.clear();
     }
     out.markers.clear();
     out.tempo_changes.clear();

@@ -29,7 +29,9 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "An instrument track's instrument, or its layers (each with its \
                       instrument, level, pan, note and velocity ranges, transpose and \
                       effects), the effects on a drum machine's pads, and the instrument's \
-                      extra outputs with the bus each goes to. Its settings are in \
+                      extra outputs with the bus each goes to; for a sampler playing an \
+                      SFZ library, the library: its keys, articulations and controls \
+                      (mic levels and the like, each a setting). Its settings are in \
                       list_parameters.",
         access: Access::Read,
         schema: || {
@@ -306,9 +308,48 @@ impl App {
                 json!({"output": o, "name": name, "to": to})
             })
             .collect();
+        let library = (t.instrument.as_ref())
+            .and_then(Slot::builtin_ref)
+            .and_then(|b| b.library().map(|l| (b, l)))
+            .map(|(b, l)| {
+                let p = b.params();
+                let controls: Vec<Value> = (p.list().iter().enumerate())
+                    .filter(|(_, x)| x.key.starts_with("cc"))
+                    .map(|(i, x)| {
+                        json!({"param": format!("instrument.{}", x.key), "name": x.name,
+                               "value": p.get(i)})
+                    })
+                    .collect();
+                let switches: Vec<Value> = (l.sfz.key_switches().into_iter())
+                    .map(|(k, name)| json!({"key": k, "name": name}))
+                    .collect();
+                let keys: Vec<Value> = (0..128u8)
+                    .filter(|&k| !l.by_key[k as usize].is_empty())
+                    .map(|k| {
+                        let name = l.sfz.key_labels.get(&k).cloned();
+                        json!({"key": k, "name": name, "regions": l.by_key[k as usize].len()})
+                    })
+                    .collect();
+                json!({
+                    "file": l.path.display().to_string(),
+                    "name": l.name(),
+                    "regions": l.sfz.regions.len(),
+                    "sounds": l.sources.len(),
+                    "memory_mb": l.bytes >> 20,
+                    "from_disk": l.streamed,
+                    "keys": keys,
+                    "articulations": switches,
+                    "articulation": p.get_key("keyswitch"),
+                    "controls": controls,
+                    "normalise": p.get_key("normalise").map(|v| v >= 0.5),
+                    "not_played": l.sfz.unsupported.keys().collect::<Vec<_>>(),
+                    "problems": l.problems,
+                })
+            });
         Ok(json!({
             "track": key,
             "instrument": pt.instrument.as_ref().map(instrument),
+            "library": library,
             "layers": layers,
             "outputs": outputs,
         }))
@@ -864,5 +905,181 @@ mod tests {
         )
         .unwrap();
         assert_eq!(instrument(&mut d, &t)["outputs"][0]["to"], json!(null));
+    }
+}
+
+/// An assistant loading an SFZ library onto a sampler and mixing it.
+#[cfg(test)]
+mod sfz_tests {
+    use serde_json::json;
+
+    use crate::agent::driver::Driver;
+
+    fn kit() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("daw-sfz-agent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, level) in [("close.wav", 0.5f32), ("room.wav", 0.25)] {
+            let mut w = hound::WavWriter::create(
+                dir.join(name),
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: 48_000,
+                    bits_per_sample: 32,
+                    sample_format: hound::SampleFormat::Float,
+                },
+            )
+            .unwrap();
+            for i in 0..96_000 {
+                w.write_sample(level * (i as f32 * 0.05).sin()).unwrap();
+            }
+            w.finalize().unwrap();
+        }
+        std::fs::write(
+            dir.join("Drums.sfz"),
+            "<control> label_cc70=Kick close set_cc70=127 label_cc71=Kick room set_cc71=127\n\
+             <global> loop_mode=one_shot\n\
+             <region> key=36 sample=close.wav amplitude_cc70=100 locc70=1\n\
+             <region> key=36 sample=room.wav amplitude_cc71=100 locc71=1\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn rms(d: &mut Driver, t: &str) -> f64 {
+        d.call(
+            "analyse",
+            json!({"track": t, "from_seconds": 0.0, "to_seconds": 1.0}),
+        )
+        .unwrap()["rms_dbfs"]
+            .as_f64()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_assistant_loads_an_sfz_library_and_sets_its_mics() {
+        let dir = kit();
+        let mut d = Driver::new();
+        let path = dir.join("Drums.sfz");
+        let r = d
+            .call("file_command", json!({"id": "load-sfz", "path": path}))
+            .unwrap();
+        assert!(r["message"].as_str().unwrap().contains("2 regions"), "{r}");
+        let t = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(d.project()["tracks"][0]["name"], "Drums");
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        let lib = &i["library"];
+        assert_eq!(lib["regions"], 2, "{i}");
+        assert_eq!(lib["keys"][0]["key"], 36);
+        assert_eq!(lib["controls"][0]["param"], "instrument.cc70");
+        assert_eq!(lib["controls"][1]["name"], "Kick room");
+        // A kick on the first beat.
+        {
+            let a = d.app();
+            let tr = &mut a.tracks[0];
+            let mut c = daw_project::NoteClip::new("n".into(), "Kick".into(), 0, 960);
+            c.notes.push(daw_project::Note::new(0, 480, 36, 127));
+            tr.note_clips.push(c);
+            a.rebuild();
+        }
+        let both = rms(&mut d, &t);
+        assert!(both > -40.0, "{both}");
+        // The room mic off: quieter, and one undo step back.
+        d.call(
+            "set_parameter",
+            json!({"track": t, "param": "instrument.cc71", "value": 0}),
+        )
+        .unwrap();
+        let close = rms(&mut d, &t);
+        assert!(close < both - 1.0 && close > -40.0, "{both} {close}");
+        d.call("undo_steps", json!({"undo": 1})).unwrap();
+        let back = rms(&mut d, &t);
+        assert!((back - both).abs() < 0.5, "{both} {back}");
+        // Back to its own zones, and the library again by set_sound.
+        d.call("run_command", json!({"id": "unload-sfz", "track": t}))
+            .unwrap();
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert!(i["library"].is_null(), "{i}");
+        d.call(
+            "set_sound",
+            json!({"track": t, "slot": "sfz", "sound": path}),
+        )
+        .unwrap();
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["library"]["sounds"], 2, "{i}");
+    }
+}
+
+/// The CC0 drum library the sampler was tested with, played by an
+/// assistant: set DAW_BIG_RUSTY to its folder to run this, and
+/// DAW_BIG_RUSTY_OUT to a file to keep what it played.
+#[cfg(test)]
+mod big_rusty {
+    use serde_json::json;
+
+    use crate::agent::driver::Driver;
+
+    #[test]
+    fn an_assistant_plays_a_beat_on_big_rusty_drums() {
+        let Some(dir) = std::env::var_os("DAW_BIG_RUSTY").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let mut d = Driver::new();
+        let path = dir.join("Programs/01-full.sfz");
+        let r = d
+            .call("file_command", json!({"id": "load-sfz", "path": path}))
+            .unwrap();
+        eprintln!("{}", r["message"]);
+        let t = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        let lib = &i["library"];
+        eprintln!(
+            "{} keys, {} controls, not played: {}",
+            lib["keys"].as_array().unwrap().len(),
+            lib["controls"].as_array().unwrap().len(),
+            lib["not_played"]
+        );
+        // Two bars at 120: kick, snare, eighth-note hats getting
+        // harder, then a crash.
+        {
+            let a = d.app();
+            let tr = &mut a.tracks[0];
+            let mut c = daw_project::NoteClip::new("n".into(), "Beat".into(), 0, 8 * 960);
+            for beat in 0..8i64 {
+                let at = beat * 960;
+                let kick = if beat % 2 == 0 { 36 } else { 38 };
+                c.notes.push(daw_project::Note::new(at, 240, kick, 110));
+                for half in 0..2 {
+                    let v = (40 + beat * 10 + half * 5) as u8;
+                    c.notes
+                        .push(daw_project::Note::new(at + half * 480, 120, 42, v));
+                }
+            }
+            c.notes
+                .push(daw_project::Note::new(8 * 960 - 1, 240, 49, 120));
+            tr.note_clips.push(c);
+            a.rebuild();
+        }
+        let a = d
+            .call(
+                "analyse",
+                json!({"track": t, "from_seconds": 0.0, "to_seconds": 6.0}),
+            )
+            .unwrap();
+        eprintln!(
+            "peak {} dBFS, true peak {}, rms {} dBFS, loudness {} LUFS",
+            a["sample_peak_dbfs"], a["true_peak_dbtp"], a["rms_dbfs"], a["integrated_lufs"]
+        );
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() > -20.0, "{a}");
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() < 0.0, "{a}");
+        if let Some(out) = std::env::var_os("DAW_BIG_RUSTY_OUT") {
+            let r = d
+                .call(
+                    "render_audio",
+                    json!({"from_seconds": 0.0, "to_seconds": 6.0}),
+                )
+                .unwrap();
+            std::fs::copy(r["file"].as_str().unwrap(), out).unwrap();
+        }
     }
 }

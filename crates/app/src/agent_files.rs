@@ -34,6 +34,7 @@ pub(crate) const FILE_COMMANDS: &[(Cmd, bool)] = &[
     (Cmd::PrintNotation, true),
     (Cmd::ImportKit, false),
     (Cmd::ExportKit, true),
+    (Cmd::LoadSfz, false),
 ];
 
 pub(crate) const TOOLS: &[Tool] = &[
@@ -42,13 +43,16 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Runs a command that would ask for a file in a file chooser, with the \
                       file given instead: import-preset, import-bundle, export-bundle, \
                       import-midi, export-midi, import-musicxml, export-musicxml, \
-                      export-text-tab, print-notation (a PDF), import-kit or export-kit. \
-                      Those that write a file need the edit and export permission.",
+                      export-text-tab, print-notation (a PDF), import-kit, export-kit or \
+                      load-sfz (an SFZ sample library, on the sampler track given, else the \
+                      first sampler track, else a new one; a big library takes a few \
+                      seconds). Those that write a file need the edit and export permission.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
                 "id": {"type": "string", "description": "The command's id."},
-                "path": {"type": "string", "description": "The file's full path."}
+                "path": {"type": "string", "description": "The file's full path."},
+                "track": {"type": "string", "description": "For load-sfz: the sampler track to load it on."}
             }, "required": ["id", "path"]})
         },
     },
@@ -203,6 +207,16 @@ impl App {
                 self.write_notation(what, &score, &path);
             }
             Cmd::ImportKit => self.import_kit(&path),
+            Cmd::LoadSfz => {
+                if let Some(key) = args["track"].as_str() {
+                    let i = self
+                        .track_index(key)
+                        .ok_or_else(|| format!("There is no track {key}."))?;
+                    self.instrument_open = Some(i);
+                }
+                let m = self.load_sfz(&path)?;
+                self.message = Some(m);
+            }
             Cmd::ExportKit => self.export_kit(&path),
             _ => unreachable!("only the commands listed"),
         }

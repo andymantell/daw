@@ -442,6 +442,7 @@ impl Slot {
     pub fn fresh(&self, effects: &mut Effects, rate: u32) -> Result<Option<Fresh>, String> {
         match &self.inner {
             Inner::Plugin(fx) => effects.fresh_instrument(fx, rate).map(Some),
+            Inner::Builtin(b) => Ok(Some((None, b.make_offline(rate)))),
             _ => Ok(self.make(rate).map(|m| (None, m))),
         }
     }
@@ -449,7 +450,9 @@ impl Slot {
     /// The sound files it uses that aren't in the project yet (full
     /// paths), for saving.
     pub fn outside_files(&self) -> Vec<String> {
+        // An SFZ library stays where it is.
         let mut v: Vec<String> = (self.value().samples.into_iter())
+            .filter(|(k, _)| k != daw_instruments::SFZ_SLOT)
             .map(|(_, r)| r)
             .filter(|r| !r.starts_with(made::PREFIX) && !daw_project::is_asset_name(r))
             .filter(|r| Path::new(r).is_file())
@@ -592,6 +595,30 @@ impl Slot {
 
 /// What a sound reference is called: a file's name without its folder
 /// and ending, or the name of a sound made here.
+/// What a library is, in a line.
+pub fn library_summary(l: &daw_instruments::Library) -> String {
+    let mut m = format!(
+        "Loaded {}: {} regions, {} sounds, {} MB in memory{}.",
+        l.name(),
+        l.sfz.regions.len(),
+        l.sources.len(),
+        l.bytes >> 20,
+        if l.streamed {
+            ", the rest played from disk"
+        } else {
+            ""
+        }
+    );
+    if !l.problems.is_empty() {
+        m.push_str(&format!(
+            " {} couldn't be read, such as {}.",
+            l.problems.len(),
+            l.problems[0]
+        ));
+    }
+    m
+}
+
 pub fn sound_name(reference: &str) -> String {
     if let Some(n) = made::name(reference) {
         return n.into();
@@ -1068,6 +1095,35 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
         return false;
     };
     let p = b.params().clone();
+    ui.horizontal(|ui| {
+        // ai: load-sfz
+        if ui
+            .button("Load an SFZ library…")
+            .on_hover_text("Plays a sample library in the SFZ format, with its layers, round robins, mics and articulations")
+            .clicked()
+        {
+            shown.cmd = Some(Cmd::LoadSfz);
+        }
+        if b.library().is_some() {
+            // ai: unload-sfz
+            if ui.button("Back to zones").clicked() {
+                shown.cmd = Some(Cmd::UnloadSfz);
+            }
+        }
+    });
+    if let Some(lib) = b.library().cloned() {
+        library_controls(ui, id, &p, &lib);
+        return false;
+    }
+    if b.sfz_path().is_some() {
+        ui.label(
+            egui::RichText::new(format!(
+                "Its SFZ library couldn't be read: {}",
+                b.sfz_path().unwrap_or_default()
+            ))
+            .weak(),
+        );
+    }
     egui::CollapsingHeader::new("Sound")
         .default_open(true)
         .show(ui, |ui| {
@@ -1103,6 +1159,14 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
             .clicked()
         {
             b.spread_zones();
+        }
+        // ai: normalise-zones
+        if ui
+            .button("Normalise levels")
+            .on_hover_text("Each zone's level so its loudest moment peaks at -6 dB")
+            .clicked()
+        {
+            shown.cmd = Some(Cmd::NormaliseZones);
         }
     });
     let zones = b.zones();
@@ -1151,6 +1215,102 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
     }
     slot.zone = chosen;
     renew
+}
+
+/// A loaded SFZ library's settings: its level, the articulation, and a
+/// fader for each controller it names (mic levels, say). Each is a
+/// setting assistants set with set_parameter.
+fn library_controls(ui: &mut egui::Ui, id: u64, p: &Params, lib: &daw_instruments::Library) {
+    ui.label(format!(
+        "{}: {} regions, {} sounds, {} MB in memory{}",
+        lib.name(),
+        lib.sfz.regions.len(),
+        lib.sources.len(),
+        lib.bytes >> 20,
+        if lib.streamed {
+            ", the rest from disk"
+        } else {
+            ""
+        }
+    ))
+    .on_hover_text(lib.path.display().to_string());
+    if !lib.problems.is_empty() {
+        egui::CollapsingHeader::new(format!("{} problems", lib.problems.len()))
+            .id_salt(("sfz-problems", id))
+            .show(ui, |ui| {
+                for pr in lib.problems.iter().take(20) {
+                    ui.label(egui::RichText::new(pr).weak());
+                }
+            });
+    }
+    if !lib.sfz.unsupported.is_empty() {
+        let list: Vec<String> = (lib.sfz.unsupported.iter())
+            .map(|(k, n)| format!("{k} ({n})"))
+            .collect();
+        ui.label(egui::RichText::new("Some of its settings aren't played yet").weak())
+            .on_hover_text(list.join(", "));
+    }
+    let row = |key: &str| p.index(key);
+    egui::Grid::new(("sfz-main", id))
+        .num_columns(2)
+        .show(ui, |ui| {
+            // ai: set_parameter
+            param(ui, ("sfz", id), p, sampler::at::LEVEL);
+            if let Some(i) = row("normalise") {
+                // ai: set_parameter
+                param(ui, ("sfz", id), p, i);
+            }
+            if let Some(i) = row("keyswitch") {
+                ui.label("Articulation");
+                let now = p.get(i) as u8;
+                let switches = lib.sfz.key_switches();
+                let shown = (switches.iter()).find(|(k, _)| *k == now).map_or_else(
+                    || daw_instruments::params::note_name(now as i32),
+                    |(_, n)| n.clone(),
+                );
+                // ai: set_parameter
+                egui::ComboBox::from_id_salt(("sfz-switch", id))
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for (k, name) in &switches {
+                            let text = format!(
+                                "{name} ({})",
+                                daw_instruments::params::note_name(*k as i32)
+                            );
+                            // ai: set_parameter
+                            if ui.selectable_label(*k == now, text).clicked() {
+                                p.set(i, *k as f64);
+                            }
+                        }
+                    })
+                    .response
+                    .accessible_name("Articulation");
+                ui.end_row();
+            }
+        });
+    let ccs: Vec<usize> = (p.list().iter().enumerate())
+        .filter(|(_, x)| x.key.starts_with("cc"))
+        .map(|(i, _)| i)
+        .collect();
+    if !ccs.is_empty() {
+        egui::CollapsingHeader::new(format!("Controls ({})", ccs.len()))
+            .id_salt(("sfz-ccs", id))
+            .default_open(true)
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new(("sfz-cc", id))
+                            .num_columns(2)
+                            .show(ui, |ui| {
+                                for i in ccs {
+                                    // ai: set_parameter
+                                    param(ui, ("sfz-cc", id), p, i);
+                                }
+                            });
+                    });
+            });
+    }
 }
 
 fn drum_sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Shown) -> bool {
@@ -1691,6 +1851,78 @@ impl crate::App {
         self.tracks.push(t);
         self.instrument_open = Some(self.tracks.len() - 1);
         self.rebuild();
+    }
+
+    /// Plays the SFZ library at `path` on the sampler track commands act
+    /// on, or on a new one. Reading a big library takes a few seconds.
+    /// What was loaded, to tell the user.
+    pub(crate) fn load_sfz(&mut self, path: &Path) -> Result<String, String> {
+        let lib = daw_instruments::library::open(path)?;
+        if lib.sfz.regions.is_empty() {
+            return Err(format!("{}: no sounds in it", path.display()));
+        }
+        let i = match self.instrument_track(Some(Kind::Sampler)) {
+            Some(i) => i,
+            None => {
+                self.add_instrument_track(Kind::Sampler);
+                self.tracks.len() - 1
+            }
+        };
+        let rate = self.rate;
+        let mut pending = std::mem::take(&mut self.pending_instruments);
+        let t = &mut self.tracks[i];
+        let renamed = t.name.starts_with(Kind::Sampler.name());
+        let slot = t
+            .instrument
+            .as_mut()
+            .ok_or("The track has no instrument.")?;
+        let b = slot
+            .builtin_mut()
+            .ok_or("The track's instrument isn't the sampler.")?;
+        b.set_library(&path.to_string_lossy(), lib.clone());
+        slot.renew(rate, &mut pending);
+        if renamed {
+            t.name = lib.name();
+        }
+        self.pending_instruments.extend(pending);
+        self.instrument_open = Some(i);
+        self.rebuild();
+        Ok(library_summary(&lib))
+    }
+
+    /// The sampler's track stops playing its library.
+    pub(crate) fn unload_sfz(&mut self) -> Result<(), String> {
+        let i = self
+            .instrument_track(Some(Kind::Sampler))
+            .ok_or("Add a sampler track first.")?;
+        let rate = self.rate;
+        let mut pending = std::mem::take(&mut self.pending_instruments);
+        if let Some(slot) = self.tracks[i].instrument.as_mut()
+            && let Some(b) = slot.builtin_mut()
+            && b.library().is_some()
+        {
+            b.clear_library();
+            slot.renew(rate, &mut pending);
+        }
+        self.pending_instruments.extend(pending);
+        self.rebuild();
+        Ok(())
+    }
+
+    /// Sets the sampler's zones' levels so each peaks at −6 dBFS.
+    pub(crate) fn normalise_zones(&mut self) -> Result<(), String> {
+        let i = self
+            .instrument_track(Some(Kind::Sampler))
+            .ok_or("Add a sampler track first.")?;
+        if let Some(b) = self.tracks[i]
+            .instrument
+            .as_mut()
+            .and_then(Slot::builtin_mut)
+        {
+            b.normalise_zones();
+        }
+        self.rebuild();
+        Ok(())
     }
 
     /// Puts a note clip on the slicer's track that plays its slices in

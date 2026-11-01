@@ -92,7 +92,7 @@ impl Sample {
 
 /// Four-point, third-order Hermite interpolation between `x0` and `x1`.
 #[inline]
-fn hermite(xm: f32, x0: f32, x1: f32, x2: f32, t: f32) -> f32 {
+pub(crate) fn hermite(xm: f32, x0: f32, x1: f32, x2: f32, t: f32) -> f32 {
     let c1 = 0.5 * (x1 - xm);
     let c2 = xm - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
     let c3 = 0.5 * (x2 - xm) + 1.5 * (x0 - x1);

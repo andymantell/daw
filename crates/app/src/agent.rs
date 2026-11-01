@@ -506,6 +506,7 @@ const NEEDS_A_PERSON: &[Cmd] = &[
     Cmd::ImportKit,
     Cmd::ExportKit,
     Cmd::ImportPreset,
+    Cmd::LoadSfz,
 ];
 
 /// What a command needs of an assistant.

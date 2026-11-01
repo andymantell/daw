@@ -267,6 +267,90 @@ fn decode(path: &Path) -> Result<Sound, String> {
     })
 }
 
+/// Reads a sound file a piece at a time, for playing long sounds from
+/// disk (the sampler's big libraries) without decoding all of them
+/// first. Mono stays mono and stereo stereo; more channels are mixed to
+/// stereo as [`read`] does.
+pub struct Decoder {
+    format: Box<dyn FormatReader>,
+    dec: Box<dyn symphonia::core::codecs::audio::AudioDecoder>,
+    track: u32,
+    buf: Vec<f32>,
+    pub rate: u32,
+    /// 1 or 2.
+    pub channels: usize,
+    /// How many frames the file says it has, if it says.
+    pub frames: Option<u64>,
+}
+
+impl Decoder {
+    pub fn open(path: &Path) -> Result<Decoder, String> {
+        let err = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+        let format = probe(path).map_err(|e| err(&e))?;
+        let (track, params) = audio_track(format.as_ref()).map_err(|e| err(&e))?;
+        let dec = symphonia::default::get_codecs()
+            .make_audio_decoder(&params, &AudioDecoderOptions::default())
+            .map_err(|e| err(&e))?;
+        let n = params.channels.as_ref().map_or(1, |c| c.count()).max(1);
+        let frames = format
+            .tracks()
+            .iter()
+            .find(|t| t.id == track)
+            .and_then(|t| t.num_frames);
+        Ok(Decoder {
+            format,
+            dec,
+            track,
+            buf: Vec::new(),
+            rate: params.sample_rate.unwrap_or(44_100),
+            channels: n.min(2),
+            frames,
+        })
+    }
+
+    /// Adds the next piece of the sound to `out`, interleaved in
+    /// [`channels`](Self::channels) channels. False at the end.
+    pub fn next(&mut self, out: &mut Vec<f32>) -> Result<bool, String> {
+        loop {
+            let packet = match self.format.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(false),
+                Err(DecodeError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    return Ok(false);
+                }
+                Err(e) => return Err(e.to_string()),
+            };
+            if packet.track_id != self.track {
+                continue;
+            }
+            let decoded = match self.dec.decode(&packet) {
+                Ok(d) => d,
+                Err(DecodeError::DecodeError(_)) => continue,
+                Err(e) => return Err(e.to_string()),
+            };
+            let channels = decoded.spec().channels().clone();
+            decoded.copy_to_vec_interleaved::<f32>(&mut self.buf);
+            if channels.count() <= 2 {
+                out.extend_from_slice(&self.buf);
+            } else {
+                let (s, _) = to_stereo(std::mem::take(&mut self.buf), &channels);
+                out.extend_from_slice(&s);
+            }
+            return Ok(true);
+        }
+    }
+
+    /// Decodes until `out` holds at least `frames` frames, or the end.
+    pub fn read_frames(&mut self, frames: usize, out: &mut Vec<f32>) -> Result<(), String> {
+        while out.len() < frames * self.channels {
+            if !self.next(out)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Mono and stereo as they are; more channels mixed to stereo, centre
 /// and surrounds 3 dB down and the low-frequency channel left out.
 fn to_stereo(samples: Vec<f32>, channels: &Channels) -> (Vec<f32>, usize) {

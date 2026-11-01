@@ -65,7 +65,8 @@ switching and per-theme designs for dense views are still to come.
 
 The mock-ups cover the timeline, transport bar and a row of mixer strips
 only. Before the themes are built, each one needs the rest of the app
-designed in it: the full mixer window, plugin and effect panels, the note
+designed in it: the full mixer window (now specified as a desk with
+vertical faders, see [MIXER_DESK.md](MIXER_DESK.md)), plugin and effect panels, the note
 and notation editors, the browser, settings, dialogs and the phone remote.
 Dense views are where a theme's spacing, line weights and contrast are
 really tested.

@@ -44,15 +44,21 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "set_instrument",
         description: "Changes the instrument an instrument track plays, or one of its \
-                      layers. For the track, its layers go (with their effects); \"none\" \
-                      plays no instrument, sending its notes only to a MIDI output.",
+                      layers, and/or sets many of its settings at once, as one undo step. \
+                      For the track, its layers go (with their effects); \"none\" plays no \
+                      instrument, sending its notes only to a MIDI output. With settings \
+                      and no instrument, the instrument stays and only its settings change; \
+                      with both, the new instrument starts from them. All or none: a key \
+                      it doesn't have changes nothing.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
                 "track": {"type": "string"},
                 "layer": {"type": "string", "description": "A layer's id, to change only that layer's instrument."},
-                "instrument": {"type": "string", "description": INSTRUMENT}
-            }, "required": ["track", "instrument"]})
+                "instrument": {"type": "string", "description": INSTRUMENT},
+                "settings": {"type": "object", "additionalProperties": {"type": "number"},
+                             "description": "The instrument's settings by key (the part after instrument. in list_parameters, or as get_instrument with settings lists a layer's); each kept in its range."}
+            }, "required": ["track"]})
         },
     },
     Tool {
@@ -357,7 +363,11 @@ impl App {
 
     fn set_instrument_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?;
-        let which = text(args, "instrument", "the instrument")?;
+        let which = args["instrument"].as_str();
+        let settings = args["settings"].as_object();
+        if which.is_none() && settings.is_none() {
+            return Err("Give the instrument, its settings, or both.".into());
+        }
         let ti = self.note_track(key)?;
         let layer = args["layer"].as_str();
         let n = match layer {
@@ -369,31 +379,102 @@ impl App {
             None => None,
         };
         let slot = match which {
-            "none" if n.is_none() => None,
-            "none" => return Err("A layer has to have an instrument; remove it instead.".into()),
-            w => Some(self.new_instrument(w)?),
-        };
-        let name = slot
-            .as_ref()
-            .map_or("no instrument".into(), |s| s.name.clone());
-        let id = slot.as_ref().map(|s| s.key.clone());
-        let t = &mut self.tracks[ti];
-        match (n, slot) {
-            (Some(n), Some(s)) => t.layers[n].slot = s,
-            (_, s) => {
-                crate::layers::drop_layers(t);
-                if s.as_ref().is_none_or(Slot::is_plugin) {
-                    // Where another instrument's outputs went means
-                    // nothing to this one.
-                    t.instrument_outputs.clear();
-                }
-                t.instrument = s;
+            None => None,
+            Some("none") if n.is_none() => Some(None),
+            Some("none") => {
+                return Err("A layer has to have an instrument; remove it instead.".into());
             }
+            Some(w) => Some(Some(self.new_instrument(w)?)),
+        };
+        // The settings are checked against the instrument they go on
+        // before anything changes.
+        let settings = match settings {
+            None => Vec::new(),
+            Some(m) => {
+                let t = &self.tracks[ti];
+                let on = match (&slot, n) {
+                    (Some(s), _) => s.as_ref(),
+                    (None, Some(n)) => Some(&t.layers[n].slot),
+                    (None, None) => t.instrument.as_ref(),
+                };
+                let Some(on) = on else {
+                    return Err(match t.layers.is_empty() {
+                        true => format!("{} plays no instrument.", t.name),
+                        false => format!(
+                            "{} plays layers; give a layer to set its instrument's settings.",
+                            t.name
+                        ),
+                    });
+                };
+                let have = on.settings();
+                let mut out = Vec::new();
+                for (k, v) in m {
+                    let (_, _, _, min, max, _) = (have.iter())
+                        .find(|x| &x.0 == k)
+                        .ok_or_else(|| format!("{} has no setting {k}.", on.name))?;
+                    let v = (v.as_f64())
+                        .filter(|v| v.is_finite())
+                        .ok_or_else(|| format!("The setting {k} isn't a number."))?;
+                    out.push((k.clone(), v.clamp(*min, *max)));
+                }
+                out
+            }
+        };
+        let mut label = None;
+        if let Some(slot) = slot {
+            let name = slot
+                .as_ref()
+                .map_or("no instrument".into(), |s| s.name.clone());
+            let t = &mut self.tracks[ti];
+            match (n, slot) {
+                (Some(n), Some(s)) => t.layers[n].slot = s,
+                (_, s) => {
+                    crate::layers::drop_layers(t);
+                    if s.as_ref().is_none_or(Slot::is_plugin) {
+                        // Where another instrument's outputs went means
+                        // nothing to this one.
+                        t.instrument_outputs.clear();
+                    }
+                    t.instrument = s;
+                }
+            }
+            self.rebuild();
+            label = Some(format!("Play {name}"));
         }
-        self.rebuild();
+        let count = settings.len();
+        if count > 0 {
+            self.edit_model(|p| {
+                let t = &mut p.tracks[ti];
+                let params = match n {
+                    Some(n) => &mut t.layers[n].instrument.params,
+                    None => {
+                        &mut (t.instrument.as_mut())
+                            .ok_or("The instrument has gone.")?
+                            .params
+                    }
+                };
+                for (k, v) in settings {
+                    params.retain(|(x, _)| *x != k);
+                    params.push((k, v));
+                }
+                Ok(Value::Null)
+            })?;
+        }
+        let t = &self.tracks[ti];
+        let slot = match n {
+            Some(n) => Some(&t.layers[n].slot),
+            None => t.instrument.as_ref(),
+        };
+        let id = slot.map(|s| s.key.clone());
+        let name = slot.map_or("no instrument".into(), |s| s.name.clone());
+        let label = match (label, count) {
+            (Some(l), 0) => l,
+            (Some(l), c) => format!("{l} with {c} settings"),
+            (None, c) => format!("Set {c} of {}'s {name} settings", t.name),
+        };
         Ok((
-            json!({"track": key, "layer": layer, "instrument": id, "name": name}),
-            Some(format!("Play {name}")),
+            json!({"track": key, "layer": layer, "instrument": id, "name": name, "settings_set": count}),
+            Some(label),
         ))
     }
 
@@ -645,6 +726,82 @@ mod tests {
 
     fn instrument(d: &mut Driver, t: &str) -> Value {
         d.call("get_instrument", json!({"track": t})).unwrap()
+    }
+
+    /// The track's own instrument's settings, from list_parameters.
+    fn own_settings(d: &mut Driver, t: &str) -> Vec<Value> {
+        let list = d.call("list_parameters", json!({"track": t})).unwrap();
+        (list[0]["params"].as_array().unwrap().iter())
+            .filter(|p| p["param"].as_str().unwrap().starts_with("instrument."))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_tracks_own_instrument_takes_many_settings_at_once() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "poly-synth"})).unwrap(),
+            "track",
+        );
+        let s = own_settings(&mut d, &t);
+        let key = |p: &Value| p["param"].as_str().unwrap()["instrument.".len()..].to_string();
+        let (k0, k1) = (key(&s[0]), key(&s[1]));
+        let was = instrument(&mut d, &t)["instrument"].clone();
+        let r = d
+            .call(
+                "set_instrument",
+                json!({"track": t, "settings": {k0.clone(): s[0]["max"], k1.clone(): -1.0e9}}),
+            )
+            .unwrap();
+        assert_eq!(r["settings_set"], 2);
+        let now = own_settings(&mut d, &t);
+        assert_eq!(now[0]["value"], s[0]["max"]);
+        assert_eq!(now[1]["value"], s[1]["min"], "kept in its range");
+        assert_eq!(
+            instrument(&mut d, &t)["instrument"],
+            was,
+            "the instrument stays"
+        );
+        // One undo step.
+        d.command("undo");
+        let back = own_settings(&mut d, &t);
+        assert_eq!(
+            (back[0]["value"].clone(), back[1]["value"].clone()),
+            (s[0]["value"].clone(), s[1]["value"].clone())
+        );
+
+        // A key it doesn't have changes nothing.
+        let e = d
+            .call(
+                "set_instrument",
+                json!({"track": t, "settings": {k0.clone(): s[0]["max"], "no-such": 1.0}}),
+            )
+            .unwrap_err();
+        assert!(e.contains("no setting no-such"), "{e}");
+        assert_eq!(own_settings(&mut d, &t)[0]["value"], s[0]["value"]);
+
+        // A new instrument and its settings in one call.
+        let r = d
+            .call(
+                "set_instrument",
+                json!({"track": t, "instrument": "synth", "settings": {"cutoff": 500.0}}),
+            )
+            .unwrap();
+        assert_eq!(r["settings_set"], 1);
+        let synth = own_settings(&mut d, &t);
+        let cutoff = synth
+            .iter()
+            .find(|p| p["param"] == "instrument.cutoff")
+            .unwrap();
+        assert_eq!(cutoff["value"], 500.0);
+        d.command("undo");
+        assert_eq!(
+            own_settings(&mut d, &t)[0]["param"],
+            s[0]["param"],
+            "back to the poly-synth"
+        );
+        assert!(d.call("set_instrument", json!({"track": t})).is_err());
     }
 
     #[test]

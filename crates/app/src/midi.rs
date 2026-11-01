@@ -304,6 +304,7 @@ impl App {
         let mut captured = Vec::new();
         self.ctl.take_captured(&mut captured);
         self.kits.hear(&captured, &self.midi.ports.inputs);
+        self.fretboard_hear(&captured);
         if captured.is_empty() {
             return false;
         }

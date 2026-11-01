@@ -82,6 +82,14 @@ pub enum Command {
         target: Target,
         live: bool,
     },
+    /// Plays a note on a track's instrument for `frames` frames, to
+    /// hear it (a fret clicked, say), whether or not the track is armed.
+    Audition {
+        track: usize,
+        pitch: u8,
+        velocity: u8,
+        frames: i64,
+    },
     SetMetronome(Metronome),
     /// Records armed tracks whenever playing (after any count-in).
     SetRecording(bool),
@@ -849,6 +857,16 @@ impl Engine {
                 } => {
                     if let Some(g) = &mut self.graph {
                         g.set_auto_live(track, target, live);
+                    }
+                }
+                Command::Audition {
+                    track,
+                    pitch,
+                    velocity,
+                    frames,
+                } => {
+                    if let Some(g) = &mut self.graph {
+                        g.audition(track, pitch, velocity, frames);
                     }
                 }
                 Command::SetMetronome(m) => self.metronome = m,

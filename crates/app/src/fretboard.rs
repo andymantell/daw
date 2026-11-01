@@ -198,6 +198,10 @@ pub(crate) struct Fretboard {
     /// (on the neck, the capo not counted).
     pub(crate) typing: bool,
     pub(crate) cursor: (u8, u8),
+    /// Clicking a fret plays its note on the track's instrument.
+    pub(crate) hear: bool,
+    /// Notes held down on a MIDI keyboard or guitar now, by pitch.
+    pub(crate) live: Vec<u8>,
 }
 
 impl Default for Fretboard {
@@ -214,6 +218,8 @@ impl Default for Fretboard {
             position: 0,
             typing: false,
             cursor: (1, 0),
+            hear: true,
+            live: Vec::new(),
         }
     }
 }
@@ -327,6 +333,8 @@ pub(crate) struct Mark {
     pub(crate) tone: bool,
     pub(crate) root: bool,
     pub(crate) playing: bool,
+    /// Held down on a MIDI keyboard or guitar now.
+    pub(crate) live: bool,
     pub(crate) selected: bool,
 }
 
@@ -468,6 +476,16 @@ impl App {
                 }
             }
         }
+        for &p in &self.fretboard.live {
+            if let Some((s, f)) = neck.place(&Note::new(0, 1, p, 1)) {
+                marks[usize::from(s - 1)][usize::from(f)].live = true;
+                playing.push(format!(
+                    "{} (string {s}, fret {}, played live)",
+                    pitch_name(p),
+                    f - neck.capo
+                ));
+            }
+        }
         View {
             neck,
             marks,
@@ -560,6 +578,14 @@ impl App {
         clip.len = clip.len.max(tick + step - clip.start);
         clip.sort_notes();
         self.rebuild();
+        if self.fretboard.hear {
+            self.send(Command::Audition {
+                track,
+                pitch,
+                velocity: 96,
+                frames: i64::from(self.rate) * 6 / 10,
+            });
+        }
         if !playing {
             let next = map.frames_at(Ticks(tick + step));
             self.send(Command::Seek(next));
@@ -609,6 +635,7 @@ impl App {
                 fb.chord_root = None;
             }
             Cmd::FretboardLabels => fb.labels = fb.labels.next(),
+            Cmd::FretboardHear => fb.hear = !fb.hear,
             Cmd::FretboardPositionUp => {
                 fb.position = (fb.position.max(neck.capo) + 1).min(neck.frets + 1 - SPAN);
             }
@@ -657,6 +684,31 @@ impl App {
                 self.fretboard_put(s, f);
             }
             _ => {}
+        }
+    }
+
+    /// Keeps up with the notes held down on MIDI devices, from what the
+    /// engine heard.
+    pub(crate) fn fretboard_hear(&mut self, captured: &[daw_engine::midi::Captured]) {
+        use daw_engine::midi::Kind;
+        let live = &mut self.fretboard.live;
+        for c in captured {
+            match c.event.kind {
+                Kind::NoteOn {
+                    pitch, velocity, ..
+                } if velocity > 0 => {
+                    if !live.contains(&pitch) && live.len() < 16 {
+                        live.push(pitch);
+                    }
+                }
+                Kind::NoteOn { pitch, .. } | Kind::NoteOff { pitch, .. } => {
+                    live.retain(|&p| p != pitch);
+                }
+                Kind::Control {
+                    number: 120 | 123, ..
+                } => live.clear(),
+                _ => {}
+            }
         }
     }
 
@@ -895,6 +947,13 @@ impl App {
             {
                 run = Some(Cmd::FretboardType);
             }
+            if ui
+                .selectable_label(self.fretboard.hear, "Hear notes")
+                .on_hover_text(self.commands.hover(Cmd::FretboardHear))
+                .clicked()
+            {
+                run = Some(Cmd::FretboardHear);
+            }
         });
         if let Some(c) = run {
             self.fretboard_command(c);
@@ -1030,11 +1089,13 @@ fn draw_neck(ui: &mut egui::Ui, view: &View, fb: &Fretboard) -> Option<(u8, u8)>
     for s in 1..=strings {
         for f in 0..=neck.frets {
             let m = view.mark(s, f);
-            if !(m.tone || m.playing || m.selected) {
+            if !(m.tone || m.playing || m.live || m.selected) {
                 continue;
             }
             let at = pos2(x_of(f), y_of(s));
-            let (fill, ink) = if m.playing {
+            let (fill, ink) = if m.live {
+                (c.record, c.on_accent)
+            } else if m.playing {
                 (c.good, c.bg)
             } else if m.root {
                 (c.accent, c.on_accent)
@@ -1044,7 +1105,11 @@ fn draw_neck(ui: &mut egui::Ui, view: &View, fb: &Fretboard) -> Option<(u8, u8)>
                 (c.panel, c.text)
             };
             // Notes playing stand out a little bigger.
-            let radius = if m.playing { radius + 1.5 } else { radius };
+            let radius = if m.playing || m.live {
+                radius + 1.5
+            } else {
+                radius
+            };
             painter.circle_filled(at, radius, fill);
             if m.selected {
                 painter.circle_stroke(at, radius + 2.5, Stroke::new(2.0, c.glow));
@@ -1289,6 +1354,52 @@ mod tests {
             ),
             (json!(3), json!(2))
         );
+    }
+
+    #[test]
+    fn a_fret_entered_is_heard_and_live_notes_show() {
+        use daw_engine::midi::{Captured, Event};
+        let mut h = harness();
+        let ctx = h.ctx.clone();
+        h.state_mut().run(&ctx, Cmd::AddInstrumentTrack);
+        h.state_mut().run(&ctx, Cmd::Fretboard);
+        h.run();
+        // Stopped, so only the audition can make a sound.
+        h.state_mut().run(&ctx, Cmd::FretEnter);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while h.state().master_meter.0 < 0.001 && std::time::Instant::now() < end {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(h.state().master_meter.0 >= 0.001, "the note is heard");
+        // And stops of its own accord.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while h.state().master_meter.0 > 0.0001 && std::time::Instant::now() < end {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(h.state().master_meter.0 <= 0.0001, "the note ends");
+        // A note held on a MIDI keyboard shows; let go, it doesn't.
+        let held = |on: bool| Captured {
+            port: 0,
+            event: if on {
+                Event::note_on(0, 0, 69, 100, 1)
+            } else {
+                Event::note_off(0, 0, 69, 1)
+            },
+            at: 0,
+            playing: false,
+            recording: false,
+        };
+        h.state_mut().fretboard_hear(&[held(true)]);
+        let v = h.state().fretboard_view();
+        assert!(v.mark(1, 5).live, "A4 at the top string's 5th fret");
+        assert_eq!(
+            v.playing.last().unwrap(),
+            "A4 (string 1, fret 5, played live)"
+        );
+        h.state_mut().fretboard_hear(&[held(false)]);
+        assert!(!h.state().fretboard_view().mark(1, 5).live);
     }
 
     #[test]

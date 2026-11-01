@@ -4,6 +4,7 @@
 pub mod ahead;
 pub mod analysis;
 pub mod automation;
+pub mod bend;
 mod chain;
 pub mod engine;
 pub mod export;
@@ -17,6 +18,7 @@ pub mod metronome;
 pub mod midi;
 pub mod monitor;
 pub mod notefx;
+pub mod pitch_line;
 pub mod preview;
 pub mod process;
 pub mod record;

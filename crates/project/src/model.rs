@@ -1069,10 +1069,73 @@ pub struct Clip {
     /// does) rather than staying where they were (the default, so a
     /// voice still sounds like the same person).
     pub move_formants: bool,
+    /// Pitch editing (plan B2): the notes found in the clip's audio, in
+    /// order, each with the user's edits. Empty until notes are found.
+    pub pitch_notes: Vec<PitchNote>,
 }
 
 /// The widest transpose a clip takes, in cents: an octave either way.
 pub const MAX_TRANSPOSE_CENTS: i64 = 1200;
+
+/// A note found in a clip's audio for pitch editing, with its edits.
+/// Frames are of the clip's asset, at the project's rate; pitches are in
+/// cents (100 to a semitone).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PitchNote {
+    /// The asset frames the note was sung or played over, as found.
+    pub start: i64,
+    pub end: i64,
+    /// The pitch it was found at, in cents above MIDI note 0 (A4, MIDI
+    /// 69, is 6900): the middle of its pitch line.
+    pub cents: i64,
+    /// How far it is moved in pitch, in cents, within
+    /// ±[`MAX_TRANSPOSE_CENTS`].
+    pub shift: i64,
+    /// How far it is moved in time, in frames: later when above 0.
+    pub moved: i64,
+    /// How much longer it is made, in frames (shorter below 0).
+    pub resized: i64,
+    /// How much of the note's slow wander off its pitch is kept, in
+    /// percent: 100 as sung, 0 held flat on the note.
+    pub drift: i64,
+    /// How much of its vibrato is kept, in percent: 100 as sung, 0
+    /// none, up to [`MAX_VIBRATO_PCT`] for more.
+    pub vibrato: i64,
+    /// How far its formants are moved, in cents, on top of keeping them
+    /// where they were: down sounds bigger, up smaller.
+    pub formant: i64,
+}
+
+/// The most vibrato a note can be given, in percent of what was sung.
+pub const MAX_VIBRATO_PCT: i64 = 300;
+
+impl PitchNote {
+    /// A note as found, with no edits.
+    pub fn found(start: i64, end: i64, cents: i64) -> PitchNote {
+        PitchNote {
+            start,
+            end,
+            cents,
+            shift: 0,
+            moved: 0,
+            resized: 0,
+            drift: 100,
+            vibrato: 100,
+            formant: 0,
+        }
+    }
+
+    /// Whether the user has changed it.
+    pub fn is_edited(&self) -> bool {
+        *self != PitchNote::found(self.start, self.end, self.cents)
+    }
+
+    /// Where it plays now, in asset frames: moved and resized.
+    pub fn span(&self) -> (i64, i64) {
+        let start = self.start + self.moved;
+        (start, (self.end + self.moved + self.resized).max(start + 1))
+    }
+}
 
 /// A stretch marker: a frame of the asset tied to a point counted from
 /// the clip's start, in ticks when the clip follows tempo, else in
@@ -1096,6 +1159,7 @@ impl Clip {
             && self.fade_out.len == 0
             && self.envelope.is_empty()
             && self.cents == 0
+            && !self.pitch_notes.iter().any(PitchNote::is_edited)
         {
             return String::new();
         }
@@ -1117,6 +1181,18 @@ impl Clip {
             h.update(b"transpose");
             h.update(self.cents.to_le_bytes());
             h.update([self.move_formants as u8]);
+        }
+        // Likewise only a clip whose notes have been edited.
+        if self.pitch_notes.iter().any(PitchNote::is_edited) {
+            h.update(b"pitch");
+            for n in &self.pitch_notes {
+                for v in [
+                    n.start, n.end, n.cents, n.shift, n.moved, n.resized, n.drift, n.vibrato,
+                    n.formant,
+                ] {
+                    h.update(v.to_le_bytes());
+                }
+            }
         }
         h.finalize()[..8]
             .iter()

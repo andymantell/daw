@@ -292,6 +292,7 @@ impl App {
                 markers: c.markers.clone(),
                 cents: c.cents as i64,
                 move_formants: c.move_formants,
+                pitch_notes: c.pitch_notes.clone(),
             })
             .collect();
         clips.extend(
@@ -671,6 +672,16 @@ impl App {
                     .collect();
                 c.cents = crate::transpose::clamp(pc.cents);
                 c.move_formants = pc.move_formants;
+                c.pitch_notes = (pc.pitch_notes.iter())
+                    .map(|n| daw_project::PitchNote {
+                        start: scale(n.start),
+                        end: scale(n.end),
+                        moved: scale(n.moved),
+                        resized: scale(n.resized),
+                        ..*n
+                    })
+                    .filter(|n| n.end > n.start && n.end as usize <= c.source.frames)
+                    .collect();
                 t.clips.push(c);
             }
             self.restore_fx(&pt.id, &mut t.fx, &pt.effects, &mut problems);

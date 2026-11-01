@@ -39,10 +39,10 @@ pub use model::{
     Articulation, Assignment, AutoPoint, CUE_OFF_DB, Clip, Comment, Comp, CompPart, ControlGroup,
     Controller, CueLevel, CueMix, Curve, EditGroup, Effect, EffectState, FROZEN_TAIL_SECONDS, Fade,
     Frozen, FrozenClip, GainPoint, Groove, GrooveStep, HitPoint, InstrumentOutput, Lane,
-    LaneTarget, Layer, MAX_TRANSPOSE_CENTS, Marker, Master, MeterChange, MidiMap, Notation,
-    NotationView, Note, NoteClip, NoteFx, PPQ, Practice, Project, Send, StretchMarker, TabBlock,
-    Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion, TrainerSettings,
-    VideoClip,
+    LaneTarget, Layer, MAX_TRANSPOSE_CENTS, MAX_VIBRATO_PCT, Marker, Master, MeterChange, MidiMap,
+    Notation, NotationView, Note, NoteClip, NoteFx, PPQ, PitchNote, Practice, Project, Send,
+    StretchMarker, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion,
+    TrainerSettings, VideoClip,
 };
 pub use parts::{Brought, Pick, Range, bar_ticks};
 pub use pattern::{

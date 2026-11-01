@@ -23,6 +23,9 @@ pub fn window(rate: u32) -> usize {
 pub struct Detector {
     rate: u32,
     diff: Vec<f32>,
+    /// The pitches looked for, in Hz.
+    lowest: f32,
+    highest: f32,
 }
 
 /// Below this level (RMS) there is nothing to tune.
@@ -32,28 +35,43 @@ const THRESHOLD: f32 = 0.15;
 
 impl Detector {
     pub fn new(rate: u32) -> Detector {
+        Detector::with_range(rate, LOWEST_HZ, HIGHEST_HZ)
+    }
+
+    /// A detector looking only for pitches from `lowest` to `highest`
+    /// Hz: a narrower range needs a shorter window and less work, as
+    /// for a voice (pitch editing's pitch lines).
+    pub fn with_range(rate: u32, lowest: f32, highest: f32) -> Detector {
         Detector {
             rate,
             diff: Vec::new(),
+            lowest: lowest.max(1.0),
+            highest: highest.max(lowest + 1.0),
         }
+    }
+
+    /// Samples [`Detector::detect`] looks at: two periods of the lowest
+    /// pitch looked for.
+    pub fn window(&self) -> usize {
+        2 * (self.rate as f32 / self.lowest).ceil() as usize
     }
 
     pub fn rate(&self) -> u32 {
         self.rate
     }
 
-    /// The fundamental of the most recent [`window`] samples of
-    /// `samples`, in Hz, or `None` if it is quiet or unclear.
+    /// The fundamental of the most recent [`Detector::window`] samples
+    /// of `samples`, in Hz, or `None` if it is quiet or unclear.
     pub fn detect(&mut self, samples: &[f32]) -> Option<f32> {
         let rate = self.rate as f32;
-        let w = window(self.rate).min(samples.len());
+        let w = self.window().min(samples.len());
         let x = &samples[samples.len() - w..];
         let rms = (x.iter().map(|v| v * v).sum::<f32>() / w.max(1) as f32).sqrt();
         if rms < QUIET {
             return None;
         }
-        let max_tau = ((rate / LOWEST_HZ) as usize).min(w / 2);
-        let min_tau = ((rate / HIGHEST_HZ) as usize).max(2);
+        let max_tau = ((rate / self.lowest) as usize).min(w / 2);
+        let min_tau = ((rate / self.highest) as usize).max(2);
         if max_tau <= min_tau + 2 {
             return None;
         }

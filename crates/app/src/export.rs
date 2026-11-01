@@ -52,6 +52,24 @@ pub struct Request {
     pub mix: bool,
     /// The mix in a copy of the video.
     pub video: bool,
+    /// Only these tracks' and buses' stems, by key; `None` for every
+    /// one.
+    pub only: Option<Vec<String>>,
+    /// These bars, from the start of the first to the start of the
+    /// second, in place of the loop or the whole song.
+    pub bars: Option<(i64, i64)>,
+    /// A stem package, in place of an ordinary export.
+    pub package: Option<Package>,
+}
+
+/// What a stem package adds to the audio files.
+#[derive(Clone, Debug, Default)]
+pub struct Package {
+    /// Files written beside the audio: the notes as MIDI files and a
+    /// page about the stems. Name and contents.
+    pub files: Vec<(String, Vec<u8>)>,
+    /// Packed into one `.tar` file, in place of the folder.
+    pub archive: bool,
 }
 
 struct Job {
@@ -129,11 +147,13 @@ impl Kind {
 const MP3_USUAL: u32 = 320;
 const OPUS_USUAL: u32 = 160;
 
-/// A new numbered folder under `base`: `Mix 1`, `Mix 2`, …
-fn next_folder(base: &Path) -> PathBuf {
+/// A new numbered folder under `base`: `Mix 1`, `Mix 2`, … (or
+/// `Stems 1`, … for a stem package, with no archive of that name
+/// either).
+fn next_folder(base: &Path, word: &str) -> PathBuf {
     (1..)
-        .map(|n| base.join(format!("Mix {n}")))
-        .find(|p| !p.exists())
+        .map(|n| base.join(format!("{word} {n}")))
+        .find(|p| !p.exists() && !p.with_extension("tar").exists())
         .unwrap()
 }
 
@@ -163,7 +183,7 @@ impl Export {
         }
     }
 
-    fn dir(&self) -> &Path {
+    pub fn dir(&self) -> &Path {
         self.chosen.as_deref().unwrap_or(&self.default_dir)
     }
 
@@ -171,15 +191,17 @@ impl Export {
         self.job.is_some()
     }
 
-    /// Starts writing `parts` into a new folder under `base`.
+    /// Starts writing `parts` into a new folder under `base`, and the
+    /// rest of a stem package if there is one.
     pub fn start(
         &mut self,
         base: &Path,
         parts: Vec<Part>,
         plugins: Vec<Plugin>,
         format: Format,
+        package: Option<Package>,
     ) -> Result<(), String> {
-        let folder = next_folder(base);
+        let folder = next_folder(base, if package.is_some() { "Stems" } else { "Mix" });
         std::fs::create_dir_all(&folder)
             .map_err(|e| format!("could not make {}: {e}", folder.display()))?;
         let done = Arc::new(AtomicU64::new(0));
@@ -215,6 +237,24 @@ impl Export {
                     break;
                 }
             }
+            if let Some(pkg) = package
+                && !c.load(Ordering::Relaxed)
+            {
+                for (name, bytes) in &pkg.files {
+                    let r = std::fs::write(f.join(name), bytes)
+                        .map(|()| Written { peak: 0.0 })
+                        .map_err(|e| e.to_string());
+                    out.push((name.clone(), r));
+                }
+                if pkg.archive {
+                    let dest = f.with_extension("tar");
+                    let r = daw_collab::archive::pack(&f, &dest)
+                        .and_then(|()| std::fs::remove_dir_all(&f).map_err(|e| e.to_string()))
+                        .map(|()| Written { peak: 0.0 });
+                    let name = dest.file_name().unwrap_or_default().to_string_lossy();
+                    out.push((name.into_owned(), r));
+                }
+            }
             out
         });
         self.result = None;
@@ -240,6 +280,9 @@ impl Export {
             folder: self.dir().to_path_buf(),
             mix: false,
             video: true,
+            only: None,
+            bars: None,
+            package: None,
         }
     }
 
@@ -411,6 +454,9 @@ impl Export {
                                 folder: self.dir().to_path_buf(),
                                 mix: true,
                                 video: self.video && film.is_some() && daw_video::CAN_WRAP,
+                                only: None,
+                                bars: None,
+                                package: None,
                             });
                         }
                     }

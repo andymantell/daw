@@ -31,6 +31,7 @@ mod fx;
 mod groups;
 mod history;
 mod hitpoints;
+mod import_project;
 mod instrument;
 mod interchange;
 mod kits;
@@ -419,6 +420,8 @@ struct App {
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
     preset_ui: presets::Presets,
+    /// The Import from project and Export parts windows.
+    parts: import_project::Parts,
     /// The start screen, and the recent projects it lists.
     start: start::Start,
     /// Named commands, their keys, and their windows.
@@ -568,6 +571,7 @@ impl App {
             history: history::History::default(),
             template_ui: templates::Templates::default(),
             preset_ui: presets::Presets::default(),
+            parts: import_project::Parts::default(),
             start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
             commands: commands::Commands::new((!cfg!(test)).then(|| config_dir().join("keys.txt"))),
             simple: simple_mode::Simple::new(
@@ -1010,7 +1014,7 @@ impl App {
     }
 
     /// Renders the mix (and stems, if asked) to a file in the background.
-    fn start_export(&mut self, req: export::Request) -> Result<(), String> {
+    pub(crate) fn start_export(&mut self, req: export::Request) -> Result<(), String> {
         let map = self.tempo_map();
         let mut s = self.session();
         // The mix as it stands: no practice mute, no live input.
@@ -1065,7 +1069,12 @@ impl App {
         };
         let all: Vec<&Track> = self.tracks.iter().collect();
         let mix = graph(&s, &all, &mut plugins)?;
-        let (from, to) = if req.loop_only {
+        let (from, to) = if let Some((a, b)) = req.bars {
+            (
+                map.frames_at(map.bar_start(a)),
+                map.frames_at(map.bar_start(b)),
+            )
+        } else if req.loop_only {
             (
                 map.frames_at(map.bar_start(self.loop_bars.0)),
                 map.frames_at(map.bar_start(self.loop_bars.1)),
@@ -1082,6 +1091,7 @@ impl App {
             (Frames(0), Frames(mix.end().0 + tail))
         };
         let frames = (to.0 - from.0).max(0) as usize;
+        let wanted = |t: &Track| req.only.as_ref().is_none_or(|o| o.contains(&t.key));
         let mut parts = Vec::new();
         if req.video {
             // The whole film from its first frame: the picture can't be
@@ -1118,7 +1128,7 @@ impl App {
                 .tracks
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| !t.kind.is_bus())
+                .filter(|(_, t)| !t.kind.is_bus() && wanted(t))
             {
                 let mut one = Session::new(map.clone());
                 let mut spec = s.tracks[i].clone();
@@ -1141,7 +1151,7 @@ impl App {
                 .tracks
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| t.kind.is_bus())
+                .filter(|(_, t)| t.kind.is_bus() && wanted(t))
             {
                 let one = mixer::through_bus(&s, i);
                 parts.push(export::Part {
@@ -1153,7 +1163,11 @@ impl App {
                 });
             }
         }
-        self.export.start(&req.folder, parts, plugins, req.format)
+        if parts.is_empty() && req.package.as_ref().is_none_or(|p| p.files.is_empty()) {
+            return Err("There is nothing to export yet.".into());
+        }
+        self.export
+            .start(&req.folder, parts, plugins, req.format, req.package)
     }
 
     /// Exports the video at the playhead (or the one selected) with the
@@ -2477,6 +2491,14 @@ impl eframe::App for App {
                         app.menu_item(ui, c);
                     }
                     app.menu_gap();
+                    for c in [
+                        Cmd::ImportFromProject,
+                        Cmd::ExportParts,
+                        Cmd::ExportStemPackage,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
                     app.menu_item(ui, Cmd::Export);
                     app.menu_item(ui, Cmd::ExportVideo);
                     app.menu_item(ui, Cmd::ExportDawProject);
@@ -2901,6 +2923,7 @@ impl eframe::App for App {
         self.agent_tick(&ctx);
         self.template_windows(&ctx);
         self.preset_windows(&ctx);
+        self.parts_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);
         self.log_practice(&ctx);

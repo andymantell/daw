@@ -34,6 +34,9 @@ pub(crate) enum Cmd {
     ImportBundle,
     Snapshots,
     People,
+    ImportFromProject,
+    ExportParts,
+    ExportStemPackage,
     Export,
     ExportVideo,
     Undo,
@@ -396,6 +399,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::People, "people", "File", "People…", &[])
         .hint("Who has this project, and what they may change")
         .words("roles join name"),
+    info(
+        Cmd::ImportFromProject,
+        "import-from-project",
+        "File",
+        "Import from project…",
+        &[],
+    )
+    .hint("Bring tracks, sections, tempo or settings in from another project, with their audio")
+    .words("reuse lesson parts copy tracks markers merge"),
+    info(
+        Cmd::ExportParts,
+        "export-parts",
+        "File",
+        "Export tracks as a project…",
+        &[],
+    )
+    .hint("Chosen tracks, or a range of bars, as a new project with their audio")
+    .words("part range bars new project send out extract"),
+    info(
+        Cmd::ExportStemPackage,
+        "export-stem-package",
+        "File",
+        "Export stem package…",
+        &[],
+    )
+    .hint("Each chosen track as audio and its notes as MIDI, in a folder or one file")
+    .words("stems midi archive tar send other program"),
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")
         .words("render bounce stems wav flac mp3 opus ogg mixdown bus")
@@ -2446,6 +2476,8 @@ impl App {
             Cmd::Undo => self.can_undo(),
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
+            Cmd::ImportFromProject => self.may_edit_song(),
+            Cmd::ExportStemPackage => !self.export.busy(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
@@ -2548,6 +2580,9 @@ impl App {
             Cmd::ImportBundle => self.pick_bundle(),
             Cmd::Snapshots => self.snapshot_ui.open = true,
             Cmd::People => self.people.open = true,
+            Cmd::ImportFromProject => self.open_import(),
+            Cmd::ExportParts => self.open_export_parts(crate::import_project::Out::Project),
+            Cmd::ExportStemPackage => self.open_export_parts(crate::import_project::Out::Stems),
             Cmd::Export => self.export.open = true,
             Cmd::ExportVideo => self.export_video(),
             Cmd::Undo => self.undo(ctx),

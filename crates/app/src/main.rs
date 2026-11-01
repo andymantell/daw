@@ -2399,9 +2399,9 @@ impl eframe::App for App {
                         Cmd::SaveChainPreset,
                         Cmd::ImportPreset,
                     ] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
-                    ui.separator();
+                    app.menu_gap();
                     for c in [
                         Cmd::ExportBundle,
                         Cmd::ImportBundle,

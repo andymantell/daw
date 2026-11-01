@@ -528,7 +528,7 @@ fn record_slowed(split_it: bool, blocks: usize) -> (Frames, usize, Vec<f32>) {
     ] {
         c.send(cmd).ok().unwrap();
     }
-    let mut play = |sp: &mut Option<Split>, eng: &mut Option<engine::Engine>, at, n| match (
+    let play = |sp: &mut Option<Split>, eng: &mut Option<engine::Engine>, at, n| match (
         sp.as_mut(),
         eng.as_mut(),
     ) {

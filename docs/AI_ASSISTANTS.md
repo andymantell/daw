@@ -152,6 +152,9 @@ assistant finds them for itself. In outline:
   section), `edit_assignments` (set, change, remove, mark done, or
   practise one) and `edit_lessons` (start, rename or remove a lesson,
   or take a practice session out of the log).
+- **Plugins on this computer:** `get_plugins` and `manage_plugins`
+  (rescan, check, try a failed one again, offer or hide, where each
+  runs, how many plugin windows may be open).
 - **Practice:** `set_practice` (speed, transpose, fine pitch, the
   metronome, count-in, the tempo trainer, and measuring how far a
   track is from concert pitch).

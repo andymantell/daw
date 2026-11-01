@@ -10,7 +10,7 @@ comping.rs 11
 crash.rs 7
 export.rs 18
 fretboard.rs 11
-fx.rs 44
+fx.rs 2
 groups.rs 5
 history.rs 5
 hitpoints.rs 22

@@ -29,6 +29,7 @@ mod agent_layers;
 mod agent_lessons;
 mod agent_monitor;
 mod agent_notes;
+mod agent_plugins;
 mod agent_practice;
 mod agent_routing;
 mod agent_takes;

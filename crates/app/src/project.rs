@@ -271,6 +271,9 @@ impl App {
                         db: p.db as f64,
                     })
                     .collect(),
+                tempo: c.tempo,
+                beat: c.beat,
+                markers: c.markers.clone(),
             })
             .collect();
         clips.extend(
@@ -620,6 +623,15 @@ impl App {
                     .collect();
                 c.set_fade(false, c.fade_in.len);
                 c.set_fade(true, c.fade_out.len);
+                c.tempo = pc.tempo.filter(|t| t.is_finite() && *t > 0.0);
+                c.beat = pc.beat.max(0);
+                c.markers = (pc.markers.iter())
+                    .map(|m| daw_project::StretchMarker {
+                        frame: scale(m.frame),
+                        at: if c.tempo.is_some() { m.at } else { scale(m.at) },
+                    })
+                    .filter(|m| m.frame > c.offset as i64 && m.frame < (c.offset + c.len) as i64)
+                    .collect();
                 t.clips.push(c);
             }
             let mut had: HashMap<String, crate::fx::FxSlot> =
@@ -709,6 +721,7 @@ impl App {
             }
             self.message = Some(m);
         }
+        self.retime = true;
         self.rebuild();
         self.send_loop();
     }

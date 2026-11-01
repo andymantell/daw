@@ -593,6 +593,9 @@ impl App {
                             "muted": c.muted,
                             "gain_db": c.gain_db,
                             "take": c.take,
+                            "tempo": c.tempo,
+                            "beat": c.tempo.is_some().then_some(c.beat),
+                            "markers": c.markers.iter().map(|m| json!({"frame": m.frame, "at": m.at})).collect::<Vec<_>>(),
                         })
                     })
                     .collect();

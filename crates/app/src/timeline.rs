@@ -20,7 +20,8 @@ use daw_engine::fade::{Curve, Fade, GainPoint, Shape, envelope_db};
 use daw_engine::graph::db_to_gain;
 use daw_engine::process::Process;
 use daw_engine::stream::StreamSource;
-use daw_engine::time::{Frames, TempoMap, Ticks};
+use daw_engine::time::{Frames, PPQ as ENGINE_PPQ, TempoMap, Ticks};
+use daw_engine::warp::{Warp, WarpPoint};
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke,
     StrokeKind, pos2, vec2,
@@ -29,7 +30,7 @@ use eframe::egui::{
 use crate::commands::Cmd;
 use crate::groups::{self, LaneGroup};
 use crate::theme::{Look, LoopFill, Texture, WaveStyle};
-use daw_project::{NoteClip, PPQ};
+use daw_project::{NoteClip, PPQ, StretchMarker};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -76,10 +77,35 @@ pub struct Clip {
     /// Volume points, in source frames, in order: the line stays with
     /// the audio when the clip is trimmed, split or slipped.
     pub envelope: Vec<GainPoint>,
+    /// The clip's own tempo in beats per minute once it follows the
+    /// song's tempo: it is stretched from this tempo to the song's, and
+    /// its start and markers are in ticks. `None` keeps it in frames.
+    pub tempo: Option<f64>,
+    /// Where it starts in ticks when it follows tempo, kept in step
+    /// with `start` by the app (`start` follows `beat` when the tempo
+    /// changes, `beat` follows `start` when the clip is moved).
+    pub beat: i64,
+    /// Stretch markers: source frames tied to points from the clip's
+    /// start, in ticks when it follows tempo, else in timeline frames.
+    /// In order of frame, all strictly inside the clip's audio. The
+    /// audio between two is stretched evenly; past the last it plays at
+    /// the clip's own tempo.
+    pub markers: Vec<StretchMarker>,
+    /// How many timeline frames the clip takes once stretched; `len`
+    /// for a clip that isn't. Kept up to date by [`Clip::retime`].
+    pub span: usize,
+    /// Clip time units per timeline frame where it starts, under the
+    /// song's tempo map; kept by [`Clip::retime`]. 0 until then.
+    pub out_unit: f64,
 }
 
 /// The shortest clip a trim or split leaves, in frames.
 pub const MIN_LEN: usize = 64;
+
+/// The steepest stretch a marker may ask for against the clip's own
+/// tempo, either way: within what the stretcher takes, with room for
+/// the song's tempo to differ from the clip's.
+pub const MAX_STRETCH: f64 = 3.0;
 
 /// The range of a clip's volume and its points, in dB.
 pub const MIN_DB: f32 = -48.0;
@@ -144,7 +170,13 @@ impl Clip {
             fade_in: Fade::default(),
             fade_out: Fade::default(),
             envelope: Vec::new(),
+            tempo: None,
+            beat: 0,
+            markers: Vec::new(),
+            span: 0,
+            out_unit: 0.0,
         };
+        c.span = c.len;
         if c.start < 0 {
             let cut = ((-c.start) as usize).min(c.len);
             c.offset = cut;
@@ -154,8 +186,253 @@ impl Clip {
         c
     }
 
+    /// Where the clip ends on the timeline.
     pub fn end(&self) -> i64 {
-        self.start + self.len as i64
+        if self.is_stretched() {
+            self.start + self.span as i64
+        } else {
+            self.start + self.len as i64
+        }
+    }
+
+    /// Whether the clip is played through the stretcher: it follows
+    /// tempo, or has stretch markers.
+    pub fn is_stretched(&self) -> bool {
+        self.tempo.is_some() || !self.markers.is_empty()
+    }
+
+    /// The clip's time units per source frame at its own tempo: ticks
+    /// when it follows tempo, else frames (1).
+    fn unit(&self) -> f64 {
+        match self.tempo {
+            Some(bpm) => bpm * PPQ as f64 / 60.0 / self.source.rate.max(1) as f64,
+            None => 1.0,
+        }
+    }
+
+    /// The points tying source frames to the clip's time, from its
+    /// first frame (at 0) through its markers.
+    fn ties(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+        std::iter::once((self.offset as f64, 0.0)).chain(
+            (self.markers.iter())
+                .filter(|m| m.frame > self.offset as i64)
+                .map(|m| (m.frame as f64, m.at as f64)),
+        )
+    }
+
+    /// Where source frame `frame` falls in the clip's own time, counted
+    /// from its start.
+    pub fn at_of_frame(&self, frame: f64) -> f64 {
+        let mut last = (self.offset as f64, 0.0);
+        for (f, at) in self.ties().skip(1) {
+            if frame <= f {
+                let k = (frame - last.0) / (f - last.0).max(1.0);
+                return last.1 + k * (at - last.1);
+            }
+            last = (f, at);
+        }
+        last.1 + (frame - last.0) * self.unit()
+    }
+
+    /// The source frame at `at` in the clip's own time.
+    pub fn frame_of_at(&self, at: f64) -> f64 {
+        let mut last = (self.offset as f64, 0.0);
+        for (f, a) in self.ties().skip(1) {
+            if at <= a {
+                let k = (at - last.1) / (a - last.1).max(1e-9);
+                return last.0 + k * (f - last.0);
+            }
+            last = (f, a);
+        }
+        last.0 + (at - last.1) / self.unit()
+    }
+
+    /// The timeline frame source frame `frame` plays on.
+    pub fn out_of_frame(&self, map: &TempoMap, frame: f64) -> i64 {
+        let at = self.at_of_frame(frame);
+        match self.tempo {
+            Some(_) => map.frames_at(Ticks(self.beat + at.round() as i64)).0,
+            None => self.start + at.round() as i64,
+        }
+    }
+
+    /// The source frame playing on timeline frame `out`.
+    pub fn frame_of_out(&self, map: &TempoMap, out: i64) -> f64 {
+        self.frame_of_at(self.at_of_out(map, out))
+    }
+
+    /// Timeline frame `out` in the clip's own time.
+    pub fn at_of_out(&self, map: &TempoMap, out: i64) -> f64 {
+        match self.tempo {
+            Some(_) => (map.ticks_at(Frames(out)).0 - self.beat) as f64,
+            None => (out - self.start) as f64,
+        }
+    }
+
+    /// Works out how long the clip is on the timeline under `map`.
+    pub fn retime(&mut self, map: &TempoMap) {
+        self.out_unit = match self.tempo {
+            Some(_) => {
+                map.tempo_at(Ticks(self.beat)).as_f64() * PPQ as f64
+                    / 60.0
+                    / map.sample_rate().max(1) as f64
+            }
+            None => 1.0,
+        };
+        self.span = if self.is_stretched() {
+            let end = self.out_of_frame(map, (self.offset + self.len) as f64);
+            (end - self.start).max(MIN_LEN as i64) as usize
+        } else {
+            self.len
+        };
+    }
+
+    /// How the engine plays the clip under `map`: its ties as a warp
+    /// from source frames to timeline frames, with a point on every
+    /// beat when the song's tempo changes, so the audio follows the
+    /// map between markers too. `None` for a clip played plainly, or
+    /// whose markers ask for more than the stretcher can do.
+    pub fn warp(&self, map: &TempoMap) -> Option<Warp> {
+        if !self.is_stretched() {
+            return None;
+        }
+        let changes = self.tempo.is_some() && map.tempo_changes().next().is_some();
+        let mut points: Vec<WarpPoint> = Vec::new();
+        let mut push = |src: i64, out: i64| {
+            if points.last().is_none_or(|p| src > p.src && out > p.out) {
+                points.push(WarpPoint { src, out });
+            }
+        };
+        let end = (self.offset + self.len) as f64;
+        let ties: Vec<(f64, f64)> = self
+            .ties()
+            .chain(std::iter::once((end, self.at_of_frame(end))))
+            .collect();
+        for w in ties.windows(2) {
+            let (f0, a0) = w[0];
+            let (f1, a1) = w[1];
+            push(f0.round() as i64, self.out_of_frame(map, f0));
+            if changes {
+                // Every beat line strictly between the two ties.
+                let ppq = ENGINE_PPQ as f64;
+                let mut beat = ((self.beat as f64 + a0) / ppq).floor() + 1.0;
+                while beat * ppq < self.beat as f64 + a1 {
+                    let at = beat * ppq - self.beat as f64;
+                    let src = self.frame_of_at(at).round() as i64;
+                    let out = map.frames_at(Ticks((beat * ppq) as i64)).0;
+                    push(src, out);
+                    beat += 1.0;
+                }
+            }
+            push(f1.round() as i64, self.out_of_frame(map, f1));
+        }
+        Warp::new(points).ok()
+    }
+
+    /// Adds a stretch marker at source frame `frame`, keeping the
+    /// timing there as it is, or finds the one already there. `None`
+    /// outside the clip's audio.
+    pub fn add_marker(&mut self, frame: i64) -> Option<usize> {
+        if frame <= self.offset as i64 || frame >= (self.offset + self.len) as i64 {
+            return None;
+        }
+        match self.markers.binary_search_by_key(&frame, |m| m.frame) {
+            Ok(i) => Some(i),
+            Err(i) => {
+                let at = self.at_of_frame(frame as f64).round() as i64;
+                self.markers.insert(i, StretchMarker { frame, at });
+                Some(i)
+            }
+        }
+    }
+
+    /// Moves marker `i` so its frame plays at `at` in the clip's own
+    /// time, kept between its neighbours and within [`MAX_STRETCH`].
+    /// True if it moved.
+    pub fn move_marker(&mut self, i: usize, at: i64) -> bool {
+        let Some(m) = self.markers.get(i).copied() else {
+            return false;
+        };
+        let u = self.unit();
+        let (f0, a0) = match i.checked_sub(1).and_then(|j| self.markers.get(j)) {
+            Some(p) => (p.frame as f64, p.at as f64),
+            None => (self.offset as f64, 0.0),
+        };
+        let gap = m.frame as f64 - f0;
+        let mut lo = a0 + gap * u / MAX_STRETCH;
+        let mut hi = a0 + gap * u * MAX_STRETCH;
+        if let Some(n) = self.markers.get(i + 1) {
+            let gap = (n.frame - m.frame) as f64;
+            lo = lo.max(n.at as f64 - gap * u * MAX_STRETCH);
+            hi = hi.min(n.at as f64 - gap * u / MAX_STRETCH);
+        }
+        let at = (at as f64)
+            .clamp(lo.ceil(), hi.floor().max(lo.ceil()))
+            .round() as i64;
+        let moved = at != m.at;
+        self.markers[i].at = at;
+        moved
+    }
+
+    /// Drops the markers outside the clip's audio, and any that would
+    /// run backwards after an edit.
+    fn prune_markers(&mut self) {
+        let (lo, hi) = (self.offset as i64, (self.offset + self.len) as i64);
+        self.markers.retain(|m| m.frame > lo && m.frame < hi);
+        let mut last = 0;
+        self.markers.retain(|m| {
+            let keep = m.at > last;
+            if keep {
+                last = m.at;
+            }
+            keep
+        });
+    }
+
+    /// Makes the clip follow the song's tempo at the tempo in force
+    /// where it starts, or stop following it, keeping its timing under
+    /// `map` as it is either way.
+    pub fn follow_tempo(&mut self, map: &TempoMap, follow: bool) {
+        if follow == self.tempo.is_some() {
+            return;
+        }
+        if follow {
+            let beat = map.ticks_at(Frames(self.start));
+            let bpm = map.tempo_at(beat).as_f64();
+            for m in &mut self.markers {
+                // Where it plays now, as ticks from the start.
+                let out = self.start + m.at;
+                m.at = map.ticks_at(Frames(out)).0 - beat.0;
+            }
+            self.beat = beat.0;
+            self.tempo = Some(bpm);
+        } else {
+            let outs: Vec<i64> = (self.markers.iter())
+                .map(|m| self.out_of_frame(map, m.frame as f64) - self.start)
+                .collect();
+            for (m, out) in self.markers.iter_mut().zip(outs) {
+                m.at = out;
+            }
+            self.tempo = None;
+        }
+        self.prune_markers();
+        self.retime(map);
+    }
+
+    /// Changes the clip's own tempo: the markers keep their places in
+    /// the audio, and the clip is stretched by the new ratio.
+    pub fn set_tempo(&mut self, map: &TempoMap, bpm: f64) {
+        let Some(old) = self.tempo else {
+            return;
+        };
+        let bpm = bpm.clamp(20.0, 400.0);
+        let k = bpm / old;
+        for m in &mut self.markers {
+            m.at = (m.at as f64 * k).round() as i64;
+        }
+        self.tempo = Some(bpm);
+        self.prune_markers();
+        self.retime(map);
     }
 
     fn overlaps(&self, other: &Clip) -> bool {
@@ -172,16 +449,58 @@ impl Clip {
             return;
         }
         let d = to.clamp(lo, hi) - self.start;
-        self.offset = (self.offset as i64 + d) as usize;
-        self.len = (self.len as i64 - d) as usize;
-        self.start += d;
+        if self.is_stretched() {
+            // The edge moves in timeline frames; the audio under it by
+            // the stretch there.
+            let frame = self
+                .frame_of_at(self.at_of_frame(self.offset as f64) + d as f64 * self.unit_per_out());
+            let new_offset =
+                (frame.round() as i64).clamp(0, (self.offset + self.len - MIN_LEN) as i64);
+            let shift = self.at_of_frame(new_offset as f64).round() as i64;
+            for m in &mut self.markers {
+                m.at -= shift;
+            }
+            if self.tempo.is_some() {
+                self.beat += shift;
+            }
+            let d_src = new_offset - self.offset as i64;
+            self.offset = new_offset as usize;
+            self.len = (self.len as i64 - d_src) as usize;
+            self.span = (self.span as i64 - d).max(MIN_LEN as i64) as usize;
+            self.start += d;
+            self.prune_markers();
+        } else {
+            self.offset = (self.offset as i64 + d) as usize;
+            self.len = (self.len as i64 - d) as usize;
+            self.start += d;
+        }
         self.fit_fades();
+    }
+
+    /// Clip time units per timeline frame near the clip's start under
+    /// the song's tempo, as last retimed; the clip's own tempo until
+    /// then.
+    fn unit_per_out(&self) -> f64 {
+        if self.out_unit > 0.0 {
+            self.out_unit
+        } else {
+            self.unit()
+        }
     }
 
     /// Moves the end edge to `to`, as far as the source goes.
     pub fn trim_end(&mut self, to: i64) {
         let most = self.source.frames - self.offset;
-        self.len = ((to - self.start).max(MIN_LEN as i64) as usize).min(most);
+        if self.is_stretched() {
+            let span = (to - self.start).max(MIN_LEN as i64) as usize;
+            let frame = self.frame_of_at(span as f64 * self.unit_per_out());
+            self.len = ((frame.round() as i64 - self.offset as i64).max(MIN_LEN as i64) as usize)
+                .min(most);
+            self.span = span;
+            self.prune_markers();
+        } else {
+            self.len = ((to - self.start).max(MIN_LEN as i64) as usize).min(most);
+        }
         self.fit_fades();
     }
 
@@ -210,7 +529,19 @@ impl Clip {
     /// at its start, as far as the source goes; the clip stays put.
     pub fn slip_to(&mut self, offset: i64) {
         let most = (self.source.frames - self.len) as i64;
-        self.offset = offset.clamp(0, most) as usize;
+        let offset = offset.clamp(0, most);
+        if self.is_stretched() {
+            // The markers stay with the audio; the clip's time starts
+            // afresh at the new first frame.
+            let shift = self.at_of_frame(offset as f64).round() as i64;
+            for m in &mut self.markers {
+                m.at -= shift;
+            }
+            self.offset = offset as usize;
+            self.prune_markers();
+        } else {
+            self.offset = offset as usize;
+        }
     }
 
     /// What sets the clip's level, as the engine plays it.
@@ -252,6 +583,40 @@ impl Clip {
         if at - self.start < MIN_LEN as i64 || self.end() - at < MIN_LEN as i64 {
             return None;
         }
+        if self.is_stretched() {
+            // Cut the audio where the timeline frame plays it; each half
+            // keeps the markers on its side.
+            let span = (at - self.start) as usize;
+            let cut_at = span as f64 * self.unit_per_out();
+            let frame = self.frame_of_at(cut_at).round() as i64;
+            let first = (frame - self.offset as i64)
+                .clamp(MIN_LEN as i64, (self.len - MIN_LEN) as i64)
+                as usize;
+            let shift = self.at_of_frame((self.offset + first) as f64).round() as i64;
+            let mut a = self.clone();
+            a.len = first;
+            a.span = span;
+            a.fade_out = Fade::default();
+            a.prune_markers();
+            a.fit_fades();
+            let mut b = self.clone();
+            b.id = next_id();
+            b.key = daw_project::new_id();
+            b.start = at;
+            b.offset += first;
+            b.len -= first;
+            b.span = self.span - span;
+            for m in &mut b.markers {
+                m.at -= shift;
+            }
+            if b.tempo.is_some() {
+                b.beat += shift;
+            }
+            b.prune_markers();
+            b.fade_in = Fade::default();
+            b.fit_fades();
+            return Some((a, b));
+        }
         let first = (at - self.start) as usize;
         // The cut is clean; the fades stay at the outer ends.
         let mut a = self.clone();
@@ -282,7 +647,15 @@ impl Clip {
         for p in &mut self.envelope {
             p.at = (p.at as f64 * k).round() as usize;
         }
+        for m in &mut self.markers {
+            m.frame = (m.frame as f64 * k).round() as i64;
+            if self.tempo.is_none() {
+                m.at = (m.at as f64 * k).round() as i64;
+            }
+        }
+        self.span = (self.span as f64 * k).round() as usize;
         self.source = source;
+        self.prune_markers();
         self.fit_fades();
     }
 
@@ -759,6 +1132,8 @@ pub struct Outcome {
     pub notation_band: Option<(usize, i64, f32)>,
     /// Somewhere else on the lanes was clicked.
     pub off_band: bool,
+    /// Run this command on the selection.
+    pub command: Option<Cmd>,
 }
 
 /// What the timeline asks of patterns, which the app keeps.
@@ -872,6 +1247,8 @@ enum Zone {
     FadeOut,
     /// The volume line, or one of its points.
     Volume(Option<usize>),
+    /// A stretch marker, by index.
+    Marker(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -1103,6 +1480,33 @@ fn pin_rect(x: f32, top: f32) -> Rect {
 }
 
 /// A clip's volume line in its box `r`, with its points.
+/// The stretch markers on a clip: a line down the clip with a flag at
+/// the top, where each tied frame plays.
+fn draw_markers(
+    painter: &egui::Painter,
+    look: &Look,
+    c: &Clip,
+    map: &TempoMap,
+    x_of: &dyn Fn(i64) -> f32,
+    colour: Color32,
+) {
+    let r = painter.clip_rect();
+    let stroke = Stroke::new(look.line, colour.gamma_multiply(0.9));
+    for m in &c.markers {
+        let x = x_of(c.out_of_frame(map, m.frame as f64));
+        painter.line_segment([pos2(x, r.top()), pos2(x, r.bottom())], stroke);
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(x - HANDLE / 2.0, r.top()),
+                pos2(x + HANDLE / 2.0, r.top()),
+                pos2(x, r.top() + HANDLE * 0.8),
+            ],
+            colour,
+            Stroke::NONE,
+        ));
+    }
+}
+
 fn draw_volume(painter: &egui::Painter, look: &Look, c: &Clip, r: Rect, x_of: &dyn Fn(i64) -> f32) {
     let colour = look.c().accent;
     let w = (r.width().max(1.0) / 2.0).ceil() as usize;
@@ -1214,8 +1618,21 @@ pub fn curve_label(c: Curve) -> &'static str {
 }
 
 /// Which part of clip `c`, drawn in `r`, is at `pos`.
-fn clip_zone(c: &Clip, pos: Pos2, r: Rect, x_of: &dyn Fn(i64) -> f32, volume: bool) -> Zone {
+fn clip_zone(
+    c: &Clip,
+    map: &TempoMap,
+    pos: Pos2,
+    r: Rect,
+    x_of: &dyn Fn(i64) -> f32,
+    volume: bool,
+) -> Zone {
     let (x0, x1) = (r.left(), r.right());
+    for (i, m) in c.markers.iter().enumerate() {
+        let x = x_of(c.out_of_frame(map, m.frame as f64));
+        if (pos.x - x).abs() <= HANDLE / 2.0 + 1.0 && x > x0 + EDGE && x < x1 - EDGE {
+            return Zone::Marker(i);
+        }
+    }
     if pos.y < r.top() + HANDLE && x1 - x0 > 3.0 * HANDLE {
         let fin = x_of(c.start + c.fade_in.len as i64).max(x0 + HANDLE / 2.0);
         let fout = x_of(c.end() - c.fade_out.len as i64).min(x1 - HANDLE / 2.0);
@@ -2485,7 +2902,7 @@ impl Timeline {
                 let (x0, x1) = (x_of(c.start), x_of(c.end()));
                 if pos.x >= x0 && pos.x <= x1 {
                     let r = Rect::from_x_y_ranges(x0..=x1, top + 2.0..=top + lane_h - 2.0);
-                    let zone = clip_zone(c, pos, r, &x_of, show_volume && !c.muted);
+                    let zone = clip_zone(c, view.map, pos, r, &x_of, show_volume && !c.muted);
                     return Some(Hit::Clip { id: c.id, zone });
                 }
             }
@@ -2533,7 +2950,8 @@ impl Timeline {
         {
             match hit(p, song) {
                 Some(Hit::Clip {
-                    zone: Zone::StartEdge | Zone::EndEdge | Zone::FadeIn | Zone::FadeOut,
+                    zone:
+                        Zone::StartEdge | Zone::EndEdge | Zone::FadeIn | Zone::FadeOut | Zone::Marker(_),
                     ..
                 }) => ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal),
                 Some(Hit::Clip {
@@ -2683,7 +3101,8 @@ impl Timeline {
                     if let Some(c) = song.find_mut(t.id) {
                         d.moved |= (c.start, c.offset, c.len, c.fade_in, c.fade_out, c.gain_db)
                             != (t.start, t.offset, t.len, t.fade_in, t.fade_out, t.gain_db)
-                            || c.envelope != t.envelope;
+                            || c.envelope != t.envelope
+                            || c.markers != t.markers;
                         *c = t;
                     }
                 };
@@ -2789,6 +3208,29 @@ impl Timeline {
                         set(song, t);
                     }
                     Zone::Volume(Some(_)) => {}
+                    Zone::Marker(i) if i < anchor.markers.len() => {
+                        // The marker lands on the grid; the same place in
+                        // the clips edited with it moves with it.
+                        let was = anchor.out_of_frame(view.map, anchor.markers[i].frame as f64);
+                        let to = snap_to(was + dx);
+                        for (_, o) in &d.originals {
+                            let mut t = o.clone();
+                            let j = if o.id == anchor.id {
+                                Some(i)
+                            } else if was > o.start && was < o.end() {
+                                t.add_marker(t.frame_of_out(view.map, was).round() as i64)
+                            } else {
+                                None
+                            };
+                            if let Some(j) = j {
+                                let at = t.at_of_out(view.map, to).round() as i64;
+                                t.move_marker(j, at);
+                                t.retime(view.map);
+                                set(song, t);
+                            }
+                        }
+                    }
+                    Zone::Marker(_) => {}
                 }
             }
         }
@@ -3233,8 +3675,16 @@ impl Timeline {
                     );
                 }
                 let shape = c.shape();
+                // The source frame under a column: through the stretch.
+                let src_at = |x: f32| -> i64 {
+                    if c.is_stretched() {
+                        c.frame_of_out(view.map, frame_of(x)).round() as i64
+                    } else {
+                        frame_of(x) - c.start + c.offset as i64
+                    }
+                };
                 let level = |x: f32| {
-                    let rel = (frame_of(x) - c.start).clamp(0, c.len as i64 - 1);
+                    let rel = (src_at(x) - c.offset as i64).clamp(0, c.len as i64 - 1);
                     shape.at(rel as usize, c.len, c.offset)
                 };
                 if let Some(w) = self.waves.get(&c.source) {
@@ -3248,8 +3698,8 @@ impl Timeline {
                     let mut cols = Vec::with_capacity(r.width() as usize + 1);
                     let mut x = r.left().floor();
                     while x < r.right() {
-                        let f0 = frame_of(x) - c.start + c.offset as i64;
-                        let f1 = frame_of(x + 1.0) - c.start + c.offset as i64;
+                        let f0 = src_at(x);
+                        let f1 = src_at(x + 1.0);
                         let lo_src = c.offset as i64;
                         let hi_src = (c.offset + c.len) as i64;
                         let (a, b) = (
@@ -3286,11 +3736,17 @@ impl Timeline {
                 if self.show_volume && !c.muted {
                     draw_volume(&lanes.with_clip_rect(r.expand(4.0)), &look, c, full, &x_of);
                 }
-                let name = if c.gain_db.abs() >= 0.05 {
+                if !c.markers.is_empty() {
+                    draw_markers(&lanes.with_clip_rect(r), &look, c, view.map, &x_of, colour);
+                }
+                let mut name = if c.gain_db.abs() >= 0.05 {
                     format!("{} ({:+.1} dB)", c.name(), c.gain_db)
                 } else {
                     c.name()
                 };
+                if let Some(bpm) = c.tempo {
+                    name = format!("{name} ♩{bpm:.0}");
+                }
                 let at = r.left_top() + vec2(4.0 + HANDLE, 2.0);
                 let font = look.font(look.small);
                 if c.muted {
@@ -3502,6 +3958,72 @@ impl Timeline {
                 }
                 if ui.button("Crossfade where they meet").clicked() {
                     out.changed |= self.crossfade_selected(song, view.rate);
+                    ui.close();
+                }
+                ui.separator();
+                let follows = (song.lanes.iter())
+                    .flat_map(|l| l.clips.iter())
+                    .filter(|c| self.selected.contains(&c.id))
+                    .all(|c| c.tempo.is_some());
+                let mut follow = follows;
+                if ui
+                    .checkbox(&mut follow, "Follow tempo")
+                    .on_hover_text(
+                        "The clip keeps to the song's beats, stretched to the tempo map",
+                    )
+                    .clicked()
+                {
+                    out.command = Some(Cmd::FollowTempo);
+                    ui.close();
+                }
+                if ui.button("Clip tempo…").clicked() {
+                    out.command = Some(Cmd::ClipTempo);
+                    ui.close();
+                }
+                if let Zone::Marker(i) = zone {
+                    if ui.button("Delete stretch marker").clicked() {
+                        if let Some(c) = song.find_mut(id)
+                            && i < c.markers.len()
+                        {
+                            c.markers.remove(i);
+                            c.retime(view.map);
+                            out.changed = true;
+                        }
+                        ui.close();
+                    }
+                } else if ui
+                    .button("Add stretch marker here")
+                    .on_hover_text("Drag it onto a beat to move the attack under it")
+                    .clicked()
+                {
+                    // On the clip and those edited with it, at this frame.
+                    let ids = groups::with_partners(song, self.grouped(), [id]);
+                    for c in (song.lanes.iter_mut())
+                        .flat_map(|l| l.clips.iter_mut())
+                        .filter(|c| ids.contains(&c.id) && at > c.start && at < c.end())
+                    {
+                        let frame = c.frame_of_out(view.map, at).round() as i64;
+                        if c.add_marker(frame).is_some() {
+                            c.retime(view.map);
+                            out.changed = true;
+                        }
+                    }
+                    ui.close();
+                }
+                if ui.button("Stretch markers from attacks").clicked() {
+                    out.command = Some(Cmd::StretchMarkersFromAttacks);
+                    ui.close();
+                }
+                if ui.button("Clear stretch markers").clicked() {
+                    out.command = Some(Cmd::ClearStretchMarkers);
+                    ui.close();
+                }
+                if ui.button("Quantise audio…").clicked() {
+                    out.command = Some(Cmd::QuantiseAudio);
+                    ui.close();
+                }
+                if ui.button("Tempo from performance…").clicked() {
+                    out.command = Some(Cmd::TempoFromClip);
                     ui.close();
                 }
                 if let Zone::Volume(Some(i)) = zone
@@ -4255,5 +4777,98 @@ pub(crate) mod tests {
             "{lo} {hi}"
         );
         assert_eq!(w.range(0, BASE_HOP * 64), (-63.0, 63.0));
+    }
+
+    #[test]
+    fn a_clip_that_follows_tempo_stretches_with_the_map() {
+        let map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+        let mut c = clip(48_000, 48_000);
+        c.retime(&map);
+        assert!(c.warp(&map).is_none(), "played plainly");
+        c.follow_tempo(&map, true);
+        assert_eq!(c.tempo, Some(120.0));
+        assert_eq!(c.beat, PPQ * 2, "one second in at 120 BPM");
+        assert_eq!(c.span, 48_000, "the same length at the song's tempo");
+        // Half the tempo: twice as long, starting where its beat now is.
+        let slow = TempoMap::new(RATE, Tempo::bpm(60), TimeSignature::COMMON);
+        c.start = slow.frames_at(Ticks(c.beat)).0;
+        c.retime(&slow);
+        assert_eq!(c.start, 96_000);
+        assert_eq!(c.span, 96_000);
+        assert_eq!(c.end(), 192_000);
+        let w = c.warp(&slow).unwrap();
+        assert_eq!(w.src_range(), 0..48_000);
+        assert_eq!(w.out_range(), 96_000..192_000);
+        // Back to its own time, where it is now.
+        c.follow_tempo(&slow, false);
+        assert_eq!(c.tempo, None);
+        assert_eq!(c.span, 48_000);
+        assert_eq!(c.start, 96_000);
+    }
+
+    #[test]
+    fn markers_move_attacks_and_stay_with_their_audio_through_a_split() {
+        let map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+        let mut c = clip(0, 48_000);
+        c.retime(&map);
+        assert_eq!(c.add_marker(24_000), Some(0));
+        assert_eq!(c.add_marker(0), None, "not at the edges");
+        assert_eq!(c.add_marker(24_000), Some(0), "the same one");
+        assert!(c.move_marker(0, 20_000));
+        c.retime(&map);
+        assert_eq!(c.out_of_frame(&map, 24_000.0), 20_000);
+        assert_eq!(
+            c.out_of_frame(&map, 12_000.0),
+            10_000,
+            "stretched before it"
+        );
+        // After the last marker the audio plays at the clip's own
+        // tempo, so the end comes forward too.
+        assert_eq!(c.out_of_frame(&map, 36_000.0), 32_000, "plain after it");
+        assert_eq!(c.span, 44_000);
+        assert_eq!(c.frame_of_out(&map, 10_000).round() as i64, 12_000);
+        let w = c.warp(&map).unwrap();
+        assert_eq!(w.points().len(), 3);
+        // No more than 3× slower or faster than played.
+        assert!(c.move_marker(0, 100_000));
+        assert_eq!(c.markers[0].at, 72_000);
+        assert!(c.move_marker(0, 1_000));
+        assert_eq!(c.markers[0].at, 8_000);
+        c.move_marker(0, 20_000);
+        // Split after the marker: the first half keeps it, the second
+        // is counted from its own start.
+        let (a, b) = c.split(30_000).unwrap();
+        assert_eq!(a.markers.len(), 1);
+        assert_eq!(a.out_of_frame(&map, 24_000.0), 20_000);
+        assert!(b.markers.is_empty());
+        assert_eq!(b.start, 30_000);
+        assert_eq!(a.end(), 30_000);
+        assert_eq!(a.span + b.span, 44_000);
+        assert_eq!(a.len + b.len, 48_000);
+        // Split before it: the second half keeps it where it was.
+        let (a, b) = c.split(10_000).unwrap();
+        assert!(a.markers.is_empty());
+        assert_eq!(b.markers.len(), 1);
+        assert_eq!(b.out_of_frame(&map, 24_000.0), 20_000);
+        // Trimming the start keeps the marker where it plays.
+        let mut t = c.clone();
+        t.trim_start(5_000);
+        assert_eq!(t.out_of_frame(&map, 24_000.0), 20_000);
+        assert_eq!(t.end(), 44_000);
+    }
+
+    #[test]
+    fn a_tempo_change_inside_a_following_clip_puts_a_warp_point_on_every_beat() {
+        let mut map = TempoMap::new(RATE, Tempo::bpm(120), TimeSignature::COMMON);
+        map.add_tempo(Ticks(PPQ * 4), Tempo::bpm(60)).unwrap();
+        let mut c = clip(0, 192_000);
+        c.retime(&map);
+        c.follow_tempo(&map, true);
+        // Eight beats played at 120: four at 120 (2 s), then four at 60
+        // (4 s).
+        assert_eq!(c.span, 96_000 + 192_000);
+        let w = c.warp(&map).unwrap();
+        assert_eq!(w.points().len(), 9, "{:?}", w.points());
+        assert_eq!(w.out_range(), 0..288_000);
     }
 }

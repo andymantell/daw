@@ -71,6 +71,15 @@ pub(crate) enum Cmd {
     Bounce,
     EditGroups,
     FixTiming,
+    FollowTempo,
+    ClipTempo,
+    StretchMarkersFromAttacks,
+    AddStretchMarker,
+    ClearStretchMarkers,
+    QuantiseAudio,
+    QuantiseAudioApply,
+    TempoFromClip,
+    TempoFromClipApply,
     ZoomIn,
     ZoomOut,
     ZoomSelection,
@@ -921,6 +930,71 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::FixTiming, "fix-timing", "Edit", "Fix timing…", &[])
         .hint("Cut the selected clips at each note and move the notes toward the grid")
         .words("quantise quantize tighten align beat slice transient attack groove"),
+    info(Cmd::FollowTempo, "follow-tempo", "Edit", "Follow tempo", &[])
+        .hint(
+            "The selected clips keep to the song's beats: they stretch with the tempo map              and the project tempo, live and when exporting",
+        )
+        .words("musical time warp stretch elastic tempo sync"),
+    info(Cmd::ClipTempo, "clip-tempo", "Edit", "Clip tempo…", &[])
+        .hint("The tempo the selected clips were played at, which they follow the song from")
+        .words("original bpm warp stretch loop"),
+    info(
+        Cmd::StretchMarkersFromAttacks,
+        "stretch-markers-from-attacks",
+        "Edit",
+        "Stretch markers from attacks",
+        &[],
+    )
+    .hint("A stretch marker on every attack in the selected clips, to drag onto the beats")
+    .words("warp marker transient detect"),
+    info(
+        Cmd::AddStretchMarker,
+        "add-stretch-marker",
+        "Edit",
+        "Add stretch marker at playhead",
+        &[],
+    )
+    .hint("A stretch marker where the playhead crosses the selected clips")
+    .words("warp marker"),
+    info(
+        Cmd::ClearStretchMarkers,
+        "clear-stretch-markers",
+        "Edit",
+        "Clear stretch markers",
+        &[],
+    )
+    .hint("Take every stretch marker off the selected clips")
+    .words("warp marker remove"),
+    info(Cmd::QuantiseAudio, "quantise-audio", "Edit", "Quantise audio…", &[])
+        .hint("Move the selected clips' attacks toward the grid by stretching, with no cuts")
+        .words("quantize warp tighten align beat transient"),
+    info(
+        Cmd::QuantiseAudioApply,
+        "quantise-audio-apply",
+        "Edit",
+        "Quantise audio now",
+        &[],
+    )
+    .hint("Quantise the selected clips' attacks with the window's current settings")
+    .words("quantize warp"),
+    info(
+        Cmd::TempoFromClip,
+        "tempo-from-clip",
+        "Edit",
+        "Tempo from performance…",
+        &[],
+    )
+    .hint("Make the song's tempo map follow the selected clip's beats, as it was played")
+    .words("tempo map detect free time rubato beat"),
+    info(
+        Cmd::TempoFromClipApply,
+        "tempo-from-clip-apply",
+        "Edit",
+        "Tempo from performance now",
+        &[],
+    )
+    .hint("Set the song's tempo from the selected clip with the window's current settings")
+    .words("tempo map detect"),
     info(
         Cmd::ZoomIn,
         "zoom-in",
@@ -2321,6 +2395,15 @@ impl App {
             | Cmd::SectionLater
             | Cmd::AddToPlayOrder => !self.markers.is_empty(),
             Cmd::PlayOrder | Cmd::WriteOrder | Cmd::ClearPlayOrder => !self.arrangement.is_empty(),
+            Cmd::FollowTempo
+            | Cmd::ClipTempo
+            | Cmd::StretchMarkersFromAttacks
+            | Cmd::AddStretchMarker
+            | Cmd::ClearStretchMarkers
+            | Cmd::QuantiseAudio
+            | Cmd::QuantiseAudioApply
+            | Cmd::TempoFromClip
+            | Cmd::TempoFromClipApply => self.has_stretch_clips(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
         }
@@ -2578,6 +2661,17 @@ impl App {
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
             Cmd::FixTiming => self.timing.open = true,
+            Cmd::FollowTempo
+            | Cmd::ClipTempo
+            | Cmd::StretchMarkersFromAttacks
+            | Cmd::AddStretchMarker
+            | Cmd::ClearStretchMarkers
+            | Cmd::QuantiseAudio
+            | Cmd::QuantiseAudioApply
+            | Cmd::TempoFromClip
+            | Cmd::TempoFromClipApply => {
+                self.run_stretch(cmd);
+            }
             Cmd::HitPoint => {
                 let at = self.ctl.status().position().0;
                 self.add_hit_point(at);

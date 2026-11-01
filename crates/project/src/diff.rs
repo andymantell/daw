@@ -537,6 +537,8 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                     || !near(b.start, c.start)
                     || !near(b.offset, c.offset)
                     || !near(b.len, c.len)
+                    || b.tempo != c.tempo
+                    || b.markers != c.markers
                 {
                     changed.push(c);
                 }

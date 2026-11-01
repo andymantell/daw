@@ -24,6 +24,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::engine::Status;
+use crate::warp::Warp;
 
 use rtrb::{Consumer, Producer};
 
@@ -150,6 +151,29 @@ pub struct Placement {
     pub start: i64,
     pub end: i64,
     pub offset: usize,
+    /// A clip that follows tempo plays the file frames its warp ties to
+    /// the timeline instead, stretched.
+    pub warp: Option<Arc<Warp>>,
+}
+
+impl Placement {
+    /// The file frames timeline frames `[from, to)` play.
+    fn file_frames(&self, from: i64, to: i64) -> (usize, usize) {
+        match &self.warp {
+            Some(w) => {
+                let range = w.src_range();
+                let clamp = |f: f64| f.clamp(range.start as f64, range.end as f64) as usize;
+                (
+                    clamp(w.src_at(from as f64).floor()),
+                    clamp(w.src_at(to as f64).ceil()),
+                )
+            }
+            None => (
+                self.offset + (from - self.start) as usize,
+                self.offset + (to - self.start) as usize,
+            ),
+        }
+    }
 }
 
 /// Where playback is and what loops, read by the disk thread each pass.
@@ -242,8 +266,7 @@ impl Streamer {
                 if from >= to {
                     continue;
                 }
-                let f0 = p.offset + (from - p.start) as usize;
-                let f1 = p.offset + (to - p.start) as usize;
+                let (f0, f1) = p.file_frames(from, to);
                 for i in f0 / CHUNK..f1.div_ceil(CHUNK).min(p.source.chunks()) {
                     want.insert((p.source.id, i));
                 }

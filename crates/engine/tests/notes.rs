@@ -590,3 +590,66 @@ fn note_repeat_plays_held_notes_again_until_let_go() {
         "letting go stops it: {last:?}"
     );
 }
+
+#[test]
+fn note_effects_play_before_the_instrument_and_follow_the_song() {
+    use daw_engine::notefx::{ArpMode, NoteFxKind, NoteFxSpec, ScaleSpec};
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let logger = Logger {
+        log: log.clone(),
+        at: 0,
+    };
+    let mut s = session();
+    // A chord held for a beat from half a beat in, arpeggiated in
+    // sixteenths up.
+    let mut t = track(vec![note(0.5, 1.0, 60), note(0.5, 1.0, 64)], 0);
+    t.note_fx = vec![NoteFxSpec {
+        id: 7,
+        bypass: false,
+        kind: NoteFxKind::Arpeggiator {
+            mode: ArpMode::Up,
+            rate: PPQ as f64 / 4.0,
+            octaves: 1,
+            gate: 0.5,
+            latch: false,
+            velocity: 0,
+        },
+    }];
+    t.note_scale = ScaleSpec::CHROMATIC;
+    s.tracks.push(t);
+    let g = s
+        .compile_all(
+            BLOCK,
+            &mut Vec::new(),
+            &mut vec![(1, Box::new(logger) as _)],
+        )
+        .unwrap();
+    let (mut ctl, mut eng) = engine::new(BLOCK);
+    let _ = ctl.set_graph(g);
+    let _ = ctl.send(Command::Play);
+    let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
+    for _ in 0..(2 * BEAT as usize / BLOCK + 2) {
+        eng.process(&mut l, &mut r);
+    }
+    let log = log.lock().unwrap();
+    let ons: Vec<(i64, u8)> = (log.iter())
+        .filter_map(|(f, e)| match e.kind {
+            Kind::NoteOn { pitch, .. } => Some((*f, pitch)),
+            _ => None,
+        })
+        .collect();
+    let step = BEAT / 4;
+    let want: Vec<(i64, u8)> = (0..4)
+        .map(|k| (BEAT / 2 + k * step, if k % 2 == 0 { 60 } else { 64 }))
+        .collect();
+    let close = ons.len() == want.len()
+        && ons
+            .iter()
+            .zip(&want)
+            .all(|(a, b)| a.1 == b.1 && (a.0 - b.0).abs() <= BLOCK as i64);
+    assert!(close, "got {ons:?}, want {want:?}");
+    let offs = (log.iter())
+        .filter(|(_, e)| matches!(e.kind, Kind::NoteOff { .. }))
+        .count();
+    assert_eq!(offs, ons.len(), "every step ends");
+}

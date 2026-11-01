@@ -319,6 +319,7 @@ impl App {
             notation: t.notation.clone(),
             versions: t.versions.clone(),
             version: t.version.clone(),
+            note_fx: t.note_fx.clone(),
             automation: (t.automation.iter())
                 .map(|l| daw_project::Lane {
                     param: l.param.clone(),
@@ -545,6 +546,7 @@ impl App {
                 stored.scale_stored_versions(scale);
                 t.versions = stored.versions;
             }
+            t.note_fx = pt.note_fx.clone();
             match (&mut t.instrument, &pt.instrument) {
                 (Some(slot), Some(e)) if slot.same_shape(e) => slot.load(e),
                 (slot, Some(e)) => {

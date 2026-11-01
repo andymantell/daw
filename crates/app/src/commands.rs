@@ -156,6 +156,12 @@ pub(crate) enum Cmd {
     MakePatternUnique,
     PatternToNotes,
     NoteRepeat,
+    /// Adds a note effect to the instrument track, by its place in
+    /// `notefx::KINDS`.
+    AddNoteFx(u8),
+    NoteFxOnOff,
+    RenderNoteFx,
+    ClearNoteFx,
     AddInstrumentTrack,
     /// Adds a track with one of the built-in instruments, by its place
     /// in `daw_instruments::Kind::ALL`.
@@ -751,6 +757,42 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::NoteRepeat, "note-repeat", "Notes", "Note repeat on or off", &[])
         .hint("Keys and pads held down on the instrument track play again every sixteenth, until let go")
         .words("roll ratchet pads drums repeat"),
+    info(Cmd::AddNoteFx(0), "add-arpeggiator", "Notes", "Arpeggiator", &[])
+        .hint("Add an arpeggiator to the instrument track: held keys play one after another, in time")
+        .words("arp arpeggio note effect midi effect pattern"),
+    info(Cmd::AddNoteFx(1), "add-chord-effect", "Notes", "Chord", &[])
+        .hint("Add a chord effect to the instrument track: each note plays a chord")
+        .words("chords harmony triad note effect midi effect"),
+    info(Cmd::AddNoteFx(2), "add-note-length-effect", "Notes", "Note length", &[])
+        .hint("Add a note length effect to the instrument track: notes a set length, or longer")
+        .words("duration gate staccato note effect midi effect"),
+    info(Cmd::AddNoteFx(3), "add-velocity-effect", "Notes", "Velocity", &[])
+        .hint("Add a velocity effect to the instrument track: notes softer, harder or more even")
+        .words("dynamics compress note effect midi effect"),
+    info(Cmd::AddNoteFx(4), "add-randomise-effect", "Notes", "Randomise", &[])
+        .hint("Add a randomise effect to the instrument track: pitch and velocity moved at random")
+        .words("random randomize humanise chance note effect midi effect"),
+    info(Cmd::AddNoteFx(5), "add-scale-effect", "Notes", "Scale", &[])
+        .hint("Add a scale effect to the instrument track: notes kept on the song's key")
+        .words("key quantise pitch correct note effect midi effect"),
+    info(Cmd::NoteFxOnOff, "note-effects-on-off", "Notes", "Note effects on or off", &[])
+        .hint("Switch the instrument track's note effects off, or back on")
+        .words("bypass arpeggiator midi effects"),
+    info(
+        Cmd::RenderNoteFx,
+        "render-note-effects",
+        "Notes",
+        "Render note effects into the notes",
+        &[],
+    )
+    .hint(
+        "Make the instrument track's note clips the notes its note effects play, and switch the \
+         effects off",
+    )
+    .words("bake flatten apply arpeggiator midi effects"),
+    info(Cmd::ClearNoteFx, "remove-note-effects", "Notes", "Remove note effects", &[])
+        .hint("Take every note effect off the instrument track")
+        .words("clear delete arpeggiator midi effects"),
     info(
         Cmd::KeepNotes,
         "keep-notes",
@@ -2763,6 +2805,10 @@ impl App {
             Cmd::NextVersion | Cmd::PrevVersion | Cmd::DeleteVersion => self
                 .version_track()
                 .is_some_and(|i| !self.tracks[i].versions.is_empty()),
+            Cmd::AddNoteFx(_) => self.note_fx_track().is_some(),
+            Cmd::NoteFxOnOff | Cmd::RenderNoteFx | Cmd::ClearNoteFx => self
+                .note_fx_track()
+                .is_some_and(|i| !self.tracks[i].note_fx.is_empty()),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
             Cmd::ExportVideo => {
                 daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
@@ -2921,6 +2967,17 @@ impl App {
                     self.rebuild();
                 }
             }
+            Cmd::AddNoteFx(k) => {
+                if let Err(e) = self.add_note_fx(k as usize) {
+                    self.message = Some(e);
+                }
+            }
+            Cmd::NoteFxOnOff => self.toggle_note_fx(),
+            Cmd::ClearNoteFx => self.clear_note_fx(),
+            Cmd::RenderNoteFx => match self.render_note_fx() {
+                Ok(n) => self.message = Some(format!("{n} notes made from the note effects.")),
+                Err(e) => self.message = Some(e),
+            },
             Cmd::MakePatternUnique => {
                 if let Some(key) = self.selected_pattern_clip() {
                     self.make_pattern_unique(&key);

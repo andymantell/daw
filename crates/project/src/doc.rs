@@ -48,7 +48,7 @@ use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
     GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Notation,
-    NotationView, Note, NoteClip, Practice, Project, Scale, Send, StretchMarker, TabBlock,
+    NotationView, Note, NoteClip, NoteFx, Practice, Project, Scale, Send, StretchMarker, TabBlock,
     Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion, TrainerSettings,
     VideoClip, differences, is_asset_name,
 };
@@ -1135,6 +1135,7 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         None if m.get("notation").is_some() => w.delete(m, "notation"),
         None => {}
     }
+    write_note_fx(w, m, t);
     write_versions(w, m, t);
 }
 
@@ -1800,6 +1801,68 @@ fn read_cue_mixes(root: &LoroMapValue, tracks: &[Track]) -> Vec<CueMix> {
     out
 }
 
+/// A track's note effects: one map each by id, with its place in the
+/// list and one entry per setting. Tracks that never had one gain no
+/// entry.
+fn write_note_fx(w: &mut Writer, m: &LoroMap, t: &Track) {
+    if t.note_fx.is_empty() && m.get("note_fx").is_none() {
+        return;
+    }
+    let fx = w.fixed(m, "note_fx");
+    let keep: HashSet<&str> = t.note_fx.iter().map(|f| f.id.as_str()).collect();
+    for id in keys(&fx) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&fx, &id);
+        }
+    }
+    for (i, f) in t.note_fx.iter().enumerate() {
+        let fm = w.child(&fx, &f.id);
+        w.put(&fm, "kind", f.kind.as_str());
+        w.put(&fm, "at", i as i64);
+        w.put(&fm, "bypass", f.bypass);
+        let pm = w.child(&fm, "params");
+        let keep: HashSet<&str> = f.params.iter().map(|(k, _)| k.as_str()).collect();
+        for k in keys(&pm) {
+            if !keep.contains(k.as_str()) {
+                w.delete(&pm, &k);
+            }
+        }
+        for (k, v) in &f.params {
+            w.put(&pm, k, *v);
+        }
+    }
+}
+
+/// A track's note effects, in their order.
+fn read_note_fx(t: &LoroMapValue) -> Vec<NoteFx> {
+    let Some(LoroValue::Map(fx)) = t.get("note_fx") else {
+        return Vec::new();
+    };
+    let mut out: Vec<(i64, NoteFx)> = (fx.iter())
+        .filter_map(|(id, f)| {
+            let LoroValue::Map(f) = f else { return None };
+            let mut params: Vec<(String, f64)> = match f.get("params") {
+                Some(LoroValue::Map(pm)) => (pm.keys())
+                    .filter_map(|k| Some((k.to_string(), float(pm, k)?)))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            params.sort_by(|a, b| a.0.cmp(&b.0));
+            Some((
+                int(f, "at").unwrap_or(i64::MAX),
+                NoteFx {
+                    id: id.to_string(),
+                    kind: string(f, "kind").unwrap_or_default(),
+                    bypass: boolean(f, "bypass").unwrap_or(false),
+                    params,
+                },
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+    out.into_iter().map(|(_, f)| f).collect()
+}
+
 fn write_comps(w: &mut Writer, m: &LoroMap, t: &Track) {
     if t.comps.is_empty() && m.get("comps").is_none() {
         return;
@@ -1899,6 +1962,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         notation: None,
         versions: Vec::new(),
         version: None,
+        note_fx: read_note_fx(t),
     };
     if let Some(LoroValue::Map(nm)) = t.get("notation") {
         let tuning = match nm.get("tuning") {
@@ -2691,6 +2755,33 @@ mod tests {
         p.cue_mixes.clear();
         doc.set(&p);
         assert!(doc.get().cue_mixes.is_empty());
+    }
+
+    #[test]
+    fn note_effects_round_trip_in_order() {
+        let mut p = Project::default();
+        let mut t = Track::new("t".into(), "Keys".into());
+        t.kind = TrackKind::Instrument;
+        let fx = |id: &str, kind: &str, rate: f64| NoteFx {
+            id: id.into(),
+            kind: kind.into(),
+            bypass: false,
+            params: vec![("mode".into(), 2.0), ("rate".into(), rate)],
+        };
+        t.note_fx = vec![fx("b", "chord", 0.0), fx("a", "arpeggiator", 240.0)];
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        assert_eq!(doc.get().tracks[0].note_fx, p.tracks[0].note_fx);
+        // Reordered, one changed, one gone.
+        p.tracks[0].note_fx = vec![NoteFx {
+            bypass: true,
+            ..fx("a", "arpeggiator", 120.0)
+        }];
+        doc.set(&p);
+        assert_eq!(doc.get().tracks[0].note_fx, p.tracks[0].note_fx);
+        let back = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap();
+        assert_eq!(back.get().tracks[0].note_fx, p.tracks[0].note_fx);
     }
 
     #[test]

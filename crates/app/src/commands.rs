@@ -290,7 +290,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Keep this project's tracks, effects, sections and notes to start from")
     .words("layout set-up"),
     info(Cmd::Presets, "presets", "File", "Presets…", &[])
-        .hint("Track and effect chain presets, to add as a track or put on one")
+        .hint("Track and effect chain presets, to add as new tracks and put on tracks")
         .words("tone sound library chain load"),
     info(
         Cmd::SaveTrackPreset,

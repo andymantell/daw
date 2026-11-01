@@ -439,7 +439,9 @@ impl App {
         Ok(preset)
     }
 
-    /// Makes a change to the project as one undoable edit.
+    /// Makes a change to the project, written as one undoable edit when
+    /// the document is next brought up to date (labelled, for an
+    /// assistant's).
     fn edit_project<R>(
         &mut self,
         ctx: &egui::Context,
@@ -448,10 +450,23 @@ impl App {
         self.sync_doc(ctx, true);
         let mut p = self.project();
         let r = f(&mut p)?;
-        self.proj.doc.set(&p);
+        let before = self.proj.committed.clone();
         self.apply(p);
-        self.proj.dirty = true;
+        // Not yet written: the next sync writes it.
+        self.proj.committed = before;
         Ok(r)
+    }
+
+    /// The preset called `name`: the user's if they have one by that
+    /// name, else one that comes with the app.
+    pub(crate) fn find_preset(&self, name: &str) -> Result<Entry, String> {
+        let (list, _) = all_presets(self.preset_ui.dir.as_deref());
+        let mut found: Vec<Entry> = list.into_iter().filter(|e| e.preset.name == name).collect();
+        found.sort_by_key(|e| e.file.is_none());
+        found
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("There is no preset called {name}."))
     }
 
     /// Adds the preset in `e` to the project as a new track. Returns
@@ -1262,6 +1277,67 @@ mod tests {
         let (i, _) = h.state_mut().add_preset_track(&ctx, &bus).unwrap();
         assert_eq!(h.state().tracks[i].kind, TrackKind::Bus);
         assert_eq!(h.state().tracks[i].name, "Reverb");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// End to end, as an assistant would: list, add, save and undo.
+    #[test]
+    fn an_assistant_lists_adds_and_saves_presets() {
+        use serde_json::json;
+        let dir = scratch("agent");
+        let mut d = crate::agent::driver::Driver::new();
+        d.app().preset_ui.dir = Some(dir.join("Presets"));
+        let list = d.call("list_presets", json!({})).unwrap();
+        let crunch = (list.as_array().unwrap().iter())
+            .find(|p| p["name"] == "Crunch guitar")
+            .unwrap();
+        assert_eq!(crunch["kind"], "chain");
+        assert_eq!(crunch["included"], true);
+
+        let added = d
+            .call("add_preset", json!({"name": "Crunch guitar"}))
+            .unwrap();
+        let key = added["track"].as_str().unwrap().to_string();
+        let p = d.project();
+        assert_eq!(p["tracks"][0]["name"], "Crunch guitar");
+        assert_eq!(p["tracks"][0]["effects"].as_array().unwrap().len(), 3);
+
+        // Onto that track, another chain replaces its effects.
+        d.call("add_preset", json!({"name": "Vocal", "track": key}))
+            .unwrap();
+        assert_eq!(
+            d.project()["tracks"][0]["effects"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+
+        d.call(
+            "save_preset",
+            json!({"track": key, "kind": "chain", "name": "Mine", "tags": ["Vocal", "lesson"]}),
+        )
+        .unwrap();
+        let list = d.call("list_presets", json!({})).unwrap();
+        let mine = (list.as_array().unwrap().iter())
+            .find(|p| p["name"] == "Mine")
+            .unwrap();
+        assert_eq!(mine["included"], false);
+        assert_eq!(mine["tags"], json!(["vocal", "lesson"]));
+
+        // Each request was one undo step.
+        let ctx = d.h.ctx.clone();
+        d.app().undo(&ctx);
+        assert_eq!(
+            d.project()["tracks"][0]["effects"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        d.app().undo(&ctx);
+        assert_eq!(d.project()["tracks"].as_array().unwrap().len(), 0);
+        assert!(d.call("add_preset", json!({"name": "No such"})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

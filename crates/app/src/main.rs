@@ -61,6 +61,7 @@ mod latency;
 mod layers;
 mod lessons;
 mod listen;
+mod lyrics;
 mod meters;
 mod midi;
 mod midifile;
@@ -511,6 +512,8 @@ struct App {
     transpose: transpose::Transpose,
     /// Pitch editing: lines worked out, the notes chosen, a drag.
     pitch: pitch_edit::PitchEdit,
+    /// Finding the words sung in vocal clips, and the speech model.
+    lyrics: lyrics::Lyrics,
     takes_ui: comping::TakesPane,
     /// Automation lanes: their pane, modes and the passes being written.
     automation: automation::Automation,
@@ -684,6 +687,7 @@ impl App {
             stretch: stretch::Stretch::default(),
             transpose: transpose::Transpose::default(),
             pitch: pitch_edit::PitchEdit::default(),
+            lyrics: lyrics::Lyrics::default(),
             takes_ui: comping::TakesPane::default(),
             automation: automation::Automation::default(),
             comments: Vec::new(),
@@ -3348,6 +3352,7 @@ impl eframe::App for App {
         self.stretch_windows(&ctx);
         self.transpose_window(&ctx);
         self.pitch_tick(&ctx);
+        self.lyrics_tick(&ctx);
         self.remote_tick(&ctx);
         self.assistants_tick(&ctx);
         self.listen_tick(&ctx);

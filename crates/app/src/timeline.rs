@@ -1397,6 +1397,8 @@ pub struct Timeline {
     /// Scrubbing the playhead along the ruler.
     scrubbing: bool,
     waves: Waveforms,
+    /// The words found in each recording (crate::lyrics), by its file.
+    pub words: HashMap<PathBuf, Arc<daw_speech::Transcript>>,
     /// What was right-clicked, and where (timeline frame).
     menu: Option<(Hit, i64)>,
     /// The lane right-clicked, or `None` for the ruler.
@@ -1454,6 +1456,7 @@ impl Default for Timeline {
             drag: None,
             scrubbing: false,
             waves: Waveforms::default(),
+            words: HashMap::new(),
             menu: None,
             menu_lane: None,
             note_sel: None,
@@ -1526,6 +1529,42 @@ fn draw_markers(
             colour,
             Stroke::NONE,
         ));
+    }
+}
+
+/// The words found in a clip's recording, along its bottom edge where
+/// each is sung; a word that would run into the one before is left out
+/// until zoomed in.
+fn draw_words(
+    painter: &egui::Painter,
+    look: &Look,
+    c: &Clip,
+    t: &daw_speech::Transcript,
+    map: &TempoMap,
+    x_of: &dyn Fn(i64) -> f32,
+    ink: Color32,
+) {
+    let r = painter.clip_rect();
+    let rate = c.source.rate as f64;
+    let (lo, hi) = (c.offset as f64, (c.offset + c.len) as f64);
+    let font = look.font(look.small);
+    let mut free = f32::MIN;
+    for w in t.words() {
+        let f = w.start * rate;
+        if f < lo || f >= hi {
+            continue;
+        }
+        let x = x_of(c.out_of_frame(map, f));
+        if x < free || x > r.right() {
+            continue;
+        }
+        let g = painter.layout_no_wrap(w.text.clone(), font.clone(), ink);
+        let width = g.size().x;
+        if x + width < r.left() {
+            continue;
+        }
+        painter.galley(pos2(x + 1.0, r.bottom() - g.size().y - 1.0), g, ink);
+        free = x + width + 6.0;
     }
 }
 
@@ -3784,6 +3823,16 @@ impl Timeline {
                 }
                 if !c.markers.is_empty() {
                     draw_markers(&lanes.with_clip_rect(r), &look, c, view.map, &x_of, colour);
+                }
+                if let Some(t) = self.words.get(&c.path)
+                    && r.height() >= 30.0
+                {
+                    let ink = if c.muted {
+                        tc.text_dim
+                    } else {
+                        tc.clip_text.of(colour)
+                    };
+                    draw_words(&lanes.with_clip_rect(r), &look, c, t, view.map, &x_of, ink);
                 }
                 let mut name = if c.gain_db.abs() >= 0.05 {
                     format!("{} ({:+.1} dB)", c.name(), c.gain_db)

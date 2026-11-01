@@ -517,6 +517,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_monitor::TOOLS)
         .chain(crate::agent_practice::TOOLS)
         .chain(crate::agent_pitch::TOOLS)
+        .chain(crate::lyrics::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)
@@ -814,6 +815,7 @@ impl App {
                 .or_else(|| self.midi_read(name))
                 .or_else(|| self.spoken_read(name, args))
                 .or_else(|| self.pitch_read(name, args))
+                .or_else(|| self.lyrics_read(name, args))
                 .unwrap_or_else(|| Err(format!("There is no tool {name}."))),
         }
     }

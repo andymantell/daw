@@ -101,6 +101,7 @@ pub(crate) enum Cmd {
     MoveFormants,
     PitchEditor,
     FindPitchNotes,
+    FindLyrics,
     PitchNotesUp,
     PitchNotesDown,
     SnapPitchNotes,
@@ -1279,6 +1280,12 @@ pub(crate) const COMMANDS: &[Info] = &[
          pitch editor; notes found again keep the pitch edits of those they replace",
     )
     .words("pitch detect analyse vocal melody notes tune"),
+    info(Cmd::FindLyrics, "find-lyrics", "Edit", "Find the words", &[])
+        .hint(
+            "Read the words sung in the selected audio clip, with when each is sung, using a \
+             speech model on this computer (downloaded the first time, after asking)",
+        )
+        .words("lyrics words transcribe speech text vocal chop sung"),
     info(
         Cmd::PitchNotesUp,
         "pitch-notes-up",
@@ -3134,6 +3141,7 @@ impl App {
             | Cmd::ResetTranspose
             | Cmd::MoveFormants
             | Cmd::FindPitchNotes
+            | Cmd::FindLyrics
             | Cmd::StretchMarkersFromAttacks
             | Cmd::AddStretchMarker
             | Cmd::ClearStretchMarkers
@@ -3432,6 +3440,7 @@ impl App {
             Cmd::Video => self.workspace.toggle(Pane::Video),
             Cmd::Fretboard => self.workspace.toggle(Pane::Fretboard),
             Cmd::PitchEditor => self.workspace.toggle(Pane::PitchEditor),
+            Cmd::FindLyrics => self.find_lyrics_command(),
             Cmd::FindPitchNotes
             | Cmd::PitchNotesUp
             | Cmd::PitchNotesDown

@@ -501,6 +501,11 @@ impl Controller {
         &self.status
     }
 
+    /// The status, to read from another thread.
+    pub fn shared_status(&self) -> Arc<Status> {
+        self.status.clone()
+    }
+
     /// Frees graphs the audio thread has finished with. Call regularly
     /// from a non-real-time thread.
     pub fn collect_garbage(&mut self) -> usize {

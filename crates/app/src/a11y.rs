@@ -59,6 +59,40 @@ fn wait_for(h: &mut Harness<'_, App>, what: impl Fn(&App) -> bool) -> bool {
     false
 }
 
+/// Watches the audio thread for a preview from now on, on a thread of
+/// its own: a short tone can start and end inside one slow frame, or in
+/// a burst when the audio thread catches up, and polling between frames
+/// would miss it.
+struct PreviewWatch {
+    seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PreviewWatch {
+    fn start(h: &Harness<'_, App>) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let status = h.state().ctl.shared_status();
+        let seen = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = seen.clone();
+        std::thread::spawn(move || {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while std::time::Instant::now() < end {
+                if status.preview().is_some() {
+                    flag.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+        });
+        Self { seen }
+    }
+
+    /// Runs frames until the preview has been heard; false if it never is.
+    fn heard(&self, h: &mut Harness<'_, App>) -> bool {
+        let seen = self.seen.clone();
+        wait_for(h, move |_| seen.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 fn playing(app: &App) -> bool {
     app.ctl.status().playing()
 }
@@ -873,13 +907,11 @@ fn an_automation_lane_is_read_heard_and_set_from_the_keyboard() {
     h.run();
     // Heard: a tone that rises with the lane, its words at the foot.
     let ctx = h.ctx.clone();
+    let watch = PreviewWatch::start(h);
     h.state_mut().run(&ctx, Cmd::HearValue);
     h.run();
     assert_eq!(h.state().said.text(), Some(words));
-    assert!(
-        wait_for(h, |a| a.ctl.status().preview().is_some()),
-        "it plays"
-    );
+    assert!(watch.heard(h), "it plays");
     // Up at the playhead (bar 1) raises the lane there.
     h.key_press(Key::ArrowUp);
     h.run();
@@ -929,9 +961,10 @@ fn the_focused_value_is_heard_and_said() {
         .unwrap()
         .focus();
     h.run();
+    let watch = PreviewWatch::start(&h);
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::H);
     // (Not run: the short tone may be over by the time the frames settle.)
-    assert!(wait_for(&mut h, |a| a.ctl.status().preview().is_some()));
+    assert!(watch.heard(&mut h));
     assert_eq!(h.state().said.text(), Some("50% right"));
     h.run();
     assert!(
@@ -951,11 +984,12 @@ fn an_assistant_plays_a_value_to_the_person() {
         json!({"track": t, "param": "pan", "value": -1.0}),
     )
     .unwrap();
+    let watch = PreviewWatch::start(&d.h);
     let r = d
         .call("hear_value", json!({"track": t, "param": "pan"}))
         .unwrap();
     assert_eq!(r["text"], "Audio 1 pan, 100% left");
-    assert!(wait_for(&mut d.h, |a| a.ctl.status().preview().is_some()));
+    assert!(watch.heard(&mut d.h));
     let r = d
         .call("hear_value", json!({"track": t, "lane": true}))
         .unwrap();

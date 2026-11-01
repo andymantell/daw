@@ -105,7 +105,9 @@ assistant finds them for itself. In outline:
   next changes, by anyone.
 - **Tracks, routing and effects:** `add_track`, `edit_track`,
   `delete_track`, `set_send`, `set_parameter` (a built-in instrument's
-  settings too, as `instrument.<key>`), `set_sound` (a sound file on a
+  settings too, as `instrument.<key>`), `set_parameters` (many settings,
+  on one or many tracks, in one call and one undo step; all or none, so
+  an interruption can't leave a voicing half-set), `set_sound` (a sound file on a
   drum pad, a sampler zone or the drum sampler), `edit_control_group`,
   `add_effect`,
   `edit_effect`, `remove_effect`, `add_preset`, `save_preset`,
@@ -120,7 +122,8 @@ assistant finds them for itself. In outline:
   `remove_effect`, `list_parameters`, `set_parameter` and `analyse`, and
   `get_project` shows it as `master`.
 - **Instruments and layers:** `set_instrument` (a built-in or plugin
-  instrument, for a track or one layer), an SFZ sample library on the
+  instrument, for a track or one layer, and/or a `settings` dict for it,
+  as `edit_layer` takes for a layer), an SFZ sample library on the
   sampler (`file_command` with `load-sfz`, or `set_sound` with the
   slot `sfz`; `get_instrument` then lists its keys, articulations and
   controls, and each control, such as a mic level, is a setting,

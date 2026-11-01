@@ -261,6 +261,26 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "set_parameters",
+        description: "Sets many settings in one call, as one undo step: a synth's whole \
+                      voicing, or a mix move across tracks. Each change is a track, a \
+                      param and a value, as set_parameter takes them; a change with no \
+                      track uses the call's track. All or none: if one can't be set (no \
+                      such track or setting), nothing changes and the answer says which. \
+                      Values are kept in their ranges.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string", "description": "The track for changes that give none, by id (or \"master\")."},
+                "changes": {"type": "array", "items": {"type": "object", "properties": {
+                    "track": {"type": "string", "description": "The track's id, if not the call's."},
+                    "param": {"type": "string", "description": "The setting, as list_parameters names it."},
+                    "value": {"type": "number"}
+                }, "required": ["param", "value"]}}
+            }, "required": ["changes"]})
+        },
+    },
+    Tool {
         name: "add_preset",
         description: "Adds a preset, by name, as a new track, or with a track id puts it \
                       on that track: an effect chain replaces the track's effects; a track \
@@ -867,6 +887,7 @@ impl App {
                 let label = self.set_parameter(track, param, value)?;
                 Ok((json!({"set": param, "value": value}), Some(label)))
             }
+            "set_parameters" => self.set_parameters_tool(args),
             "add_preset" => {
                 let name = args["name"].as_str().ok_or("Give the preset's name.")?;
                 let e = self.find_preset(name)?;
@@ -1558,6 +1579,52 @@ impl App {
         Ok(format!("Set {track} {name} to {v}"))
     }
 
+    /// `set_parameters`: every change or none, as one undo step.
+    fn set_parameters_tool(&mut self, args: &Value) -> Result<(Value, Option<String>), String> {
+        let changes = args["changes"]
+            .as_array()
+            .filter(|c| !c.is_empty())
+            .ok_or("Give the changes: a list of {track, param, value}.")?;
+        let default = args["track"].as_str();
+        let mut list = Vec::with_capacity(changes.len());
+        for (n, c) in changes.iter().enumerate() {
+            let track = (c["track"].as_str())
+                .or(default)
+                .ok_or_else(|| format!("Change {n} has no track, and the call gives none."))?;
+            let param = (c["param"].as_str()).ok_or_else(|| format!("Change {n} has no param."))?;
+            let value = (c["value"].as_f64())
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| format!("Change {n}'s value isn't a number."))?;
+            list.push((track, param, value));
+        }
+        // Undone as a whole if one fails, so a half-set voicing can't stay.
+        let before = self.project();
+        let committed = self.proj.committed.clone();
+        let mut labels = Vec::with_capacity(list.len());
+        for (n, (track, param, value)) in list.iter().enumerate() {
+            match self.set_parameter(track, param, *value) {
+                Ok(l) => labels.push(l),
+                Err(e) => {
+                    let now = self.project();
+                    if now != before {
+                        self.reload_changed_fx(&now, &before);
+                        self.apply(before);
+                        self.proj.committed = committed;
+                        self.send(Command::SetMasterGain(self.master.mix.gain_db));
+                    }
+                    return Err(format!(
+                        "Change {n} ({track} {param}): {e} Nothing was changed."
+                    ));
+                }
+            }
+        }
+        let label = match labels.as_slice() {
+            [one] => one.clone(),
+            _ => format!("Set {} settings", labels.len()),
+        };
+        Ok((json!({"set": labels.len(), "changes": labels}), Some(label)))
+    }
+
     /// Sets a track's setting. The undo step's name, or why it can't.
     fn set_parameter(&mut self, key: &str, param: &str, v: f64) -> Result<String, String> {
         if !v.is_finite() {
@@ -1859,6 +1926,98 @@ mod tests {
             )
             .unwrap_err();
         assert!(e.contains("no setting"), "{e}");
+    }
+
+    /// The track's instrument settings, by key, from list_parameters.
+    fn instrument_params(d: &mut Driver, key: &str) -> Vec<Value> {
+        let list = d.call("list_parameters", json!({"track": key})).unwrap();
+        (list[0]["params"].as_array().unwrap().iter())
+            .filter(|p| p["param"].as_str().unwrap().starts_with(INSTRUMENT))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn many_settings_are_set_in_one_call_as_one_undo_step() {
+        let mut d = Driver::new();
+        let a = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let a = a["track"].as_str().unwrap().to_string();
+        let b = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let b = b["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &a);
+        let (p0, p1) = (&params[0], &params[1]);
+        let mid = |p: &Value| (p["min"].as_f64().unwrap() + p["max"].as_f64().unwrap()) / 2.0;
+        let r = d
+            .call(
+                "set_parameters",
+                json!({"track": a, "changes": [
+                    {"param": p0["param"], "value": mid(p0)},
+                    {"param": p1["param"], "value": p1["max"].as_f64().unwrap() + 100.0},
+                    {"param": "gain", "value": -6.0},
+                    {"track": b, "param": "mute", "value": 1},
+                ]}),
+            )
+            .unwrap();
+        assert_eq!(r["set"], 4);
+        let now = instrument_params(&mut d, &a);
+        assert_eq!(now[0]["value"], mid(p0));
+        assert_eq!(now[1]["value"], p1["max"], "kept in its range");
+        let p = d.project();
+        assert_eq!(p["tracks"][0]["gain_db"], -6.0);
+        assert_eq!(p["tracks"][1]["mute"], true);
+        let undo = d.call("get_history", json!({})).unwrap()["undo"].clone();
+        assert_eq!(undo[0]["label"], "Assistant: Set 4 settings", "{undo}");
+
+        // One undo takes back every change.
+        d.command("undo");
+        let back = instrument_params(&mut d, &a);
+        assert_eq!(back[0]["value"], p0["value"]);
+        assert_eq!(back[1]["value"], p1["value"]);
+        let p = d.project();
+        assert_eq!(p["tracks"][0]["gain_db"], 0.0);
+        assert_eq!(p["tracks"][1]["mute"], false);
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 2, "the tracks stay");
+    }
+
+    #[test]
+    fn set_parameters_changes_nothing_if_one_change_fails() {
+        let mut d = Driver::new();
+        let a = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let a = a["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &a);
+        let p0 = &params[0];
+        let before = d.call("get_history", json!({})).unwrap()["undo"].clone();
+        let e = d
+            .call(
+                "set_parameters",
+                json!({"track": a, "changes": [
+                    {"param": p0["param"], "value": p0["max"]},
+                    {"param": "gain", "value": -12.0},
+                    {"track": "master", "param": "gain", "value": -3.0},
+                    {"param": "no-such", "value": 1},
+                ]}),
+            )
+            .unwrap_err();
+        assert!(
+            e.contains("Change 3") && e.contains("Nothing was changed"),
+            "{e}"
+        );
+        assert_eq!(instrument_params(&mut d, &a)[0]["value"], p0["value"]);
+        let p = d.project();
+        assert_eq!(p["tracks"][0]["gain_db"], 0.0);
+        assert_eq!(p["master"]["gain_db"], 0.0);
+        assert_eq!(
+            d.call("get_history", json!({})).unwrap()["undo"],
+            before,
+            "no undo step"
+        );
+        let e = d
+            .call(
+                "set_parameters",
+                json!({"changes": [{"param": "gain", "value": 1}]}),
+            )
+            .unwrap_err();
+        assert!(e.contains("no track"), "{e}");
     }
 
     #[test]

@@ -239,7 +239,9 @@ impl App {
                     .or_else(|| self.takes_tool(ctx, name, args))
                     .or_else(|| self.notes_tool(name, args))
                     .or_else(|| self.layers_tool(name, args))
-                    .or_else(|| self.routing_tool(name, args));
+                    .or_else(|| self.routing_tool(name, args))
+                    .or_else(|| self.lessons_tool(ctx, name, args))
+                    .or_else(|| self.monitor_tool(name, args));
             }
         })
     }

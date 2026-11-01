@@ -142,6 +142,17 @@ assistant finds them for itself. In outline:
   `list_parameters` names, clear it, and add, move or delete points;
   points are joined by straight lines), `set_automation_mode` (Off,
   Read, Touch, Latch or Write).
+- **Lessons:** `get_lessons` (the lesson notes, tab blocks,
+  assignments with who has done them, lessons and the practice log),
+  `edit_lesson_notes` (the notes' text, and tab blocks pinned to a
+  section), `edit_assignments` (set, change, remove, mark done, or
+  practise one) and `edit_lessons` (start, rename or remove a lesson,
+  or take a practice session out of the log).
+- **Monitor section:** `get_monitor`, `edit_headphone_mixes` (add,
+  change, remove, copy the main mix, and each track's level, pan and
+  mute in a mix) and `set_monitor` (the speakers' controls, talkback,
+  and where speakers, headphones and the talkback microphone are
+  plugged in on this computer, so no undo step).
 - **Files:** `save_project`, `open_project`, `new_project`, `export_mix`,
   `export_sections`, `export_as_project`, `export_stem_package`,
   `import_from_project`, `export_project_file`, `import_project_file`.

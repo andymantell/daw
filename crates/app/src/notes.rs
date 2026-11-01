@@ -107,7 +107,7 @@ impl Notes {
             .show(ui, |ui| {
                 if editing {
                     ui.add(
-                        egui::TextEdit::multiline(notes)
+                        egui::TextEdit::multiline(notes) // ai: edit_lesson_notes
                             .id(text_id())
                             .desired_width(f32::INFINITY)
                             .desired_rows(10)
@@ -136,8 +136,8 @@ impl Notes {
                 return;
             }
             let mut e = editing;
-            ui.selectable_value(&mut e, false, "Read");
-            ui.selectable_value(&mut e, true, "Write");
+            ui.selectable_value(&mut e, false, "Read"); // ai: view
+            ui.selectable_value(&mut e, true, "Write"); // ai: view
             self.editing = Some(e);
             if !editing {
                 return;
@@ -149,7 +149,7 @@ impl Notes {
                 ("Bold", "Make the selected words bold (**)", Mark::Bold),
                 ("List", "Make the lines list items (-)", Mark::Line("- ")),
             ] {
-                let r = ui.button(label).on_hover_text(format!("{what}. {MARKS}."));
+                let r = ui.button(label).on_hover_text(format!("{what}. {MARKS}.")); // ai: edit_lesson_notes
                 if r.clicked() {
                     let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
                     let n = notes.chars().count();
@@ -185,6 +185,7 @@ impl Notes {
             ui.horizontal_wrapped(|ui| {
                 let at = section_at(cx.markers, cx.playhead_bar);
                 let mut pick = self.new_for.clone().unwrap_or(at.clone());
+                // ai: edit_lesson_notes
                 if ui.button("Add tab block").clicked() {
                     self.add_tab(tabs, pick.clone(), cx.me);
                 }
@@ -244,7 +245,7 @@ impl Notes {
                     if let Some(i) = i {
                         let bars = section(cx.markers, i, cx.end_bar);
                         if ui
-                            .small_button("Go to section")
+                            .small_button("Go to section") // ai: seek
                             .on_hover_text("Move the playhead to the start of this section")
                             .clicked()
                         {
@@ -252,7 +253,7 @@ impl Notes {
                             out.go_to_bar = Some(bars.0);
                         }
                         if ui
-                            .small_button("Loop section")
+                            .small_button("Loop section") // ai: set_loop
                             .on_hover_text("Loop this section")
                             .clicked()
                         {
@@ -273,13 +274,13 @@ impl Notes {
                         }
                     });
                     ui.add(
-                        egui::TextEdit::singleline(&mut t.title)
+                        egui::TextEdit::singleline(&mut t.title) // ai: edit_lesson_notes
                             .desired_width(f32::INFINITY)
                             .hint_text("Title, such as Intro riff"),
                     )
                     .accessible_name("Tab block title");
                     let text = ui.add(
-                        egui::TextEdit::multiline(&mut t.text)
+                        egui::TextEdit::multiline(&mut t.text) // ai: edit_lesson_notes
                             .code_editor()
                             .desired_width(f32::INFINITY)
                             .desired_rows(6),
@@ -289,7 +290,7 @@ impl Notes {
                         text.request_focus();
                     }
                     delete = ui
-                        .button("Delete block")
+                        .button("Delete block") // ai: edit_lesson_notes
                         .on_hover_text("Undo (Ctrl+Z) brings it back")
                         .clicked();
                 } else {
@@ -372,9 +373,9 @@ fn section_picker(
     egui::ComboBox::from_id_salt(salt)
         .selected_text(name(pick))
         .show_ui(ui, |ui| {
-            ui.selectable_value(pick, None, "Whole song");
+            ui.selectable_value(pick, None, "Whole song"); // ai: edit_lesson_notes
             for m in markers {
-                ui.selectable_value(pick, Some(m.id.clone()), &m.name);
+                ui.selectable_value(pick, Some(m.id.clone()), &m.name); // ai: edit_lesson_notes
             }
         })
         .response

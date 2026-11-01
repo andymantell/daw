@@ -467,6 +467,8 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_notes::TOOLS)
         .chain(crate::agent_layers::TOOLS)
         .chain(crate::agent_routing::TOOLS)
+        .chain(crate::agent_lessons::TOOLS)
+        .chain(crate::agent_monitor::TOOLS)
 }
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
@@ -737,6 +739,8 @@ impl App {
                 .or_else(|| self.notes_read_tool(name, args))
                 .or_else(|| self.layers_read(name, args))
                 .or_else(|| self.routing_read(name, args))
+                .or_else(|| self.lessons_read(name))
+                .or_else(|| self.monitor_read(name))
                 .unwrap_or_else(|| Err(format!("There is no tool {name}."))),
         }
     }

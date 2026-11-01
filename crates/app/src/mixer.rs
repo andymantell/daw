@@ -65,6 +65,20 @@ enum Action {
 }
 
 impl App {
+    /// Adds a bus or a folder, numbered after those there.
+    pub(crate) fn add_bus(&mut self, kind: TrackKind) {
+        let n = self.tracks.iter().filter(|t| t.kind == kind).count();
+        let what = if kind == TrackKind::Folder {
+            "Folder"
+        } else {
+            "Bus"
+        };
+        let mut t = Track::new(format!("{what} {}", n + 1));
+        t.kind = kind;
+        self.tracks.push(t);
+        self.rebuild();
+    }
+
     pub(crate) fn mixer(&mut self, ui: &mut egui::Ui) {
         if self.tracks.is_empty() {
             ui.add_space(40.0);
@@ -382,15 +396,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    let n = self
-                        .tracks
-                        .iter()
-                        .filter(|t| t.kind == TrackKind::Bus)
-                        .count();
-                    let mut t = Track::new(format!("Bus {}", n + 1));
-                    t.kind = TrackKind::Bus;
-                    self.tracks.push(t);
-                    rebuild = true;
+                    self.add_bus(TrackKind::Bus);
                 }
                 if ui
                     .button("+ Add folder")
@@ -400,15 +406,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    let n = self
-                        .tracks
-                        .iter()
-                        .filter(|t| t.kind == TrackKind::Folder)
-                        .count();
-                    let mut t = Track::new(format!("Folder {}", n + 1));
-                    t.kind = TrackKind::Folder;
-                    self.tracks.push(t);
-                    rebuild = true;
+                    self.add_bus(TrackKind::Folder);
                 }
                 if ui
                     .button("+ Add control group")

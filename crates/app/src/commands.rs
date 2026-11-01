@@ -164,6 +164,9 @@ pub(crate) enum Cmd {
     RenderNoteFx,
     ClearNoteFx,
     AddInstrumentTrack,
+    AddAudioTrack,
+    AddBus,
+    AddFolder,
     /// Adds a track with one of the built-in instruments, by its place
     /// in `daw_instruments::Kind::ALL`.
     AddInstrument(u8),
@@ -563,6 +566,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("The instrument tracks' notes as a standard MIDI file")
     .words("notes smf mid"),
+    info(Cmd::AddAudioTrack, "add-audio-track", "Edit", "Add audio track", &[])
+        .hint("An empty track to record onto, or to drag sound files to")
+        .words("new track record"),
+    info(Cmd::AddBus, "add-bus", "Edit", "Add bus", &[])
+        .hint("A bus: tracks can go to it (a group), or send a copy of their audio to it for an effect they share (a return)")
+        .words("group return aux"),
+    info(Cmd::AddFolder, "add-folder", "Edit", "Add folder", &[])
+        .hint("A folder: tracks put in it sit under it and go through its fader and effects")
+        .words("group submix"),
     info(
         Cmd::AddInstrumentTrack,
         "add-instrument-track",
@@ -3036,6 +3048,16 @@ impl App {
                     _ => {}
                 }
             }
+            Cmd::AddAudioTrack => {
+                let n = (self.tracks.iter())
+                    .filter(|t| t.kind == daw_project::TrackKind::Audio)
+                    .count();
+                self.tracks
+                    .push(crate::Track::new(format!("Audio {}", n + 1)));
+                self.rebuild();
+            }
+            Cmd::AddBus => self.add_bus(daw_project::TrackKind::Bus),
+            Cmd::AddFolder => self.add_bus(daw_project::TrackKind::Folder),
             Cmd::AddInstrumentTrack => {
                 let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
                 let t = crate::Track::instrument(format!("Instrument {n}"));

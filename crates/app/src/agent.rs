@@ -413,8 +413,13 @@ fn region_args() -> Value {
     }})
 }
 
+/// Every tool: these, then those for what the panes do.
+pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
+    TOOLS.iter().chain(crate::agent_edit::TOOLS)
+}
+
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
-    TOOLS.iter().find(|t| t.name == name)
+    all_tools().find(|t| t.name == name)
 }
 
 /// The bars a call gives (from the start of `from_bar` to the end of
@@ -625,6 +630,7 @@ impl App {
             "get_meters" => Ok(self.meters_value()),
             "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
             "get_exports" => Ok(self.exports_value()),
+            "list_effect_kinds" => Ok(self.effect_kinds_value()),
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -874,7 +880,10 @@ impl App {
                     None,
                 ))
             }
-            _ => Err(format!("There is no tool {name}.")),
+            _ => match self.pane_tool(ctx, name, args) {
+                Some(done) => done,
+                None => Err(format!("There is no tool {name}.")),
+            },
         }
     }
 
@@ -1332,7 +1341,7 @@ mod tests {
     #[test]
     fn every_tool_has_an_object_schema_and_a_unique_name() {
         let mut names = std::collections::HashSet::new();
-        for t in TOOLS {
+        for t in all_tools() {
             assert!(names.insert(t.name), "{} twice", t.name);
             assert!(!t.description.is_empty(), "{}", t.name);
             assert_eq!((t.schema)()["type"], "object", "{}", t.name);

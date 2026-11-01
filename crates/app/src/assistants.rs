@@ -17,7 +17,7 @@ use daw_agent::{Client, DEFAULT_PORT, Event, Server, ToolInfo};
 use eframe::egui::{self, RichText};
 
 use crate::App;
-use crate::agent::{Access, Request, TOOLS};
+use crate::agent::{Access, Request, all_tools};
 use crate::commands::Cmd;
 
 /// Told to assistants when they connect.
@@ -105,7 +105,7 @@ impl Assistants {
         if self.token.is_empty() {
             self.token = daw_remote::new_token();
         }
-        let tools = (TOOLS.iter())
+        let tools = all_tools()
             .map(|t| ToolInfo {
                 name: t.name.into(),
                 description: t.description.into(),

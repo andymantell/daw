@@ -85,6 +85,7 @@ pub enum Window {
     ClipTempo,
     Quantise,
     TempoFrom,
+    BeatGrid,
 }
 
 #[derive(Default)]
@@ -97,6 +98,8 @@ pub(crate) struct Stretch {
     /// Attack detection sensitivity for markers from attacks.
     pub sensitivity: f32,
     pub message: Option<String>,
+    /// The beat grid being found, or found, for the beat grid window.
+    pub beat_grid: Option<crate::beat_grid::Finding>,
 }
 
 /// Timeline frames attacks are at and where they go.
@@ -233,10 +236,18 @@ impl App {
     /// grouped with them move by as much. Nothing moves unless the
     /// playhead is inside one of them.
     pub(crate) fn anchor_to_grid(&mut self, bar: bool) {
+        let at = self.ctl.status().position().0;
+        self.line_up(at, bar);
+    }
+
+    /// Moves the chosen clips so their point at timeline frame `at`
+    /// lands on the nearest beat line (or bar line, if `bar`); clips
+    /// grouped with them move by as much. Nothing moves unless `at` is
+    /// inside one of them.
+    pub(crate) fn line_up(&mut self, at: i64, bar: bool) {
         if !self.may_edit_song() {
             return;
         }
-        let at = self.ctl.status().position().0;
         let map = self.tempo_map();
         let chosen = self.stretch_clips();
         let inside = chosen.iter().any(|&(l, id)| {
@@ -569,6 +580,7 @@ impl App {
             Some(Window::ClipTempo) => self.clip_tempo_window(ctx),
             Some(Window::Quantise) => self.quantise_window(ctx),
             Some(Window::TempoFrom) => self.tempo_from_window(ctx),
+            Some(Window::BeatGrid) => self.beat_grid_window(ctx),
             None => {}
         }
     }
@@ -789,6 +801,7 @@ impl App {
                 self.stretch.open = Some(Window::TempoFrom);
             }
             Cmd::TempoFromClipApply => self.tempo_from_clip(),
+            Cmd::BeatGrid => self.find_beat_grid(),
             Cmd::AnchorToBeat => self.anchor_to_grid(false),
             Cmd::AnchorToBar => self.anchor_to_grid(true),
             _ => return false,

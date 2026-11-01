@@ -99,7 +99,8 @@ assistant finds them for itself. In outline:
   tempo candidates from 60 to 200 bpm, each with its confidence, the
   chance onsets at random would fit as well, the first beat and first
   downbeat in timeline seconds (and the downbeat's place on the song's
-  bars), and how far the beat drifts. `transpose_semitones`
+  bars), and how far the beat drifts (the timeline's "Find beat grid…"
+  window shows the same). `transpose_semitones`
   hears a track or clip as if moved, without changing it, so a shift can
   be tried before it is made. `render_audio` (a WAV file);
   `get_picture` (the window or one pane). `get_project` with `summary`

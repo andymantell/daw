@@ -4068,6 +4068,11 @@ impl Timeline {
                     out.command = Some(Cmd::TempoFromClip);
                     ui.close();
                 }
+                // ai: beat-grid
+                if ui.button("Find beat grid…").clicked() {
+                    out.command = Some(Cmd::BeatGrid);
+                    ui.close();
+                }
                 // ai: anchor-to-beat
                 if ui.button("Line up playhead point with nearest beat").clicked() {
                     out.command = Some(Cmd::AnchorToBeat);

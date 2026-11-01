@@ -713,7 +713,7 @@ fn base64(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde_json::json;
 
     use super::*;
@@ -786,7 +786,7 @@ mod tests {
     /// phrases, the first starting `first` seconds into the file on its
     /// downbeat, a rest after each, and notes sung into one another
     /// within a phrase. Answers the clip's id.
-    fn a_cappella(d: &mut Driver, bpm: f64, first: f64, bars: usize, at: f64) -> String {
+    pub(crate) fn a_cappella(d: &mut Driver, bpm: f64, first: f64, bars: usize, at: f64) -> String {
         use std::f64::consts::TAU;
         let rate = d.app().rate;
         let beat = 60.0 / bpm;

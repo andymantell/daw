@@ -88,6 +88,8 @@ mod tuner;
 mod update;
 mod versions;
 mod video;
+#[cfg(test)]
+mod widget_check;
 mod workspace;
 
 #[cfg(test)]

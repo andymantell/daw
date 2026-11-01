@@ -169,9 +169,12 @@ assistant finds them for itself. In outline:
 - **Notes and patterns:** `get_note_clip` (notes with their chance and
   groups, expression, controller lanes, the clip's key), `edit_notes`
   (add, change, remove, group), `edit_note_lanes` (controller lanes and
-  per-note expression), `duplicate_clip` (linked or not, as many
-  copies as asked, back to back, every so many bars, or one on each of
-  a list of `bars` or `at_seconds`), `note_tool`
+  per-note expression), `duplicate_clip` (linked copies unless
+  `linked` is false, as many copies as asked, back to back, every so
+  many bars, or one on each of a list of `bars` or `at_seconds`),
+  `unlink_clip` (breaks a linked copy off; `get_project`'s
+  `linked_groups` and `get_note_clip`'s `linked_with` say which clips
+  are linked), `note_tool`
   (quantise, humanise, legato, fit to scale, apply or make a groove,
   each with its settings), `list_grooves`, `get_patterns` and
   `edit_pattern` (the step sequencer: patterns, lanes and steps).

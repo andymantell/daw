@@ -1084,6 +1084,12 @@ pub struct Clip {
     /// Pitch editing (plan B2): the notes found in the clip's audio, in
     /// order, each with the user's edits. Empty until notes are found.
     pub pitch_notes: Vec<PitchNote>,
+    /// Linked copies (instances of one clip): every audio clip with the
+    /// same link shares its audio, name, gain, volume line, transpose
+    /// and pitch edits, so changing one changes them all (see
+    /// `links.rs`). Where each sits, its trim, fades and mute are its
+    /// own. `None` for a clip of its own.
+    pub link: Option<String>,
 }
 
 /// The widest transpose a clip takes, in cents: an octave either way.
@@ -2093,6 +2099,13 @@ pub struct NoteClip {
     /// time round. `None` plays the notes once. Pattern clips loop
     /// their pattern anyway and ignore it.
     pub loop_len: Option<i64>,
+    /// Linked copies (instances of one clip): every note clip with the
+    /// same link shares its notes, controller lanes, loop, key and
+    /// name, so editing one changes them all (see `links.rs`). Where
+    /// each sits, how long it is and its mute are its own. `None` for a
+    /// clip of its own. Pattern clips link through their pattern
+    /// instead.
+    pub link: Option<String>,
 }
 
 /// The shortest note loop: a sixteenth note.
@@ -2113,6 +2126,7 @@ impl NoteClip {
             controllers: Vec::new(),
             pattern: None,
             loop_len: None,
+            link: None,
         }
     }
 

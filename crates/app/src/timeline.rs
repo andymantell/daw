@@ -101,6 +101,8 @@ pub struct Clip {
     /// Pitch editing: the notes found in the clip's audio, with their
     /// edits, in source frames; see [`crate::pitch_edit`].
     pub pitch_notes: Vec<daw_project::PitchNote>,
+    /// Linked copies share a link: see `daw_project::sync_links`.
+    pub link: Option<String>,
     /// The pitch line of its audio, once worked out: what its notes are
     /// drawn over and their drift and vibrato edits work from.
     pub pitch_line: Option<Arc<daw_engine::bend::PitchLine>>,
@@ -189,6 +191,7 @@ impl Clip {
             cents: 0,
             move_formants: false,
             pitch_notes: Vec::new(),
+            link: None,
             pitch_line: None,
             span: 0,
             out_unit: 0.0,
@@ -2457,6 +2460,7 @@ impl Timeline {
         &self,
         lanes: &egui::Painter,
         look: &Look,
+        links: &crate::linked::Links,
         lane: &Lane,
         top: f32,
         lane_h: f32,
@@ -2544,6 +2548,8 @@ impl Timeline {
             if selected {
                 lanes.rect_stroke(r, corner, Stroke::new(2.0, tc.text), StrokeKind::Inside);
             }
+            let key = crate::linked::note_key(c);
+            links.draw(lanes, key.as_deref(), r, corner, selected);
         }
     }
 
@@ -3656,6 +3662,7 @@ impl Timeline {
             pos2(rect.left(), rect.top() + tracks_top),
             rect.max,
         ));
+        let links = crate::linked::Links::of(song, &self.selected, self.note_sel.as_deref());
         for (i, lane) in song.lanes.iter().enumerate() {
             let top = lane_top(i);
             let name_rect = Rect::from_min_size(pos2(rect.left(), top), vec2(HEADER, lane_h));
@@ -3863,6 +3870,8 @@ impl Timeline {
                 if selected {
                     lanes.rect_stroke(r, corner, Stroke::new(2.0, tc.text), StrokeKind::Inside);
                 }
+                let key = c.link.as_deref().map(crate::linked::audio_key);
+                links.draw(&lanes, key.as_deref(), r, corner, selected);
                 if self
                     .focus
                     .as_ref()
@@ -3880,6 +3889,7 @@ impl Timeline {
             self.draw_note_clips(
                 &lanes,
                 &look,
+                &links,
                 lane,
                 top,
                 lane_h,
@@ -4083,6 +4093,24 @@ impl Timeline {
                     out.command = Some(Cmd::TransposeClips);
                     ui.close();
                 }
+                let link = song.find(id).and_then(|c| c.link.as_deref()).map(crate::linked::audio_key);
+                let links = crate::linked::Links::of(song, &self.selected, None);
+                let n = links.count(link.as_deref());
+                if n > 1 {
+                    // ai: unlink_clip
+                    if ui
+                        .button("Unlink")
+                        .on_hover_text(format!(
+                            "This clip is one of {n} linked copies: changing its gain, volume \
+                             line, transpose or pitch edits changes them all. Unlink it to \
+                             change it on its own"
+                        ))
+                        .clicked()
+                    {
+                        out.changed |= crate::linked::unlink(song, Some(id), None);
+                        ui.close();
+                    }
+                }
                 if let Zone::Marker(i) = zone {
                     if ui.button("Delete stretch marker").clicked() {
                         if let Some(c) = song.find_mut(id)
@@ -4259,20 +4287,55 @@ impl Timeline {
                             ui.close();
                         }
                     }
-                    let dup = if linked {
-                        ui.button("Duplicate (linked)").on_hover_text(
-                            "A copy after it playing the same pattern: editing the pattern \
-                             changes both",
-                        )
+                    let group = crate::linked::note_key(&song.lanes[lane].notes[index]);
+                    let n = crate::linked::Links::of(song, &self.selected, None)
+                        .count(group.as_deref());
+                    if n > 1 && !linked {
+                        // ai: unlink_clip
+                        if ui
+                            .button("Unlink")
+                            .on_hover_text(format!(
+                                "This clip is one of {n} linked copies: editing its notes \
+                                 changes them all. Unlink it to edit it on its own"
+                            ))
+                            .clicked()
+                        {
+                            out.changed |= crate::linked::unlink(song, None, Some(&key));
+                            ui.close();
+                        }
+                    }
+                    // ai: duplicate_clip
+                    let dup = ui.button("Duplicate (linked)").on_hover_text(if linked {
+                        "A copy after it playing the same pattern: editing the pattern \
+                         changes both"
                     } else {
-                        ui.button("Duplicate")
-                    };
+                        "A linked copy after it: editing the notes of either changes both"
+                    });
+                    let mut copy = None;
                     if dup.clicked() {
-                        let mut c = song.lanes[lane].notes[index].clone();
+                        copy = Some(true);
+                    }
+                    // ai: duplicate_clip
+                    if !linked
+                        && ui
+                            .button("Duplicate as a separate copy")
+                            .on_hover_text("A copy after it with notes of its own")
+                            .clicked()
+                    {
+                        copy = Some(false);
+                    }
+                    if let Some(link) = copy {
+                        let src = &mut song.lanes[lane].notes[index];
+                        let shared = (link && src.pattern.is_none())
+                            .then(|| src.link.get_or_insert_with(daw_project::new_id).clone());
+                        let mut c = src.clone();
                         c.id = daw_project::new_id();
                         c.start = c.end();
-                        for n in &mut c.notes {
-                            n.id = daw_project::new_id();
+                        c.link = shared;
+                        if c.link.is_none() {
+                            for n in &mut c.notes {
+                                n.id = daw_project::new_id();
+                            }
                         }
                         self.note_sel = Some(c.id.clone());
                         song.lanes[lane].notes.push(c);

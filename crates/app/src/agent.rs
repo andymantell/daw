@@ -1322,6 +1322,7 @@ impl App {
                             "beat": c.tempo.is_some().then_some(c.beat),
                             "transpose_semitones": c.cents as f64 / 100.0,
                             "move_formants": c.move_formants,
+                            "link": c.link,
                             "markers": c.markers.iter().map(|m| json!({"frame": m.frame, "at": m.at})).collect::<Vec<_>>(),
                         })
                     })
@@ -1336,6 +1337,7 @@ impl App {
                             "muted": c.muted,
                             "pattern": c.pattern,
                             "loop_ticks": c.looped(),
+                            "link": c.link,
                             "note_count": c.notes.len(),
                         });
                         if notes {
@@ -1411,6 +1413,11 @@ impl App {
                 "id": m.id, "bar": m.bar, "name": m.name,
             })).collect::<Vec<_>>(),
             "tracks": tracks,
+            // Clips that are instances of one clip: linked copies, and
+            // note clips playing the same pattern.
+            "linked_groups": daw_project::link_groups(&p).iter().map(|g| json!({
+                "link": g.link, "notes": g.notes, "clips": g.clips,
+            })).collect::<Vec<_>>(),
             "master": {
                 "id": daw_project::Master::KEY,
                 "gain_db": p.master.gain_db,

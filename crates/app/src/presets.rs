@@ -661,7 +661,7 @@ impl App {
                 };
                 ui.separator();
                 egui::ScrollArea::vertical()
-                    .max_height(300.0)
+                    .max_height(420.0)
                     .show(ui, |ui| {
                         let mut heading = None;
                         let mut any = false;

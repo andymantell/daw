@@ -115,6 +115,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "list_presets",
+        description: "Every track and effect chain preset: the user's and those that come \
+                      with the app, each with its name, kind (track or chain), tags and \
+                      description.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
         name: "run_command",
         description: "Runs a command by its id, as its menu entry or key would. \
                       list_commands gives the ids. Commands that save or write files need \
@@ -138,6 +146,35 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "param": {"type": "string", "description": "The setting, as list_parameters names it."},
                 "value": {"type": "number"}
             }, "required": ["track", "param", "value"]})
+        },
+    },
+    Tool {
+        name: "add_preset",
+        description: "Adds a preset, by name, as a new track, or with a track id puts it \
+                      on that track: an effect chain replaces the track's effects; a track \
+                      preset replaces its instrument, effects, sends and settings, keeping \
+                      its clips and notes. Says which routes it couldn't find.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "name": {"type": "string", "description": "The preset's name, as list_presets gives it."},
+                "track": {"type": "string", "description": "A track's id, to put it on that track."}
+            }, "required": ["name"]})
+        },
+    },
+    Tool {
+        name: "save_preset",
+        description: "Saves a track, or only its effect chain, as one of the user's \
+                      presets, replacing one of that name.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string", "description": "The track's id."},
+                "kind": {"type": "string", "enum": ["track", "chain"]},
+                "name": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "about": {"type": "string", "description": "What it is for."}
+            }, "required": ["track", "kind", "name"]})
         },
     },
     Tool {
@@ -181,6 +218,7 @@ const NEEDS_A_PERSON: &[Cmd] = &[
     Cmd::PrintNotation,
     Cmd::ImportKit,
     Cmd::ExportKit,
+    Cmd::ImportPreset,
 ];
 
 /// What a command needs of an assistant.
@@ -311,6 +349,22 @@ impl App {
             "get_transport" => Ok(self.transport_value()),
             "get_selection" => Ok(self.selection_value()),
             "list_parameters" => self.parameters_value(args["track"].as_str()),
+            "list_presets" => {
+                let (list, _) = crate::presets::all_presets(self.preset_ui.dir.as_deref());
+                Ok(Value::Array(
+                    (list.iter())
+                        .map(|e| {
+                            json!({
+                                "name": e.preset.name,
+                                "kind": e.preset.kind.id(),
+                                "tags": e.preset.tags,
+                                "about": e.preset.about,
+                                "included": e.file.is_none(),
+                            })
+                        })
+                        .collect(),
+                ))
+            }
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -359,6 +413,46 @@ impl App {
                     .ok_or("Give the value as a number.")?;
                 let label = self.set_parameter(track, param, value)?;
                 Ok((json!({"set": param, "value": value}), Some(label)))
+            }
+            "add_preset" => {
+                let name = args["name"].as_str().ok_or("Give the preset's name.")?;
+                let e = self.find_preset(name)?;
+                match args["track"].as_str() {
+                    Some(key) => {
+                        let i = (self.tracks.iter())
+                            .position(|t| t.key == key)
+                            .ok_or_else(|| format!("There is no track {key}."))?;
+                        let note = self.apply_preset(ctx, i, &e)?;
+                        Ok((
+                            json!({"track": key, "note": note.trim()}),
+                            Some(format!("Put the preset {name} on a track")),
+                        ))
+                    }
+                    None => {
+                        let (i, note) = self.add_preset_track(ctx, &e)?;
+                        Ok((
+                            json!({"track": self.tracks[i].key, "note": note.trim()}),
+                            Some(format!("Added the preset {name}")),
+                        ))
+                    }
+                }
+            }
+            "save_preset" => {
+                let key = args["track"].as_str().ok_or("Give the track's id.")?;
+                let i = (self.tracks.iter())
+                    .position(|t| t.key == key)
+                    .ok_or_else(|| format!("There is no track {key}."))?;
+                let kind = (args["kind"].as_str())
+                    .and_then(daw_project::PresetKind::from_id)
+                    .ok_or("Give the kind: track or chain.")?;
+                let name = args["name"].as_str().ok_or("Give the preset's name.")?;
+                let tags: Vec<&str> = (args["tags"].as_array().into_iter().flatten())
+                    .filter_map(|t| t.as_str())
+                    .collect();
+                let tags = daw_project::parse_tags(&tags.join(","));
+                let about = args["about"].as_str().unwrap_or("");
+                let (_, left_out) = self.save_preset(ctx, i, kind, name, &tags, about)?;
+                Ok((json!({"saved": name, "files_left_out": left_out}), None))
             }
             "seek" => {
                 let map = self.tempo_map();

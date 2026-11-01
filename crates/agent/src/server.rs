@@ -185,6 +185,9 @@ fn is_local(value: &str) -> bool {
 }
 
 fn serve(mut sock: TcpStream, shared: &Shared) {
+    // On macOS a socket from a non-blocking listener is non-blocking
+    // too, so a request not all there yet would read as an error.
+    let _ = sock.set_nonblocking(false);
     let _ = sock.set_read_timeout(Some(READ_TIMEOUT));
     let _ = sock.set_nodelay(true);
     let reply = match read_request(&sock) {

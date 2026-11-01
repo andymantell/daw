@@ -204,7 +204,7 @@ pub fn key_of(c: &[f32; 12]) -> Option<KeyGuess> {
 /// before it. A sound that dips and comes back (notes beating against
 /// each other in a held chord) only returns to where it was, so it
 /// scores nothing; a new hit rises above what came before.
-fn attack_curve(left: &[f32], right: &[f32], rate: u32) -> Vec<f32> {
+pub(crate) fn attack_curve(left: &[f32], right: &[f32], rate: u32) -> Vec<f32> {
     const BEFORE: usize = 12; // 60 ms
     let hop = (rate / STEPS_PER_SECOND).max(1) as usize;
     let levels: Vec<f32> = (left.chunks(hop).zip(right.chunks(hop)))
@@ -227,7 +227,7 @@ fn attack_curve(left: &[f32], right: &[f32], rate: u32) -> Vec<f32> {
         .collect()
 }
 
-const STEPS_PER_SECOND: u32 = 200;
+pub(crate) const STEPS_PER_SECOND: u32 = 200;
 
 /// The beat that repeats most in the attacks, from 60 to 200 bpm,
 /// leaning towards the usual middle of that range.

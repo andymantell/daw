@@ -4068,6 +4068,16 @@ impl Timeline {
                     out.command = Some(Cmd::TempoFromClip);
                     ui.close();
                 }
+                // ai: anchor-to-beat
+                if ui.button("Line up playhead point with nearest beat").clicked() {
+                    out.command = Some(Cmd::AnchorToBeat);
+                    ui.close();
+                }
+                // ai: anchor-to-bar
+                if ui.button("Line up playhead point with nearest bar").clicked() {
+                    out.command = Some(Cmd::AnchorToBar);
+                    ui.close();
+                }
                 if let Zone::Volume(Some(i)) = zone
                     && ui.button("Delete volume point").clicked()
                 {

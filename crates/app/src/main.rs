@@ -2915,6 +2915,8 @@ impl eframe::App for App {
                         Cmd::ClearStretchMarkers,
                         Cmd::QuantiseAudio,
                         Cmd::TempoFromClip,
+                        Cmd::AnchorToBeat,
+                        Cmd::AnchorToBar,
                     ] {
                         app.menu_item(ui, c);
                     }

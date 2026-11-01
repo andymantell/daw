@@ -53,8 +53,10 @@ pub(crate) const TOOLS: &[Tool] = &[
                       length and offset into its notes (beats), its own key (\"none\" \
                       for the song's), the pattern it plays, pattern_unique (a copy of \
                       its pattern of its own) or pattern_to_notes (its notes, no longer \
-                      following the pattern). Only what is given changes; duplicate_clip \
-                      copies one.",
+                      following the pattern). An audio clip can also be moved by a point in \
+                      it: anchor_seconds (timeline seconds, as analyse gives note starts \
+                      and beats) lands on the bar or seconds given, or on the nearest beat or \
+                      bar with snap. Only what is given changes; duplicate_clip copies one.",
         access: Access::Edit,
         schema: || {
             with_time(
@@ -68,6 +70,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                     "fade_out_seconds": {"type": "number"},
                     "transpose_semitones": {"type": "number", "description": "Audio clips: -12 to 12, such as -6 or 2.5 (2 semitones 50 cents)."},
                     "move_formants": {"type": "boolean", "description": "Audio clips: true moves the formants with the pitch (like tape sped up); false (the default) keeps a voice sounding like the same person."},
+                    "anchor_seconds": {"type": "number", "description": "Audio clips: a point inside the clip, in timeline seconds where it plays now (such as a note start from analyse). The clip moves so this point lands on bar (2.5 is halfway through bar 2), on seconds, or with snap on the nearest beat or bar, instead of its start landing there."},
+                    "snap": {"type": "string", "enum": ["beat", "bar"], "description": "With anchor_seconds and no bar or seconds: the anchor goes to the nearest beat or bar line."},
                     "muted": {"type": "boolean"},
                     "name": {"type": "string"},
                     "len_beats": {"type": "number", "description": "Note clips."},
@@ -329,6 +333,44 @@ impl App {
         let rate = self.rate as f64;
         let map = self.tempo_map();
         let frames = |k: &str| args[k].as_f64().map(|s| (s.max(0.0) * rate).round() as i64);
+        let anchor = match args.get("anchor_seconds").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => Some(
+                v.as_f64()
+                    .filter(|x| x.is_finite() && *x >= 0.0)
+                    .map(|x| (x * rate).round() as i64)
+                    .ok_or("anchor_seconds is a time in seconds, 0 or more.")?,
+            ),
+        };
+        let snap = match args["snap"].as_str() {
+            None => None,
+            Some("beat") => Some(false),
+            Some("bar") => Some(true),
+            Some(x) => return Err(format!("snap is \"beat\" or \"bar\", not {x:?}.")),
+        };
+        if snap.is_some() && anchor.is_none() {
+            return Err("snap moves a clip by a point in it: give anchor_seconds too.".into());
+        }
+        if snap.is_some() && start.is_some() {
+            return Err("Give a bar or seconds for the anchor, or snap, not both.".into());
+        }
+        if anchor.is_some() && start.is_none() && snap.is_none() {
+            return Err("Say where the anchor goes: a bar, seconds, or snap.".into());
+        }
+        if let Some(a) = anchor {
+            // Where the clip plays now, stretched or not.
+            let live = (self.tracks.iter().flat_map(|t| &t.clips)).find(|c| c.key == id);
+            if let Some(c) = live
+                && (a < c.start || a > c.end())
+            {
+                return Err(format!(
+                    "anchor_seconds {:.3} isn't in the clip: it plays from {:.3} to {:.3} seconds.",
+                    a as f64 / rate,
+                    c.start as f64 / rate,
+                    c.end() as f64 / rate
+                ));
+            }
+        }
         self.edit_model(|p| {
             let Found::Audio(mut i, j) = find_clip(p, &id)? else {
                 unreachable!("note clips are handed on first");
@@ -350,7 +392,26 @@ impl App {
                 .position(|c| c.id == id)
                 .expect("still there");
             let c = &mut p.tracks[i].clips[j];
-            if let Some(s) = start {
+            let mut moved = None;
+            if let Some(a) = anchor {
+                let to = match snap {
+                    Some(bar) => crate::stretch::nearest_line(&map, a, bar),
+                    None => start.expect("checked above"),
+                };
+                let (from, beat) = crate::stretch::moved_by_anchor(
+                    &map,
+                    c.start,
+                    c.beat,
+                    c.tempo.is_some(),
+                    a,
+                    to,
+                )?;
+                moved = Some((to - a) as f64 / rate);
+                c.start = from;
+                if c.tempo.is_some() {
+                    c.beat = beat;
+                }
+            } else if let Some(s) = start {
                 c.start = s;
                 if c.tempo.is_some() {
                     c.beat = map.ticks_at(Frames(s)).0;
@@ -391,11 +452,16 @@ impl App {
             if let Some(m) = args["move_formants"].as_bool() {
                 c.move_formants = m;
             }
-            Ok(json!({"clip": id, "start_seconds": c.start as f64 / rate,
+            let mut v = json!({"clip": id, "start_seconds": c.start as f64 / rate,
                       "len_seconds": c.len as f64 / rate,
                       "offset_seconds": c.offset as f64 / rate,
                       "transpose_semitones": c.cents as f64 / 100.0,
-                      "move_formants": c.move_formants}))
+                      "move_formants": c.move_formants});
+            if let (Some(a), Some(by)) = (anchor, moved) {
+                v["anchor_now_seconds"] = json!(a as f64 / rate + by);
+                v["moved_seconds"] = json!(by);
+            }
+            Ok(v)
         })
         .map(|mut v| {
             v["end_seconds"] = json!(self.clip_end(&id).map(|e| e as f64 / rate));

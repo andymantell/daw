@@ -18,7 +18,7 @@ use daw_engine::analysis::{analyse, band_centres};
 use daw_engine::engine::render_offline;
 use daw_engine::export::LANE_BLOCK;
 use daw_engine::graph::{Graph, Session};
-use daw_engine::time::Frames;
+use daw_engine::time::{Frames, TempoMap};
 use eframe::egui;
 use serde_json::{Value, json};
 
@@ -148,6 +148,8 @@ impl App {
         let rate = self.rate;
         let what = describe(self, args);
         let notes = args["notes"].as_bool().unwrap_or(false);
+        let beats = args["beats"].as_bool().unwrap_or(false);
+        let map = self.tempo_map();
         let thread = std::thread::Builder::new()
             .name("assistant-render".into())
             .spawn(move || {
@@ -157,6 +159,14 @@ impl App {
                     let mut v = report_value(&l, &r, rate, from_s, &what);
                     if notes {
                         v["notes"] = notes_value(&l, &r, rate, from_s);
+                    }
+                    if beats {
+                        v["beat_grid"] = beat_grid_value(&l, &r, &map, from);
+                    } else if v["tempo"].is_null() {
+                        v["tempo_note"] = json!(
+                            "No steady beat in the attacks. For a voice alone or another sparse \
+                             part, beats: true finds the tempos its note starts fit."
+                        );
                     }
                     Ok(v)
                 } else {
@@ -500,6 +510,69 @@ fn notes_value(l: &[f32], r: &[f32], rate: u32, from: f64) -> Value {
     })
 }
 
+/// The beat grids the onsets of `l` and `r` fit, from `from` on the
+/// timeline under `map`, for `analyse`.
+fn beat_grid_value(l: &[f32], r: &[f32], map: &TempoMap, from: Frames) -> Value {
+    let rate = map.sample_rate();
+    let from_s = from.0 as f64 / rate as f64;
+    let beats = map.signature_at(map.ticks_at(from)).beats;
+    let on = daw_engine::beats::onsets(l, r, rate);
+    let grids = daw_engine::beats::beat_grid(&on, beats);
+    let round = |x: f64, by: f64| (x * by).round() / by;
+    // Where a time falls on the song's grid, as a bar with fractions.
+    let bar = |s: f64| {
+        let t = map.ticks_at(Frames((s * rate as f64).round() as i64));
+        let bb = map.bar_beat(t);
+        let sig = map.signature_at(t);
+        let into = (bb.beat - 1) as f64 + bb.tick as f64 / sig.beat_ticks() as f64;
+        round(bb.bar as f64 + into / sig.beats as f64, 1000.0)
+    };
+    let candidates: Vec<Value> = (grids.iter())
+        .map(|g| {
+            let first = from_s + g.first_beat;
+            let down = from_s + g.first_downbeat;
+            json!({
+                "bpm": round(g.bpm, 100.0),
+                "confidence": round(g.confidence, 100.0),
+                "chance": round(g.chance, 1000.0),
+                "agreement": round(g.agreement, 1000.0),
+                "on_beat": round(g.on_beat, 100.0),
+                "first_beat_seconds": round(first, 1000.0),
+                "first_downbeat_seconds": round(down, 1000.0),
+                "first_downbeat_song_bar": bar(down),
+                "downbeat_confidence": round(g.downbeat_confidence, 100.0),
+                "drift_seconds": round(g.drift, 1000.0),
+                "relation": g.relation.map(|(ratio, i)| {
+                    let name = match ratio {
+                        x if (x - 0.5).abs() < 1e-9 => "half",
+                        x if (x - 2.0).abs() < 1e-9 => "double",
+                        x if (x - 1.5).abs() < 1e-9 => "3/2",
+                        _ => "2/3",
+                    };
+                    format!("{name} of {:.2} bpm", grids[i].bpm)
+                }),
+            })
+        })
+        .collect();
+    json!({
+        "onsets": on.len(),
+        "beats_per_bar": beats,
+        "candidates": candidates,
+        "note": "Tempos the note starts fit, best first, from 60 to 200 bpm; made for a voice \
+                 alone or another sparse part (for a full mix the tempo above is better). \
+                 confidence: how likely it is the beat, after chance; chance: how likely onsets \
+                 at random would fit some tempo this well; agreement: how tightly the onsets \
+                 gather on the beats (1 all on them); on_beat: the share within an eighth of a \
+                 beat. Beats fall every 60/bpm seconds from first_beat_seconds (timeline \
+                 seconds). The downbeat is a guess from where long notes and phrase starts fall: \
+                 trust it less under a downbeat_confidence of about 0.2. first_downbeat_song_bar \
+                 is where it is now on the song's bars (5.5 is halfway through bar 5). \
+                 drift_seconds: how far the beat wanders across the stretch, so how far a fixed \
+                 grid will be off in places. edit_clip anchor_seconds puts a point of a clip on \
+                 a bar.",
+    })
+}
+
 fn report_value(l: &[f32], r: &[f32], rate: u32, from: f64, what: &str) -> Value {
     let rep = analyse(l, r, rate);
     let finite = |x: f64| x.is_finite().then_some(x);
@@ -707,6 +780,116 @@ mod tests {
         a.tracks[0].clips.extend([c, low]);
         a.rebuild();
         key
+    }
+
+    /// A voice alone at `bpm`, as a clip at `at` seconds: two-bar
+    /// phrases, the first starting `first` seconds into the file on its
+    /// downbeat, a rest after each, and notes sung into one another
+    /// within a phrase. Answers the clip's id.
+    fn a_cappella(d: &mut Driver, bpm: f64, first: f64, bars: usize, at: f64) -> String {
+        use std::f64::consts::TAU;
+        let rate = d.app().rate;
+        let beat = 60.0 / bpm;
+        let len = first + (bars as f64 + 1.0) * 4.0 * beat;
+        let mut x = vec![0.0f32; (len * rate as f64) as usize];
+        let tune = [
+            (0.0, 64.0),
+            (1.0, 67.0),
+            (2.0, 69.0),
+            (2.5, 71.0),
+            (4.0, 67.0),
+            (6.0, 64.0),
+        ];
+        let mut phase = 0.0f64;
+        for bar in (0..bars).step_by(2) {
+            let from = first + bar as f64 * 4.0 * beat;
+            let to = from + 6.5 * beat;
+            for (i, v) in x.iter_mut().enumerate() {
+                let t = i as f64 / rate as f64;
+                if t < from || t >= to {
+                    continue;
+                }
+                let b = (t - from) / beat;
+                let midi = tune.iter().rev().find(|n| b >= n.0).map_or(64.0, |n| n.1);
+                phase += TAU * 440.0 * 2f64.powf((midi - 69.0) / 12.0) / rate as f64;
+                let env = ((t - from) / 0.04).min(1.0).min((to - t) / 0.05);
+                *v = (0.4 * env * phase.sin()) as f32;
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("daw-listen-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.wav", crate::timeline::next_id()));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for v in x {
+            w.write_sample(v).unwrap();
+        }
+        w.finalize().unwrap();
+        let src = daw_engine::stream::StreamSource::open(&path).unwrap();
+        let mut c = crate::timeline::Clip::new(src, path, 0, Some(0));
+        c.start = (at * rate as f64) as i64;
+        let key = c.key.clone();
+        let a = d.app();
+        a.tracks.push(crate::Track::new("Vocal".into()));
+        a.tracks[0].clips.push(c);
+        a.rebuild();
+        key
+    }
+
+    #[test]
+    fn the_beat_grid_of_a_voice_alone_is_found_and_a_phrase_put_on_a_bar() {
+        let mut d = Driver::new();
+        // At 116.4 bpm, its first downbeat 0.7 s into the file, which
+        // starts 3 s into a song at 120.
+        let clip = a_cappella(&mut d, 116.4, 0.7, 16, 3.0);
+        let plain = d.call("analyse", json!({"clip": clip})).unwrap();
+        assert!(plain["beat_grid"].is_null(), "only when asked: {plain}");
+        let r = d
+            .call("analyse", json!({"clip": clip, "beats": true}))
+            .unwrap();
+        let g = &r["beat_grid"];
+        assert_eq!(g["beats_per_bar"], json!(4), "{g}");
+        let best = &g["candidates"][0];
+        let bpm = best["bpm"].as_f64().unwrap();
+        assert!((bpm - 116.4).abs() < 0.3, "{g}");
+        assert!(best["confidence"].as_f64().unwrap() > 0.5, "{g}");
+        assert!(best["chance"].as_f64().unwrap() < 0.05, "{g}");
+        // Timeline seconds: the phrase starts at 3.7 s, a whole number
+        // of bars after the first downbeat found.
+        let down = best["first_downbeat_seconds"].as_f64().unwrap();
+        let bars = (3.7 - down) / (4.0 * 60.0 / 116.4);
+        assert!((bars - bars.round()).abs() < 0.03, "{g}");
+        assert!(down >= 3.0, "{g}");
+        // Where that is on the song's bars: 120 bpm, 2 s a bar.
+        let song_bar = best["first_downbeat_song_bar"].as_f64().unwrap();
+        assert!((song_bar - (1.0 + down / 2.0)).abs() < 0.01, "{g}");
+
+        // Its first phrase onto bar 3 (4 s in), by the point found.
+        let moved = d
+            .call(
+                "edit_clip",
+                json!({"clip": clip, "anchor_seconds": down, "bar": 3}),
+            )
+            .unwrap();
+        assert!(
+            (moved["anchor_now_seconds"].as_f64().unwrap() - 4.0).abs() < 1e-3,
+            "{moved}"
+        );
+        let r = d
+            .call("analyse", json!({"clip": clip, "beats": true}))
+            .unwrap();
+        let down = r["beat_grid"]["candidates"][0]["first_downbeat_song_bar"]
+            .as_f64()
+            .unwrap();
+        assert!(
+            (down - down.round()).abs() < 0.01,
+            "a downbeat is on a bar line now: {r}"
+        );
     }
 
     #[test]

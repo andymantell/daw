@@ -93,7 +93,13 @@ assistant finds them for itself. In outline:
   mix, over a time range, with or without one track. With `notes` it also
   reads one voice or instrument note by note: each note with its start,
   length and how many cents off it is, the seconds of each of the 12
-  notes, the overall tuning and the key they fit. `transpose_semitones`
+  notes, the overall tuning and the key they fit. With `beats` it finds
+  the beat grid of a voice alone or another sparse part, from its note
+  starts, where the attack-based tempo often finds nothing: up to five
+  tempo candidates from 60 to 200 bpm, each with its confidence, the
+  chance onsets at random would fit as well, the first beat and first
+  downbeat in timeline seconds (and the downbeat's place on the song's
+  bars), and how far the beat drifts. `transpose_semitones`
   hears a track or clip as if moved, without changing it, so a shift can
   be tried before it is made. `render_audio` (a WAV file);
   `get_picture` (the window or one pane). `get_project` with `summary`
@@ -136,6 +142,10 @@ assistant finds them for itself. In outline:
   `add_note_clip`, `edit_notes`, `edit_markers`, `set_tempo`, `set_key`,
   `set_loop`, `seek`, `select_clips`, `undo_steps`, `add_comment`,
   `resolve_comment`. `set_tempo` takes time signature changes too.
+  `edit_clip` with `anchor_seconds` moves an audio clip by a point in it
+  (timeline seconds, such as a note start or downbeat from `analyse`):
+  that point lands on the `bar` or `seconds` given, or with `snap` on the
+  nearest beat or bar line.
 - **Takes, timing and clip processing:** `edit_comp` (new, duplicate,
   choose, rename, delete, flatten, swipe, clear, use a take, choose a
   take), `fix_timing` (with its grid, strength and sensitivity, or a

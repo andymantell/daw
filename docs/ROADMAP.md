@@ -818,6 +818,13 @@ pattern from the pads. Checks in `docs/review-queue/3.3-patterns.md`.*
   robins, controllers, key-switches and choke groups, plays big ones
   from disk, and its own zones get round robins and velocity layers;
   see [review-queue/3.4-sfz-sampler.md](review-queue/3.4-sfz-sampler.md).*
+- **Classic synths, clean-room** (2026-11-01): the one synth of our own
+  design sounds thin next to the classics, so a shared "vintage" toolkit
+  (saturating 4-pole filters, drifting oscillators, analogue envelope
+  curves, a bucket-brigade chorus) and nine instruments built on it,
+  each on the architecture of a classic synth, from monosynths for bass
+  and leads to polysynths, FM and wavetable. See
+  [plans/classic-synths.md](plans/classic-synths.md).
 - **Drum machine instrument:** pads with several layers each, mixing
   samples with **synthesised drum voices**. Choke/exclusive groups (closed
   hi-hat cuts off open), a per-pad effect chain, per-pad outputs and sends.

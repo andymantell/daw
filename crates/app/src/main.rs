@@ -22,6 +22,7 @@
 
 mod agent;
 mod agent_arrange;
+mod agent_automation;
 mod agent_edit;
 mod agent_files;
 mod agent_layers;
@@ -3157,7 +3158,6 @@ impl eframe::App for App {
         self.stretch_windows(&ctx);
         self.remote_tick(&ctx);
         self.assistants_tick(&ctx);
-        self.agent_tick(&ctx);
         self.listen_tick(&ctx);
         self.template_windows(&ctx);
         self.preset_windows(&ctx);
@@ -3166,6 +3166,9 @@ impl eframe::App for App {
         self.poll_sharing(&ctx);
         self.log_practice(&ctx);
         self.automation_tick(&ctx);
+        // After the lanes' values are taken off the controls, so an
+        // assistant sees and edits the controls' own values.
+        self.agent_tick(&ctx);
         self.sync_doc(&ctx, false);
         self.autosave(&ctx);
         self.title(&ctx);

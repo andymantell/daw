@@ -187,6 +187,12 @@ assistant finds them for itself. In outline:
   with the clip's transpose (`plays`, `plays_midi`), and its time in the
   file's seconds (`start_seconds`) and on the timeline
   (`timeline_seconds`, `timeline_end_seconds`).
+  Words in a vocal: `find_lyrics` reads the words sung in an audio
+  clip's recording with a speech model on the computer (downloaded once,
+  only with `download_model: true`), and `get_lyrics` gives them in
+  lines, each word with its time from the clip's start, in its file (for
+  `edit_clip offset_seconds`), in the song and as a bar, and how sure
+  the model is.
   `add_note_clip` and `edit_notes` take chords by name (`Dm9`, `G/B`)
   or several pitches at once, and `select_clips` picks a note clip.
 - **Automation:** `get_automation` (each track's mode, lanes and

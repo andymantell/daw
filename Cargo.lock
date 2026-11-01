@@ -1212,6 +1212,7 @@ dependencies = [
  "daw-plugins",
  "daw-project",
  "daw-remote",
+ "daw-speech",
  "daw-test-plugin",
  "daw-video",
  "eframe",
@@ -1222,6 +1223,7 @@ dependencies = [
  "rfd",
  "rustls",
  "serde_json",
+ "sha2 0.11.1",
  "ureq",
  "vst3",
  "windows-sys 0.61.2",
@@ -1340,6 +1342,14 @@ dependencies = [
 [[package]]
 name = "daw-schema"
 version = "0.0.0"
+
+[[package]]
+name = "daw-speech"
+version = "0.0.0"
+dependencies = [
+ "sha2 0.11.1",
+ "whisper-rs",
+]
 
 [[package]]
 name = "daw-test-plugin"
@@ -2007,6 +2017,12 @@ checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
 ]
+
+[[package]]
+name = "fs_extra"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "futures-channel"
@@ -6610,6 +6626,28 @@ dependencies = [
  "raw-window-handle",
  "static_assertions",
  "web-sys",
+]
+
+[[package]]
+name = "whisper-rs"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
+dependencies = [
+ "whisper-rs-sys",
+]
+
+[[package]]
+name = "whisper-rs-sys"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
+dependencies = [
+ "bindgen",
+ "cfg-if",
+ "cmake",
+ "fs_extra",
+ "semver",
 ]
 
 [[package]]

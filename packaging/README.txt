@@ -16,6 +16,16 @@ Nothing is sent anywhere unless you send it yourself.
 Checking for new versions is off until you turn it on
 (Help -> Check for updates).
 
+Speech model
+------------
+
+Find the words uses a speech model that runs on your computer. It is
+not part of this download: the app asks before downloading it once from
+https://huggingface.co/ggerganov/whisper.cpp. The models are OpenAI's
+Whisper, whose code and weights are under the MIT licence; they are run
+by whisper.cpp (https://github.com/ggml-org/whisper.cpp), under the MIT
+licence.
+
 Audio encoders
 --------------
 

@@ -35,12 +35,10 @@ pub(crate) fn alone(spec: &mut TrackSpec) {
 /// bus's stem: everything routed or sent into it (directly or through
 /// other buses), through its effects and fader, and nothing else. Every
 /// other track that went to the master goes instead to a muted bus
-/// added at the end, so its sends into this bus still sound.
+/// added at the end, so its sends into this bus still sound. The bus
+/// still goes through the master, as it does in the mix.
 pub(crate) fn through_bus(s: &Session, bus: usize) -> Session {
     let mut s = s.clone();
-    // The bus alone: not through the master's effects or fader.
-    s.master_inserts.clear();
-    s.master_db = 0.0;
     let silent = s.tracks.len();
     for (i, t) in s.tracks.iter_mut().enumerate() {
         if i == bus {

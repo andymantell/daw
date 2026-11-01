@@ -126,8 +126,10 @@ assistant finds them for itself. In outline:
   presets and picks its programs.
   The master channel (the whole mix's effects and fader, after every
   track and bus) is the track `master` to `add_effect`, `edit_effect`,
-  `remove_effect`, `list_parameters`, `set_parameter` and `analyse`, and
-  `get_project` shows it as `master`.
+  `remove_effect`, `list_parameters`, `set_parameter`, `analyse` and
+  the automation tools (`get_automation`, `edit_automation`,
+  `set_automation_mode`: its volume and effect settings, no pan), and
+  `get_project` shows it as `master`. Exported stems go through it.
 - **Instruments and layers:** `set_instrument` (a built-in or plugin
   instrument, for a track or one layer, and/or a `settings` dict for it,
   as `edit_layer` takes for a layer), an SFZ sample library on the

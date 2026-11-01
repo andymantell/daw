@@ -114,6 +114,9 @@ pub fn insert_bars(p: &mut Project, b: &Bars) {
             insert_in_lane(lane, f, l);
         }
     }
+    for lane in &mut p.master.automation {
+        insert_in_lane(lane, f, l);
+    }
     for v in &mut p.videos {
         v.start = fl(v.start);
     }
@@ -288,6 +291,9 @@ pub fn delete_bars(p: &mut Project, b: &Bars) {
         for lane in &mut t.automation {
             delete_in_lane(lane, f, l);
         }
+    }
+    for lane in &mut p.master.automation {
+        delete_in_lane(lane, f, l);
     }
     // Comments are people's words: they move to the cut, never go.
     for c in &mut p.comments {

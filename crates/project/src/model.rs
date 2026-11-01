@@ -73,6 +73,9 @@ pub struct Project {
 pub struct Master {
     pub gain_db: f64,
     pub effects: Vec<Effect>,
+    /// Lanes on its fader ([`Lane::GAIN`]) and its effects' settings,
+    /// as a track's are.
+    pub automation: Vec<Lane>,
 }
 
 impl Master {

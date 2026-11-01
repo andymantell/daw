@@ -459,6 +459,9 @@ impl ProjectDoc {
             let m = self.doc.get_map("master");
             w.put(&m, "gain_db", p.master.gain_db);
             write_effects(&mut w, &m, &p.master.effects);
+            if !p.master.automation.is_empty() || m.get("automation").is_some() {
+                write_automation(&mut w, &m, &p.master.automation);
+            }
         }
 
         // Video clips, likewise only once a project has one.
@@ -809,6 +812,7 @@ impl ProjectDoc {
         if let Some(LoroValue::Map(m)) = root.get("master") {
             p.master.gain_db = float(m, "gain_db").filter(|v| v.is_finite()).unwrap_or(0.0);
             p.master.effects = read_effects(m);
+            p.master.automation = read_automation(m);
             // A master effect listens to no sidechain.
             for e in &mut p.master.effects {
                 e.sidechain = None;
@@ -1198,6 +1202,44 @@ fn write_versions(w: &mut Writer, m: &LoroMap, t: &Track) {
     w.put(m, "version", opt_str(&t.version));
 }
 
+/// Automation lanes into `m`: one entry per setting, each its points as
+/// one list.
+fn write_automation(w: &mut Writer, m: &LoroMap, automation: &[Lane]) {
+    let lanes = w.fixed(m, "automation");
+    let keep: HashSet<&str> = automation.iter().map(|l| l.param.as_str()).collect();
+    for id in keys(&lanes) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&lanes, &id);
+        }
+    }
+    for l in automation {
+        let lm = w.child(&lanes, &l.param);
+        let points: Vec<LoroValue> = (l.points.iter())
+            .map(|p| LoroValue::List(vec![p.at.into(), p.value.into()].into()))
+            .collect();
+        w.put(&lm, "points", LoroValue::List(points.into()));
+    }
+}
+
+/// Automation lanes as [`write_automation`] keeps them, by setting.
+fn read_automation(m: &LoroMapValue) -> Vec<Lane> {
+    let Some(LoroValue::Map(lanes)) = m.get("automation") else {
+        return Vec::new();
+    };
+    let mut params: Vec<&str> = lanes.keys().map(|k| k.as_str()).collect();
+    params.sort_unstable();
+    params
+        .into_iter()
+        .filter_map(|param| match lanes.get(param) {
+            Some(LoroValue::Map(lm)) => Some(Lane {
+                param: param.to_string(),
+                points: read_points(lm),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What a version of a track holds, into `m`: the track's own map, or a
 /// version's body.
 fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
@@ -1208,20 +1250,7 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
     // people writing different settings keep both. Tracks never
     // automated gain no entries.
     if !plain("automation", t.automation.is_empty()) {
-        let lanes = w.fixed(m, "automation");
-        let keep: HashSet<&str> = t.automation.iter().map(|l| l.param.as_str()).collect();
-        for id in keys(&lanes) {
-            if !keep.contains(id.as_str()) {
-                w.delete(&lanes, &id);
-            }
-        }
-        for l in &t.automation {
-            let lm = w.child(&lanes, &l.param);
-            let points: Vec<LoroValue> = (l.points.iter())
-                .map(|p| LoroValue::List(vec![p.at.into(), p.value.into()].into()))
-                .collect();
-            w.put(&lm, "points", LoroValue::List(points.into()));
-        }
+        write_automation(w, m, &t.automation);
     }
 
     let clips = w.fixed(m, "clips");
@@ -2069,19 +2098,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         });
     }
     (track.comps, track.comp) = read_comps(t);
-    if let Some(LoroValue::Map(lanes)) = t.get("automation") {
-        let mut params: Vec<&str> = lanes.keys().map(|k| k.as_str()).collect();
-        params.sort_unstable();
-        for param in params {
-            let Some(LoroValue::Map(lm)) = lanes.get(param) else {
-                continue;
-            };
-            track.automation.push(Lane {
-                param: param.to_string(),
-                points: read_points(lm),
-            });
-        }
-    }
+    track.automation = read_automation(t);
     if let Some(LoroValue::Map(outs)) = t.get("instrument_outputs") {
         for (k, v) in outs.iter() {
             if let (Ok(output), LoroValue::String(to)) = (k.parse::<u32>(), v)
@@ -2672,6 +2689,13 @@ mod tests {
             back.master.effects[0].params,
             vec![("ceiling".to_string(), -0.3)]
         );
+        // Its lanes, as a track's.
+        let mut lane = Lane::new(Lane::GAIN);
+        lane.put(0, -3.0);
+        lane.put(48_000, -12.0);
+        p.master.automation = vec![lane];
+        assert!(d.write(&p));
+        assert_eq!(d.get().master.automation, p.master.automation);
         // Taking the effects off and the fader back leaves the entry,
         // reading as the default.
         d.write(&Project::default());

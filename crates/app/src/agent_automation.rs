@@ -32,7 +32,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                       Latch or Write) and its lanes, each with the setting it is on and its \
                       points in time order (place in the lane, bar, seconds, value in the \
                       setting's own unit, and that value as text). Points are joined by \
-                      straight lines and held level beyond the ends.",
+                      straight lines and held level beyond the ends. The track \"master\" is \
+                      the master channel, listed when it has lanes.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -56,7 +57,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                       sends, -1 to 1 for pan, 0 to 1 for plugins) and are kept in its \
                       range. Adding points to a lane that isn't there adds it. Done in the \
                       order: remove lane, clear, delete, move, add. Example, a fade in over \
-                      two bars: param gain, add [{bar: 1, value: -60}, {bar: 3, value: 0}].",
+                      two bars: param gain, add [{bar: 1, value: -60}, {bar: 3, value: 0}]. \
+                      The track \"master\" automates the master channel's volume and \
+                      effect settings (a fade out of the whole song).",
         access: Access::Edit,
         schema: || {
             let point = json!({"type": "object", "properties": {
@@ -148,6 +151,7 @@ impl App {
     /// What `get_automation` answers.
     pub(crate) fn automation_value(&self, only: Option<&str>) -> Result<Value, String> {
         if let Some(k) = only
+            && k != daw_project::Master::KEY
             && self.track_index(k).is_none()
         {
             return Err(format!("There is no track {k}."));
@@ -158,8 +162,13 @@ impl App {
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
             .collect();
+        // The master is listed when asked for, or when it has lanes.
+        let master = (only == Some(daw_project::Master::KEY)
+            || (only.is_none() && !self.master.automation.is_empty()))
+        .then_some(&self.master);
         let tracks: Vec<Value> = (self.tracks.iter())
             .filter(|t| only.is_none_or(|k| t.key == k))
+            .chain(master)
             .map(|t| {
                 let lanes: Vec<Value> = (t.automation.iter())
                     .map(|l| {
@@ -197,14 +206,24 @@ impl App {
     fn edit_automation_tool(&mut self, args: &Value) -> Done {
         let key = args["track"].as_str().ok_or("Give the track's id.")?;
         let param = args["param"].as_str().ok_or("Give the setting's name.")?;
-        let ti = self
-            .track_index(key)
-            .ok_or_else(|| format!("There is no track {key}."))?;
-        let t = &self.tracks[ti];
+        let master = key == daw_project::Master::KEY;
+        let t = if master {
+            &self.master
+        } else {
+            let ti = self
+                .track_index(key)
+                .ok_or_else(|| format!("There is no track {key}."))?;
+            &self.tracks[ti]
+        };
         let buses: Vec<(String, String)> = (self.tracks.iter())
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
             .collect();
+        if master && param == Lane::PAN {
+            return Err(
+                "The master has no pan; its volume and effect settings can be automated.".into(),
+            );
+        }
         let name = crate::automation::name_of(t, &buses, param);
         // The setting is there to automate: its value now, and its range.
         let here = crate::automation::control(t, param).zip(crate::automation::range(t, param));
@@ -292,18 +311,23 @@ impl App {
         let now = here.map(|(v, _)| v);
 
         let v = self.edit_model(|p| {
-            let t = (p.tracks.iter_mut())
-                .find(|t| t.id == key)
-                .ok_or_else(|| format!("There is no track {key}."))?;
+            let lanes = if master {
+                &mut p.master.automation
+            } else {
+                let t = (p.tracks.iter_mut())
+                    .find(|t| t.id == key)
+                    .ok_or_else(|| format!("There is no track {key}."))?;
+                &mut t.automation
+            };
             if remove_lane {
-                let before = t.automation.len();
-                t.automation.retain(|l| l.param != param);
-                if t.automation.len() == before {
+                let before = lanes.len();
+                lanes.retain(|l| l.param != param);
+                if lanes.len() == before {
                     return Err(format!("{track_name} has no {name} lane."));
                 }
                 return Ok(json!({"removed": param}));
             }
-            let li = match t.automation.iter().position(|l| l.param == param) {
+            let li = match lanes.iter().position(|l| l.param == param) {
                 Some(i) => i,
                 None if add_lane || !added.is_empty() => {
                     let mut lane = Lane::new(param);
@@ -314,12 +338,12 @@ impl App {
                     {
                         lane.put(0, v);
                     }
-                    t.automation.push(lane);
-                    t.automation.len() - 1
+                    lanes.push(lane);
+                    lanes.len() - 1
                 }
                 None => return Err(format!("{track_name} has no {name} lane; add it first.")),
             };
-            let lane = &mut t.automation[li];
+            let lane = &mut lanes[li];
             if clear {
                 lane.points.clear();
             }
@@ -368,8 +392,10 @@ impl App {
         let mode = mode_named(mode).ok_or_else(|| {
             format!("There is no mode {mode}; it is off, read, touch, latch or write.")
         })?;
-        self.track_index(key)
-            .ok_or_else(|| format!("There is no track {key}."))?;
+        if key != daw_project::Master::KEY {
+            self.track_index(key)
+                .ok_or_else(|| format!("There is no track {key}."))?;
+        }
         if self.automation.mode(key) != mode {
             self.automation.set_mode(key, mode);
             self.rebuild();
@@ -824,5 +850,62 @@ mod tests {
         .unwrap();
         let swept = highs(&mut d, &t);
         assert!(swept < open - 30.0, "{open} {swept}");
+    }
+
+    #[test]
+    fn the_master_has_lanes_too() {
+        let mut d = Driver::new();
+        // A fade out of the whole song.
+        d.call(
+            "edit_automation",
+            json!({"track": "master", "param": "gain", "add": [
+                {"bar": 1, "value": 0.0},
+                {"bar": 3, "value": -60.0}
+            ]}),
+        )
+        .unwrap();
+        let l = lanes(&mut d, "master");
+        assert_eq!(l[0]["name"], "Volume");
+        assert_eq!(l[0]["points"].as_array().unwrap().len(), 2);
+        let all = d.call("get_automation", json!({})).unwrap();
+        assert_eq!(
+            all["tracks"].as_array().unwrap().last().unwrap()["track"],
+            "master"
+        );
+        assert_eq!(d.project()["master"]["automated"][0], "gain");
+        let params = d
+            .call("list_parameters", json!({"track": "master"}))
+            .unwrap();
+        let gain = (params[0]["params"].as_array().unwrap().iter())
+            .find(|p| p["param"] == "gain")
+            .unwrap();
+        assert_eq!(gain["automated"], true);
+        assert!(
+            d.call(
+                "edit_automation",
+                json!({"track": "master", "param": "pan", "add_lane": true})
+            )
+            .is_err()
+        );
+
+        // The engine plays it, unless the master's mode is off.
+        assert_eq!(d.app().session().master_automation.len(), 1);
+        d.call(
+            "set_automation_mode",
+            json!({"track": "master", "mode": "off"}),
+        )
+        .unwrap();
+        assert!(d.app().session().master_automation.is_empty());
+        d.call(
+            "set_automation_mode",
+            json!({"track": "master", "mode": "read"}),
+        )
+        .unwrap();
+
+        // It is in the document, and one undo step.
+        assert_eq!(d.app().proj.doc.get().master.automation.len(), 1);
+        d.command("undo");
+        assert!(d.app().master.automation.is_empty());
+        assert!(d.app().session().master_automation.is_empty());
     }
 }

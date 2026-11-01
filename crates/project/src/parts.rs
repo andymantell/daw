@@ -319,6 +319,9 @@ impl Project {
         } else {
             (1, b - shift)
         };
+        for l in &mut self.master.automation {
+            cut_lane(l, fa, fb);
+        }
         for t in &mut self.tracks {
             t.frozen = None;
             t.clips = (t.clips.iter())
@@ -355,6 +358,11 @@ impl Project {
         }
         let k = rate as f64 / self.rate as f64;
         let s = |v: i64| (v as f64 * k).round() as i64;
+        for l in &mut self.master.automation {
+            for p in &mut l.points {
+                p.at = s(p.at);
+            }
+        }
         for t in &mut self.tracks {
             for c in &mut t.clips {
                 c.start = s(c.start);

@@ -569,7 +569,10 @@ impl Export {
                 )
                 .on_hover_text("Tracks with practice mute (P) on are not in the file");
                 ui.add_enabled_ui(!per_section, |ui| {
-                    ui.checkbox(&mut self.stems, "Also each track on its own (stems)");
+                    ui.checkbox(&mut self.stems, "Also each track on its own (stems)")
+                        .on_hover_text(
+                            "Each through the master's effects and fader, as in the mix",
+                        );
                     ui.add_enabled_ui(buses, |ui| {
                         ui.checkbox(
                             &mut self.bus_stems,
@@ -577,7 +580,7 @@ impl Export {
                         )
                         .on_hover_text(
                             "Everything that goes through the bus, after its effects \
-                                 and fader",
+                                 and fader, then through the master",
                         )
                         .on_disabled_hover_text("This song has no buses");
                     });

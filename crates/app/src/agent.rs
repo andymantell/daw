@@ -128,7 +128,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                       mute, solo, sends, each effect's settings, and its built-in \
                       instrument's, named instrument.<key>), with its value, range and \
                       how it reads, and whether it is automated. The track \"master\" is \
-                      the master channel: its volume and its effects' settings. Without a \
+                      the master channel: its volume and its effects' settings, which can be automated too. Without a \
                       track, every track's and the master's; a drum machine has hundreds, \
                       so ask for one track, or give a prefix such as \"instrument.pad0.\". \
                       Every parameter of a plugin is listed: narrow them with effect, \
@@ -1415,6 +1415,7 @@ impl App {
                 "id": daw_project::Master::KEY,
                 "gain_db": p.master.gain_db,
                 "effects": p.master.effects.iter().map(effect).collect::<Vec<_>>(),
+                "automated": p.master.automation.iter().map(|l| &l.param).collect::<Vec<_>>(),
             },
             "control_groups": p.control_groups.iter().map(|g| json!({
                 "id": g.id, "name": g.name, "gain_db": g.gain_db, "mute": g.mute,
@@ -1468,7 +1469,6 @@ impl App {
     fn master_parameters(&self) -> Value {
         let t = &self.master;
         let params: Vec<Value> = (crate::automation::choices_up_to(t, &[], usize::MAX).iter())
-            .filter(|c| c.param != daw_project::Lane::PAN)
             .filter_map(|c| {
                 let v = crate::automation::control(t, &c.param)?;
                 let r = crate::automation::range(t, &c.param)?;
@@ -1479,7 +1479,7 @@ impl App {
                     "text": crate::automation::text_of(t, &c.param, v),
                     "min": r.min,
                     "max": r.max,
-                    "automated": false,
+                    "automated": t.automation.iter().any(|l| l.param == c.param),
                 });
                 let named = crate::automation::choice_names(t, &c.param);
                 if !named.is_empty() {

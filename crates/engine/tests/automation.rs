@@ -375,3 +375,94 @@ fn an_instrument_lane_being_written_leaves_the_control_in_charge() {
     // Cleared to the control's 1.0, as the lane plays nothing.
     assert!((l[100] - 1.0).abs() < 1e-3, "{}", l[100]);
 }
+
+#[test]
+fn the_master_fader_follows_its_lane() {
+    let mut s = session();
+    s.tracks.push(track());
+    s.master_automation = vec![lane(Target::Gain, vec![(0, -60.0), (2400, 0.0)])];
+    let [l, _] = render(&s, vec![]);
+    assert!(
+        gain_at(&l, 200) < 0.1,
+        "quiet at the start: {}",
+        gain_at(&l, 200)
+    );
+    let mid = gain_at(&l, 1200);
+    let want = db_to_gain(-30.0);
+    assert!((mid - want).abs() < 0.1, "half way: {mid} vs about {want}");
+    assert!((gain_at(&l, LEN - 1) - 1.0).abs() < 1e-3);
+    for i in 1..2400 {
+        assert!(l[i] >= l[i - 1] - 1e-6, "a dip at frame {i}");
+    }
+    // Pan and send lanes mean nothing on the master.
+    s.master_automation = vec![lane(Target::Pan, vec![(0, -1.0)])];
+    let [l, r] = render(&s, vec![]);
+    assert!((l[LEN - 1] - r[LEN - 1]).abs() < 1e-6);
+}
+
+#[test]
+fn a_master_effect_setting_lane_reaches_the_effect() {
+    let mut s = session();
+    s.tracks.push(track());
+    s.master_inserts = vec![InsertSpec {
+        id: 7,
+        ..InsertSpec::default()
+    }];
+    s.master_automation = vec![lane(Target::Insert { id: 7, param: 0 }, vec![(0, 0.25)])];
+    let scaler: Box<dyn Insert> = Box::new(Scaler {
+        gain: 1.0,
+        set: None,
+    });
+    let [l, _] = render(&s, vec![(7, scaler)]);
+    assert!(
+        (gain_at(&l, LEN - 1) - 0.25).abs() < 1e-3,
+        "the master's effect took the lane's value: {}",
+        gain_at(&l, LEN - 1)
+    );
+}
+
+#[test]
+fn a_master_lane_being_written_leaves_the_fader_in_charge() {
+    let mut s = session();
+    s.tracks.push(TrackSpec::new(vec![ClipSpec::new(
+        Ticks(0),
+        steady(LEN * 4),
+    )]));
+    s.master_db = -6.0;
+    s.master_automation = vec![lane(Target::Gain, vec![(0, -20.0)])];
+    let (mut ctl, mut eng) = engine::new(BLOCK);
+    ctl.set_graph(s.compile(BLOCK).unwrap()).ok().unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
+    for _ in 0..10 {
+        eng.process(&mut l, &mut r);
+    }
+    assert!((gain_at(&l, BLOCK - 1) - db_to_gain(-20.0)).abs() < 1e-3);
+    ctl.send(Command::SetAutoLive {
+        track: daw_engine::graph::MASTER,
+        target: Target::Gain,
+        live: true,
+    })
+    .ok()
+    .unwrap();
+    for _ in 0..10 {
+        eng.process(&mut l, &mut r);
+    }
+    assert!((gain_at(&l, BLOCK - 1) - db_to_gain(-6.0)).abs() < 1e-3);
+    ctl.send(Command::SetMasterGain(0.0)).ok().unwrap();
+    for _ in 0..10 {
+        eng.process(&mut l, &mut r);
+    }
+    assert!((gain_at(&l, BLOCK - 1) - 1.0).abs() < 1e-3);
+    ctl.send(Command::SetAutoLive {
+        track: daw_engine::graph::MASTER,
+        target: Target::Gain,
+        live: false,
+    })
+    .ok()
+    .unwrap();
+    for _ in 0..10 {
+        eng.process(&mut l, &mut r);
+    }
+    assert!((gain_at(&l, BLOCK - 1) - db_to_gain(-20.0)).abs() < 1e-3);
+}

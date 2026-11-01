@@ -372,8 +372,10 @@ mod tests {
         };
         let raw = std::fs::read(a).unwrap();
         let x: Vec<f32> = raw
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         let t = transcribe(Path::new(&m), &x, |_| {}).unwrap();
         for l in &t.lines {

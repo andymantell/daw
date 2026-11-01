@@ -99,6 +99,13 @@ pub(crate) enum Cmd {
     TransposeDown,
     ResetTranspose,
     MoveFormants,
+    PitchEditor,
+    FindPitchNotes,
+    PitchNotesUp,
+    PitchNotesDown,
+    SnapPitchNotes,
+    FlattenPitchDrift,
+    ResetPitchNotes,
     StretchMarkersFromAttacks,
     AddStretchMarker,
     ClearStretchMarkers,
@@ -1252,6 +1259,66 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::ClipTempo, "clip-tempo", "Edit", "Clip tempo…", &[])
         .hint("The tempo the selected clips were played at, which they follow the song from")
         .words("original bpm warp stretch loop"),
+    info(Cmd::PitchEditor, "pitch-editor", "View", "Pitch editor", &[])
+        .hint("Show or hide the notes of the selected audio clip, to move each in pitch and time")
+        .words("pitch correction tune vocal notes blobs melody drift vibrato formant autotune"),
+    info(
+        Cmd::FindPitchNotes,
+        "find-pitch-notes",
+        "Edit",
+        "Find notes to edit",
+        &[],
+    )
+    .hint(
+        "Find the notes of the selected clip, a single voice or single-note line, for the \
+         pitch editor; notes found again keep the pitch edits of those they replace",
+    )
+    .words("pitch detect analyse vocal melody notes tune"),
+    info(
+        Cmd::PitchNotesUp,
+        "pitch-notes-up",
+        "Edit",
+        "Notes up a semitone",
+        &[],
+    )
+    .hint("Raise the notes chosen in the pitch editor (or all of the clip's) by a semitone")
+    .words("pitch shift higher vocal tune"),
+    info(
+        Cmd::PitchNotesDown,
+        "pitch-notes-down",
+        "Edit",
+        "Notes down a semitone",
+        &[],
+    )
+    .hint("Lower the notes chosen in the pitch editor (or all of the clip's) by a semitone")
+    .words("pitch shift lower vocal tune"),
+    info(
+        Cmd::SnapPitchNotes,
+        "snap-pitch-notes",
+        "Edit",
+        "Snap notes to pitch",
+        &[],
+    )
+    .hint("Move each chosen note (or all of the clip's) to the nearest whole note")
+    .words("pitch correction tune in tune sharp flat autotune quantise"),
+    info(
+        Cmd::FlattenPitchDrift,
+        "flatten-pitch-drift",
+        "Edit",
+        "Flatten pitch drift",
+        &[],
+    )
+    .hint("Hold each chosen note (or all of the clip's) on its pitch, keeping its vibrato")
+    .words("pitch correction tune steady wander scoop"),
+    info(
+        Cmd::ResetPitchNotes,
+        "reset-pitch-notes",
+        "Edit",
+        "Notes as sung",
+        &[],
+    )
+    .hint("Take every pitch edit off the chosen notes (or all of the clip's)")
+    .words("pitch reset original undo correction"),
     info(Cmd::TransposeClips, "transpose-clips", "Edit", "Transpose clips…", &[])
         .hint("Move the selected audio clips' pitch by semitones and cents, keeping their timing")
         .words("pitch shift key change semitone cents formant tune"),
@@ -2194,6 +2261,7 @@ impl Cmd {
                 | Cmd::Browser
                 | Cmd::Video
                 | Cmd::Fretboard
+                | Cmd::PitchEditor
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -3017,6 +3085,7 @@ impl App {
             | Cmd::TransposeDown
             | Cmd::ResetTranspose
             | Cmd::MoveFormants
+            | Cmd::FindPitchNotes
             | Cmd::StretchMarkersFromAttacks
             | Cmd::AddStretchMarker
             | Cmd::ClearStretchMarkers
@@ -3024,6 +3093,11 @@ impl App {
             | Cmd::QuantiseAudioApply
             | Cmd::TempoFromClip
             | Cmd::TempoFromClipApply => self.has_stretch_clips(),
+            Cmd::PitchNotesUp
+            | Cmd::PitchNotesDown
+            | Cmd::SnapPitchNotes
+            | Cmd::FlattenPitchDrift
+            | Cmd::ResetPitchNotes => self.has_pitch_notes(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             Cmd::AudioSetupNext
             | Cmd::AudioSetupSkip
@@ -3304,6 +3378,15 @@ impl App {
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::Video => self.workspace.toggle(Pane::Video),
             Cmd::Fretboard => self.workspace.toggle(Pane::Fretboard),
+            Cmd::PitchEditor => self.workspace.toggle(Pane::PitchEditor),
+            Cmd::FindPitchNotes
+            | Cmd::PitchNotesUp
+            | Cmd::PitchNotesDown
+            | Cmd::SnapPitchNotes
+            | Cmd::FlattenPitchDrift
+            | Cmd::ResetPitchNotes => {
+                self.run_pitch(cmd);
+            }
             Cmd::FretboardView
             | Cmd::FretboardRootUp
             | Cmd::FretboardRootDown

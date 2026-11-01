@@ -161,6 +161,12 @@ assistant finds them for itself. In outline:
   `edit_clip` moves, resizes, mutes and keys note clips too, and
   transposes audio clips (`transpose_semitones`, fractions for cents,
   with `move_formants`).
+  Pitch editing of a single voice or single-note line: `edit_pitch_notes`
+  finds an audio clip's notes (`find: true`) and edits them one by one
+  or together (`to_midi`, `shift_semitones`, `by_semitones`, `snap`,
+  `move_seconds`, `resize_seconds`, `drift_pct`, `vibrato_pct`,
+  `formant_semitones`, `reset`); `get_pitch_notes` reads them back,
+  with each note's pitch line when asked (`line: true`).
   `add_note_clip` and `edit_notes` take chords by name (`Dm9`, `G/B`)
   or several pitches at once, and `select_clips` picks a note clip.
 - **Automation:** `get_automation` (each track's mode, lanes and

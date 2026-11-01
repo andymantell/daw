@@ -99,8 +99,11 @@ pub struct Clip {
     /// them where they were.
     pub move_formants: bool,
     /// Pitch editing: the notes found in the clip's audio, with their
-    /// edits, in source frames (plan B2).
+    /// edits, in source frames; see [`crate::pitch_edit`].
     pub pitch_notes: Vec<daw_project::PitchNote>,
+    /// The pitch line of its audio, once worked out: what its notes are
+    /// drawn over and their drift and vibrato edits work from.
+    pub pitch_line: Option<Arc<daw_engine::bend::PitchLine>>,
     /// How many timeline frames the clip takes once stretched; `len`
     /// for a clip that isn't. Kept up to date by [`Clip::retime`].
     pub span: usize,
@@ -186,6 +189,7 @@ impl Clip {
             cents: 0,
             move_formants: false,
             pitch_notes: Vec::new(),
+            pitch_line: None,
             span: 0,
             out_unit: 0.0,
         };

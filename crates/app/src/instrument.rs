@@ -160,6 +160,18 @@ impl Slot {
         }
     }
 
+    /// The names of a setting's values, by value from its lowest, when
+    /// it picks one of a list (a waveform, a mode); empty otherwise.
+    pub fn choices(&self, key: &str) -> Vec<String> {
+        let Inner::Builtin(b) = &self.inner else {
+            return Vec::new();
+        };
+        (b.params().list().iter())
+            .find(|x| x.key == key && !x.choices.is_empty())
+            .map(|x| x.choices.iter().map(|c| c.to_string()).collect())
+            .unwrap_or_default()
+    }
+
     pub fn builtin_ref(&self) -> Option<&Builtin> {
         match &self.inner {
             Inner::Builtin(b) => Some(b),

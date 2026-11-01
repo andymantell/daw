@@ -117,6 +117,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "clear_markers": {"type": "boolean"},
                 "markers_from_notes": {"type": "boolean"},
                 "sensitivity": {"type": "number", "description": "0 to 1, for finding notes; 0.5 if left out."},
+                "markers_from": {"type": "integer", "description": "List markers from this index (0 if left out)."},
+                "markers_limit": {"type": "integer", "description": "List at most this many markers (100 if left out); marker_count gives them all."},
                 "add_markers": {"type": "array", "items": {"type": "number"}, "description": "Seconds on the timeline."},
                 "move_markers": {"type": "array", "items": {"type": "object", "properties": {
                     "index": {"type": "integer"}, "to_seconds": {"type": "number"}
@@ -660,12 +662,14 @@ impl App {
         ))
     }
 
-    fn stretch_value(&self, ids: &HashSet<u64>) -> Value {
+    /// The clips' tempo and markers: `markers` lists from marker
+    /// `from`, at most `most` of them.
+    fn stretch_value(&self, ids: &HashSet<u64>, from: usize, most: usize) -> Value {
         let map = self.tempo_map();
         let clips: Vec<Value> = (self.tracks.iter().flat_map(|t| &t.clips))
             .filter(|c| ids.contains(&c.id))
             .map(|c| {
-                let markers: Vec<Value> = (c.markers.iter().enumerate())
+                let markers: Vec<Value> = (c.markers.iter().enumerate().skip(from).take(most))
                     .map(|(i, m)| {
                         json!({"index": i, "frame": m.frame,
                                "seconds": self.seconds(c.out_of_frame(&map, m.frame as f64))})
@@ -673,7 +677,7 @@ impl App {
                     .collect();
                 json!({"clip": c.key, "follows_tempo": c.tempo.is_some(), "tempo": c.tempo,
                        "from_seconds": self.seconds(c.start), "to_seconds": self.seconds(c.end()),
-                       "markers": markers})
+                       "marker_count": c.markers.len(), "markers": markers})
             })
             .collect();
         json!({"clips": clips})
@@ -811,7 +815,9 @@ impl App {
         {
             return Err(e.clone());
         }
-        let mut v = self.stretch_value(&ids);
+        let from = args["markers_from"].as_u64().unwrap_or(0) as usize;
+        let most = args["markers_limit"].as_u64().unwrap_or(100) as usize;
+        let mut v = self.stretch_value(&ids, from, most);
         v["problem"] = json!(problem);
         Ok((v, changed.then(|| "Stretch clips".into())))
     }
@@ -1429,6 +1435,83 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn quantising_a_stretched_clip_moves_its_markers_rather_than_adding_more() {
+        let mut d = Driver::new();
+        // Notes about an eighth apart at 92 bpm (15,652 frames), up to
+        // 20 ms off, after 6,000 frames trimmed from the front.
+        let at: Vec<usize> = [900i64, -700, 500, -900, 300, -400]
+            .iter()
+            .enumerate()
+            .map(|(k, j)| (6_000 + (k as i64 + 1) * 15_652 + j) as usize)
+            .collect();
+        let mut c = take(120_000, &at);
+        c.offset += 6_000;
+        c.len -= 6_000;
+        // Placed at bar 3 (4 s at 120 bpm).
+        c.start = 4 * 48_000;
+        let key = c.key.clone();
+        let app = d.app();
+        app.tracks.push(Track::new("Rap".into()));
+        app.tracks[0].clips.push(c);
+        app.rebuild();
+        // Played at 92 bpm, heard at the song's 120: stretched, with
+        // markers on its notes, in one call.
+        let v = d
+            .call(
+                "stretch_clips",
+                json!({"clips": [key], "follow_tempo": true, "tempo": 92,
+                       "markers_from_notes": true}),
+            )
+            .unwrap();
+        let markers = v["clips"][0]["markers"].as_array().unwrap();
+        let n = markers.len();
+        assert_eq!(n, 6, "{v}");
+        for (k, m) in markers.iter().enumerate() {
+            let s = m["seconds"].as_f64().unwrap();
+            let want = 4.0 + (k + 1) as f64 * 0.25;
+            assert!((s - want).abs() < 0.03, "marker {k} near {want} s: {v}");
+        }
+        let v = d
+            .call(
+                "stretch_clips",
+                json!({"clips": [key], "quantise": {"grid": "1/2", "strength": 1, "window_ms": 200}}),
+            )
+            .unwrap();
+        let markers = v["clips"][0]["markers"].as_array().unwrap();
+        assert_eq!(markers.len(), n, "no marker beside each one: {v}");
+        for m in markers {
+            let s = m["seconds"].as_f64().unwrap() / 0.25;
+            assert!((s - s.round()).abs() < 0.01, "on the eighths: {v}");
+        }
+    }
+
+    #[test]
+    fn a_clip_that_follows_tempo_is_copied_to_the_time_given() {
+        let mut d = Driver::new();
+        let c = take(48_000, &[12_000]);
+        let key = c.key.clone();
+        let app = d.app();
+        app.tracks.push(Track::new("Hook".into()));
+        app.tracks[0].clips.push(c);
+        app.rebuild();
+        d.call(
+            "stretch_clips",
+            json!({"clips": [key], "follow_tempo": true, "tempo": 120}),
+        )
+        .unwrap();
+        let v = d
+            .call("duplicate_clip", json!({"clip": key, "seconds": 6.0}))
+            .unwrap();
+        let copy = v["clip"].as_str().unwrap().to_string();
+        let p = d.project();
+        let at = (p["tracks"][0]["clips"].as_array().unwrap().iter())
+            .find(|c| c["id"] == copy.as_str())
+            .map(|c| c["start_seconds"].as_f64().unwrap())
+            .unwrap();
+        assert!((at - 6.0).abs() < 0.001, "the copy starts at 6 s: {p}");
     }
 
     #[test]

@@ -102,7 +102,9 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "export_mix",
         description: "Exports the mix, and stems if asked, into a new numbered folder: the \
                       whole song, the loop, or bars given. Starts now, or waits in the \
-                      export queue. Follow it with get_exports.",
+                      export queue. Answers with the revision now: wait_for_change with \
+                      it answers when the export (or anything else) finishes, then \
+                      get_exports says where the files are.",
         access: Access::EditExport,
         schema: || {
             json!({"type": "object", "properties": {
@@ -334,7 +336,12 @@ impl App {
         }
         let queued = self.export.busy() || self.export.queue().next().is_some();
         self.export_or_queue(req)?;
-        Ok((json!({"started": !queued, "queued": queued}), None))
+        // wait_for_change with this revision answers when it is done.
+        let revision = self.agent.revision;
+        Ok((
+            json!({"started": !queued, "queued": queued, "revision": revision}),
+            None,
+        ))
     }
 }
 
@@ -384,8 +391,8 @@ mod tests {
                 .is_err()
         );
         assert!(d.call("export_mix", json!({"format": "aiff"})).is_err());
-        // Waiting for a change hears the export finish.
-        let rev = d.call("wait_for_change", json!({})).unwrap()["revision"].clone();
+        // Waiting for a change, from the revision export_mix gives,
+        // hears the export finish.
         let r = d
             .call(
                 "export_mix",
@@ -396,7 +403,7 @@ mod tests {
         let woke = d
             .call(
                 "wait_for_change",
-                json!({"revision": rev, "timeout_seconds": 30}),
+                json!({"revision": r["revision"], "timeout_seconds": 30}),
             )
             .unwrap();
         assert_eq!(woke["changed"], true, "{woke}");

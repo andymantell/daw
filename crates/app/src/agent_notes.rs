@@ -87,8 +87,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "duplicate_clip",
         description: "Copies an audio clip or a note clip, straight after it unless a bar \
-                      or seconds is given, as many times as asked, back to back (a 4-bar \
-                      riff 8 times fills 32 bars). A copy of a pattern clip plays the same \
+                      or seconds is given (the first copy then starts there), as many times \
+                      as asked, back to back (a 4-bar riff 8 times fills 32 bars). A copy of a pattern clip plays the same \
                       pattern (linked: editing the pattern changes both) unless linked is \
                       false, when it gets a copy of the pattern of its own. Gives the new \
                       clip's id.",
@@ -126,7 +126,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                       with one_of, one note of the group is picked at random each time \
                       round. Notes are placed in beats (quarter notes) from the clip's \
                       start; pitch is a MIDI number (60 is middle C). get_note_clip gives \
-                      their ids.",
+                      their ids. copy_to puts the same notes in other clips, for a part \
+                      that repeats.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -143,7 +144,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                         "one_of": {"type": "boolean", "description": "Play one of them at random."}
                     }, "required": ["notes"]}},
                 "ungroup": {"type": "array", "items": {"type": "string"},
-                    "description": "Notes, by id, to take out of their groups."}
+                    "description": "Notes, by id, to take out of their groups."},
+                "copy_to": {"type": "array", "items": {"type": "string"},
+                    "description": "Other note clips, by id, whose notes become a copy of this clip's (as edited)."}
             }, "required": ["clip"]})
         },
     },
@@ -732,6 +735,7 @@ impl App {
         let linked = args["linked"].as_bool().unwrap_or(true);
         let to = args["track"].as_str().map(String::from);
         let times = args["times"].as_i64().unwrap_or(1).clamp(1, 256);
+        let map = self.tempo_map();
         self.edit_model(|p| {
             let dest = |p: &Project, i: usize, audio: bool| -> Result<usize, String> {
                 let Some(to) = &to else { return Ok(i) };
@@ -758,6 +762,8 @@ impl App {
                         let mut c = src.clone();
                         c.id = daw_project::new_id();
                         c.start = first + k * src.len;
+                        // A clip that follows tempo is placed by its beat.
+                        c.beat = map.ticks_at(Frames(c.start)).0;
                         new.push(c.id.clone());
                         p.tracks[ti].clips.push(c);
                     }
@@ -885,8 +891,26 @@ impl App {
                 groups.push(k);
             }
             c.sort_notes();
+            let notes = c.notes.clone();
+            let mut copied = Vec::new();
+            for to in ids(&args["copy_to"]) {
+                let (a, b) = note_clip_at(p, &to)?;
+                let d = &mut p.tracks[a].note_clips[b];
+                if d.pattern.is_some() {
+                    return Err(format!(
+                        "The clip {to} plays a pattern, so it has no notes of its own."
+                    ));
+                }
+                d.notes = (notes.iter().cloned())
+                    .map(|mut n| {
+                        n.id = daw_project::new_id();
+                        n
+                    })
+                    .collect();
+                copied.push(to);
+            }
             Ok(json!({"added": added, "removed": removed, "groups": groups,
-                      "notes": c.notes.len()}))
+                      "notes": notes.len(), "copied_to": copied}))
         })
         .map(|v| (v, Some("Edit notes".into())))
     }
@@ -1337,6 +1361,47 @@ mod tests {
 
     fn clip(d: &mut Driver, c: &str) -> Value {
         d.call("get_note_clip", json!({"clip": c})).unwrap()
+    }
+
+    #[test]
+    fn notes_are_copied_to_other_clips() {
+        let mut d = Driver::new();
+        let (t, a) = with_clip(&mut d);
+        let b = id(
+            d.call("add_note_clip", json!({"track": t, "bar": 3, "bars": 2}))
+                .unwrap(),
+            "clip",
+        );
+        let r = d
+            .call(
+                "edit_notes",
+                json!({"clip": a, "add": [{"beat": 0, "beats": 1, "pitch": 36},
+                                          {"beat": 2, "beats": 1, "pitch": 43}],
+                       "copy_to": [b]}),
+            )
+            .unwrap();
+        assert_eq!(r["copied_to"][0], b.as_str());
+        let (na, nb) = (
+            clip(&mut d, &a)["notes"].clone(),
+            clip(&mut d, &b)["notes"].clone(),
+        );
+        let pitches = |v: &Value| -> Vec<i64> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["pitch"].as_i64().unwrap())
+                .collect()
+        };
+        assert_eq!(pitches(&nb), vec![36, 43]);
+        assert_eq!(pitches(&na), pitches(&nb));
+        assert_ne!(
+            na[0]["id"], nb[0]["id"],
+            "the copies are notes of their own"
+        );
+        assert!(
+            d.call("edit_notes", json!({"clip": a, "copy_to": ["nope"]}))
+                .is_err()
+        );
     }
 
     #[test]

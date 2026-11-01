@@ -868,6 +868,24 @@ impl App {
     /// Reads each plugin's settings into the document. Not an edit:
     /// kept out of undo.
     pub(crate) fn write_plugin_states(&mut self) {
+        let p = self.project_and_plugin_states();
+        self.proj.doc.set_quietly(&p);
+        self.proj.committed = self.project();
+    }
+
+    /// Writes the project with every plugin's own settings as an undo
+    /// step of its own, called `label`: for a change inside a plugin (a
+    /// preset loaded), which the project otherwise leaves out.
+    pub(crate) fn write_plugin_step(&mut self, label: &str) {
+        let p = self.project_and_plugin_states();
+        self.proj.doc.set_labelled(&p, label);
+        self.proj.committed = self.project();
+        self.proj.dirty = true;
+        self.agent.revision += 1;
+    }
+
+    /// The project with the plugins' own settings read.
+    fn project_and_plugin_states(&mut self) -> Project {
         let mut p = self.project();
         for (pt, t) in p.tracks.iter_mut().zip(&mut self.tracks) {
             // By id: effects missing here sit among them, and keep the
@@ -888,8 +906,7 @@ impl App {
                 }
             }
         }
-        self.proj.doc.set_quietly(&p);
-        self.proj.committed = self.project();
+        p
     }
 
     /// Makes a project folder called `name` and saves into it.

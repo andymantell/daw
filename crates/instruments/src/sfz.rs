@@ -559,7 +559,7 @@ fn expand(
                 defines.retain(|(n, _)| *n != name);
                 defines.push((name, value));
                 // Longest first, so `$a_b` isn't read as `$a` and `_b`.
-                defines.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+                defines.sort_by_key(|d| std::cmp::Reverse(d.0.len()));
             }
             continue;
         }
@@ -859,9 +859,9 @@ fn build(tokens: &[Token], dir: &Path, sfz: &mut Sfz) {
             sfz.regions.push(r);
         }
     }
-    sfz.sw_default = regions.iter().find_map(|o| {
-        note(o.get("sw_default")).map(|n| (n as i64 + note_offset).clamp(0, 127) as u8)
-    });
+    sfz.sw_default = regions
+        .iter()
+        .find_map(|o| note(o.get("sw_default")).map(|n| (n + note_offset).clamp(0, 127) as u8));
 }
 
 fn num(v: Option<&String>) -> Option<f64> {

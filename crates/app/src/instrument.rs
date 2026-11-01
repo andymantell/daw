@@ -1277,6 +1277,7 @@ fn library_controls(ui: &mut egui::Ui, id: u64, p: &Params, lib: &daw_instrument
                                 "{name} ({})",
                                 daw_instruments::params::note_name(*k as i32)
                             );
+                            // ai: set_parameter
                             if ui.selectable_label(*k == now, text).clicked() {
                                 p.set(i, *k as f64);
                             }

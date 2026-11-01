@@ -111,7 +111,11 @@ assistant finds them for itself. In outline:
   `remove_effect`, `list_parameters`, `set_parameter` and `analyse`, and
   `get_project` shows it as `master`.
 - **Instruments and layers:** `set_instrument` (a built-in or plugin
-  instrument, for a track or one layer), `edit_layer` (add, remove,
+  instrument, for a track or one layer), an SFZ sample library on the
+  sampler (`file_command` with `load-sfz`, or `set_sound` with the
+  slot `sfz`; `get_instrument` then lists its keys, articulations and
+  controls, and each control, such as a mic level, is a setting,
+  `instrument.ccN`), `edit_layer` (add, remove,
   reorder, switch on or off, instrument, level, pan, note and velocity
   ranges, transpose, and its instrument's settings), `edit_pad_effect`
   (a drum machine pad's effects) and `set_instrument_output` (an

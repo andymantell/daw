@@ -184,7 +184,7 @@ impl Library {
             region_name.push(Some(i));
         }
         // How big each is.
-        let infos: Vec<Result<(f64, usize, Option<u64>), String>> = parallel(&names, |name| {
+        let infos: Vec<Result<Info, String>> = parallel(&names, |name| {
             if name.starts_with('*') {
                 return Ok((48_000.0, 1, Some(1)));
             }
@@ -299,6 +299,9 @@ impl Library {
         }
     }
 }
+
+/// A sound file's rate, channels and length (if it says).
+type Info = (f64, usize, Option<u64>);
 
 #[derive(Default, Clone, Copy)]
 struct Need {

@@ -797,6 +797,11 @@ pattern from the pads. Checks in `docs/review-queue/3.3-patterns.md`.*
 
 ### 3.4 Built-in instruments & content (L)
 - Multi-zone sampler, drum sampler, and a synth of our own design.
+  *2026-11-01, at risk: the sampler reads SFZ libraries (the open text
+  format most free sample libraries use) with their layers, round
+  robins, controllers, key-switches and choke groups, plays big ones
+  from disk, and its own zones get round robins and velocity layers;
+  see [review-queue/3.4-sfz-sampler.md](review-queue/3.4-sfz-sampler.md).*
 - **Drum machine instrument:** pads with several layers each, mixing
   samples with **synthesised drum voices**. Choke/exclusive groups (closed
   hi-hat cuts off open), a per-pad effect chain, per-pad outputs and sends.

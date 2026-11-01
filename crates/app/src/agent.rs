@@ -662,8 +662,13 @@ impl App {
                     ));
                 }
                 if NEEDS_A_PERSON.contains(&cmd) {
+                    let instead = match OWN_TOOL.iter().find(|(c, _)| *c == cmd) {
+                        Some((_, t)) => format!("{t} does it with a file given"),
+                        None => "file_command runs it with a file given".into(),
+                    };
                     return Err(format!(
-                        "{id} opens a file chooser, which needs a person at the computer."
+                        "{id} opens a file chooser, which needs a person at the computer; \
+                         {instead}."
                     ));
                 }
                 if !self.can_run(cmd) {
@@ -885,7 +890,7 @@ impl App {
                     None,
                 ))
             }
-            _ => match self.pane_tool(ctx, name, args) {
+            _ => match self.pane_tool(ctx, name, args, access) {
                 Some(done) => done,
                 None => Err(format!("There is no tool {name}.")),
             },
@@ -1500,5 +1505,118 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!((t["bar"].clone(), t["beat"].clone()), (json!(3), json!(1)));
+    }
+}
+
+/// Commands that ask for a file and have a tool of their own, which
+/// assistants use instead.
+pub(crate) const OWN_TOOL: &[(Cmd, &str)] = &[
+    (Cmd::ExportDawProject, "export_project_file"),
+    (Cmd::ImportDawProject, "import_project_file"),
+];
+
+/// The checks that keep the interface whole as features are added
+/// (roadmap 2.11): every command in the table works from an assistant.
+#[cfg(test)]
+mod coverage {
+    use serde_json::json;
+
+    use super::driver::Driver;
+    use super::*;
+    use crate::agent_files::FILE_COMMANDS;
+
+    /// Runs every `parts`th command from `part` from an assistant: none
+    /// may panic or leave the request unanswered (`call` would time out).
+    /// A fresh app every few, as windows piling up make frames slow.
+    fn run_commands(part: usize, parts: usize) {
+        let mut d = Driver::new();
+        for (n, i) in COMMANDS.iter().skip(part).step_by(parts).enumerate() {
+            if n > 0 && n % 12 == 0 {
+                d = Driver::new();
+            }
+            let id = i.id();
+            match d.call("run_command", json!({"id": id})) {
+                Ok(v) => assert_eq!(v["ran"], id),
+                Err(e) => assert!(
+                    e.contains("can't run now")
+                        || e.contains("file chooser")
+                        || e.contains("permission"),
+                    "{id}: {e}"
+                ),
+            }
+        }
+    }
+
+    // In four, so they run side by side.
+    #[test]
+    fn every_command_runs_from_an_assistant_1() {
+        run_commands(0, 4);
+    }
+
+    #[test]
+    fn every_command_runs_from_an_assistant_2() {
+        run_commands(1, 4);
+    }
+
+    #[test]
+    fn every_command_runs_from_an_assistant_3() {
+        run_commands(2, 4);
+    }
+
+    #[test]
+    fn every_command_runs_from_an_assistant_4() {
+        run_commands(3, 4);
+    }
+
+    #[test]
+    fn every_command_that_asks_for_a_file_has_another_way_in() {
+        for &cmd in NEEDS_A_PERSON {
+            let by_file = FILE_COMMANDS.iter().any(|(c, _)| *c == cmd);
+            let own = (OWN_TOOL.iter()).find(|(c, _)| *c == cmd).map(|(_, t)| *t);
+            assert!(
+                by_file || own.is_some_and(|t| tool(t).is_some()),
+                "{}: an assistant has no way to run it with a file given; add it to \
+                 FILE_COMMANDS or OWN_TOOL",
+                cmd.info().id()
+            );
+        }
+        for (c, _) in FILE_COMMANDS {
+            assert!(NEEDS_A_PERSON.contains(c), "{}", c.info().id());
+        }
+    }
+
+    #[test]
+    fn a_file_command_runs_with_its_file() {
+        let mut d = Driver::new();
+        d.access = Access::Edit;
+        let dir = std::env::temp_dir().join(format!("daw-file-cmd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mid = dir.join("notes.mid");
+        let e = d
+            .call("file_command", json!({"id": "export-midi", "path": mid}))
+            .unwrap_err();
+        assert!(e.contains("permission"), "{e}");
+        d.access = Access::EditExport;
+        d.command("add-instrument-track");
+        let t = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        let c = d
+            .call("add_note_clip", json!({"track": t, "bar": 1}))
+            .unwrap();
+        d.call(
+            "edit_notes",
+            json!({"clip": c["clip"], "add": [{"beat": 0, "beats": 1, "pitch": 60}]}),
+        )
+        .unwrap();
+        d.call("file_command", json!({"id": "export-midi", "path": mid}))
+            .unwrap();
+        assert!(mid.is_file());
+        d.call("file_command", json!({"id": "import-midi", "path": mid}))
+            .unwrap();
+        assert!(d.project()["tracks"].as_array().unwrap().len() >= 2);
+        assert!(
+            d.call("file_command", json!({"id": "play", "path": mid}))
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

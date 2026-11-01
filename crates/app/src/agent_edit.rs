@@ -150,6 +150,7 @@ impl App {
         ctx: &eframe::egui::Context,
         name: &str,
         args: &Value,
+        access: Access,
     ) -> Option<Done> {
         Some(match name {
             "add_track" => self.add_track_tool(ctx, args),
@@ -162,7 +163,7 @@ impl App {
             _ => {
                 return self
                     .arrange_tool(name, args)
-                    .or_else(|| self.files_tool(ctx, name, args));
+                    .or_else(|| self.files_tool(ctx, name, args, access));
             }
         })
     }

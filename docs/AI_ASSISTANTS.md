@@ -148,6 +148,9 @@ assistant finds them for itself. In outline:
   section), `edit_assignments` (set, change, remove, mark done, or
   practise one) and `edit_lessons` (start, rename or remove a lesson,
   or take a practice session out of the log).
+- **Practice:** `set_practice` (speed, transpose, fine pitch, the
+  metronome, count-in, the tempo trainer, and measuring how far a
+  track is from concert pitch).
 - **Monitor section:** `get_monitor`, `edit_headphone_mixes` (add,
   change, remove, copy the main mix, and each track's level, pan and
   mute in a mix) and `set_monitor` (the speakers' controls, talkback,

@@ -469,6 +469,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_routing::TOOLS)
         .chain(crate::agent_lessons::TOOLS)
         .chain(crate::agent_monitor::TOOLS)
+        .chain(crate::agent_practice::TOOLS)
 }
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {

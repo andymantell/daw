@@ -213,6 +213,9 @@ pub struct NoteTools {
     pub learn_track: Option<String>,
     pub learn_param: String,
     pub learning: bool,
+    /// Each control's last value, by channel and number, to tell a
+    /// footswitch press (low to high) from it being held.
+    pub(crate) last_cc: std::collections::HashMap<(u8, u8), u8>,
     /// Seeds humanising, one after another.
     seed: u64,
 }
@@ -233,6 +236,7 @@ impl Default for NoteTools {
             learn_track: None,
             learn_param: Lane::GAIN.into(),
             learning: false,
+            last_cc: Default::default(),
             seed: 0x5eed,
         }
     }
@@ -526,13 +530,18 @@ impl App {
                     (m.channel, m.cc) != (channel, number)
                         && (&m.track, &m.param) != (&track, &param)
                 });
+                // A footswitch steps through a switching container's
+                // chains, press by press.
+                let step = crate::switch::is_heard(&self.tracks, &track, &param);
                 self.midi_maps.push(MidiMap {
                     id: daw_project::new_id(),
                     channel,
                     cc: number,
                     track,
                     param,
+                    step,
                 });
+                self.note_tools.last_cc.insert((channel, number), value);
                 self.message = Some(format!(
                     "Tied controller {number} (channel {}).",
                     channel + 1
@@ -544,11 +553,29 @@ impl App {
                 .filter(|m| (m.channel, m.cc) == (channel, number))
                 .cloned()
                 .collect();
+            let was = self.note_tools.last_cc.insert((channel, number), value);
+            let pressed = value >= 64 && was.is_none_or(|w| w < 64);
             for m in maps {
-                self.set_from_control(&m, value as f64 / 127.0);
+                if m.step {
+                    if pressed {
+                        self.step_from_control(&m);
+                    }
+                } else {
+                    self.set_from_control(&m, value as f64 / 127.0);
+                }
             }
         }
         changed
+    }
+
+    /// Steps a tied setting on, for a footswitch press.
+    fn step_from_control(&mut self, m: &MidiMap) {
+        let Some(i) = self.tracks.iter().position(|t| t.key == m.track) else {
+            return;
+        };
+        if automation::step_control(&mut self.tracks[i], &m.param) {
+            self.send_controls(i);
+        }
     }
 
     /// Sets a tied setting to `k` (0 to 1) of its range, and tells the
@@ -561,6 +588,11 @@ impl App {
             return;
         };
         automation::set_control(&mut self.tracks[i], &m.param, range.value(k));
+        self.send_controls(i);
+    }
+
+    /// Tells the engine track `i`'s mixer settings and sends.
+    fn send_controls(&mut self, i: usize) {
         let mix = self.tracks[i].mix;
         self.send(Command::SetMix { track: i, mix });
         let sends: Vec<(f32, bool)> = (self.sends_of(&self.tracks[i]).iter())
@@ -690,6 +722,7 @@ impl App {
         }
         let mut open = true;
         let mut remove = None;
+        let mut step = None;
         let buses: Vec<(String, String)> = (self.tracks.iter())
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
@@ -705,7 +738,7 @@ impl App {
                 if self.midi_maps.is_empty() {
                     ui.label(RichText::new("Nothing is tied yet.").weak());
                 }
-                egui::Grid::new("midi-maps").num_columns(3).show(ui, |ui| {
+                egui::Grid::new("midi-maps").num_columns(4).show(ui, |ui| {
                     for (i, m) in self.midi_maps.iter().enumerate() {
                         ui.label(format!("Controller {} (channel {})", m.cc, m.channel + 1));
                         let what = match self.tracks.iter().find(|t| t.key == m.track) {
@@ -715,7 +748,21 @@ impl App {
                             None => "a track that is gone".into(),
                         };
                         ui.label(what);
+                        let mut on = m.step;
                         if ui
+                            // ai: edit_midi_maps
+                            .checkbox(&mut on, "Each press steps")
+                            .on_hover_text(
+                                "For a footswitch: each press moves the setting on to its \
+                                 next choice (the next chain of a switching container), in \
+                                 place of following the pedal's position",
+                            )
+                            .changed()
+                        {
+                            step = Some((i, on));
+                        }
+                        if ui
+                            // ai: edit_midi_maps
                             .button("Remove")
                             .accessible_name(format!("Remove the tie for controller {}", m.cc))
                             .clicked()
@@ -745,6 +792,7 @@ impl App {
                         .selected_text(self.tracks[ti].name.as_str())
                         .show_ui(ui, |ui| {
                             for x in &self.tracks {
+                                // ai: view
                                 ui.selectable_value(
                                     &mut t.learn_track,
                                     Some(x.key.clone()),
@@ -765,6 +813,7 @@ impl App {
                         .selected_text(current)
                         .show_ui(ui, |ui| {
                             for c in &choices {
+                                // ai: view
                                 ui.selectable_value(
                                     &mut t.learn_param,
                                     c.param.clone(),
@@ -779,14 +828,19 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.label("Move a control on your MIDI device…");
+                        // ai: view
                         if ui.button("Cancel").clicked() {
                             t.learning = false;
                         }
                     });
+                // ai: edit_midi_maps
                 } else if ui.button("Learn").clicked() {
                     t.learning = true;
                 }
             });
+        if let Some((i, on)) = step {
+            self.midi_maps[i].step = on;
+        }
         if let Some(i) = remove {
             self.midi_maps.remove(i);
         }

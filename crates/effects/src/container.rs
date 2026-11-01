@@ -14,6 +14,10 @@
 //! - Mid and side: the sum (L+R)/2 and difference (L−R)/2, each run as
 //!   mono, then decoded back to left and right.
 //! - Left and right: each side run on its own, as mono.
+//! - Switch: every chain gets a copy and keeps running, but only one is
+//!   heard, such as a clean or a driven amp channel. Changing which one
+//!   fades across in about 30 ms, so it doesn't click, and as the chains
+//!   never stop, the one switched to is already warmed up.
 
 use daw_engine::graph::Lanes;
 
@@ -55,13 +59,27 @@ pub(crate) const LEFT_RIGHT: &[Param] = &[
     level("level2", "Right level"),
 ];
 
+pub(crate) const SWITCH: &[Param] = &[
+    Param::new("chains", "Chains", 0.0, 2.0, 0.0, Unit::Choice)
+        .choices(&["2 chains", "3 chains", "4 chains"]),
+    Param::new("heard", "Chain heard", 0.0, 3.0, 0.0, Unit::Choice)
+        .choices(&["Chain 1", "Chain 2", "Chain 3", "Chain 4"]),
+    level("level1", "Chain 1 level"),
+    level("level2", "Chain 2 level"),
+    level("level3", "Chain 3 level"),
+    level("level4", "Chain 4 level"),
+];
+
+/// Where the switch's "heard" setting is in its params.
+pub(crate) const HEARD: usize = 1;
+
 /// How many chains a container of `kind` has with these settings (in
 /// the order of its params), or 0 for an effect that isn't one.
 pub(crate) fn chains(kind: Kind, values: &[f64]) -> usize {
     let at = |i: usize| values.get(i).copied().unwrap_or(0.0).round().max(0.0) as usize;
     match kind {
         Kind::Parallel => (at(0) + 1).min(4),
-        Kind::Bands => (at(0) + 2).min(4),
+        Kind::Bands | Kind::Switch => (at(0) + 2).min(4),
         Kind::MidSide | Kind::LeftRight => 2,
         _ => 0,
     }
@@ -74,7 +92,7 @@ pub(crate) fn shown(kind: Kind, key: &str, count: usize) -> bool {
             .and_then(|d| d.parse::<usize>().ok())
     };
     match kind {
-        Kind::Parallel | Kind::Bands => {
+        Kind::Parallel | Kind::Bands | Kind::Switch => {
             if let Some(i) = n("level") {
                 i <= count
             } else if let Some(i) = n("cross") {
@@ -121,7 +139,7 @@ pub(crate) struct Container {
     /// The crossovers in use, low to high, in Hz.
     cross: [f64; 3],
     bands: [Bands; 2],
-    /// No settings taken yet: the first are reached at once.
+    /// Nothing played yet: the levels are reached at once.
     fresh: bool,
 }
 
@@ -185,6 +203,12 @@ impl Container {
     }
 
     pub(crate) fn split(&mut self, left: &[f32], right: &[f32], lanes: &mut Lanes, at: usize) {
+        // The settings it starts playing with are reached at once, not
+        // faded to: those of the first block played, which an automation
+        // lane may have set since it was made.
+        if std::mem::take(&mut self.fresh) {
+            self.now = self.target;
+        }
         let count = lanes.count();
         let n = left.len();
         match self.kind {
@@ -323,13 +347,17 @@ impl Dsp for Container {
                     self.target[b] = level(v[4 + b]);
                 }
             }
+            Kind::Switch => {
+                let count = chains(Kind::Switch, v);
+                let heard = (v[HEARD].round().max(0.0) as usize).min(count - 1);
+                for b in 0..4 {
+                    self.target[b] = if b == heard { level(v[2 + b]) } else { 0.0 };
+                }
+            }
             _ => {
                 self.target[0] = level(v[0]);
                 self.target[1] = level(v[1]);
             }
-        }
-        if std::mem::take(&mut self.fresh) {
-            self.now = self.target;
         }
     }
 
@@ -479,5 +507,75 @@ mod tests {
         assert_eq!(Kind::Parallel.chain_name(2, 4), "Chain 3");
         assert_eq!(Effect::new(Kind::Eq).chains(), 0);
         assert!(Kind::MidSide.is_container() && !Kind::Delay.is_container());
+    }
+
+    /// Runs a switch over `x`, with chain `b` turning the sound up
+    /// `b + 1` times, so each chain is told apart by its level; `heard`
+    /// is called before each block to change the settings.
+    fn switching(e: &Effect, x: &[f32], mut heard: impl FnMut(usize)) -> Vec<f32> {
+        let mut p = e.processor(RATE);
+        let count = e.chains();
+        let mut lanes = Lanes::new(count, BLOCK);
+        let mut out = vec![0.0; x.len()];
+        let mut right = vec![0.0; BLOCK];
+        for (n, at) in (0..x.len()).step_by(BLOCK).enumerate() {
+            heard(n);
+            let input = &x[at..at + BLOCK];
+            let s = p.as_split().expect("a container splits");
+            s.split(input, input, &mut lanes);
+            for b in 0..count {
+                let (l, r) = lanes.get_mut(b);
+                for v in l.iter_mut().chain(r.iter_mut()) {
+                    *v *= (b + 1) as f32;
+                }
+            }
+            s.join((input, input), &lanes, &mut out[at..at + BLOCK], &mut right);
+        }
+        out
+    }
+
+    #[test]
+    fn a_switch_plays_only_the_chain_heard_and_fades_across_without_a_click() {
+        let e = Effect::new(Kind::Switch);
+        assert_eq!(e.chains(), 2);
+        assert_eq!(e.heard(), Some(0));
+        let x = vec![0.5f32; BLOCK * 64];
+        let out = switching(&e, &x, |n| {
+            if n == 32 {
+                assert!(e.set_heard(1));
+            }
+        });
+        // Chain 1 alone before, chain 2 alone after.
+        assert!((out[BLOCK * 31] - 0.5).abs() < 1e-5);
+        assert!((out[BLOCK * 63] - 1.0).abs() < 1e-4);
+        // In between it moves a little each sample, never jumping.
+        let steepest = (out.windows(2))
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(steepest < 0.01, "a jump of {steepest}");
+        // Around 30 ms to get there, not longer.
+        let at = BLOCK * 32 + (0.03 * RATE as f64) as usize;
+        assert!((out[at] - 1.0).abs() < 0.06, "{}", out[at]);
+    }
+
+    #[test]
+    fn a_switch_keeps_to_its_chains_and_each_chain_has_a_level() {
+        let e = Effect::new(Kind::Switch);
+        e.set(0, 2.0); // 4 chains
+        assert_eq!(e.chains(), 4);
+        assert!(e.shown("level4"));
+        e.set_heard(3);
+        e.set(5, -6.0); // chain 4 at half
+        let x = vec![0.5f32; BLOCK * 32];
+        let out = switching(&e, &x, |_| {});
+        let want = 0.5 * 4.0 * 10f32.powf(-6.0 / 20.0);
+        assert!((out[BLOCK * 31] - want).abs() < 1e-4);
+        // Down to two chains: the fourth isn't there, so the last is heard.
+        e.set(0, 0.0);
+        assert_eq!(e.heard(), Some(1));
+        assert!(!e.shown("level3"));
+        assert!(!Effect::new(Kind::Parallel).set_heard(1));
+        assert_eq!(Effect::new(Kind::Parallel).heard(), None);
+        assert!(Kind::Switch.is_container());
     }
 }

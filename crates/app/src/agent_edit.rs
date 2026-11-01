@@ -259,7 +259,8 @@ impl App {
                     .or_else(|| self.lessons_tool(ctx, name, args))
                     .or_else(|| self.monitor_tool(name, args))
                     .or_else(|| self.practice_tool(name, args))
-                    .or_else(|| self.plugins_tool(name, args));
+                    .or_else(|| self.plugins_tool(name, args))
+                    .or_else(|| self.midi_tool(name, args));
             }
         })
     }

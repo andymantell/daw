@@ -410,6 +410,7 @@ impl ProjectDoc {
                 w.put(&m, "cc", mm.cc as i64);
                 w.put(&m, "track", mm.track.as_str());
                 w.put(&m, "param", mm.param.as_str());
+                w.put(&m, "step", mm.step);
             }
         }
 
@@ -709,6 +710,7 @@ impl ProjectDoc {
                     cc: int(m, "cc").unwrap_or(0).clamp(0, 127) as u8,
                     track,
                     param,
+                    step: boolean(m, "step").unwrap_or(false),
                 });
             }
         }
@@ -3317,6 +3319,7 @@ mod tests {
                 cc: 21,
                 track: "t1".into(),
                 param: "gain".into(),
+                step: true,
             }],
             ..Project::default()
         };

@@ -78,11 +78,12 @@ pub enum Kind {
     Bands,
     MidSide,
     LeftRight,
+    Switch,
 }
 
 impl Kind {
     /// In the order the effects list shows them.
-    pub const ALL: [Kind; 25] = [
+    pub const ALL: [Kind; 26] = [
         Kind::Eq,
         Kind::Compressor,
         Kind::Gate,
@@ -108,6 +109,7 @@ impl Kind {
         Kind::Bands,
         Kind::MidSide,
         Kind::LeftRight,
+        Kind::Switch,
     ];
 
     /// How projects name it. Never change one.
@@ -138,6 +140,7 @@ impl Kind {
             Kind::Bands => "band-split",
             Kind::MidSide => "mid-side",
             Kind::LeftRight => "left-right",
+            Kind::Switch => "switch",
         }
     }
 
@@ -173,6 +176,7 @@ impl Kind {
             Kind::Bands => "Split by frequency",
             Kind::MidSide => "Mid/side split",
             Kind::LeftRight => "Left/right split",
+            Kind::Switch => "Switch between chains",
         }
     }
 
@@ -180,7 +184,7 @@ impl Kind {
     pub fn is_container(self) -> bool {
         matches!(
             self,
-            Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight
+            Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight | Kind::Switch
         )
     }
 
@@ -237,6 +241,10 @@ impl Kind {
             Kind::Bands => "Two to four frequency bands, each with its own chain of effects",
             Kind::MidSide => "One chain for what's in the middle, one for the sides",
             Kind::LeftRight => "One chain for the left, one for the right",
+            Kind::Switch => {
+                "Two to four chains, one heard at a time, such as a clean and a driven amp \
+                 channel: switch by key, footswitch or automation"
+            }
         }
     }
 
@@ -267,6 +275,7 @@ impl Kind {
             Kind::Bands => container::BANDS,
             Kind::MidSide => container::MID_SIDE,
             Kind::LeftRight => container::LEFT_RIGHT,
+            Kind::Switch => container::SWITCH,
         }
     }
 
@@ -567,6 +576,27 @@ impl Effect {
         container::chains(self.kind, &values)
     }
 
+    /// For a container that switches between chains, the chain heard
+    /// now, from 0; `None` for any other effect.
+    pub fn heard(&self) -> Option<usize> {
+        (self.kind == Kind::Switch).then(|| {
+            let count = self.chains();
+            (self.get(container::HEARD).round().max(0.0) as usize).min(count - 1)
+        })
+    }
+
+    /// For a container that switches between chains, makes chain
+    /// `chain` (from 0, kept to the chains there are) the one heard.
+    /// False for any other effect.
+    pub fn set_heard(&self, chain: usize) -> bool {
+        if self.kind != Kind::Switch {
+            return false;
+        }
+        let last = self.chains() - 1;
+        self.set(container::HEARD, chain.min(last) as f64);
+        true
+    }
+
     /// Whether the setting `key` means anything with the settings now
     /// (a container's crossovers and levels past its last chain don't).
     pub fn shown(&self, key: &str) -> bool {
@@ -607,7 +637,7 @@ impl Effect {
             Kind::Vinyl => Box::new(lofi::Vinyl::new(rate)),
             Kind::Tape => Box::new(lofi::Tape::new(rate)),
             Kind::BitCrusher => Box::new(lofi::Crusher::new(rate)),
-            Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight => {
+            Kind::Parallel | Kind::Bands | Kind::MidSide | Kind::LeftRight | Kind::Switch => {
                 Box::new(container::Container::new(self.kind, rate))
             }
         };

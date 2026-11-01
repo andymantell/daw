@@ -2769,14 +2769,12 @@ impl eframe::App for App {
                     for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
                         app.menu_item(ui, c);
                     }
-                    ui.separator();
-                    ui.menu_button("Add note effect", |ui| {
-                        for k in 0..notefx::KINDS.len() {
-                            self.menu_item(ui, Cmd::AddNoteFx(k as u8));
-                        }
-                    });
+                    app.menu_gap();
+                    for k in 0..notefx::KINDS.len() {
+                        app.menu_item(ui, Cmd::AddNoteFx(k as u8));
+                    }
                     for c in [Cmd::NoteFxOnOff, Cmd::RenderNoteFx, Cmd::ClearNoteFx] {
-                        self.menu_item(ui, c);
+                        app.menu_item(ui, c);
                     }
                 });
                 self.top_menu(ui, "Notation", |app, ui| {

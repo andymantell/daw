@@ -106,7 +106,10 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_selection",
-        description: "The selected clips, by track and clip id, and the selected note clip.",
+        description: "The selected clips, by track and clip id, the selected note clip, \
+                      the mixer strips selected (by track id; their faders move together \
+                      when one is dragged), and whether the mixer shows narrow strips \
+                      (the mixer-narrow command switches it).",
         access: Access::Read,
         schema: no_args,
     },
@@ -1452,6 +1455,8 @@ impl App {
         json!({
             "clips": clips,
             "note_clip": self.timeline.note_sel,
+            "mixer_strips": self.desk.selected,
+            "mixer_narrow": self.desk.narrow,
         })
     }
 

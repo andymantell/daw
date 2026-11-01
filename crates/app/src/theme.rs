@@ -205,6 +205,14 @@ pub(crate) struct Colours {
     pub(crate) meter_low: Color32,
     pub(crate) meter_mid: Color32,
     pub(crate) meter_high: Color32,
+    /// The mixer desk: a strip's body, the fader's slot, its cap and the
+    /// line across the cap, and the name tag at the strip's foot.
+    pub(crate) desk: Color32,
+    pub(crate) fader_slot: Color32,
+    pub(crate) fader_cap: Color32,
+    pub(crate) fader_line: Color32,
+    pub(crate) scribble: Color32,
+    pub(crate) scribble_text: Color32,
     /// Messages: all well, take care, and something went wrong.
     pub(crate) good: Color32,
     pub(crate) warn: Color32,
@@ -471,6 +479,12 @@ impl Reader<'_> {
             meter_low: c("meter_low")?,
             meter_mid: c("meter_mid")?,
             meter_high: c("meter_high")?,
+            desk: c("desk")?,
+            fader_slot: c("fader_slot")?,
+            fader_cap: c("fader_cap")?,
+            fader_line: c("fader_line")?,
+            scribble: c("scribble")?,
+            scribble_text: c("scribble_text")?,
             good: c("good")?,
             warn: c("warn")?,
             error: c("error")?,
@@ -1320,6 +1334,16 @@ mod tests {
             ] {
                 need(&format!("meter {name}"), fg, c.meter_bg, 3.0);
             }
+            need("text on the desk", c.text, c.desk, 4.5);
+            need("the desk's scale", c.text_dim, c.desk, 4.5);
+            need(
+                "the line across a fader cap",
+                c.fader_line,
+                c.fader_cap,
+                3.0,
+            );
+            need("a fader cap's edge on the desk", c.text_dim, c.desk, 3.0);
+            need("names on scribble strips", c.scribble_text, c.scribble, 4.5);
             for (i, &track) in c.tracks.iter().enumerate() {
                 let fill = super::contrast::over(c.clip_fill.of(track), c.lane);
                 let fill = Color32::from_rgb(fill[0] as u8, fill[1] as u8, fill[2] as u8);

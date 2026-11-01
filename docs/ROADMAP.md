@@ -517,6 +517,11 @@ pane in `app/monitor.rs`. Owner checks on the interface's outputs in
   Drawn from theme tokens so each theme has its own desk look. The same
   commands and accessible names as the table today. See
   [research/MIXER_DESK.md](research/MIXER_DESK.md).
+  *Built 2026-11-01, at risk; the table is gone (Andy: desk only). Grouped
+  drags move the strips selected by their name tags. In a short mixer
+  pane each strip folds its routing into a menu; shorter still, the desk
+  starts scrolled to the faders. Review steps:
+  [review-queue/2.3-mixer-desk.md](review-queue/2.3-mixer-desk.md).*
 
 ### 2.4 Plugin hosting — depth (L)
 *Started 2026-10-29, at risk. Done so far: a choice per plugin (Settings

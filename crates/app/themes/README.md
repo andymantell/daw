@@ -47,6 +47,8 @@ can also be `track` (the track's colour) or `track 35%` (see-through).
 | `tempo`, `signature` | Tempo and time-signature changes on the ruler (labelled in `bg`) |
 | `clip_fill`, `clip_border`, `clip_text`, `clip_label` | Clips; `clip_label` is a label behind the name, or `none` |
 | `meter_bg`, `meter_low`, `meter_mid`, `meter_high` | Meters: below −12 dB, up to 0 dB, over |
+| `desk`, `fader_slot`, `fader_cap`, `fader_line` | The mixer desk: a strip's body, the fader's slot, its cap and the line across the cap (also the pan pot) |
+| `scribble`, `scribble_text` | The name tag at the foot of each mixer strip |
 | `good`, `warn`, `error` | Messages |
 | `texture`, `shadow` | The grain's specks, and shadows |
 | `tracks` | Track colours, used in turn, separated by spaces |

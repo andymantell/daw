@@ -228,6 +228,7 @@ pub(crate) enum Cmd {
     AssignFrets,
     PracticeMutePart,
     ContinuousScroll,
+    MixerNarrow,
     ImportMusicXml,
     ExportMusicXml,
     ExportTextTab,
@@ -2231,6 +2232,16 @@ pub(crate) const COMMANDS: &[Info] = &[
     .words("follow page continuous notation")
     .everyday(),
     info(
+        Cmd::MixerNarrow,
+        "mixer-narrow",
+        "View",
+        "Narrow mixer strips",
+        &[],
+    )
+    .hint("Mixer strips with only the fader, meter, pan, mute, solo and name, so more fit")
+    .words("desk channel strips compact width")
+    .everyday(),
+    info(
         Cmd::ImportMusicXml,
         "import-musicxml",
         "File",
@@ -3406,6 +3417,7 @@ impl App {
                 }
             }
             Cmd::ContinuousScroll => self.timeline.continuous = !self.timeline.continuous,
+            Cmd::MixerNarrow => self.desk.narrow = !self.desk.narrow,
             Cmd::ImportMusicXml => self.pick_musicxml_file(),
             Cmd::ExportMusicXml => self.export_notation(crate::notation::NotationFile::MusicXml),
             Cmd::ExportTextTab => self.export_notation(crate::notation::NotationFile::TextTab),

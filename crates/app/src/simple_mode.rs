@@ -333,11 +333,12 @@ mod ui_tests {
     fn on_the_mixer_leaves_out_routing() {
         for simple in [false, true] {
             let mut h = harness(simple);
-            h.state_mut().workspace.open(Pane::Mixer);
+            // Tall enough for the strips to show their routing.
+            h.state_mut().workspace.layout = crate::workspace::Layout::mixing();
             h.run();
             h.run();
             assert!(shown(&h, "Guitar volume"));
-            for label in ["Sends", "+ Add bus"] {
+            for label in ["Sends from Guitar", "+ Add bus"] {
                 assert_eq!(shown(&h, label), !simple, "{label}");
             }
         }

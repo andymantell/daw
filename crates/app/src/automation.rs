@@ -1589,8 +1589,9 @@ mod tests {
         let from = r.center();
         h.drag_at(from);
         h.step();
+        // Up the fader.
         for i in 1..=8 {
-            h.hover_at(from + vec2(i as f32 * 6.0, 0.0));
+            h.hover_at(from - vec2(0.0, i as f32 * 6.0));
             h.step();
             std::thread::sleep(Duration::from_millis(30));
         }
@@ -1601,7 +1602,7 @@ mod tests {
         // While held, the engine plays the fader, not the line.
         let s = h.state().session();
         assert!(s.tracks[0].automation.is_empty() || s.tracks[0].automation[0].live);
-        h.drop_at(from + vec2(48.0, 0.0));
+        h.drop_at(from - vec2(0.0, 48.0));
         assert!(until(&mut h, 2, |a| !a
             .automation
             .writing(&key, Lane::GAIN)));
@@ -1630,9 +1631,9 @@ mod tests {
         let from = r.center();
         h.drag_at(from);
         h.step();
-        h.hover_at(from + vec2(12.0, 0.0));
+        h.hover_at(from - vec2(0.0, 12.0));
         h.step();
-        h.drop_at(from + vec2(12.0, 0.0));
+        h.drop_at(from - vec2(0.0, 12.0));
         for _ in 0..5 {
             h.step();
             std::thread::sleep(Duration::from_millis(20));

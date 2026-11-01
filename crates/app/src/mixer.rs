@@ -11,9 +11,9 @@
 use daw_engine::engine::Command;
 use daw_engine::graph::{GroupSpec, Output, Session, TrackSpec};
 use daw_project::{ControlGroup, Send, TrackKind};
-use eframe::egui::{self, RichText, vec2};
+use eframe::egui::{self, Align, Color32, Layout, Rect, RichText, pos2, vec2};
 
-use crate::{App, Track, meters, spoken, theme};
+use crate::{App, Track, desk, spoken, theme};
 
 /// Takes a track spec out of its routing, for rendering it on its own
 /// (a stem, or frozen audio): straight to the master, with no sends,
@@ -71,6 +71,150 @@ enum Action {
     Parent(usize, Option<String>),
     Remove(usize),
     RemoveGroup(usize),
+    /// The faders of the other selected strips, by this many dB.
+    Follow(String, f32),
+    /// Select this strip: alone, or added to (or taken from) the rest.
+    Select(String, bool),
+}
+
+/// How the mixer desk is shown.
+#[derive(Default)]
+pub(crate) struct DeskView {
+    /// Strips with only the fader, meter, pan, mute, solo and name.
+    pub(crate) narrow: bool,
+    /// The strips selected, by track key: their faders move together.
+    pub(crate) selected: Vec<String>,
+}
+
+/// A row of controls on a strip.
+const ROW: f32 = 24.0;
+/// The pan pot's row.
+const PAN_ROW: f32 = 36.0;
+/// The name tag's row.
+const TAG_ROW: f32 = 28.0;
+/// Inside a strip's edge.
+const INSET: f32 = 4.0;
+
+/// Lays out a strip from the top down, each part in a rectangle of its
+/// own, so a control stays put whatever else on the strip changes.
+struct Rows {
+    rect: Rect,
+    y: f32,
+    salt: egui::Id,
+    n: usize,
+}
+
+impl Rows {
+    fn new(rect: Rect, salt: egui::Id) -> Rows {
+        Rows {
+            rect,
+            y: rect.top() + INSET,
+            salt,
+            n: 0,
+        }
+    }
+
+    /// The next `h` points of the strip, for `add` to draw in.
+    fn row<R>(&mut self, ui: &mut egui::Ui, h: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        let r = Rect::from_min_size(
+            pos2(self.rect.left() + INSET, self.y),
+            vec2(self.rect.width() - 2.0 * INSET, h),
+        );
+        self.y += h;
+        self.n += 1;
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(r)
+                .id_salt(self.salt.with(self.n))
+                .layout(Layout::left_to_right(Align::Center).with_main_align(Align::Center)),
+        );
+        child.spacing_mut().item_spacing.x = 3.0;
+        add(&mut child)
+    }
+
+    /// Leaves `h` points empty.
+    fn skip(&mut self, h: f32) {
+        self.y += h;
+        self.n += 1;
+    }
+}
+
+/// Mute, solo and arm lit in their own colours when on.
+fn lit<R>(ui: &mut egui::Ui, colour: Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let on = theme::look(ui.ctx()).c().bg;
+    ui.scope(|ui| {
+        let v = ui.visuals_mut();
+        v.selection.bg_fill = colour;
+        v.selection.stroke.color = on;
+        add(ui)
+    })
+    .inner
+}
+
+/// The size of a strip's fixed parts, and its fader's travel.
+struct Geometry {
+    width: f32,
+    /// Routing rows above the pan pot.
+    rows: usize,
+    travel: f32,
+    narrow: bool,
+    /// A short pane: arming and effects, the rest of the routing in a
+    /// menu.
+    compact: bool,
+}
+
+/// A part of a strip's routing section.
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    Source,
+    Arm,
+    Fx,
+    Out,
+    Sends,
+    Group,
+    Folder,
+    Take,
+}
+
+impl Part {
+    /// Its name in the compact strip's routing menu.
+    fn title(self) -> &'static str {
+        match self {
+            Part::Source => "In",
+            Part::Arm => "",
+            Part::Fx => "",
+            Part::Out => "Out",
+            Part::Sends => "Sends",
+            Part::Group => "Group",
+            Part::Folder => "Folder",
+            Part::Take => "Take",
+        }
+    }
+}
+
+/// What the strips' routing picks from.
+struct Routing {
+    inputs: usize,
+    direct: bool,
+    frozen: Vec<bool>,
+    buses: Vec<(String, String)>,
+    folders: Vec<(String, String)>,
+    /// Which buses, and which folders, each track may go to.
+    allowed: Vec<Vec<bool>>,
+    folders_ok: Vec<Vec<bool>>,
+    groups: Vec<ControlGroup>,
+}
+
+impl Geometry {
+    fn height(&self) -> f32 {
+        2.0 * INSET
+            + self.rows as f32 * ROW
+            + PAN_ROW
+            + self.travel
+            + desk::CAP_H
+            + 2.0 * ROW
+            + TAG_ROW
+    }
 }
 
 impl App {
@@ -98,16 +242,21 @@ impl App {
         self.rebuild();
     }
 
+    /// The mixer pane: a mixing desk, one vertical strip per track and
+    /// bus in the timeline's order, the control groups and the master
+    /// pinned on the right.
     pub(crate) fn mixer(&mut self, ui: &mut egui::Ui) {
         if self.tracks.is_empty() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("Drop audio or video files here to add tracks.").size(18.0));
                 ui.add_space(8.0);
+                // ai: add-audio-track
                 if ui.button("Or add an empty track to record on").clicked() {
                     self.tracks.push(Track::new("Track 1".into()));
                     self.rebuild();
                 }
+                // ai: add-instrument-track
                 if ui
                     .button("Or add an instrument track for notes")
                     .on_hover_text(
@@ -126,11 +275,141 @@ impl App {
             });
             return;
         }
+        let mut actions = Vec::new();
+        let mut rebuild = self.desk_toolbar(ui);
+        ui.add_space(4.0);
+
+        let narrow = self.desk.narrow;
+        let mut g = Geometry {
+            width: if narrow {
+                desk::NARROW_W
+            } else {
+                desk::STRIP_W
+            },
+            rows: if narrow { 0 } else { self.parts(false).len() },
+            travel: 0.0,
+            narrow,
+            compact: false,
+        };
+        // The fader takes what height is left, less room for a scroll
+        // bar. A pane too short for the whole strip shows the routing
+        // compactly; shorter still, the desk scrolls, starting at its
+        // foot so the faders show.
+        let height = ui.available_height() - 14.0;
+        if !narrow && height < g.height() + desk::MIN_TRAVEL {
+            g.rows = 2;
+            g.compact = true;
+        }
+        g.travel = desk::travel(height, g.height());
+
+        egui::ScrollArea::vertical()
+            .id_salt("desk")
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.allocate_ui_with_layout(
+                    vec2(ui.available_width(), g.height() + 14.0),
+                    Layout::right_to_left(Align::Min),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        self.master_strip(ui, &g, &mut actions);
+                        for gi in (0..self.groups.len()).rev() {
+                            self.group_strip(ui, &g, gi, &mut actions);
+                        }
+                        ui.separator();
+                        egui::ScrollArea::horizontal()
+                            .id_salt("desk strips")
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    rebuild |= self.track_strips(ui, &g, &mut actions);
+                                });
+                            });
+                    },
+                );
+            });
+        rebuild |= self.desk_actions(actions);
+        if rebuild {
+            self.rebuild();
+        }
+    }
+
+    /// The buttons along the top of the desk. Returns true if the tracks
+    /// changed.
+    fn desk_toolbar(&mut self, ui: &mut egui::Ui) -> bool {
+        let simple = self.simple.on;
         let inputs = self.input_count();
-        let direct = self.profile.as_ref().is_some_and(|p| p.direct_monitoring);
-        let frozen: Vec<bool> = (self.tracks.iter())
-            .map(|t| self.frozen_playing(t).is_some())
-            .collect();
+        let mut rebuild = false;
+        ui.horizontal_wrapped(|ui| {
+            // ai: add-audio-track
+            if ui.button("+ Add track").clicked() {
+                self.tracks
+                    .push(Track::new(format!("Track {}", self.tracks.len() + 1)));
+                rebuild = true;
+            }
+            // ai: add-instrument-track
+            if ui
+                .button("+ Add instrument track")
+                .on_hover_text(
+                    "A track that plays notes through an instrument: from a MIDI keyboard, \
+                     or drawn in the note editor",
+                )
+                .clicked()
+            {
+                let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
+                let t = Track::instrument(format!("Instrument {n}"));
+                if let Some(i) = &t.instrument {
+                    i.make_into(self.rate, &mut self.pending_instruments);
+                }
+                self.tracks.push(t);
+                rebuild = true;
+            }
+            if !simple {
+                // ai: add-bus
+                if ui
+                    .button("+ Add bus")
+                    .on_hover_text(
+                        "A bus: tracks can go to it (a group), or send a copy of their audio to \
+                         it for an effect they share (a return)",
+                    )
+                    .clicked()
+                {
+                    self.add_bus(TrackKind::Bus);
+                }
+                // ai: add-folder
+                if ui
+                    .button("+ Add folder")
+                    .on_hover_text(
+                        "A folder: tracks put in it sit under it and go through its fader and \
+                         effects",
+                    )
+                    .clicked()
+                {
+                    self.add_bus(TrackKind::Folder);
+                }
+                // ai: add-control-group
+                if ui
+                    .button("+ Add control group")
+                    .on_hover_text(
+                        "One fader and mute over several tracks, without summing their audio",
+                    )
+                    .clicked()
+                {
+                    self.add_control_group();
+                }
+            }
+            rebuild |= self.input_tracks_button(ui, inputs);
+            ui.separator();
+            // ai: mixer-narrow
+            ui.toggle_value(&mut self.desk.narrow, "Narrow strips")
+                .on_hover_text("Only the fader, meter, pan, mute, solo and name, so more fit");
+        });
+        rebuild
+    }
+
+    /// What every strip's routing picks from.
+    fn routing(&self) -> Routing {
         let buses: Vec<(String, String)> = (self.tracks.iter())
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
@@ -139,273 +418,395 @@ impl App {
             .filter(|t| t.kind == TrackKind::Folder)
             .map(|t| (t.key.clone(), t.name.clone()))
             .collect();
-        // Which buses each track may go to without its audio coming
-        // back round to it.
-        let allowed: Vec<Vec<bool>> = (0..self.tracks.len())
-            .map(|i| {
-                buses
-                    .iter()
-                    .map(|(k, _)| !self.feeds(k, &self.tracks[i].key))
-                    .collect()
-            })
-            .collect();
-        // Which folders each track may sit in, likewise.
-        let folders_ok: Vec<Vec<bool>> = (0..self.tracks.len())
-            .map(|i| {
-                folders
-                    .iter()
-                    .map(|(k, _)| !self.feeds(k, &self.tracks[i].key))
-                    .collect()
-            })
-            .collect();
-        let mut actions = Vec::new();
+        // Which buses (and folders) each track may go to without its
+        // audio coming back round to it.
+        let can = |list: &[(String, String)]| -> Vec<Vec<bool>> {
+            (0..self.tracks.len())
+                .map(|i| {
+                    list.iter()
+                        .map(|(k, _)| !self.feeds(k, &self.tracks[i].key))
+                        .collect()
+                })
+                .collect()
+        };
+        Routing {
+            inputs: self.input_count(),
+            direct: self.profile.as_ref().is_some_and(|p| p.direct_monitoring),
+            frozen: (self.tracks.iter())
+                .map(|t| self.frozen_playing(t).is_some())
+                .collect(),
+            allowed: can(&buses),
+            folders_ok: can(&folders),
+            buses,
+            folders,
+            groups: self.groups.clone(),
+        }
+    }
+
+    /// The routing parts a strip shows, top down.
+    fn parts(&self, compact: bool) -> Vec<Part> {
+        let mut parts = vec![Part::Source];
+        if !compact {
+            parts.extend([Part::Arm, Part::Fx]);
+        }
+        if !self.simple.on {
+            parts.extend([Part::Out, Part::Sends]);
+            if !self.groups.is_empty() {
+                parts.push(Part::Group);
+            }
+            if self.tracks.iter().any(|t| t.kind == TrackKind::Folder) {
+                parts.push(Part::Folder);
+            }
+        }
+        parts.push(Part::Take);
+        parts
+    }
+
+    /// Draws one part of track `i`'s strip. Returns true if the graph
+    /// must be rebuilt.
+    fn strip_part(
+        &mut self,
+        ui: &mut egui::Ui,
+        i: usize,
+        part: Part,
+        r: &Routing,
+        actions: &mut Vec<Action>,
+    ) -> bool {
         let mut rebuild = false;
-        let groups = self.groups.clone();
-        // The simpler mode leaves out the routing columns.
-        let simple = self.simple.on;
-        egui::Grid::new("tracks")
-            .num_columns(if simple { 10 } else { 13 })
-            .spacing(vec2(10.0, 10.0))
-            .striped(true)
-            .show(ui, |ui| {
-                for h in [
-                    "Track", "Input", "", "Level", "Volume", "Pan", "", "", "Effects", "Out",
-                    "Sends", "Group", "Take",
-                ] {
-                    if !(simple && matches!(h, "Out" | "Sends" | "Group")) {
-                        ui.strong(h);
+        let t = &mut self.tracks[i];
+        let name = t.name.clone();
+        match part {
+            // Where its sound comes from: an input, an instrument, or for
+            // a bus its name.
+            Part::Source if t.kind.is_bus() => {
+                let mut head = t.name.clone();
+                // ai: edit_track
+                let e = ui
+                    .add(egui::TextEdit::singleline(&mut head).desired_width(desk::STRIP_W - 14.0))
+                    .accessible_name(format!("Name of {name}"));
+                if e.changed() {
+                    t.name = head;
+                }
+            }
+            Part::Source if t.kind.plays_notes() => {
+                let open = self.instrument_open == Some(i);
+                let label = t.instrument.as_ref().map_or(
+                    if t.layers.is_empty() {
+                        "Instrument"
+                    } else {
+                        "Layers"
+                    },
+                    |i| match i.kind() {
+                        None | Some(daw_instruments::Kind::Synth) => "Synth",
+                        Some(daw_instruments::Kind::Sampler) => "Sampler",
+                        Some(daw_instruments::Kind::DrumSampler) => "Drum",
+                        Some(daw_instruments::Kind::DrumMachine) => "Drums",
+                        Some(daw_instruments::Kind::Slicer) => "Slicer",
+                    },
+                );
+                // ai: view
+                if ui
+                    .selectable_label(open, label)
+                    .accessible_name(format!("Instrument on {name}"))
+                    .on_hover_text(
+                        "The instrument that plays this track's notes, and its MIDI output",
+                    )
+                    .clicked()
+                {
+                    self.instrument_open = (!open).then_some(i);
+                }
+            }
+            Part::Source => {
+                // ai: set_track_input
+                rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, r.inputs);
+            }
+            // Arm, monitor and practice mute; for a bus, what it is.
+            Part::Arm if t.kind.is_bus() => {
+                ui.label(
+                    RichText::new(match t.kind {
+                        TrackKind::Folder => "folder",
+                        _ => "bus",
+                    })
+                    .weak(),
+                );
+            }
+            Part::Arm => {
+                let record = theme::look(ui.ctx()).c().record;
+                let direct = r.direct;
+                ui.add_enabled_ui(t.input.is_some() || t.kind.plays_notes(), |ui| {
+                    // ai: set_track_input
+                    rebuild |= lit(ui, record, |ui| ui.toggle_value(&mut t.arm, "R"))
+                        .accessible_name(format!("Arm {name} for recording"))
+                        .on_hover_text(if t.kind.plays_notes() {
+                            "Arm: record notes from MIDI devices (R records)"
+                        } else {
+                            "Arm for recording (R records)"
+                        })
+                        .changed();
+                    // ai: set_track_input
+                    let m = ui
+                        .add_enabled(!direct, egui::Button::selectable(t.monitor, "M"))
+                        .accessible_name(format!("Monitor {name}"));
+                    if m.clicked() {
+                        t.monitor = !t.monitor;
+                        rebuild = true;
+                    }
+                    m.on_hover_text(if t.kind.plays_notes() {
+                        "Monitor: play MIDI devices through this track's instrument"
+                    } else {
+                        "Monitor: hear the input through this track"
+                    })
+                    .on_disabled_hover_text("Direct monitoring is on (Settings → Audio device)");
+                });
+                if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
+                    ui.toggle_value(&mut t.practice_mute, "🎧")
+                        .accessible_name(format!("Practice mute {name}"))
+                        .on_hover_text("Practice mute: silence this part to play it yourself");
+                }
+            }
+            // The insert effects.
+            Part::Fx => {
+                let fx = t.fx.len() + self.proj.missing_fx.get(&t.key).map_or(0, Vec::len);
+                let label = match (fx, r.frozen[i]) {
+                    (0, _) => "FX".to_string(),
+                    (n, false) => format!("FX ({n})"),
+                    // Plays its frozen audio.
+                    (n, true) => format!("FX ({n}) ❄"),
+                };
+                let open = self.effects.open_track == Some(i);
+                // ai: view
+                if ui
+                    .selectable_label(open, label)
+                    .accessible_name(format!("Effects on {name}"))
+                    .on_hover_text(
+                        t.fx.iter()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" → "),
+                    )
+                    .clicked()
+                {
+                    self.effects.open_track = (!open).then_some(i);
+                    self.effects.open_master = false;
+                }
+            }
+            Part::Out => rebuild |= output_picker(ui, i, t, &r.buses, &r.allowed[i]),
+            Part::Sends => {
+                if let Some(changed) = sends_menu(ui, i, t, &r.buses, &r.allowed[i]) {
+                    if changed {
+                        rebuild = true;
+                    } else {
+                        actions.push(Action::Sends(i));
                     }
                 }
-                ui.end_row();
-                let n = self.tracks.len();
-                for i in 0..n {
-                    let (before, mut head) = {
-                        let t = &self.tracks[i];
-                        (t.heard(), t.name.clone())
-                    };
-                    let t = &mut self.tracks[i];
-                    let name = t.name.clone();
-                    ui.horizontal(|ui| {
-                        if t.parent.is_some() {
-                            ui.add_space(14.0);
-                        }
-                        // The track's colour, as on its lane.
-                        let (tag, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
-                        let c = theme::look(ui.ctx()).c().track(i);
-                        ui.painter().rect_filled(tag, 2.0, c);
-                        if t.kind.is_bus() {
-                            let r = ui
-                                .add(egui::TextEdit::singleline(&mut head).desired_width(90.0))
-                                .accessible_name(format!("Name of {name}"));
-                            if r.changed() {
-                                t.name = head.clone();
-                            }
-                            ui.label(
-                                RichText::new(match t.kind {
-                                    TrackKind::Folder => "folder",
-                                    _ => "bus",
-                                })
-                                .weak(),
-                            );
-                        } else {
-                            let label = ui.label(&t.name);
-                            if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
-                                label.on_hover_text(c.path.display().to_string());
-                            }
-                        }
-                    });
-                    if t.kind.is_bus() {
-                        // No input, arming or monitoring on a bus.
-                        ui.label("");
-                        ui.label("");
-                    } else {
-                        if t.kind.plays_notes() {
-                            let open = self.instrument_open == Some(i);
-                            let label = t.instrument.as_ref().map_or(if t.layers.is_empty() { "Instrument" } else { "Layers" }, |i| {
-                                match i.kind() {
-                                    None | Some(daw_instruments::Kind::Synth) => "Synth",
-                                    Some(daw_instruments::Kind::Sampler) => "Sampler",
-                                    Some(daw_instruments::Kind::DrumSampler) => "Drum",
-                                    Some(daw_instruments::Kind::DrumMachine) => "Drums",
-                                    Some(daw_instruments::Kind::Slicer) => "Slicer",
-                                }
-                            });
-                            if ui
-                                .selectable_label(open, label)
-                                .accessible_name(format!("Instrument on {name}"))
-                                .on_hover_text("The instrument that plays this track's notes, and its MIDI output")
-                                .clicked()
-                            {
-                                self.instrument_open = (!open).then_some(i);
-                            }
-                        } else {
-                            rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, inputs);
-                        }
-                        ui.horizontal(|ui| {
-                            ui.add_enabled_ui(t.input.is_some() || t.kind.plays_notes(), |ui| {
-                                let arm = RichText::new("R").color(if t.arm {
-                                    theme::look(ui.ctx()).c().record
-                                } else {
-                                    ui.visuals().text_color()
-                                });
-                                rebuild |= ui
-                                    .toggle_value(&mut t.arm, arm)
-                                    .accessible_name(format!("Arm {name} for recording"))
-                                    .on_hover_text(if t.kind.plays_notes() {
-                                        "Arm: record notes from MIDI devices (R records)"
-                                    } else {
-                                        "Arm for recording (R records)"
-                                    })
-                                    .changed();
-                                let m = ui
-                                    .add_enabled(!direct, egui::Button::selectable(t.monitor, "M"))
-                                    .accessible_name(format!("Monitor {name}"));
-                                if m.clicked() {
-                                    t.monitor = !t.monitor;
-                                    rebuild = true;
-                                }
-                                m.on_hover_text(if t.kind.plays_notes() {
-                                    "Monitor: play MIDI devices through this track's instrument"
-                                } else {
-                                    "Monitor: hear the input through this track"
-                                })
-                                    .on_disabled_hover_text(
-                                        "Direct monitoring is on (Settings → Audio device)",
-                                    );
-                            });
-                        });
-                    }
-                    let rms = self.ctl.status().track_rms(i);
-                    if meters::strip(ui, t.meter, rms)
-                        .on_hover_text("Peak and RMS. Click for the meters")
-                        .clicked()
-                    {
-                        self.meters.show(Some(t.key.clone()));
-                    }
-                    let first = spoken::start(ui);
-                    ui.name_inputs(format!("{name} volume"), |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut t.mix.gain_db, -60.0..=12.0)
-                                .suffix(" dB")
-                                .step_by(0.1),
-                        )
-                    });
-                    spoken::level(ui, first, t.mix.gain_db as f64);
-                    let first = spoken::start(ui);
-                    ui.add(egui::Slider::new(&mut t.mix.pan, -1.0..=1.0).show_value(false))
-                        .accessible_name(format!("{name} pan"))
-                        .on_hover_text("Pan");
-                    spoken::pan(ui, first, t.mix.pan as f64);
-                    ui.toggle_value(&mut t.mix.mute, "Mute")
-                        .accessible_name(format!("Mute {name}"));
-                    ui.horizontal(|ui| {
-                        ui.toggle_value(&mut t.mix.solo, "Solo")
-                            .accessible_name(format!("Solo {name}"));
-                        if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
-                            ui.toggle_value(&mut t.practice_mute, "🎧")
-                                .accessible_name(format!("Practice mute {name}"))
-                                .on_hover_text(
-                                    "Practice mute: silence this part to play it yourself",
-                                );
-                        }
-                    });
-                    let fx = t.fx.len() + self.proj.missing_fx.get(&t.key).map_or(0, Vec::len);
-                    let label = match (fx, frozen[i]) {
-                        (0, _) => "FX".to_string(),
-                        (n, false) => format!("FX ({n})"),
-                        // Plays its frozen audio.
-                        (n, true) => format!("FX ({n}) ❄"),
-                    };
-                    let open = self.effects.open_track == Some(i);
-                    if ui
-                        .selectable_label(open, label)
-                        .accessible_name(format!("Effects on {name}"))
-                        .on_hover_text(
-                            t.fx.iter()
-                                .map(|f| f.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(" → "),
-                        )
-                        .clicked()
-                    {
-                        self.effects.open_track = (!open).then_some(i);
-                        self.effects.open_master = false;
-                    }
-                    if !simple {
-                        rebuild |= output_picker(ui, i, t, &buses, &allowed[i]);
-                        if let Some(changed) = sends_menu(ui, i, t, &buses, &allowed[i]) {
-                            if changed {
-                                rebuild = true;
-                            } else {
-                                actions.push(Action::Sends(i));
-                            }
-                        }
-                        rebuild |= group_picker(ui, i, t, &groups);
-                    }
-                    if t.kind.is_bus() {
-                        ui.horizontal(|ui| {
-                            if !folders.is_empty()
-                                && let Some(p) = folder_picker(ui, i, t, &folders, &folders_ok[i])
-                            {
-                                actions.push(Action::Parent(i, p));
-                            }
-                            if ui
-                                .button("Remove")
-                                .accessible_name(format!("Remove {name}"))
-                                .on_hover_text("Remove this bus; tracks on it go to the master")
-                                .clicked()
-                            {
-                                actions.push(Action::Remove(i));
-                            }
-                        });
-                    } else {
-                        ui.horizontal(|ui| {
-                            if !folders.is_empty()
-                                && let Some(p) = folder_picker(ui, i, t, &folders, &folders_ok[i])
-                            {
-                                actions.push(Action::Parent(i, p));
-                            }
-                            if let Some(k) = crate::take_picker(ui, i, t) {
-                                actions.push(Action::Take(i, k));
-                            }
-                        });
-                    }
-                    ui.end_row();
-                    if t.heard() != before {
-                        actions.push(Action::Mix(i, t.heard()));
-                    }
+            }
+            Part::Group => rebuild |= group_picker(ui, i, t, &r.groups),
+            Part::Folder => {
+                if let Some(p) = folder_picker(ui, i, t, &r.folders, &r.folders_ok[i]) {
+                    actions.push(Action::Parent(i, p));
                 }
-                // The master channel: the whole mix's level, fader and
-                // effects, with nowhere to go.
-                ui.label(RichText::new("Master").strong());
-                ui.label("");
+            }
+            // The take that plays, or for a bus, removing it.
+            Part::Take if t.kind.is_bus() => {
+                // ai: delete_track
+                if ui
+                    .button("Remove")
+                    .accessible_name(format!("Remove {name}"))
+                    .on_hover_text("Remove this bus; tracks on it go to the master")
+                    .clicked()
+                {
+                    actions.push(Action::Remove(i));
+                }
+            }
+            Part::Take => {
+                if let Some(k) = crate::take_picker(ui, i, t) {
+                    actions.push(Action::Take(i, k));
+                }
+            }
+        }
+        rebuild
+    }
+
+    /// Every track's and bus's strip. Returns true if the routing
+    /// changed.
+    fn track_strips(&mut self, ui: &mut egui::Ui, g: &Geometry, actions: &mut Vec<Action>) -> bool {
+        let r = self.routing();
+        let parts = self.parts(g.compact);
+        let mut rebuild = false;
+        let n = self.tracks.len();
+        for i in 0..n {
+            let rms = self.ctl.status().track_rms(i);
+            let colour = theme::look(ui.ctx()).c().track(i);
+            let selected = self.desk.selected.contains(&self.tracks[i].key);
+            let before = self.tracks[i].heard();
+            let name = self.tracks[i].name.clone();
+            let key = self.tracks[i].key.clone();
+            let (_, rect) = ui.allocate_space(vec2(g.width, g.height()));
+            desk::paint_strip(ui, rect);
+            let mut rows = Rows::new(rect, egui::Id::unique(("strip", &key)));
+            if g.compact {
+                // A short pane: the effects, with the rest of the routing
+                // in a menu beside them, then arming.
+                rows.row(ui, ROW, |ui| {
+                    rebuild |= self.strip_part(ui, i, Part::Fx, &r, actions);
+                    let menu = ui.menu_button("▾", |ui| {
+                        ui.set_min_width(200.0);
+                        for &p in &parts {
+                            ui.horizontal(|ui| {
+                                ui.label(p.title());
+                                rebuild |= self.strip_part(ui, i, p, &r, actions);
+                            });
+                        }
+                    });
+                    menu.response
+                        .accessible_name(format!("Routing of {name}"))
+                        .on_hover_text("Input, out, sends, group, folder and take");
+                });
+                rows.row(ui, ROW, |ui| {
+                    rebuild |= self.strip_part(ui, i, Part::Arm, &r, actions);
+                });
+            } else if !g.narrow {
+                for &p in &parts {
+                    rows.row(ui, ROW, |ui| {
+                        rebuild |= self.strip_part(ui, i, p, &r, actions);
+                    });
+                }
+            }
+            let t = &mut self.tracks[i];
+            // The pan pot.
+            rows.row(ui, PAN_ROW, |ui| {
+                let first = spoken::start(ui);
+                // ai: set_parameter
+                desk::pan_pot(
+                    ui,
+                    egui::Id::unique(("pan", &key)),
+                    &mut t.mix.pan,
+                    &format!("{name} pan"),
+                    30.0,
+                );
+                spoken::pan(ui, first, t.mix.pan as f64);
+                if !g.narrow {
+                    ui.label(RichText::new(desk::pan_short(t.mix.pan)).small().weak());
+                }
+            });
+            // The fader, its scale and the meter beside it.
+            let mut db = t.mix.gain_db as f64;
+            let moved = rows.row(ui, g.travel + desk::CAP_H, |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                desk::scale(ui, g.travel, g.narrow);
+                let first = spoken::start(ui);
+                // ai: set_parameter
+                let moved = desk::fader(
+                    ui,
+                    egui::Id::unique(("fader", &key)),
+                    &mut db,
+                    g.travel,
+                    &format!("{name} volume"),
+                );
+                spoken::level(ui, first, db);
+                let reading = desk::Reading { peak: t.meter, rms };
+                // ai: view
+                let m = desk::meter(
+                    ui,
+                    egui::Id::unique(("meter", &key)),
+                    g.travel,
+                    reading,
+                    &name,
+                );
+                if m.meter.clicked() {
+                    self.meters.show(Some(key.clone()));
+                }
+                moved
+            });
+            // Its level as a number, to read or type.
+            rows.row(ui, ROW, |ui| {
+                let first = spoken::start(ui);
+                // ai: set_parameter
+                ui.name_inputs(format!("{name} level in dB"), |ui| {
+                    ui.add_sized(
+                        [g.width - 2.0 * INSET - 6.0, 18.0],
+                        // ai: set_parameter
+                        egui::DragValue::new(&mut db)
+                            .range(desk::MIN_DB..=desk::MAX_DB)
+                            .speed(0.1)
+                            .max_decimals(1)
+                            .custom_formatter(|v, _| {
+                                if v <= desk::MIN_DB {
+                                    "off".into()
+                                } else {
+                                    format!("{v:.1} dB")
+                                }
+                            }),
+                    )
+                });
+                spoken::level(ui, first, db);
+            });
+            if db != t.mix.gain_db as f64 {
+                let old = t.mix.gain_db;
+                t.mix.gain_db = db as f32;
+                if moved.dragged && selected {
+                    actions.push(Action::Follow(key.clone(), t.mix.gain_db - old));
+                }
+            }
+            // Mute and solo, lit when on.
+            rows.row(ui, ROW, |ui| {
+                let c = theme::look(ui.ctx()).c().clone();
+                let (mute, solo) = if g.narrow {
+                    ("M", "S")
+                } else {
+                    ("Mute", "Solo")
+                };
+                // ai: set_parameter
+                lit(ui, c.warn, |ui| ui.toggle_value(&mut t.mix.mute, mute))
+                    .accessible_name(format!("Mute {name}"));
+                // ai: set_parameter
+                lit(ui, c.good, |ui| ui.toggle_value(&mut t.mix.solo, solo))
+                    .accessible_name(format!("Solo {name}"));
+            });
+            // The name tag: click to select.
+            let tag = rows.row(ui, TAG_ROW, |ui| {
+                // ai: view
+                desk::scribble(
+                    ui,
+                    egui::Id::unique(("tag", &key)),
+                    g.width - 2.0 * INSET,
+                    &name,
+                    colour,
+                    Some(selected),
+                )
+            });
+            if tag.clicked() {
+                let add = ui.input(|i| i.modifiers.command || i.modifiers.shift);
+                actions.push(Action::Select(key.clone(), add));
+            }
+            if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
+                tag.on_hover_text(c.path.display().to_string());
+            }
+            if t.heard() != before {
+                actions.push(Action::Mix(i, t.heard()));
+            }
+        }
+        rebuild
+    }
+
+    /// The master strip: the whole mix's effects, fader and meter.
+    fn master_strip(&mut self, ui: &mut egui::Ui, g: &Geometry, actions: &mut Vec<Action>) {
+        let (_, rect) = ui.allocate_space(vec2(g.width, g.height()));
+        desk::paint_strip(ui, rect);
+        let mut rows = Rows::new(rect, egui::Id::unique("master strip"));
+        if !g.narrow {
+            if !g.compact {
+                rows.row(ui, ROW, |ui| {
+                    ui.label(RichText::new("Master").strong());
+                });
+            }
+            rows.row(ui, ROW, |ui| {
+                // ai: view
                 if ui.button("Meters…").clicked() {
                     self.meters.show(None);
                 }
-                let rms = self.ctl.status().master_rms();
-                if meters::strip(ui, self.master_meter, rms)
-                    .on_hover_text("Peak and RMS. Click for the meters")
-                    .clicked()
-                {
-                    self.meters.show(None);
-                }
-                let before = self.master.mix.gain_db;
-                let first = spoken::start(ui);
-                // ai: set_parameter
-                ui.name_inputs("Master volume", |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut self.master.mix.gain_db, -60.0..=12.0)
-                            .suffix(" dB")
-                            .step_by(0.1),
-                    )
-                });
-                spoken::level(ui, first, self.master.mix.gain_db as f64);
-                if self.master.mix.gain_db != before {
-                    actions.push(Action::MasterGain(self.master.mix.gain_db));
-                }
-                ui.label("");
-                ui.label("");
-                ui.label("");
+            });
+            rows.row(ui, ROW, |ui| {
                 let fx = self.master.fx.len()
                     + (self.proj.missing_fx.get(daw_project::Master::KEY)).map_or(0, Vec::len);
                 let label = match fx {
@@ -430,99 +831,172 @@ impl App {
                     self.effects.open_master = !open;
                     self.effects.open_track = None;
                 }
-                ui.end_row();
             });
-        ui.horizontal(|ui| {
-            if ui.button("+ Add track").clicked() {
-                self.tracks
-                    .push(Track::new(format!("Track {}", self.tracks.len() + 1)));
-                rebuild = true;
-            }
-            if ui
-                .button("+ Add instrument track")
-                .on_hover_text(
-                    "A track that plays notes through an instrument: from a MIDI keyboard, \
-                     or drawn in the note editor",
-                )
-                .clicked()
-            {
-                let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
-                let t = Track::instrument(format!("Instrument {n}"));
-                if let Some(i) = &t.instrument {
-                    i.make_into(self.rate, &mut self.pending_instruments);
-                }
-                self.tracks.push(t);
-                rebuild = true;
-            }
-            if !simple {
-                if ui
-                    .button("+ Add bus")
-                    .on_hover_text(
-                        "A bus: tracks can go to it (a group), or send a copy of their audio to \
-                         it for an effect they share (a return)",
-                    )
-                    .clicked()
-                {
-                    self.add_bus(TrackKind::Bus);
-                }
-                if ui
-                    .button("+ Add folder")
-                    .on_hover_text(
-                        "A folder: tracks put in it sit under it and go through its fader and \
-                         effects",
-                    )
-                    .clicked()
-                {
-                    self.add_bus(TrackKind::Folder);
-                }
-                if ui
-                    .button("+ Add control group")
-                    .on_hover_text(
-                        "One fader and mute over several tracks, without summing their audio",
-                    )
-                    .clicked()
-                {
-                    self.add_control_group();
-                }
-            }
-            rebuild |= self.input_tracks_button(ui, inputs);
-        });
-        if !self.groups.is_empty() {
-            ui.add_space(8.0);
-            ui.strong("Control groups");
-            egui::Grid::new("control-groups")
-                .num_columns(4)
-                .spacing(vec2(10.0, 6.0))
-                .show(ui, |ui| {
-                    for (gi, g) in self.groups.iter_mut().enumerate() {
-                        let before = (g.gain_db, g.mute);
-                        ui.add(egui::TextEdit::singleline(&mut g.name).desired_width(100.0))
-                            .accessible_name(format!("Name of control group {}", gi + 1));
-                        let first = spoken::start(ui);
-                        ui.name_inputs(format!("{} volume", g.name), |ui| {
-                            ui.add(
-                                egui::Slider::new(&mut g.gain_db, -60.0..=12.0)
-                                    .suffix(" dB")
-                                    .step_by(0.1),
-                            )
-                        });
-                        spoken::level(ui, first, g.gain_db);
-                        ui.toggle_value(&mut g.mute, "Mute")
-                            .accessible_name(format!("Mute {}", g.name));
-                        if ui
-                            .button("Remove")
-                            .accessible_name(format!("Remove {}", g.name))
-                            .clicked()
-                        {
-                            actions.push(Action::RemoveGroup(gi));
-                        }
-                        ui.end_row();
-                        if (g.gain_db, g.mute) != before {
-                            actions.push(Action::Group(gi));
-                        }
-                    }
-                });
+            rows.skip(g.rows.saturating_sub(3) as f32 * ROW);
         }
+        rows.skip(PAN_ROW);
+        let mut db = self.master.mix.gain_db as f64;
+        let rms = self.ctl.status().master_rms();
+        let reading = desk::Reading {
+            peak: self.master_meter,
+            rms,
+        };
+        rows.row(ui, g.travel + desk::CAP_H, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            desk::scale(ui, g.travel, g.narrow);
+            let first = spoken::start(ui);
+            // ai: set_parameter
+            desk::fader(
+                ui,
+                egui::Id::unique("master fader"),
+                &mut db,
+                g.travel,
+                "Master volume",
+            );
+            spoken::level(ui, first, db);
+            // ai: view
+            let m = desk::meter(
+                ui,
+                egui::Id::unique("master meter"),
+                g.travel,
+                reading,
+                "Master",
+            );
+            if m.meter.clicked() {
+                self.meters.show(None);
+            }
+        });
+        rows.row(ui, ROW, |ui| {
+            let first = spoken::start(ui);
+            // ai: set_parameter
+            ui.name_inputs("Master level in dB", |ui| {
+                ui.add_sized(
+                    [g.width - 2.0 * INSET - 6.0, 18.0],
+                    // ai: set_parameter
+                    egui::DragValue::new(&mut db)
+                        .range(desk::MIN_DB..=desk::MAX_DB)
+                        .speed(0.1)
+                        .max_decimals(1)
+                        .suffix(" dB"),
+                )
+            });
+            spoken::level(ui, first, db);
+        });
+        if db != self.master.mix.gain_db as f64 {
+            self.master.mix.gain_db = db as f32;
+            actions.push(Action::MasterGain(self.master.mix.gain_db));
+        }
+        rows.skip(ROW);
+        let accent = theme::look(ui.ctx()).c().accent;
+        rows.row(ui, TAG_ROW, |ui| {
+            desk::scribble(
+                ui,
+                egui::Id::unique("master tag"),
+                g.width - 2.0 * INSET,
+                "Master",
+                accent,
+                None,
+            );
+        });
+    }
+
+    /// A control group's strip: its name, fader and mute.
+    fn group_strip(
+        &mut self,
+        ui: &mut egui::Ui,
+        g: &Geometry,
+        gi: usize,
+        actions: &mut Vec<Action>,
+    ) {
+        let (_, rect) = ui.allocate_space(vec2(g.width, g.height()));
+        desk::paint_strip(ui, rect);
+        let grp = &mut self.groups[gi];
+        let before = (grp.gain_db, grp.mute);
+        let id = grp.id.clone();
+        let mut rows = Rows::new(rect, egui::Id::unique(("group strip", &id)));
+        if !g.narrow {
+            rows.row(ui, ROW, |ui| {
+                // ai: edit_control_group
+                ui.add(egui::TextEdit::singleline(&mut grp.name).desired_width(g.width - 14.0))
+                    .accessible_name(format!("Name of control group {}", gi + 1));
+            });
+            if !g.compact {
+                rows.row(ui, ROW, |ui| {
+                    ui.label(RichText::new("control group").weak().small());
+                });
+            }
+            rows.row(ui, ROW, |ui| {
+                // ai: edit_control_group
+                if ui
+                    .button("Remove")
+                    .accessible_name(format!("Remove {}", grp.name))
+                    .clicked()
+                {
+                    actions.push(Action::RemoveGroup(gi));
+                }
+            });
+            rows.skip(g.rows.saturating_sub(3) as f32 * ROW);
+        }
+        rows.skip(PAN_ROW);
+        let name = grp.name.clone();
+        rows.row(ui, g.travel + desk::CAP_H, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            desk::scale(ui, g.travel, g.narrow);
+            let first = spoken::start(ui);
+            // ai: edit_control_group
+            desk::fader(
+                ui,
+                egui::Id::unique(("group fader", &id)),
+                &mut grp.gain_db,
+                g.travel,
+                &format!("{name} volume"),
+            );
+            spoken::level(ui, first, grp.gain_db);
+        });
+        rows.row(ui, ROW, |ui| {
+            let first = spoken::start(ui);
+            // ai: edit_control_group
+            ui.name_inputs(format!("{name} level in dB"), |ui| {
+                ui.add_sized(
+                    [g.width - 2.0 * INSET - 6.0, 18.0],
+                    // ai: edit_control_group
+                    egui::DragValue::new(&mut grp.gain_db)
+                        .range(desk::MIN_DB..=desk::MAX_DB)
+                        .speed(0.1)
+                        .max_decimals(1)
+                        .suffix(" dB"),
+                )
+            });
+            spoken::level(ui, first, grp.gain_db);
+        });
+        rows.row(ui, ROW, |ui| {
+            let warn = theme::look(ui.ctx()).c().warn;
+            // ai: edit_control_group
+            lit(ui, warn, |ui| {
+                ui.toggle_value(&mut grp.mute, if g.narrow { "M" } else { "Mute" })
+            })
+            .accessible_name(format!("Mute {name}"));
+        });
+        let dim = theme::look(ui.ctx()).c().text_dim;
+        rows.row(ui, TAG_ROW, |ui| {
+            desk::scribble(
+                ui,
+                egui::Id::unique(("group tag", &id)),
+                g.width - 2.0 * INSET,
+                &name,
+                dim,
+                None,
+            );
+        });
+        if (grp.gain_db, grp.mute) != before {
+            actions.push(Action::Group(gi));
+        }
+    }
+
+    /// Does what the strips asked. Returns true if the graph must be
+    /// rebuilt.
+    fn desk_actions(&mut self, actions: Vec<Action>) -> bool {
+        let mut rebuild = false;
         for a in actions {
             match a {
                 Action::Mix(track, mix) => self.send(Command::SetMix { track, mix }),
@@ -570,10 +1044,38 @@ impl App {
                     }
                     rebuild = true;
                 }
+                Action::Follow(key, by) => self.follow_fader(&key, by),
+                Action::Select(key, add) => {
+                    let sel = &mut self.desk.selected;
+                    if !add {
+                        let only = sel.len() == 1 && sel[0] == key;
+                        sel.clear();
+                        if !only {
+                            sel.push(key);
+                        }
+                    } else if let Some(at) = sel.iter().position(|k| *k == key) {
+                        sel.remove(at);
+                    } else {
+                        sel.push(key);
+                    }
+                }
             }
         }
-        if rebuild {
-            self.rebuild();
+        rebuild
+    }
+
+    /// Moves the faders of the selected strips other than `key` by `by`
+    /// dB, keeping their levels apart as they were.
+    pub(crate) fn follow_fader(&mut self, key: &str, by: f32) {
+        let keys = self.desk.selected.clone();
+        for k in keys.iter().filter(|k| *k != key) {
+            let Some(i) = self.track_index(k) else {
+                continue;
+            };
+            let t = &mut self.tracks[i];
+            t.mix.gain_db = (t.mix.gain_db + by).clamp(desk::MIN_DB as f32, desk::MAX_DB as f32);
+            let mix = t.heard();
+            self.send(Command::SetMix { track: i, mix });
         }
     }
 
@@ -663,12 +1165,14 @@ fn output_picker(
     };
     let before = t.output.clone();
     egui::ComboBox::from_id_salt(("output", i))
-        .width(90.0)
+        .width(76.0)
         .selected_text(name(&t.output))
         .show_ui(ui, |ui| {
+            // ai: edit_track
             ui.selectable_value(&mut t.output, None, name(&None));
             for ((key, n), ok) in buses.iter().zip(allowed) {
                 if *key != t.key && *ok {
+                    // ai: edit_track
                     ui.selectable_value(&mut t.output, Some(key.clone()), n);
                 }
             }
@@ -707,18 +1211,22 @@ fn sends_menu(
                 let before = (s.gain_db, s.mute, s.pre_fader);
                 let first = spoken::start(ui);
                 ui.add(
+                    // ai: set_send
                     egui::Slider::new(&mut s.gain_db, -60.0..=12.0)
                         .suffix(" dB")
                         .step_by(0.1),
                 )
                 .accessible_name(format!("Send to {to} level"));
                 spoken::level(ui, first, s.gain_db);
+                // ai: set_send
                 ui.toggle_value(&mut s.pre_fader, "Pre")
                     .accessible_name(format!("Send to {to} before the fader"))
                     .on_hover_text("Pre-fader: the track's volume leaves this send alone");
+                // ai: set_send
                 ui.toggle_value(&mut s.mute, "Mute")
                     .accessible_name(format!("Mute send to {to}"));
                 if ui
+                    // ai: set_send
                     .button("✕")
                     .accessible_name(format!("Remove send to {to}"))
                     .clicked()
@@ -746,6 +1254,7 @@ fn sends_menu(
         } else {
             ui.menu_button("Add send to…", |ui| {
                 for (k, n) in free {
+                    // ai: set_send
                     if ui.button(n).clicked() {
                         t.sends.push(Send::to(k.clone()));
                         result = Some(true);
@@ -777,11 +1286,13 @@ fn group_picker(ui: &mut egui::Ui, i: usize, t: &mut Track, groups: &[ControlGro
     };
     let before = t.group.clone();
     egui::ComboBox::from_id_salt(("group", i))
-        .width(80.0)
+        .width(76.0)
         .selected_text(name(&t.group))
         .show_ui(ui, |ui| {
+            // ai: edit_track
             ui.selectable_value(&mut t.group, None, "None");
             for g in groups {
+                // ai: edit_track
                 ui.selectable_value(&mut t.group, Some(g.id.clone()), &g.name);
             }
         })
@@ -808,12 +1319,14 @@ fn folder_picker(
     };
     let mut pick = t.parent.clone();
     egui::ComboBox::from_id_salt(("folder", i))
-        .width(90.0)
+        .width(76.0)
         .selected_text(name(&pick))
         .show_ui(ui, |ui| {
+            // ai: edit_track
             ui.selectable_value(&mut pick, None, "No folder");
             for ((k, n), ok) in folders.iter().zip(allowed) {
                 if *k != t.key && *ok {
+                    // ai: edit_track
                     ui.selectable_value(&mut pick, Some(k.clone()), n);
                 }
             }
@@ -833,6 +1346,7 @@ mod tests {
 
     use daw_engine::graph::Output;
     use daw_project::{ProjectDoc, ProjectFolder, TrackKind};
+    use eframe::egui;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
@@ -1011,6 +1525,9 @@ mod tests {
     #[test]
     fn removing_a_bus_sends_its_tracks_to_the_master() {
         let mut h = harness();
+        // Tall enough for the strips to show their routing.
+        h.state_mut().workspace.layout = crate::workspace::Layout::mixing();
+        settle(&mut h);
         h.get_by_label("Or add an empty track to record on").click();
         settle(&mut h);
         h.get_by_label("+ Add bus").click();
@@ -1104,5 +1621,120 @@ mod tests {
         only_direct.tracks[2].clips.clear();
         let stem = render(&super::through_bus(&only_direct, 1));
         assert!(stem.iter().flatten().all(|x| x.abs() < 1e-6));
+    }
+
+    /// The desk end to end, as an assistant and a person share it: what
+    /// an assistant sets shows on the fader and is read out; the fader,
+    /// dragged or stepped from the keyboard, is what the assistant then
+    /// reads (the test harness spreads clicks over frames, so it can't
+    /// double-click); selected strips move together; and the
+    /// narrow strips are a command.
+    #[test]
+    fn the_desk_and_an_assistant_work_the_same_faders() {
+        use egui::Key;
+        use egui::accesskit::Role;
+        use egui_kittest::Node;
+        use egui_kittest::kittest::NodeT;
+        use serde_json::json;
+
+        use crate::agent::driver::Driver;
+
+        let mut d = Driver::new();
+        let id = |v: serde_json::Value| v["track"].as_str().unwrap().to_string();
+        let a = id(d.call("add_track", json!({"kind": "audio"})).unwrap());
+        let b = id(d.call("add_track", json!({"kind": "audio"})).unwrap());
+        d.app().workspace.layout = crate::workspace::Layout::mixing();
+        d.h.run();
+        let gain = |d: &mut Driver, t: &str| -> f64 {
+            let p = d.call("get_project", json!({"track": t})).unwrap();
+            p["tracks"][0]["gain_db"].as_f64().unwrap()
+        };
+        fn slider<'a>(h: &'a Harness<'static, App>, name: &'a str) -> Node<'a> {
+            h.query_all_by_label(name)
+                .find(|n| n.accesskit_node().role() == Role::Slider)
+                .unwrap_or_else(|| panic!("no fader named {name}"))
+        }
+
+        // An assistant sets a level: the fader shows it, in words.
+        d.call(
+            "set_parameter",
+            json!({"track": a, "param": "gain", "value": -6.0}),
+        )
+        .unwrap();
+        d.h.run();
+        let f = slider(&d.h, "Audio 1 volume");
+        assert_eq!(f.accesskit_node().value().as_deref(), Some("-6.0 dB"));
+
+        // Dragged up, it rises from where it was (no jump to the
+        // pointer), and the assistant reads the new level.
+        let r = slider(&d.h, "Audio 1 volume").rect();
+        let from = egui::pos2(r.center().x, r.bottom() - 4.0);
+        d.h.drag_at(from);
+        d.h.run();
+        for i in 1..=4 {
+            d.h.hover_at(from - egui::vec2(0.0, i as f32 * 5.0));
+            d.h.run();
+        }
+        d.h.drop_at(from - egui::vec2(0.0, 20.0));
+        d.h.run();
+        let up = gain(&mut d, &a);
+        assert!(up > -6.0 && up < 0.0, "pushed up a little from -6 dB: {up}");
+        assert_eq!(
+            d.app().session().tracks[0].mix.gain_db as f64,
+            up,
+            "and the engine has it"
+        );
+
+        // From the keyboard: Up raises it half a dB.
+        slider(&d.h, "Audio 1 volume").focus();
+        d.h.run();
+        d.h.key_press(Key::ArrowUp);
+        d.h.run();
+        assert!((gain(&mut d, &a) - (up + 0.5)).abs() < 1e-6);
+
+        // Two strips selected by their name tags: dragging one fader
+        // moves the other by as much.
+        d.call(
+            "set_parameter",
+            json!({"track": b, "param": "gain", "value": -10.0}),
+        )
+        .unwrap();
+        d.h.get_by_label("Select Audio 1").click();
+        d.h.run();
+        d.h.get_by_label("Select Audio 2")
+            .click_modifiers(egui::Modifiers::COMMAND);
+        d.h.run();
+        let sel = d.call("get_selection", json!({})).unwrap();
+        assert_eq!(sel["mixer_strips"], json!([a, b]));
+        let a0 = gain(&mut d, &a);
+        let r = slider(&d.h, "Audio 1 volume").rect();
+        let from = r.center();
+        d.h.drag_at(from);
+        d.h.run();
+        d.h.hover_at(from + egui::vec2(0.0, 10.0));
+        d.h.run();
+        d.h.drop_at(from + egui::vec2(0.0, 30.0));
+        d.h.run();
+        let (ga, gb) = (gain(&mut d, &a), gain(&mut d, &b));
+        assert!(ga < a0, "pulled down: {ga}");
+        assert!(
+            (gb - (-10.0 + ga - a0)).abs() < 1e-4,
+            "followed by as much: {gb} vs {ga} from {a0}"
+        );
+
+        // Narrow strips, from the command an assistant runs.
+        let wide = slider(&d.h, "Audio 1 volume").rect().center().x;
+        d.command("mixer-narrow");
+        d.h.run();
+        assert_eq!(
+            d.call("get_selection", json!({})).unwrap()["mixer_narrow"],
+            true
+        );
+        let x = slider(&d.h, "Audio 1 volume").rect().center().x;
+        assert!(x < wide, "the strip is narrower");
+        assert!(
+            d.h.query_by_label("Sends from Audio 1").is_none(),
+            "routing hidden"
+        );
     }
 }

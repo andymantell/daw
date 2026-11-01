@@ -236,7 +236,8 @@ impl Kind {
                 "Fewer bits and a lower sample rate, for the grit of early samplers"
             }
             Kind::Parallel => {
-                "Up to four chains of effects side by side, mixed with the untouched sound"
+                "Up to four chains of effects side by side. The untouched sound can be \
+                 mixed in too: its Dry level starts off"
             }
             Kind::Bands => "Two to four frequency bands, each with its own chain of effects",
             Kind::MidSide => "One chain for what's in the middle, one for the sides",

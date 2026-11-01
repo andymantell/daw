@@ -1063,6 +1063,61 @@ mod tests {
         .unwrap();
         assert_eq!(instrument(&mut d, &t)["outputs"][0]["to"], json!(null));
     }
+
+    /// Song test 3: analysing a drum machine whose kick went to a bus
+    /// failed with "routed to a track that isn't there".
+    #[test]
+    fn a_drum_machine_with_an_output_on_a_bus_can_be_heard_alone() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "drum-machine"}))
+                .unwrap(),
+            "track",
+        );
+        let bus = id(
+            d.call("add_track", json!({"kind": "bus"})).unwrap(),
+            "track",
+        );
+        {
+            use daw_instruments::drum_machine as dm;
+            let app = d.app();
+            let ti = app.track_index(&t).unwrap();
+            let b = app.tracks[ti]
+                .instrument
+                .as_ref()
+                .unwrap()
+                .builtin_ref()
+                .unwrap();
+            b.params().set(dm::pad_at(0, dm::pad::OUTPUT), 3.0);
+        }
+        d.call(
+            "set_instrument_output",
+            json!({"track": t, "output": 3, "to": bus}),
+        )
+        .unwrap();
+        let kick = daw_instruments::drum_machine::FIRST_NOTE;
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 1, "notes": [
+                {"beat": 0.0, "beats": 0.5, "pitch": kick, "velocity": 110},
+                {"beat": 1.0, "beats": 0.5, "pitch": kick, "velocity": 110}
+            ]}),
+        )
+        .unwrap();
+        let range = |track: &str| json!({"track": track, "from_bar": 1, "to_bar": 2});
+        // The track alone has its kick, though the kick goes to the bus.
+        let alone = d.call("analyse", range(&t)).unwrap();
+        assert!(
+            alone["sample_peak_dbfs"].as_f64().unwrap() > -40.0,
+            "{alone}"
+        );
+        // And in the mix the bus carries it.
+        let on_bus = d.call("analyse", range(&bus)).unwrap();
+        assert!(
+            on_bus["sample_peak_dbfs"].as_f64().unwrap() > -40.0,
+            "{on_bus}"
+        );
+    }
 }
 
 /// An assistant loading an SFZ library onto a sampler and mixing it.

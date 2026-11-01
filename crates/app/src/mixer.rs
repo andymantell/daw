@@ -22,6 +22,10 @@ pub(crate) fn alone(spec: &mut TrackSpec) {
     spec.output = Output::Master;
     spec.sends.clear();
     spec.group = None;
+    // Extra instrument outputs routed to buses (a drum machine's kick
+    // to its own bus) come back through the track, so all it plays is
+    // heard, and no route names a bus that isn't in the session.
+    spec.instrument_outputs.clear();
     for i in &mut spec.inserts {
         i.sidechain = None;
     }

@@ -210,6 +210,10 @@ pub struct Track {
     pub versions: Vec<TrackVersion>,
     /// The version playing, by id, while there are versions.
     pub version: Option<String>,
+    /// Note effects (an arpeggiator, chords…) that an instrument track's
+    /// notes go through before its instrument, in order. Shared by every
+    /// version of the track, like its notation lane.
+    pub note_fx: Vec<NoteFx>,
 }
 
 /// A version of a track: its clips, note clips, comps, effects,
@@ -229,6 +233,19 @@ impl TrackVersion {
     /// document keeps its body where the track's was, so two people
     /// making a track's first versions at once share it.
     pub const FIRST: &'static str = "first";
+}
+
+/// A note effect on an instrument track: which one (such as
+/// `arpeggiator`), whether it is switched off, and its settings by
+/// name. The app knows each kind's settings and their ranges; one it
+/// doesn't know is kept as it is, switched off.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NoteFx {
+    pub id: String,
+    pub kind: String,
+    pub bypass: bool,
+    /// Sorted by name.
+    pub params: Vec<(String, f64)>,
 }
 
 /// How a track's notes are shown as notation (roadmap 3.8, decision
@@ -352,6 +369,7 @@ impl Track {
             notation: None,
             versions: Vec::new(),
             version: None,
+            note_fx: Vec::new(),
         }
     }
 

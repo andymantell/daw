@@ -713,6 +713,8 @@ pub struct Ctx<'a> {
     pub read: Reader<'a>,
     /// Makes and runs plugin instruments.
     pub effects: &'a mut Effects,
+    /// The song's key, which some note effects follow.
+    pub scale: Option<daw_project::Scale>,
 }
 
 /// What came of showing the window this frame.
@@ -869,6 +871,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                         shown.layer = edit.or(shown.layer);
                     });
                 ui.separator();
+                note_fx_section(ui, t, cx.scale, &mut shown);
                 note_repeat_picker(ui, t, &mut shown.changed);
                 midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
                 return;
@@ -883,6 +886,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                     slot_controls(ui, slot, &mut t.instrument_outputs, &mut cx, &mut shown);
                 });
             ui.separator();
+            note_fx_section(ui, t, cx.scale, &mut shown);
             note_repeat_picker(ui, t, &mut shown.changed);
             midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
         });
@@ -918,6 +922,19 @@ pub(crate) fn slot_controls(
         slot.renew(cx.rate, cx.pending);
         shown.changed = true;
     }
+}
+
+/// The track's note effects (Phase 4, A6), at the head of its chain.
+fn note_fx_section(
+    ui: &mut egui::Ui,
+    t: &mut crate::Track,
+    scale: Option<daw_project::Scale>,
+    shown: &mut Shown,
+) {
+    let edited = crate::notefx::controls(ui, &t.key, &mut t.note_fx, scale);
+    shown.changed |= edited.changed;
+    shown.cmd = edited.cmd.or(shown.cmd);
+    ui.separator();
 }
 
 /// Note-repeat: off, or how often held keys and pads play again.
@@ -1811,6 +1828,7 @@ impl crate::App {
                 pending: &mut pending,
                 read: &read,
                 effects: &mut self.effects,
+                scale: self.scale,
             },
         );
         self.pending_instruments.extend(pending);

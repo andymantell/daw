@@ -46,6 +46,7 @@ mod mixer;
 mod monitor;
 mod notation;
 mod note_tools;
+mod notefx;
 mod notes;
 mod notes_editor;
 mod patterns;
@@ -129,6 +130,9 @@ struct Track {
     /// Note-repeat (roadmap 3.3): held live notes play again at this
     /// rate, while on. Kept for this run only, like monitoring.
     note_repeat: Option<daw_project::StepRate>,
+    /// Note effects (Phase 4, A6), as in the project: the notes go
+    /// through them before the instrument.
+    note_fx: Vec<daw_project::NoteFx>,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
     /// The track rendered through its effects, as the document has it.
@@ -187,6 +191,7 @@ impl Track {
             layers: Vec::new(),
             midi_out: None,
             note_repeat: None,
+            note_fx: Vec::new(),
             fx: Vec::new(),
             frozen: None,
             frozen_audio: None,
@@ -1016,6 +1021,10 @@ impl App {
             spec.layers = t.layers.iter().map(layers::Layer::spec).collect();
             spec.notes_live = t.kind.plays_notes() && (t.arm || t.monitor);
             spec.note_repeat = t.note_repeat.map(|r| daw_engine::time::Ticks(r.ticks()));
+            if t.kind.plays_notes() {
+                spec.note_fx = notefx::specs(&t.note_fx);
+                spec.note_scale = notefx::scale_spec(self.scale);
+            }
             spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
             self.route(t, &mut spec);
             spec.automation = self.lane_specs(t);
@@ -2759,6 +2768,15 @@ impl eframe::App for App {
                     app.menu_gap();
                     for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
                         app.menu_item(ui, c);
+                    }
+                    ui.separator();
+                    ui.menu_button("Add note effect", |ui| {
+                        for k in 0..notefx::KINDS.len() {
+                            self.menu_item(ui, Cmd::AddNoteFx(k as u8));
+                        }
+                    });
+                    for c in [Cmd::NoteFxOnOff, Cmd::RenderNoteFx, Cmd::ClearNoteFx] {
+                        self.menu_item(ui, c);
                     }
                 });
                 self.top_menu(ui, "Notation", |app, ui| {

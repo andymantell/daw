@@ -37,6 +37,7 @@ use crate::layers::{self, Held, LayerNode, LayerSpec};
 use crate::metronome::Clicks;
 use crate::midi::{Event, Expression, Instrument, Kind, MAX_EVENTS, Outputs};
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
+use crate::notefx::{self, NoteFxSpec, ScaleSpec};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
 use crate::stretch::{Feed, Stretcher};
 use crate::time::{Frames, TempoMap, Ticks};
@@ -495,6 +496,12 @@ pub struct TrackSpec {
     /// Note-repeat (roadmap 3.3): live notes held down play again every
     /// this many ticks, from when the first was pressed, until let go.
     pub note_repeat: Option<Ticks>,
+    /// Note effects (Phase 4, A6), in order: every note, from clips or
+    /// played live, goes through them before the instrument and the
+    /// MIDI output.
+    pub note_fx: Vec<NoteFxSpec>,
+    /// The key and scale the note effects that use one follow.
+    pub note_scale: ScaleSpec,
     /// A MIDI output port (as the app numbers them) the track's notes
     /// go to, as well as its instrument.
     pub midi_out: Option<usize>,
@@ -530,6 +537,8 @@ impl TrackSpec {
             layers: Vec::new(),
             notes_live: false,
             note_repeat: None,
+            note_fx: Vec::new(),
+            note_scale: ScaleSpec::CHROMATIC,
             midi_out: None,
             mix: Mix::default(),
             inserts: Vec::new(),
@@ -929,6 +938,21 @@ pub(crate) struct InstrumentNode {
     pub inst: Option<Box<dyn Instrument>>,
 }
 
+/// Where a block of `n` frames from `from` (timeline frames, each
+/// output frame `speed` of them) is in musical time, for note effects.
+fn clock(tempo: &TempoMap, from: f64, speed: f64, playing: bool) -> notefx::Clock {
+    let t = tempo.ticks_at(Frames(from.floor() as i64));
+    let per = tempo.tempo_at(t).as_f64() * crate::time::PPQ as f64
+        / 60.0
+        / tempo.sample_rate().max(1) as f64;
+    let base = tempo.frames_at(t).0 as f64;
+    notefx::Clock {
+        at: t.0 as f64 + (from - base).max(0.0) * per,
+        per_frame: per * if speed > 0.0 { speed } else { 1.0 },
+        playing,
+    }
+}
+
 /// The most live notes note-repeat holds at once.
 const MAX_HELD: usize = 16;
 
@@ -1009,6 +1033,8 @@ pub(crate) struct TrackNode {
     pub repeat: Option<f64>,
     pub held: Vec<(u8, u8, u8, u32)>,
     pub repeat_in: f64,
+    /// Its note effects, when it has any.
+    pub note_fx: Option<Box<notefx::Chain>>,
     pub midi_out: Option<usize>,
     /// This block's events, in frame order; capacity [`MAX_EVENTS`].
     pub events: Vec<Event>,
@@ -1877,6 +1903,8 @@ impl Session {
                 }),
                 held: Vec::with_capacity(MAX_HELD),
                 repeat_in: 0.0,
+                note_fx: (!t.note_fx.is_empty())
+                    .then(|| Box::new(notefx::Chain::new(&t.note_fx, t.note_scale))),
                 midi_out: t.midi_out,
                 events: Vec::with_capacity(MAX_EVENTS),
                 sounding: Vec::with_capacity(MAX_SOUNDING),
@@ -2333,6 +2361,14 @@ impl Graph {
                 }
             }
             t.events.sort_by_key(|e| e.frame);
+            if let Some(fx) = &mut t.note_fx {
+                let from = match &rate {
+                    Some(r) if play => r.u + t.latency as f64 * r.speed,
+                    _ => (pos + t.latency) as f64,
+                };
+                let speed = rate.as_ref().map_or(1.0, |r| r.speed);
+                fx.process(&mut t.events, n, clock(&self.tempo, from, speed, play));
+            }
             if let Some(port) = t.midi_out
                 && let Some(out) = midi_out.as_mut()
             {
@@ -2572,6 +2608,16 @@ impl Graph {
                 t.repeat_in = o.repeat_in;
             }
             t.was_playing = o.was_playing;
+            // Note effects with the same effects carry on; others stop
+            // what they made.
+            let carried = match (&mut t.note_fx, &mut o.note_fx) {
+                (Some(fx), Some(old)) => fx.adopt(old, &mut t.events),
+                (None, Some(old)) => {
+                    old.stop(&mut t.events);
+                    false
+                }
+                _ => false,
+            };
             for &k in &o.sounding {
                 let on = &o.notes[k];
                 let same = t.notes.iter().position(|nn| {
@@ -2584,6 +2630,9 @@ impl Graph {
                         .events
                         .push(Event::note_off(0, on.channel, on.pitch, k as u32)),
                 }
+            }
+            if carried && let Some(fx) = &mut t.note_fx {
+                fx.ends(&mut t.events);
             }
             if !t.events.is_empty() {
                 if let Some(InstrumentNode {

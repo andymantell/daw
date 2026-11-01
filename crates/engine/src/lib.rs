@@ -14,6 +14,7 @@ pub mod meter;
 pub mod metronome;
 pub mod midi;
 pub mod monitor;
+pub mod notefx;
 pub mod preview;
 pub mod process;
 pub mod record;

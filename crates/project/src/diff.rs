@@ -539,6 +539,17 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             n => format!("Automation changed ({n} lanes)"),
         });
     }
+    if before.note_fx != after.note_fx {
+        let names =
+            |t: &Track| -> Vec<String> { t.note_fx.iter().map(|f| f.kind.clone()).collect() };
+        out.push(if names(before) == names(after) {
+            "Note effect settings changed".into()
+        } else if after.note_fx.is_empty() {
+            "Note effects taken off".into()
+        } else {
+            format!("Note effects now: {}", names(after).join(", "))
+        });
+    }
     if before.notation != after.notation {
         out.push(match (&before.notation, &after.notation) {
             (None, Some(_)) => "Notation lane shown".into(),

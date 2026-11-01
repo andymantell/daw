@@ -1,6 +1,6 @@
 # Phase 4 A3 Track and effect chain presets
 
-Screenshots: `app-presets.png`, `app-save-preset.png` and
+Screenshots (in the project's screenshots folder): `app-presets.png`, `app-save-preset.png` and
 `app-effects-presets.png`. (In the cloud screenshots some symbols show as
 boxes, as the renderer there lacks those glyphs.)
 

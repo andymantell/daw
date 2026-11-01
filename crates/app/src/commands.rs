@@ -44,6 +44,16 @@ pub(crate) enum Cmd {
     InsertBars,
     DeleteBars,
     TimeWindow,
+    Sections,
+    LoopSection,
+    DuplicateSection,
+    DeleteSection,
+    SectionEarlier,
+    SectionLater,
+    AddToPlayOrder,
+    PlayOrder,
+    WriteOrder,
+    ClearPlayOrder,
     HitPoint,
     HitPoints,
     Timecode,
@@ -671,6 +681,89 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Put in empty bars, or take bars out, anywhere in the song")
     .words("insert delete time add remove bars gap shift"),
+    info(Cmd::Sections, "sections", "Edit", "Sections…", &[])
+        .hint("Loop, copy, move or delete a section, and try the sections in another order")
+        .words("arrange arranger arrangement verse chorus solo bridge song parts form"),
+    info(
+        Cmd::LoopSection,
+        "loop-section",
+        "Edit",
+        "Practise this section",
+        &[],
+    )
+    .hint("Loops the section the playhead is in, to practise it")
+    .words("loop practice repeat verse chorus"),
+    info(
+        Cmd::DuplicateSection,
+        "duplicate-section",
+        "Edit",
+        "Copy this section after itself",
+        &[],
+    )
+    .hint("Puts a copy of the playhead's section straight after it, on every track")
+    .words("duplicate repeat again verse chorus arrange"),
+    info(
+        Cmd::DeleteSection,
+        "delete-section",
+        "Edit",
+        "Delete this section",
+        &[],
+    )
+    .hint("Takes the playhead's section out of every track, closing the gap")
+    .words("remove cut verse chorus arrange"),
+    info(
+        Cmd::SectionEarlier,
+        "section-earlier",
+        "Edit",
+        "Move this section earlier",
+        &[],
+    )
+    .hint("Swaps the playhead's section with the one before it")
+    .words("rearrange arrange order swap up"),
+    info(
+        Cmd::SectionLater,
+        "section-later",
+        "Edit",
+        "Move this section later",
+        &[],
+    )
+    .hint("Swaps the playhead's section with the one after it")
+    .words("rearrange arrange order swap down"),
+    info(
+        Cmd::AddToPlayOrder,
+        "add-to-play-order",
+        "Edit",
+        "Add this section to the play order",
+        &[],
+    )
+    .hint("Adds the playhead's section to the end of the play order")
+    .words("arrangement arrange sequence playlist repeat"),
+    info(
+        Cmd::PlayOrder,
+        "play-order",
+        "Transport",
+        "Play the sections in the play order",
+        &[],
+    )
+    .hint("Plays the play order's sections one after another, round and round")
+    .words("arrangement arrange sequence playlist audition try"),
+    info(
+        Cmd::WriteOrder,
+        "write-play-order",
+        "Edit",
+        "Write the play order into the song",
+        &[],
+    )
+    .hint("Lays the song out in the play order, so it plays that way from start to end")
+    .words("flatten arrangement arrange render commit apply"),
+    info(
+        Cmd::ClearPlayOrder,
+        "clear-play-order",
+        "Edit",
+        "Clear the play order",
+        &[],
+    )
+    .words("arrangement arrange reset empty"),
     info(
         Cmd::HitPoint,
         "hit-point",
@@ -2181,6 +2274,13 @@ impl App {
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
             Cmd::SaveTrackPreset | Cmd::SaveChainPreset => !self.tracks.is_empty(),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
+            Cmd::LoopSection
+            | Cmd::DuplicateSection
+            | Cmd::DeleteSection
+            | Cmd::SectionEarlier
+            | Cmd::SectionLater
+            | Cmd::AddToPlayOrder => !self.markers.is_empty(),
+            Cmd::PlayOrder | Cmd::WriteOrder | Cmd::ClearPlayOrder => !self.arrangement.is_empty(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             _ => true,
         }
@@ -2441,6 +2541,16 @@ impl App {
             Cmd::InsertBars => self.insert_loop_bars(),
             Cmd::DeleteBars => self.delete_loop_bars(),
             Cmd::TimeWindow => self.open_time_window(),
+            Cmd::Sections
+            | Cmd::LoopSection
+            | Cmd::DuplicateSection
+            | Cmd::DeleteSection
+            | Cmd::SectionEarlier
+            | Cmd::SectionLater
+            | Cmd::AddToPlayOrder
+            | Cmd::PlayOrder
+            | Cmd::WriteOrder
+            | Cmd::ClearPlayOrder => self.section_command(cmd),
             Cmd::Timecode => self.timecode.shown = !self.timecode.shown,
             Cmd::TimecodeFromFilm => self.timecode_from_film(),
             Cmd::FrameForward => self.step_frame(1),

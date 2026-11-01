@@ -21,7 +21,7 @@ kits.rs 8
 latency.rs 3
 layers.rs 14
 lessons.rs 0
-main.rs 51
+main.rs 29
 meters.rs 4
 mixer.rs 33
 monitor.rs 0
@@ -46,7 +46,7 @@ tempo.rs 12
 theme.rs 4
 timeline.rs 79
 timing.rs 6
-trainer.rs 4
+trainer.rs 0
 tuner.rs 2
 update.rs 5
 versions.rs 11

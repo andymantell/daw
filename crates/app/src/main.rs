@@ -29,6 +29,7 @@ mod agent_layers;
 mod agent_lessons;
 mod agent_monitor;
 mod agent_notes;
+mod agent_practice;
 mod agent_routing;
 mod agent_takes;
 mod assistants;
@@ -1794,6 +1795,7 @@ impl App {
         ui.horizontal(|ui| {
             let playing = self.ctl.status().playing();
             if ui
+                // ai: play
                 .button(if playing { "⏹ Stop" } else { "▶ Play" })
                 .on_hover_text(self.commands.hover(Cmd::PlayStop))
                 .clicked()
@@ -1801,6 +1803,7 @@ impl App {
                 self.toggle_play();
             }
             if ui
+                // ai: to-start
                 .button("⏮")
                 .accessible_name("Back to the start")
                 .on_hover_text(self.commands.hover(Cmd::ToStart))
@@ -1814,6 +1817,7 @@ impl App {
                 ui.visuals().text_color()
             });
             if ui
+                // ai: record
                 .selectable_label(self.recording, rec)
                 .on_hover_text(self.commands.hover(Cmd::Record))
                 .clicked()
@@ -1842,6 +1846,7 @@ impl App {
             ui.label("Tempo");
             let t = ui
                 .add(
+                    // ai: set_tempo
                     egui::DragValue::new(&mut self.tempo_bpm)
                         .range(20.0..=300.0)
                         .speed(0.2)
@@ -1850,6 +1855,7 @@ impl App {
                 .accessible_name("Tempo");
             ui.label("Time signature");
             let b = ui
+                // ai: set_tempo
                 .add(egui::DragValue::new(&mut self.beats_per_bar).range(1..=12))
                 .accessible_name("Beats per bar");
             ui.label("/");
@@ -1858,6 +1864,7 @@ impl App {
                 self.time_changed();
             }
             if ui
+                // ai: view
                 .button("Changes…")
                 .on_hover_text("Tempo and time signature changes later in the song")
                 .clicked()
@@ -1867,6 +1874,7 @@ impl App {
         });
         ui.horizontal(|ui| {
             let mut m = self.metronome;
+            // ai: metronome
             ui.checkbox(&mut m.enabled, "Metronome")
                 .on_hover_text(self.commands.hover(Cmd::Metronome));
             egui::ComboBox::from_id_salt("subdivision")
@@ -1884,32 +1892,38 @@ impl App {
                         (3, "Triplets"),
                         (4, "Sixteenths"),
                     ] {
+                        // ai: set_practice
                         ui.selectable_value(&mut m.subdivision, n, label);
                     }
                 })
                 .response
                 .accessible_name("Clicks per beat");
             ui.label("Click level");
+            // ai: set_practice
             ui.add(egui::Slider::new(&mut m.level_db, -40.0..=0.0).suffix(" dB"))
                 .accessible_name("Click level");
             if m != self.metronome {
                 self.metronome = m;
                 self.send(Command::SetMetronome(m));
             }
+            // ai: count-in
             ui.checkbox(&mut self.count_in, "Count-in")
                 .on_hover_text(self.commands.hover(Cmd::CountIn));
             ui.separator();
 
             let mut changed = ui
+                // ai: loop
                 .checkbox(&mut self.looping, "Loop bars")
                 .on_hover_text(self.commands.hover(Cmd::Loop))
                 .changed();
             changed |= ui
+                // ai: set_loop
                 .add(egui::DragValue::new(&mut self.loop_bars.0).range(1..=999))
                 .accessible_name("Loop from bar")
                 .changed();
             ui.label("to");
             changed |= ui
+                // ai: set_loop
                 .add(egui::DragValue::new(&mut self.loop_bars.1).range(2..=1000))
                 .accessible_name("Loop to bar")
                 .changed();
@@ -1938,6 +1952,7 @@ impl App {
         let before = (self.speed_pct, self.semitones, self.cents);
         ui.label("Speed");
         ui.add(
+            // ai: set_practice
             egui::DragValue::new(&mut self.speed_pct)
                 .range(50.0..=150.0)
                 .speed(0.5)
@@ -1948,6 +1963,7 @@ impl App {
         .on_hover_text("Slow down or speed up without changing pitch");
         for pct in [50.0, 75.0, 100.0] {
             if ui
+                // ai: set_practice
                 .selectable_label(self.speed_pct == pct, format!("{pct:.0}%"))
                 .clicked()
             {
@@ -1957,6 +1973,7 @@ impl App {
         ui.separator();
         ui.label("Transpose");
         ui.add(
+            // ai: set_practice
             egui::DragValue::new(&mut self.semitones)
                 .range(-12..=12)
                 .suffix(" st"),
@@ -1964,6 +1981,7 @@ impl App {
         .accessible_name("Transpose, semitones")
         .on_hover_text("Semitones, without changing speed");
         ui.add(
+            // ai: set_practice
             egui::DragValue::new(&mut self.cents)
                 .range(-50..=50)
                 .suffix(" ¢"),
@@ -1981,6 +1999,7 @@ impl App {
                     ("Standard → half step down (−1)", -1),
                     ("Standard → whole step down (−2)", -2),
                 ] {
+                    // ai: set_practice
                     if ui.selectable_label(false, label).clicked() {
                         self.semitones = st;
                         self.cents = 0;
@@ -1994,6 +2013,7 @@ impl App {
                         continue;
                     };
                     if ui
+                        // ai: set_practice
                         .selectable_label(false, format!("Detect tuning of {}", t.name))
                         .on_hover_text(
                             "Measures how far the recording is from concert pitch \
@@ -2032,6 +2052,7 @@ impl App {
             match r {
                 Some(c) if c.abs() >= 2.0 => {
                     ui.label(format!("{name} is {c:+.0} ¢ off"));
+                    // ai: set_practice
                     if ui.button(format!("Shift {:+.0} ¢", -c)).clicked() {
                         self.cents = (-c).round() as i32;
                         self.detected = None;
@@ -2044,12 +2065,14 @@ impl App {
                     ui.label(format!("{name}: no clear pitch to measure"));
                 }
             }
+            // ai: view
             if ui.small_button("✖").accessible_name("Dismiss").clicked() {
                 self.detected = None;
             }
         }
         if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
             && ui
+                // ai: normal-speed
                 .button("Reset")
                 .on_hover_text(self.commands.hover(Cmd::NormalSpeed))
                 .clicked()

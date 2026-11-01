@@ -69,10 +69,12 @@ impl Trainer {
 
     /// The trainer's settings, on one row.
     pub fn controls(&mut self, ui: &mut egui::Ui) {
+        // ai: set_practice
         ui.checkbox(&mut self.on, "Trainer")
             .on_hover_text("Speed up while looping: needs Loop on");
         ui.add_enabled_ui(self.on, |ui| {
             ui.add(
+                // ai: set_practice
                 egui::DragValue::new(&mut self.step)
                     .range(1.0..=25.0)
                     .speed(0.2)
@@ -83,6 +85,7 @@ impl Trainer {
             .accessible_name("Trainer step, percent");
             ui.label("every");
             ui.add(
+                // ai: set_practice
                 egui::DragValue::new(&mut self.every)
                     .range(1..=32)
                     .suffix(" loops"),
@@ -90,6 +93,7 @@ impl Trainer {
             .accessible_name("Trainer, loops between steps");
             ui.label("up to");
             ui.add(
+                // ai: set_practice
                 egui::DragValue::new(&mut self.target)
                     .range(50.0..=150.0)
                     .speed(0.5)

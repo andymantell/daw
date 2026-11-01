@@ -106,6 +106,15 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: no_args,
     },
     Tool {
+        name: "get_fretboard",
+        description: "What the fretboard pane shows: the tuning (open pitches from string 1, \
+                      the highest), capo, the scale or chord shown and its places, the \
+                      notes playing at the playhead and the selected notes, each as a \
+                      string and a fret counted from the capo.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
         name: "list_parameters",
         description: "Every setting of a track that can be set by value (volume, pan, \
                       mute, solo, sends, and each effect's settings), with its value, \
@@ -524,6 +533,7 @@ impl App {
             "get_project" => Ok(self.project_value(args["notes"].as_bool().unwrap_or(false))),
             "get_transport" => Ok(self.transport_value()),
             "get_selection" => Ok(self.selection_value()),
+            "get_fretboard" => Ok(self.fretboard_value()),
             "list_parameters" => self.parameters_value(args["track"].as_str()),
             "list_presets" => {
                 let (list, _) = crate::presets::all_presets(self.preset_ui.dir.as_deref());

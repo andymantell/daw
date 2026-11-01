@@ -27,6 +27,7 @@ mod comping;
 mod crash;
 mod export;
 mod freeze;
+mod fretboard;
 mod fx;
 mod groups;
 mod history;
@@ -84,7 +85,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use commands::Cmd;
+use commands::{Cmd, FRETBOARD_MENU};
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running, SavedProfiles};
 use daw_engine::engine::{self, Command, Controller};
 use daw_engine::graph::{ClipSpec, Input, Mix, Output, Session, TrackSpec};
@@ -477,6 +478,8 @@ struct App {
     agent: agent::Agent,
     /// Exporting for and importing from other DAWs.
     swap: interchange::Swap,
+    /// The fretboard pane's settings.
+    fretboard: fretboard::Fretboard,
 }
 
 /// How often to look for a lost device.
@@ -567,6 +570,7 @@ impl App {
             pending_instruments: Vec::new(),
             notes_editor: notes_editor::Editor::default(),
             patterns: Vec::new(),
+            fretboard: fretboard::Fretboard::default(),
             pattern_editor: patterns::Editor::default(),
             instrument_open: None,
             practice_log: practice::Logger::default(),
@@ -2770,6 +2774,12 @@ impl eframe::App for App {
                     ] {
                         app.menu_item(ui, c);
                     }
+                    app.menu_gap();
+                    ui.menu_button("Fretboard", |ui| {
+                        for c in FRETBOARD_MENU {
+                            app.menu_item(ui, c);
+                        }
+                    });
                     app.menu_gap();
                     for c in [Cmd::PracticeMutePart, Cmd::ContinuousScroll] {
                         app.menu_item(ui, c);

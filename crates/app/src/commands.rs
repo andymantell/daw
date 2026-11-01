@@ -117,6 +117,25 @@ pub(crate) enum Cmd {
     AutomationLanes,
     Browser,
     Video,
+    Fretboard,
+    FretboardView,
+    FretboardRootUp,
+    FretboardRootDown,
+    FretboardScale,
+    FretboardChord,
+    FretboardSongKey,
+    FretboardTuning,
+    FretboardCapoUp,
+    FretboardCapoDown,
+    FretboardLabels,
+    FretboardPositionUp,
+    FretboardPositionDown,
+    FretboardType,
+    FretLeft,
+    FretRight,
+    FretUp,
+    FretDown,
+    FretEnter,
     FullSize,
     SimpleMode,
     /// Recalls saved layout n, counted from 0.
@@ -302,6 +321,28 @@ impl Info {
         }
     }
 }
+
+/// The fretboard's commands, in its menu.
+pub(crate) const FRETBOARD_MENU: [Cmd; 18] = [
+    Cmd::FretboardView,
+    Cmd::FretboardScale,
+    Cmd::FretboardChord,
+    Cmd::FretboardRootUp,
+    Cmd::FretboardRootDown,
+    Cmd::FretboardSongKey,
+    Cmd::FretboardTuning,
+    Cmd::FretboardCapoUp,
+    Cmd::FretboardCapoDown,
+    Cmd::FretboardPositionUp,
+    Cmd::FretboardPositionDown,
+    Cmd::FretboardLabels,
+    Cmd::FretboardType,
+    Cmd::FretLeft,
+    Cmd::FretRight,
+    Cmd::FretUp,
+    Cmd::FretDown,
+    Cmd::FretEnter,
+];
 
 /// Every command, in menu order.
 pub(crate) const COMMANDS: &[Info] = &[
@@ -1285,6 +1326,142 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Video, "video", "View", "Video", &[])
         .hint("Show or hide the video at the playhead")
         .words("picture film movie score scoring clip frames watch"),
+    info(Cmd::Fretboard, "fretboard", "View", "Fretboard", &[])
+        .hint("Show or hide a guitar or bass neck with the notes playing, a scale or a chord")
+        .words("guitar bass neck frets strings scale mode chord arpeggio capo tuning")
+        .everyday(),
+    info(
+        Cmd::FretboardView,
+        "fretboard-view",
+        "Fretboard",
+        "Next fretboard view",
+        &[],
+    )
+    .hint("The notes playing, then a scale or mode, a chord shape, and the chord's arpeggio")
+    .words("guitar neck scale chord arpeggio"),
+    info(
+        Cmd::FretboardRootUp,
+        "fretboard-root-up",
+        "Fretboard",
+        "Fretboard root up a semitone",
+        &[],
+    )
+    .hint("Move the scale's or chord's root up")
+    .words("guitar neck key transpose"),
+    info(
+        Cmd::FretboardRootDown,
+        "fretboard-root-down",
+        "Fretboard",
+        "Fretboard root down a semitone",
+        &[],
+    )
+    .hint("Move the scale's or chord's root down")
+    .words("guitar neck key transpose"),
+    info(
+        Cmd::FretboardScale,
+        "fretboard-scale",
+        "Fretboard",
+        "Next scale or mode on the fretboard",
+        &[],
+    )
+    .hint("Show the next scale or mode on the same root")
+    .words("guitar neck pentatonic blues dorian mixolydian modes"),
+    info(
+        Cmd::FretboardChord,
+        "fretboard-chord",
+        "Fretboard",
+        "Next chord on the fretboard",
+        &[],
+    )
+    .hint("Show a chord, then the next kind of chord on the same root")
+    .words("guitar neck shape major minor seventh"),
+    info(
+        Cmd::FretboardSongKey,
+        "fretboard-song-key",
+        "Fretboard",
+        "Fretboard follows the song's key",
+        &[],
+    )
+    .hint("Show the song's key and scale again, after picking another")
+    .words("guitar neck project scale reset"),
+    info(
+        Cmd::FretboardTuning,
+        "fretboard-tuning",
+        "Fretboard",
+        "Next tuning on the fretboard",
+        &[],
+    )
+    .hint("The next guitar or bass tuning; a track with a tab lane changes the lane's")
+    .words("guitar bass drop d open seven eight strings"),
+    info(
+        Cmd::FretboardCapoUp,
+        "fretboard-capo-up",
+        "Fretboard",
+        "Capo up a fret",
+        &[],
+    )
+    .hint("Move the capo up the neck")
+    .words("guitar neck"),
+    info(
+        Cmd::FretboardCapoDown,
+        "fretboard-capo-down",
+        "Fretboard",
+        "Capo down a fret",
+        &[],
+    )
+    .hint("Move the capo down the neck, or take it off")
+    .words("guitar neck"),
+    info(
+        Cmd::FretboardLabels,
+        "fretboard-labels",
+        "Fretboard",
+        "Next fretboard labels",
+        &[],
+    )
+    .hint("Note names, steps from the root (1, b3, 5), or none")
+    .words("guitar neck degrees intervals names"),
+    info(
+        Cmd::FretboardPositionUp,
+        "fretboard-position-up",
+        "Fretboard",
+        "Hand position up a fret",
+        &[],
+    )
+    .hint("Show the scale, chord or arpeggio in the four frets from the next fret up")
+    .words("guitar neck box shape"),
+    info(
+        Cmd::FretboardPositionDown,
+        "fretboard-position-down",
+        "Fretboard",
+        "Hand position down a fret",
+        &[],
+    )
+    .hint("Move the hand down the neck; below the first fret shows the whole neck")
+    .words("guitar neck box shape"),
+    info(
+        Cmd::FretboardType,
+        "fretboard-type",
+        "Fretboard",
+        "Type on the fretboard",
+        &[],
+    )
+    .hint("Arrows move a box on the neck, Enter enters its note at the playhead, Escape stops")
+    .words("guitar neck enter notes keyboard"),
+    info(Cmd::FretLeft, "fret-left", "Fretboard", "Fretboard box down a fret", &[])
+        .hint("Move the fretboard's typing box towards the nut")
+        .words("guitar neck cursor"),
+    info(Cmd::FretRight, "fret-right", "Fretboard", "Fretboard box up a fret", &[])
+        .hint("Move the fretboard's typing box towards the body")
+        .words("guitar neck cursor"),
+    info(Cmd::FretUp, "fret-up", "Fretboard", "Fretboard box to the string above", &[])
+        .hint("Move the fretboard's typing box to the next higher string")
+        .words("guitar neck cursor"),
+    info(Cmd::FretDown, "fret-down", "Fretboard", "Fretboard box to the string below", &[])
+        .hint("Move the fretboard's typing box to the next lower string")
+        .words("guitar neck cursor"),
+    info(Cmd::FretEnter, "fret-enter", "Fretboard", "Enter the fretboard box's note", &[])
+        .hint("Enter the note under the fretboard's box at the playhead")
+        .words("guitar neck write"),
     info(
         Cmd::AutomationLanes,
         "automation-lanes",
@@ -1795,6 +1972,7 @@ impl Cmd {
                 | Cmd::AutomationLanes
                 | Cmd::Browser
                 | Cmd::Video
+                | Cmd::Fretboard
                 | Cmd::FullSize
                 | Cmd::Layout(_)
                 | Cmd::SaveLayout
@@ -2529,8 +2707,10 @@ impl App {
     /// Runs the commands whose keys were pressed. Called before
     /// anything is drawn, so they come before the controls see the keys.
     pub(crate) fn command_keys(&mut self, ctx: &egui::Context) {
-        // Typing tab takes numbers and arrows first.
+        // Typing tab takes numbers and arrows first, then typing on
+        // the fretboard.
         self.notation_keys(ctx);
+        self.fretboard_keys(ctx);
         // A clip or marker holding the keyboard is not a text field.
         let typing = ctx.egui_wants_keyboard_input() && !self.timeline.has_keyboard(ctx);
         let (run, held) = self.commands.pressed(ctx, typing, self.simple.on);
@@ -2841,6 +3021,25 @@ impl App {
             Cmd::AutomationLanes => self.workspace.toggle(Pane::Automation),
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
             Cmd::Video => self.workspace.toggle(Pane::Video),
+            Cmd::Fretboard => self.workspace.toggle(Pane::Fretboard),
+            Cmd::FretboardView
+            | Cmd::FretboardRootUp
+            | Cmd::FretboardRootDown
+            | Cmd::FretboardScale
+            | Cmd::FretboardChord
+            | Cmd::FretboardSongKey
+            | Cmd::FretboardTuning
+            | Cmd::FretboardCapoUp
+            | Cmd::FretboardCapoDown
+            | Cmd::FretboardLabels
+            | Cmd::FretboardPositionUp
+            | Cmd::FretboardPositionDown
+            | Cmd::FretboardType
+            | Cmd::FretLeft
+            | Cmd::FretRight
+            | Cmd::FretUp
+            | Cmd::FretDown
+            | Cmd::FretEnter => self.fretboard_command(cmd),
             Cmd::FullSize => self.workspace.toggle_full(),
             Cmd::SimpleMode => self.toggle_simple(),
             Cmd::Layout(n) => self.workspace.recall(n as usize),

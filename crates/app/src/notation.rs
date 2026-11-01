@@ -65,7 +65,7 @@ pub(crate) struct Built {
 }
 
 /// The tuning a setting describes, made safe for the notation crate.
-fn tuning_of(n: &Notation) -> Tuning {
+pub(crate) fn tuning_of(n: &Notation) -> Tuning {
     let strings: Vec<u8> = n
         .tuning
         .iter()
@@ -1752,7 +1752,7 @@ fn snap_tick(map: &TempoMap, tick: i64, step: i64) -> i64 {
 }
 
 /// Takes notes starting at `tick` on `string` out of the clips.
-fn clear_at(clips: &mut [NoteClip], tick: i64, string: u8) -> bool {
+pub(crate) fn clear_at(clips: &mut [NoteClip], tick: i64, string: u8) -> bool {
     let mut changed = false;
     for c in clips {
         let before = c.notes.len();
@@ -1765,7 +1765,11 @@ fn clear_at(clips: &mut [NoteClip], tick: i64, string: u8) -> bool {
 }
 
 /// The note clip under `tick`, or a new one a bar long from its bar.
-fn clip_at<'a>(clips: &'a mut Vec<NoteClip>, map: &TempoMap, tick: i64) -> &'a mut NoteClip {
+pub(crate) fn clip_at<'a>(
+    clips: &'a mut Vec<NoteClip>,
+    map: &TempoMap,
+    tick: i64,
+) -> &'a mut NoteClip {
     if let Some(i) = clips
         .iter()
         .position(|c| !c.muted && c.start <= tick && c.end() > tick)

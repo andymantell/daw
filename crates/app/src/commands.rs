@@ -758,7 +758,7 @@ pub(crate) const COMMANDS: &[Info] = &[
         .hint("Keys and pads held down on the instrument track play again every sixteenth, until let go")
         .words("roll ratchet pads drums repeat"),
     info(Cmd::AddNoteFx(0), "add-arpeggiator", "Notes", "Arpeggiator", &[])
-        .hint("Add an arpeggiator to the instrument track: held keys play one after another, in time")
+        .hint("Add an arpeggiator to the instrument track: held keys play in turn, in time with the song")
         .words("arp arpeggio note effect midi effect pattern"),
     info(Cmd::AddNoteFx(1), "add-chord-effect", "Notes", "Chord", &[])
         .hint("Add a chord effect to the instrument track: each note plays a chord")
@@ -775,8 +775,8 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::AddNoteFx(5), "add-scale-effect", "Notes", "Scale", &[])
         .hint("Add a scale effect to the instrument track: notes kept on the song's key")
         .words("key quantise pitch correct note effect midi effect"),
-    info(Cmd::NoteFxOnOff, "note-effects-on-off", "Notes", "Note effects on or off", &[])
-        .hint("Switch the instrument track's note effects off, or back on")
+    info(Cmd::NoteFxOnOff, "note-effects-on-off", "Notes", "Bypass note effects", &[])
+        .hint("Switch the instrument track's note effects off, and again to switch them back")
         .words("bypass arpeggiator midi effects"),
     info(
         Cmd::RenderNoteFx,

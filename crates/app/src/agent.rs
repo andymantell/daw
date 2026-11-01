@@ -984,6 +984,9 @@ impl App {
                     })).collect::<Vec<_>>(),
                     "instrument": t.instrument.as_ref().map(effect),
                     "effects": t.effects.iter().map(effect).collect::<Vec<_>>(),
+                    "note_effects": t.note_fx.iter().map(|f| json!({
+                        "id": f.id, "kind": f.kind, "bypass": f.bypass,
+                    })).collect::<Vec<_>>(),
                     "frozen": t.freeze,
                     "automated": t.automation.iter().map(|l| &l.param).collect::<Vec<_>>(),
                     "clips": clips,
@@ -1092,6 +1095,7 @@ impl App {
                     "automated": t.automation.iter().any(|l| l.param == c.param),
                 }));
             }
+            params.extend(crate::notefx::parameters(&t.note_fx));
             out.push(json!({"track": t.key, "name": t.name, "params": params}));
         }
         Ok(Value::Array(out))
@@ -1111,6 +1115,9 @@ impl App {
             .collect();
         let t = &mut self.tracks[i];
         let label = match param {
+            p if p.starts_with(crate::notefx::PARAM_PREFIX) => {
+                crate::notefx::set_parameter(&t.name, &mut t.note_fx, p, v)?
+            }
             MUTE | SOLO => {
                 let on = v >= 0.5;
                 if param == MUTE {

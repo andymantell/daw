@@ -398,6 +398,80 @@ pub(crate) fn set(fx: &mut NoteFx, id: &str, value: f64) -> Result<(), String> {
     Ok(())
 }
 
+/// How the assistant tools name a note effect's setting:
+/// `notefx:` and the effect's id, `:` and the setting.
+pub(crate) const PARAM_PREFIX: &str = "notefx:";
+
+/// The settings of a track's note effects, as `list_parameters` gives
+/// them: each with its name, value, range and, for a choice, the values
+/// it can take.
+pub(crate) fn parameters(list: &[NoteFx]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for fx in list {
+        let Some(k) = kind(&fx.kind) else { continue };
+        let id = format!("{PARAM_PREFIX}{}", fx.id);
+        out.push(serde_json::json!({
+            "param": format!("{id}:on"),
+            "name": format!("{}: on", k.name),
+            "value": (!fx.bypass) as u8,
+            "min": 0, "max": 1,
+        }));
+        for p in k.params {
+            let v = get(fx, p.id);
+            let mut row = serde_json::json!({
+                "param": format!("{id}:{}", p.id),
+                "name": format!("{}: {}", k.name, p.label),
+                "value": v,
+                "text": value_text(p, v),
+                "min": p.min,
+                "max": p.max,
+            });
+            if let Shape::Choice(c) = p.shape {
+                row["choices"] = (c.iter())
+                    .map(|(v, name)| serde_json::json!({"value": v, "name": name}))
+                    .collect();
+            }
+            out.push(row);
+        }
+    }
+    out
+}
+
+/// Sets a note effect's setting by its `list_parameters` name. The undo
+/// step's name, or why it can't.
+pub(crate) fn set_parameter(
+    track: &str,
+    list: &mut [NoteFx],
+    param: &str,
+    value: f64,
+) -> Result<String, String> {
+    let rest = param.strip_prefix(PARAM_PREFIX).unwrap_or(param);
+    let (id, name) = rest
+        .rsplit_once(':')
+        .ok_or_else(|| format!("{track} has no setting {param}."))?;
+    let fx = (list.iter_mut())
+        .find(|f| f.id == id)
+        .ok_or_else(|| format!("{track} has no note effect {id}."))?;
+    let k = kind(&fx.kind).ok_or_else(|| format!("{} isn't known here.", fx.kind))?;
+    if name == "on" {
+        fx.bypass = value < 0.5;
+        let state = if fx.bypass { "off" } else { "on" };
+        return Ok(format!("{} on {track} {state}", k.name));
+    }
+    set(fx, name, value)?;
+    let p = k
+        .params
+        .iter()
+        .find(|p| p.id == name)
+        .expect("set checked it");
+    Ok(format!(
+        "Set {track} {} {} to {}",
+        k.name,
+        p.label,
+        value_text(p, get(fx, name))
+    ))
+}
+
 /// The key the effects follow: the song's, or C major when it has none.
 pub(crate) fn scale_spec(scale: Option<Scale>) -> ScaleSpec {
     let s = scale.unwrap_or(Scale::new(0, daw_project::ScaleKind::Major));
@@ -651,6 +725,7 @@ pub(crate) fn controls(
                                     ui.add(
                                         egui::Slider::new(&mut v, p.min..=p.max)
                                             .step_by(1.0)
+                                            .fixed_decimals(0)
                                             .suffix(unit),
                                     )
                                     .accessible_name(p.label);
@@ -825,6 +900,57 @@ mod tests {
             .map(|n| n.pitch)
             .collect();
         assert_eq!(p, [69, 72, 76]);
+    }
+
+    #[test]
+    fn an_assistant_adds_sets_and_renders_note_effects() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.command("add-instrument-track");
+        let mut clip = daw_project::NoteClip::new("c".into(), "Keys".into(), 0, 1920);
+        for p in [60, 64, 67] {
+            clip.notes.push(daw_project::Note::new(0, 960, p, 100));
+        }
+        d.app().tracks[0].note_clips.push(clip);
+        d.command("add-arpeggiator");
+        let p = d.project();
+        let track = p["tracks"][0]["id"].as_str().unwrap().to_string();
+        let fx = &p["tracks"][0]["note_effects"][0];
+        assert_eq!(fx["kind"], "arpeggiator");
+        let id = fx["id"].as_str().unwrap().to_string();
+        // Its settings are listed, with their choices, and set by name.
+        let list = d.call("list_parameters", json!({"track": track})).unwrap();
+        let rate = format!("notefx:{id}:rate");
+        let row = (list[0]["params"].as_array().unwrap().iter())
+            .find(|r| r["param"] == rate.as_str())
+            .unwrap()
+            .clone();
+        assert_eq!(row["text"], "1/16");
+        assert!(row["choices"].as_array().unwrap().len() >= 6);
+        d.call(
+            "set_parameter",
+            json!({"track": track, "param": rate, "value": 480.0}),
+        )
+        .unwrap();
+        d.call(
+            "set_parameter",
+            json!({"track": track, "param": format!("notefx:{id}:mode"), "value": 1.0}),
+        )
+        .unwrap();
+        assert!(
+            d.call(
+                "set_parameter",
+                json!({"track": track, "param": format!("notefx:{id}:nothing"), "value": 1.0}),
+            )
+            .is_err()
+        );
+        // Rendered: eighths down the chord for the beat it's held.
+        d.command("render-note-effects");
+        let p = d.call("get_project", json!({"notes": true})).unwrap();
+        let notes = p["tracks"][0]["note_clips"][0]["notes"].as_array().unwrap();
+        let pitches: Vec<u64> = notes.iter().map(|n| n["pitch"].as_u64().unwrap()).collect();
+        assert_eq!(pitches, [67, 64]);
+        assert_eq!(p["tracks"][0]["note_effects"][0]["bypass"], true);
     }
 
     mod app {

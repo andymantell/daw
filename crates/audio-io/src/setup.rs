@@ -52,8 +52,8 @@ fn is_stand_in(name: &str) -> bool {
 /// The part of a name in brackets, which shared drivers use for the
 /// hardware: "Speakers (Interface)" and "Line In (Interface)".
 fn bracketed(name: &str) -> Option<&str> {
-    let a = name.rfind('(')?;
-    let b = name[a..].find(')')? + a;
+    let a = name.find('(')?;
+    let b = name.rfind(')').filter(|&b| b > a)?;
     Some(name[a + 1..b].trim()).filter(|s| !s.is_empty())
 }
 
@@ -290,7 +290,7 @@ impl Level {
             }
             Level::Quiet => {
                 "This input is quiet. Turn its gain knob on the interface up while playing as \
-                loud as you will, until the loudest notes reach the green part."
+                loud as you will, until the bar turns green and this says Good."
             }
             Level::Good => "Good: the loudest notes have room to spare.",
             Level::Hot => {
@@ -382,6 +382,17 @@ mod tests {
         assert_eq!(c[2].input, None);
         assert!(c[2].why.contains("can't record"));
         assert!(driver_problems(&hosts, true).is_empty());
+    }
+
+    #[test]
+    fn brackets_inside_the_hardware_name_are_kept() {
+        assert_eq!(
+            bracketed("Speakers (Maker(R) Audio)"),
+            Some("Maker(R) Audio")
+        );
+        let d = dev("Speakers (Maker(R) Audio)", 2, 0);
+        let other = vec!["Microphone (Other(R) Device)".to_string()];
+        assert_eq!(input_for(&d, &other), None);
     }
 
     #[test]

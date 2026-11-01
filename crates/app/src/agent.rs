@@ -69,7 +69,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "list_commands",
         description: "Every command in the app (the same as the menus, keys and command \
-                      search), with its id, name, menu, keys, and whether it can run now.",
+                      search), with its id, name, menu, keys, and whether it can run now. In the \
+                      simpler mode, \"offered\" is false for the advanced ones the person \
+                      can't see; they still run by id.",
         access: Access::Read,
         schema: no_args,
     },
@@ -404,6 +406,8 @@ impl App {
                     "keys": self.commands.keymap.text(i.cmd),
                     "can_run": ready,
                     "needs": command_access(i.cmd).name(),
+                    "everyday": i.everyday,
+                    "offered": self.offered(i.cmd),
                 })
             })
             .collect();

@@ -352,4 +352,28 @@ mod ui_tests {
         h.state_mut().run(&ctx, Cmd::SimpleMode);
         assert!(!h.state().simple.on);
     }
+
+    /// End to end through the agent interface, as an assistant sees it.
+    #[test]
+    fn the_agent_turns_it_on_and_sees_what_is_offered() {
+        let mut d = crate::agent::driver::Driver::new();
+        let offered = |d: &mut crate::agent::driver::Driver, id: &str| {
+            let list = d.call("list_commands", serde_json::json!({})).unwrap();
+            let c = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == id)
+                .cloned();
+            c.unwrap()["offered"].as_bool().unwrap()
+        };
+        assert!(offered(&mut d, "edit-groups"));
+        d.command("simpler-mode");
+        assert!(d.app().simple.on);
+        assert!(!offered(&mut d, "edit-groups"));
+        assert!(offered(&mut d, "simpler-mode"));
+        // Still runs when asked for by name.
+        d.command("edit-groups");
+        assert!(d.app().groups_ui.open);
+    }
 }

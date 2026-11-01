@@ -148,7 +148,7 @@ impl Lessons {
                 (Tab::Log, "Practice log"),
                 (Tab::History, "History"),
             ] {
-                ui.selectable_value(&mut self.tab, t, name);
+                ui.selectable_value(&mut self.tab, t, name); // ai: view
             }
         });
         ui.separator();
@@ -175,7 +175,7 @@ impl Lessons {
             ui.label(RichText::new("Only editors can set assignments.").weak());
         } else if self.draft.is_none()
             && ui
-                .button("Set an assignment")
+                .button("Set an assignment") // ai: edit_assignments
                 .on_hover_text("Some bars to play at a tempo, by a date")
                 .clicked()
         {
@@ -251,7 +251,7 @@ impl Lessons {
                 }
                 ui.horizontal(|ui| {
                     if ui
-                        .button("Practise")
+                        .button("Practise") // ai: edit_assignments
                         .on_hover_text("Loop these bars, with the trainer aiming at the tempo")
                         .clicked()
                     {
@@ -259,20 +259,23 @@ impl Lessons {
                     }
                     let mine = progress.iter().any(|p| p.who == cx.me && p.done.is_some());
                     if mine {
+                        // ai: edit_assignments
                         if ui.button("Not done yet").clicked() {
                             out.done = Some((a.id.clone(), false));
                         }
                     } else if ui
-                        .button("Mark done")
+                        .button("Mark done") // ai: edit_assignments
                         .on_hover_text("Tell your teacher or student you've done it")
                         .clicked()
                     {
                         out.done = Some((a.id.clone(), true));
                     }
                     if cx.may_edit {
+                        // ai: edit_assignments
                         if ui.button("Change").clicked() {
                             change = Some(i);
                         }
+                        // ai: edit_assignments
                         if ui.button("Delete").clicked() {
                             delete = Some(i);
                         }
@@ -307,13 +310,14 @@ impl Lessons {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
                 ui.label("Bars");
-                ui.add(egui::DragValue::new(&mut d.from).range(1..=999))
+                ui.add(egui::DragValue::new(&mut d.from).range(1..=999)) // ai: edit_assignments
                     .accessible_name("Assignment from bar");
                 ui.label("to");
-                ui.add(egui::DragValue::new(&mut d.last).range(d.from..=999))
+                ui.add(egui::DragValue::new(&mut d.last).range(d.from..=999)) // ai: edit_assignments
                     .accessible_name("Assignment to bar");
                 d.last = d.last.max(d.from);
                 if ui.button("The loop").clicked() {
+                    // ai: edit_assignments
                     (d.from, d.last) = (cx.loop_bars.0, cx.loop_bars.1 - 1);
                 }
                 if !cx.markers.is_empty() {
@@ -321,6 +325,7 @@ impl Lessons {
                         .selected_text("Section")
                         .show_ui(ui, |ui| {
                             for (i, m) in cx.markers.iter().enumerate() {
+                                // ai: edit_assignments
                                 if ui.selectable_label(false, &m.name).clicked() {
                                     let (f, t) = section(cx.markers, i, cx.end_bar);
                                     (d.from, d.last) = (f, t - 1);
@@ -334,7 +339,7 @@ impl Lessons {
             ui.horizontal_wrapped(|ui| {
                 ui.label("At");
                 ui.add(
-                    egui::DragValue::new(&mut d.bpm)
+                    egui::DragValue::new(&mut d.bpm) // ai: edit_assignments
                         .range(20.0..=400.0)
                         .speed(0.5)
                         .fixed_decimals(0)
@@ -343,7 +348,7 @@ impl Lessons {
                 .accessible_name("Assignment tempo");
                 ui.label("due in");
                 ui.add(
-                    egui::DragValue::new(&mut d.days)
+                    egui::DragValue::new(&mut d.days) // ai: edit_assignments
                         .range(0..=90)
                         .suffix(" days"),
                 )
@@ -355,13 +360,14 @@ impl Lessons {
                 ui.label(RichText::new(when).weak());
             });
             ui.add(
-                egui::TextEdit::singleline(&mut d.note)
+                egui::TextEdit::singleline(&mut d.note) // ai: edit_assignments
                     .hint_text("What to listen for, how to play it…")
                     .desired_width(f32::INFINITY),
             )
             .accessible_name("Assignment note");
             ui.horizontal(|ui| {
                 let label = if d.id.is_some() { "Save" } else { "Set" };
+                // ai: edit_assignments
                 if ui.button(label).clicked() {
                     let was = (d.id.as_ref()).and_then(|id| list.iter().position(|a| &a.id == id));
                     let a = Assignment {
@@ -389,6 +395,7 @@ impl Lessons {
                     }
                     close = true;
                 }
+                // ai: view
                 if ui.button("Cancel").clicked() {
                     close = true;
                 }
@@ -413,7 +420,7 @@ impl Lessons {
             .selected_text(shown)
             .show_ui(ui, |ui| {
                 for (s, name) in spans {
-                    ui.selectable_value(&mut self.span, s, name);
+                    ui.selectable_value(&mut self.span, s, name); // ai: view
                 }
             })
             .response
@@ -505,7 +512,7 @@ impl Lessons {
                 );
                 if s.who == cx.me
                     && ui
-                        .small_button("Forget")
+                        .small_button("Forget") // ai: edit_lessons
                         .on_hover_text("Take this out of your log")
                         .clicked()
                 {
@@ -529,7 +536,7 @@ impl Lessons {
                 let next = format!("Lesson {}", lessons.len() + 1);
                 let r = ui
                     .add(
-                        egui::TextEdit::singleline(&mut self.title)
+                        egui::TextEdit::singleline(&mut self.title) // ai: edit_lessons
                             .char_limit(daw_project::MAX_LESSON_TITLE)
                             .hint_text(&next)
                             .desired_width(160.0),
@@ -537,7 +544,7 @@ impl Lessons {
                     .accessible_name("Lesson title");
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui
-                    .button("Start a lesson")
+                    .button("Start a lesson") // ai: edit_lessons
                     .on_hover_text(
                         "Takes a snapshot named after the lesson, and counts practice \
                          from here",
@@ -572,16 +579,18 @@ impl Lessons {
                     ui.horizontal(|ui| {
                         let r = ui
                             .add(
-                                egui::TextEdit::singleline(title)
+                                egui::TextEdit::singleline(title) // ai: edit_lessons
                                     .char_limit(daw_project::MAX_LESSON_TITLE)
                                     .desired_width(160.0),
                             )
                             .accessible_name("New lesson title");
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        // ai: edit_lessons
                         if ui.button("Rename").clicked() || enter {
                             out.rename_lesson = Some((id.clone(), title.clone()));
                             done = true;
                         }
+                        // ai: view
                         if ui.button("Cancel").clicked() {
                             done = true;
                         }
@@ -621,18 +630,19 @@ impl Lessons {
                 }
                 ui.horizontal(|ui| {
                     if ui
-                        .button("What changed since…")
+                        .button("What changed since…") // ai: view
                         .on_hover_text("What has been done to the song since this lesson began")
                         .clicked()
                     {
                         out.show_changes = Some(l.snapshot.clone());
                     }
                     if cx.may_edit {
+                        // ai: edit_lessons
                         if ui.button("Rename").clicked() {
                             self.renaming = Some((l.id.clone(), l.title.clone()));
                         }
                         if ui
-                            .button("Remove")
+                            .button("Remove") // ai: edit_lessons
                             .on_hover_text("Take it off this list. Its snapshot stays.")
                             .clicked()
                         {
@@ -751,7 +761,13 @@ impl App {
         self.lessons_outcome(ui.ctx(), out, &me, &author);
     }
 
-    fn lessons_outcome(&mut self, ctx: &egui::Context, out: Outcome, me: &str, author: &str) {
+    pub(crate) fn lessons_outcome(
+        &mut self,
+        ctx: &egui::Context,
+        out: Outcome,
+        me: &str,
+        author: &str,
+    ) {
         if let Some(a) = out.practise {
             self.practise(&a);
         }

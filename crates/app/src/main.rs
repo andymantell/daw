@@ -26,6 +26,8 @@ mod agent_automation;
 mod agent_edit;
 mod agent_files;
 mod agent_layers;
+mod agent_lessons;
+mod agent_monitor;
 mod agent_notes;
 mod agent_routing;
 mod agent_takes;

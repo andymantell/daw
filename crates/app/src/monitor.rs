@@ -190,7 +190,7 @@ impl App {
     }
 
     /// The device's output channels.
-    fn output_count(&self) -> usize {
+    pub(crate) fn output_count(&self) -> usize {
         let Some(p) = &self.profile else { return 2 };
         (self.hosts.iter())
             .filter(|h| h.name == p.host)
@@ -218,6 +218,7 @@ impl App {
             ui.heading("Headphone mixes");
             let full = self.cues.mixes.len() >= MAX_CUES;
             if ui
+                // ai: edit_headphone_mixes
                 .add_enabled(!full, egui::Button::new("+ Add headphone mix"))
                 .on_hover_text("A mix of its own for one performer")
                 .on_disabled_hover_text(format!("{MAX_CUES} mixes is the most"))
@@ -271,8 +272,10 @@ impl App {
             egui::ComboBox::from_id_salt("listen")
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
+                    // ai: set_monitor
                     ui.selectable_value(&mut c.listen, None, "Main mix");
                     for (id, name) in &mixes {
+                        // ai: set_monitor
                         ui.selectable_value(&mut c.listen, Some(id.clone()), name);
                     }
                 })
@@ -281,26 +284,32 @@ impl App {
                 .on_hover_text("Hear a performer's headphone mix on the speakers");
             ui.name_inputs("Speaker level", |ui| {
                 ui.add(
+                    // ai: set_monitor
                     egui::Slider::new(&mut c.gain_db, -60.0..=12.0)
                         .suffix(" dB")
                         .step_by(0.5),
                 )
             });
+            // ai: set_monitor
             ui.toggle_value(&mut c.dim, "Dim")
                 .on_hover_text(format!("Turn the speakers down {} dB", c.dim_db));
+            // ai: set_monitor
             ui.toggle_value(&mut c.mono, "Mono")
                 .on_hover_text("Left and right together, to check the mix in mono");
+            // ai: set_monitor
             ui.toggle_value(&mut c.cut, "Cut")
                 .accessible_name("Cut the speakers")
                 .on_hover_text("Silence the speakers (the headphones go on)");
             if names.len() > 1 {
                 ui.separator();
                 for (k, n) in names.iter().enumerate() {
+                    // ai: set_monitor
                     ui.selectable_value(&mut c.speakers, k, n)
                         .on_hover_text("Play on these speakers");
                 }
             }
             ui.separator();
+            // ai: talkback
             let talk = ui
                 .add_enabled(
                     mic.is_some(),
@@ -323,6 +332,7 @@ impl App {
                 c.talk = talk.is_pointer_button_down_on();
             }
             if ui
+                // ai: set_monitor
                 .checkbox(&mut c.latch, "Latch")
                 .on_hover_text("The Talk button stays on until clicked again")
                 .changed()
@@ -331,6 +341,7 @@ impl App {
             }
             ui.name_inputs("Talkback level", |ui| {
                 ui.add(
+                    // ai: set_monitor
                     egui::Slider::new(&mut c.talk_db, -40.0..=12.0)
                         .suffix(" dB")
                         .step_by(0.5),
@@ -373,6 +384,7 @@ impl App {
                 for m in mixes.iter_mut() {
                     let before = m.name.clone();
                     if ui
+                        // ai: edit_headphone_mixes
                         .add(egui::TextEdit::singleline(&mut m.name).desired_width(140.0))
                         .accessible_name(format!("Name of {before}"))
                         .changed()
@@ -404,6 +416,7 @@ impl App {
                         let mut db = m.gain_db as f32;
                         let r = ui.name_inputs(format!("{} level", m.name), |ui| {
                             ui.add(
+                                // ai: edit_headphone_mixes
                                 egui::Slider::new(&mut db, -60.0..=12.0)
                                     .suffix(" dB")
                                     .step_by(0.5),
@@ -422,15 +435,18 @@ impl App {
                     ui.horizontal(|ui| {
                         let name = m.name.clone();
                         let mut changed = ui
+                            // ai: edit_headphone_mixes
                             .toggle_value(&mut m.mute, "Mute")
                             .accessible_name(format!("Mute {name}"))
                             .changed();
                         changed |= ui
+                            // ai: edit_headphone_mixes
                             .checkbox(&mut m.follow_main, "Same as main")
                             .accessible_name(format!("{name} is the same as the main mix"))
                             .on_hover_text("Play the main mix, as the speakers do")
                             .changed();
                         changed |= ui
+                            // ai: edit_headphone_mixes
                             .checkbox(&mut m.talkback, "Talkback")
                             .accessible_name(format!("Talkback to {name}"))
                             .on_hover_text("Hear the talkback microphone")
@@ -439,6 +455,7 @@ impl App {
                             actions.push(Action::Buses);
                         }
                         if ui
+                            // ai: edit_headphone_mixes
                             .small_button("Copy main mix")
                             .on_hover_text("Set every track as it is in the main mix")
                             .clicked()
@@ -446,6 +463,7 @@ impl App {
                             actions.push(Action::CopyMain(k));
                         }
                         if ui
+                            // ai: edit_headphone_mixes
                             .small_button("Remove")
                             .accessible_name(format!("Remove {name}"))
                             .clicked()
@@ -463,6 +481,7 @@ impl App {
                             let mut on = m.click_db.is_some();
                             let name = m.name.clone();
                             if ui
+                                // ai: edit_headphone_mixes
                                 .checkbox(&mut on, "")
                                 .accessible_name(format!("Click in {name}"))
                                 .on_hover_text("The metronome in these headphones")
@@ -475,6 +494,7 @@ impl App {
                                 let mut v = *db as f32;
                                 let r = ui.name_inputs(format!("Click level in {name}"), |ui| {
                                     ui.add(
+                                        // ai: edit_headphone_mixes
                                         egui::Slider::new(&mut v, -40.0..=12.0)
                                             .suffix(" dB")
                                             .step_by(0.5),
@@ -544,6 +564,7 @@ impl App {
                 ui.weak(format!("{} and {}", main.0 + 1, main.1 + 1));
                 ui.name_inputs("Main speakers trim", |ui| {
                     ui.add(
+                        // ai: set_monitor
                         egui::Slider::new(&mut m.main_trim_db, -12.0..=12.0)
                             .suffix(" dB trim")
                             .step_by(0.5),
@@ -554,6 +575,7 @@ impl App {
                 let mut remove = None;
                 for (k, s) in m.speakers.iter_mut().enumerate() {
                     let before = s.name.clone();
+                    // ai: set_monitor
                     ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(110.0))
                         .accessible_name(format!("Name of speakers {}", k + 2));
                     let mut pair = Some(s.out);
@@ -564,12 +586,14 @@ impl App {
                     }
                     ui.name_inputs(format!("{before} trim"), |ui| {
                         ui.add(
+                            // ai: set_monitor
                             egui::Slider::new(&mut s.trim_db, -12.0..=12.0)
                                 .suffix(" dB trim")
                                 .step_by(0.5),
                         )
                     });
                     if ui
+                        // ai: set_monitor
                         .small_button("Remove")
                         .accessible_name(format!("Remove {before}"))
                         .clicked()
@@ -584,6 +608,7 @@ impl App {
                 }
                 if m.speakers.len() < MAX_SPEAKERS - 1
                     && ui
+                        // ai: set_monitor
                         .button("+ Add speakers")
                         .on_hover_text("Another pair of speakers to switch to")
                         .clicked()
@@ -604,8 +629,10 @@ impl App {
                 egui::ComboBox::from_id_salt("talkback input")
                     .selected_text(shown)
                     .show_ui(ui, |ui| {
+                        // ai: set_monitor
                         ui.selectable_value(&mut m.talkback, None, "None");
                         for ch in 0..ins {
+                            // ai: set_monitor
                             ui.selectable_value(
                                 &mut m.talkback,
                                 Some(ch),
@@ -623,6 +650,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.name_inputs("Dim by", |ui| {
                 ui.add(
+                    // ai: set_monitor
                     egui::Slider::new(&mut c.dim_db, 0.0..=40.0)
                         .text("Dim by")
                         .suffix(" dB"),
@@ -630,6 +658,7 @@ impl App {
             });
             ui.name_inputs("Talkback dims the speakers by", |ui| {
                 ui.add(
+                    // ai: set_monitor
                     egui::Slider::new(&mut c.talk_dim_db, 0.0..=40.0)
                         .text("Talkback dims by")
                         .suffix(" dB"),
@@ -641,6 +670,17 @@ impl App {
         }
         if room != (c.dim_db, c.talk_dim_db) {
             actions.push(Action::Buses);
+        }
+    }
+
+    /// Keeps the device settings' monitor outputs, as changed.
+    pub(crate) fn save_monitor_device(&mut self) {
+        if let Some(p) = &self.profile {
+            self.saved.use_profile(p.clone());
+            if let Err(e) = crate::save_settings(&self.saved) {
+                self.message = Some(format!("Could not save the device settings: {e}"));
+            }
+            self.draft = Some(p.clone());
         }
     }
 
@@ -660,13 +700,7 @@ impl App {
                 }
                 Action::Buses => buses = true,
                 Action::Device => {
-                    if let Some(p) = &self.profile {
-                        self.saved.use_profile(p.clone());
-                        if let Err(e) = crate::save_settings(&self.saved) {
-                            self.message = Some(format!("Could not save the device settings: {e}"));
-                        }
-                        self.draft = Some(p.clone());
-                    }
+                    self.save_monitor_device();
                     buses = true;
                 }
                 Action::Remove(k) => {
@@ -733,8 +767,10 @@ fn out_picker(
     egui::ComboBox::from_id_salt(("cue out", id))
         .selected_text(text(*pair))
         .show_ui(ui, |ui| {
+            // ai: set_monitor
             ui.selectable_value(pair, None, "Nowhere");
             for l in (0..outs.saturating_sub(1)).step_by(2) {
+                // ai: set_monitor
                 ui.selectable_value(pair, Some((l, l + 1)), text(Some((l, l + 1))));
             }
         })
@@ -751,6 +787,7 @@ fn level_cell(ui: &mut egui::Ui, mix: &str, track: &str, l: &mut CueLevel) -> bo
         let mut db = if off { -60.0 } else { l.gain_db as f32 };
         let r = ui.name_inputs(format!("{track} in {mix}"), |ui| {
             ui.add(
+                // ai: edit_headphone_mixes
                 egui::Slider::new(&mut db, -60.0..=12.0)
                     .custom_formatter(|v, _| {
                         if v <= -60.0 {
@@ -768,6 +805,7 @@ fn level_cell(ui: &mut egui::Ui, mix: &str, track: &str, l: &mut CueLevel) -> bo
         }
         let mut pan = l.pan as f32;
         if ui
+            // ai: edit_headphone_mixes
             .add(egui::Slider::new(&mut pan, -1.0..=1.0).show_value(false))
             .accessible_name(format!("{track} pan in {mix}"))
             .on_hover_text("Pan")
@@ -777,6 +815,7 @@ fn level_cell(ui: &mut egui::Ui, mix: &str, track: &str, l: &mut CueLevel) -> bo
             changed = true;
         }
         changed |= ui
+            // ai: edit_headphone_mixes
             .toggle_value(&mut l.mute, "M")
             .accessible_name(format!("Mute {track} in {mix}"))
             .changed();

@@ -424,7 +424,7 @@ pub(crate) const COMMANDS: &[Info] = &[
         "Export stem package…",
         &[],
     )
-    .hint("Each chosen track as audio and its notes as MIDI, in a folder or one file")
+    .hint("Each chosen track as audio and its notes as MIDI, in a folder or a single file")
     .words("stems midi archive tar send other program"),
     info(Cmd::Export, "export", "File", "Export…", &[])
         .hint("The mix, or each track or bus as a stem, as WAV, FLAC, MP3 or Opus")

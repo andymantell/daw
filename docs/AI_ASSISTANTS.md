@@ -171,8 +171,12 @@ assistant finds them for itself. In outline:
   finds an audio clip's notes (`find: true`) and edits them one by one
   or together (`to_midi`, `to_plays_midi`, `shift_semitones`,
   `by_semitones`, `snap`, `move_seconds`, `resize_seconds`, `drift_pct`,
-  `vibrato_pct`, `formant_semitones`, `reset`); `get_pitch_notes` reads
-  them back, with each note's pitch line when asked (`line: true`).
+  `vibrato_pct`, `formant_semitones`, `reset`, and `min_cents` with
+  `snap`). `snap: "key"` snaps to the song's key instead of the nearest
+  semitone, both as heard with the clip's transpose, and `min_cents`
+  leaves notes already that close; the answer says how many were
+  `snapped`. `get_pitch_notes` reads them back, with each note's pitch
+  line when asked (`line: true`).
   Each note gives its pitch in the file (`pitch`, `now`) and as heard
   with the clip's transpose (`plays`, `plays_midi`), and its time in the
   file's seconds (`start_seconds`) and on the timeline

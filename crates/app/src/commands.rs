@@ -104,6 +104,7 @@ pub(crate) enum Cmd {
     PitchNotesUp,
     PitchNotesDown,
     SnapPitchNotes,
+    SnapPitchNotesToKey,
     FlattenPitchDrift,
     ResetPitchNotes,
     StretchMarkersFromAttacks,
@@ -1301,6 +1302,18 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Move each chosen note (or all of the clip's) to the nearest whole note")
     .words("pitch correction tune in tune sharp flat autotune quantise"),
+    info(
+        Cmd::SnapPitchNotesToKey,
+        "snap-pitch-notes-to-key",
+        "Edit",
+        "Snap notes to the key",
+        &[],
+    )
+    .hint(
+        "Move each chosen note (or all of the clip's) to the nearest note of the song's key, \
+         as the clip plays it",
+    )
+    .words("pitch correction tune scale in key autotune quantise"),
     info(
         Cmd::FlattenPitchDrift,
         "flatten-pitch-drift",
@@ -3098,6 +3111,7 @@ impl App {
             | Cmd::SnapPitchNotes
             | Cmd::FlattenPitchDrift
             | Cmd::ResetPitchNotes => self.has_pitch_notes(),
+            Cmd::SnapPitchNotesToKey => self.has_pitch_notes() && self.scale.is_some(),
             Cmd::KitNext | Cmd::KitSkip | Cmd::KitBack | Cmd::KitCancel => self.kits.learning(),
             Cmd::AudioSetupNext
             | Cmd::AudioSetupSkip
@@ -3383,6 +3397,7 @@ impl App {
             | Cmd::PitchNotesUp
             | Cmd::PitchNotesDown
             | Cmd::SnapPitchNotes
+            | Cmd::SnapPitchNotesToKey
             | Cmd::FlattenPitchDrift
             | Cmd::ResetPitchNotes => {
                 self.run_pitch(cmd);

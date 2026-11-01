@@ -9,7 +9,7 @@ use daw_project::{MAX_VIBRATO_PCT, PitchNote};
 
 use crate::App;
 use crate::agent::{Access, Tool};
-use crate::pitch_edit::{MIN_SECONDS, clamp_cents, note_name, retime, snapped};
+use crate::pitch_edit::{MIN_SECONDS, SnapTo, clamp_cents, note_name, retime, snap_shift};
 use crate::timeline::Clip;
 use daw_engine::time::TempoMap;
 
@@ -54,13 +54,18 @@ pub(crate) const TOOLS: &[Tool] = &[
                       to_plays_midi so that it is heard at that pitch, with the clip's \
                       transpose (as plays_midi reads), shift_semitones sets its move, \
                       by_semitones adds to it, snap: true puts it on the nearest whole \
-                      note as heard (with the clip's transpose); move_seconds and \
+                      note and snap: \"key\" on the nearest note of the song's key \
+                      (both as heard, with the clip's transpose), and min_cents leaves \
+                      the notes already that close to where they would go (so snap: \
+                      \"key\", min_cents: 30 snaps every note more than 30 cents off); \
+                      move_seconds and \
                       resize_seconds, in the file's own seconds, set how far it is moved \
                       in time and made longer (they stop where the audio around it would \
                       stretch more than 3×); drift_pct (0 to 100) and vibrato_pct (0 to 300) set how \
                       much of each is kept; formant_semitones (-12 to 12) moves the \
                       voice's character; reset: true takes every edit off first. Answers \
-                      with the notes as get_pitch_notes does. One undo step.",
+                      with the notes as get_pitch_notes does, and with a snap how many \
+                      notes it moved (snapped) and to which key. One undo step.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "required": ["clip"], "properties": {
@@ -73,7 +78,11 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "to_plays_midi": {"type": "number", "description": "The pitch heard, after the clip's transpose."},
                 "shift_semitones": {"type": "number", "description": "-12 to 12."},
                 "by_semitones": {"type": "number"},
-                "snap": {"type": "boolean"},
+                "snap": {"enum": [true, false, "semitone", "key"],
+                         "description": "true or \"semitone\": the nearest whole note; \
+                                         \"key\": the nearest note of the song's key."},
+                "min_cents": {"type": "number",
+                              "description": "0 to 100: with snap, leave notes this close."},
                 "move_seconds": {"type": "number"},
                 "resize_seconds": {"type": "number"},
                 "drift_pct": {"type": "number"},
@@ -207,7 +216,21 @@ impl App {
             MAX_VIBRATO_PCT as f64,
         )?;
         let formant = within(&args["formant_semitones"], "formant_semitones", -12.0, 12.0)?;
-        let snap = args["snap"].as_bool() == Some(true);
+        let snap = match &args["snap"] {
+            Value::Null | Value::Bool(false) => None,
+            Value::Bool(true) => Some(SnapTo::Semitone),
+            Value::String(s) if s == "semitone" => Some(SnapTo::Semitone),
+            Value::String(s) if s == "key" => Some(SnapTo::Key(self.scale.ok_or(
+                "The song has no key to snap to: set one with set_key, or snap: true for \
+                 the nearest whole note.",
+            )?)),
+            _ => return Err("snap is true, \"semitone\" or \"key\".".into()),
+        };
+        let min_cents = within(&args["min_cents"], "min_cents", 0.0, 100.0)?;
+        if min_cents.is_some() && snap.is_none() {
+            return Err("min_cents goes with snap.".into());
+        }
+        let min_cents = min_cents.map_or(0, |m| m.round() as i64);
         let reset = args["reset"].as_bool() == Some(true);
         let picked: Option<Vec<usize>> = match &args["notes"] {
             Value::Null => None,
@@ -253,6 +276,7 @@ impl App {
         let frames = |s: f64| (s * rate).round() as i64;
         let c = &mut self.tracks[l].clips[k];
         let clip_cents = c.cents as i64;
+        let mut snapped = 0;
         let range = (c.offset as i64, (c.offset + c.len) as i64);
         let min_len = frames(MIN_SECONDS);
         for &i in &targets {
@@ -272,8 +296,11 @@ impl App {
             if let Some(b) = by {
                 n.shift = clamp_cents(n.shift + (b * 100.0).round() as i64);
             }
-            if snap {
-                n.shift = snapped(n.cents + clip_cents, n.shift);
+            if let Some(to) = snap
+                && let Some(s) = snap_shift(n.cents, n.shift, clip_cents, to, min_cents)
+            {
+                snapped += usize::from(s != n.shift);
+                n.shift = s;
             }
             if let Some(d) = drift {
                 n.drift = d.round() as i64;
@@ -302,7 +329,13 @@ impl App {
         if changed {
             self.rebuild();
         }
-        let v = notes_value(&self.tracks[l].clips[k], &self.tempo_map(), false);
+        let mut v = notes_value(&self.tracks[l].clips[k], &self.tempo_map(), false);
+        if let Some(to) = snap {
+            v["snapped"] = json!(snapped);
+            if let SnapTo::Key(s) = to {
+                v["key"] = json!(s.label());
+            }
+        }
         Ok((v, changed.then(|| "Edit pitch notes".to_string())))
     }
 }

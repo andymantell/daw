@@ -382,6 +382,7 @@ impl App {
                     self.meters.show(None);
                 }
                 let before = self.master.mix.gain_db;
+                // ai: set_parameter
                 ui.name_inputs("Master volume", |ui| {
                     ui.add(
                         egui::Slider::new(&mut self.master.mix.gain_db, -60.0..=12.0)
@@ -402,6 +403,7 @@ impl App {
                     n => format!("FX ({n})"),
                 };
                 let open = self.effects.open_master;
+                // ai: view
                 if ui
                     .selectable_label(open, label)
                     .accessible_name("Effects on the master")

@@ -29,6 +29,7 @@ mod export;
 mod freeze;
 mod fx;
 mod groups;
+mod history;
 mod hitpoints;
 mod instrument;
 mod interchange;
@@ -413,6 +414,8 @@ struct App {
     comment_ui: comments::Comments,
     /// The snapshots window.
     snapshot_ui: snapshots::Snapshots,
+    /// The undo list and activity window.
+    history: history::History,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
     preset_ui: presets::Presets,
@@ -562,6 +565,7 @@ impl App {
             comments: Vec::new(),
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
+            history: history::History::default(),
             template_ui: templates::Templates::default(),
             preset_ui: presets::Presets::default(),
             start: start::Start::new((!cfg!(test)).then(|| config_dir().join("start.txt"))),
@@ -2484,6 +2488,8 @@ impl eframe::App for App {
                 self.top_menu(ui, "Edit", |app, ui| {
                     app.menu_item(ui, Cmd::Undo);
                     app.menu_item(ui, Cmd::Redo);
+                    app.menu_item(ui, Cmd::History);
+                    app.menu_item(ui, Cmd::Activity);
                     app.menu_gap();
                     app.menu_item(ui, Cmd::AddInstrumentTrack);
                     app.menu_gap();
@@ -2880,6 +2886,7 @@ impl eframe::App for App {
         self.interchange_windows(&ctx);
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
+        self.history_window(&ctx);
         self.tempo_window(&ctx);
         self.hit_points_window(&ctx);
         self.select_notes_window(&ctx);

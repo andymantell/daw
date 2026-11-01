@@ -38,6 +38,8 @@ pub(crate) enum Cmd {
     ExportVideo,
     Undo,
     Redo,
+    History,
+    Activity,
     Split,
     Delete,
     Marker,
@@ -662,6 +664,12 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .repeat()
     .everyday(),
+    info(Cmd::History, "undo-list", "Edit", "Undo list…", &[])
+        .hint("Your changes by name, to go back several at a time")
+        .words("history steps undo redo jump back"),
+    info(Cmd::Activity, "activity", "Edit", "Activity…", &[])
+        .hint("Who changed what in the project, and when")
+        .words("history changes log who when"),
     info(
         Cmd::Split,
         "split",
@@ -2544,6 +2552,8 @@ impl App {
             Cmd::ExportVideo => self.export_video(),
             Cmd::Undo => self.undo(ctx),
             Cmd::Redo => self.redo(ctx),
+            Cmd::History => self.history.show(crate::history::View::Undo),
+            Cmd::Activity => self.history.show(crate::history::View::Activity),
             Cmd::PlayStop => self.toggle_play(),
             Cmd::ToStart => self.send(Command::Seek(Frames(0))),
             Cmd::Record => {

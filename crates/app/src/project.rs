@@ -384,21 +384,34 @@ impl App {
     }
 
     pub(crate) fn undo(&mut self, ctx: &egui::Context) {
-        self.sync_doc(ctx, true);
-        let before = self.proj.doc.get();
-        if self.proj.doc.undo() {
-            let after = self.proj.doc.get();
-            // Plugin settings a restore changed come back too.
-            self.reload_changed_fx(&before, &after);
-            self.apply(after);
-            self.proj.dirty = true;
-        }
+        self.undo_steps(ctx, 1);
     }
 
     pub(crate) fn redo(&mut self, ctx: &egui::Context) {
+        self.redo_steps(ctx, 1);
+    }
+
+    /// Undoes up to `n` of this user's steps at once (see the undo
+    /// list, `history.rs`). Returns how many were undone.
+    pub(crate) fn undo_steps(&mut self, ctx: &egui::Context, n: usize) -> usize {
         self.sync_doc(ctx, true);
         let before = self.proj.doc.get();
-        if self.proj.doc.redo() {
+        let done = self.proj.doc.undo_steps(n);
+        self.after_undo(before, done);
+        done
+    }
+
+    /// Redoes up to `n` steps. Returns how many were redone.
+    pub(crate) fn redo_steps(&mut self, ctx: &egui::Context, n: usize) -> usize {
+        self.sync_doc(ctx, true);
+        let before = self.proj.doc.get();
+        let done = self.proj.doc.redo_steps(n);
+        self.after_undo(before, done);
+        done
+    }
+
+    fn after_undo(&mut self, before: Project, done: usize) {
+        if done > 0 {
             let after = self.proj.doc.get();
             // Plugin settings a restore changed come back too.
             self.reload_changed_fx(&before, &after);

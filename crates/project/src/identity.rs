@@ -296,6 +296,18 @@ impl ProjectDoc {
         who.members.get(key).map(Member::shown_name)
     }
 
+    /// Who each run of the app was: Loro peer id to member key, and key
+    /// to the name shown. Both empty for a project with no owner.
+    pub(crate) fn peer_keys(&self) -> (BTreeMap<u64, String>, BTreeMap<String, String>) {
+        let Some(who) = Who::read(&self.doc, None) else {
+            return Default::default();
+        };
+        let names = (who.members.iter())
+            .map(|(k, m)| (k.clone(), m.shown_name()))
+            .collect();
+        (who.peers, names)
+    }
+
     /// Lets `key` in as `role` (editor or commenter), or with `None`
     /// takes their role away. Only the owner can, and the owner's own
     /// role can't be changed. Undoable.
@@ -325,6 +337,7 @@ impl ProjectDoc {
             }
         }
         self.doc.commit();
+        self.note_step("Changed who may edit", Vec::new());
         Ok(())
     }
 

@@ -365,6 +365,19 @@ fn report_value(l: &[f32], r: &[f32], rate: u32, from: f64, what: &str) -> Value
         "correlation": rep.correlation,
         "third_octave_bands": bands,
         "bands_note": "Average level per third-octave band, in dB where a full-scale sine reads about 0.",
+        "key": rep.key.map(|k| json!({
+            "key": daw_project::Scale::new(
+                k.root,
+                if k.minor { daw_project::ScaleKind::Minor } else { daw_project::ScaleKind::Major },
+            ).label(),
+            "margin": (k.margin * 1000.0).round() / 1000.0,
+            "note": "By the notes heard; a margin under about 0.05 is a close call, often with the relative major or minor.",
+        })),
+        "tempo": rep.tempo.map(|t| json!({
+            "bpm": t.bpm,
+            "strength": (t.strength * 100.0).round() / 100.0,
+            "note": "By the attacks heard; half or double is a common mistake.",
+        })),
     })
 }
 

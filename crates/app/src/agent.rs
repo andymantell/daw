@@ -150,8 +150,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "analyse",
         description: "Renders a stretch offline and measures it: sample and true peak, \
                       RMS, integrated and short-term loudness, loudness range, stereo \
-                      correlation, and the level in each third-octave band from 20 Hz to \
-                      20 kHz. Of one track or bus on its own (after its fader), or of the \
+                      correlation, the level in each third-octave band from 20 Hz to \
+                      20 kHz, and the key and tempo it sounds in, when it can tell. Of one track or bus on its own (after its fader), or of the \
                       mix, maybe without one track. Without times: the loop if it is on, \
                       else the whole song (at most 10 minutes).",
         access: Access::Read,
@@ -186,6 +186,21 @@ pub(crate) const TOOLS: &[Tool] = &[
             json!({"type": "object", "properties": {
                 "runs": {"type": "integer",
                          "description": "How many runs of activity to give; 20 if not said."}
+            }})
+        },
+    },
+    Tool {
+        name: "wait_for_change",
+        description: "Waits until the project changes (by the person, another member, or an \
+                      assistant), then answers with its new revision; or answers at once \
+                      with the revision now if none is given. Give the revision last seen \
+                      to hear of the next change, and get_history or get_project for what \
+                      it was. Waits up to timeout_seconds (30 if left out, at most 60).",
+        access: Access::Read,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "revision": {"type": "integer"},
+                "timeout_seconds": {"type": "number"}
             }})
         },
     },
@@ -504,7 +519,15 @@ pub(crate) struct Agent {
     pub(crate) inbox: Sender<Request>,
     requests: Receiver<Request>,
     running: Vec<Running>,
+    /// Counts the project's changes, by anyone, since the app started.
+    pub(crate) revision: u64,
+    /// `wait_for_change` calls waiting.
+    waiting: Vec<Waiting>,
 }
+
+/// A `wait_for_change` call: the revision seen, until when, and where
+/// its answer goes.
+type Waiting = (u64, std::time::Instant, Sender<Result<Value, String>>);
 
 impl Default for Agent {
     fn default() -> Agent {
@@ -513,6 +536,8 @@ impl Default for Agent {
             inbox,
             requests,
             running: Vec::new(),
+            revision: 0,
+            waiting: Vec::new(),
         }
     }
 }
@@ -550,6 +575,18 @@ impl App {
             }
             let _ = r.reply.send(r.result);
         }
+        let now = std::time::Instant::now();
+        let rev = self.agent.revision;
+        let (done, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.agent.waiting)
+            .into_iter()
+            .partition(|(seen, until, _)| *seen != rev || now >= *until);
+        self.agent.waiting = wait;
+        for (seen, _, reply) in done {
+            let _ = reply.send(Ok(json!({"revision": rev, "changed": seen != rev})));
+        }
+        if !self.agent.waiting.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         while let Ok(req) = self.agent.requests.try_recv() {
             let Some(t) = tool(&req.tool) else {
                 let _ = req
@@ -564,6 +601,20 @@ impl App {
                     t.access.name(),
                     req.access.name()
                 )));
+                continue;
+            }
+            if t.name == "wait_for_change" {
+                let rev = self.agent.revision;
+                let Some(seen) = req.args["revision"].as_u64() else {
+                    let _ = req
+                        .reply
+                        .send(Ok(json!({"revision": rev, "changed": false})));
+                    continue;
+                };
+                let secs = req.args["timeout_seconds"].as_f64().unwrap_or(30.0);
+                let until = now + std::time::Duration::from_secs_f64(secs.clamp(0.0, 60.0));
+                self.agent.waiting.push((seen, until, req.reply));
+                ctx.request_repaint();
                 continue;
             }
             if crate::listen::LATER.contains(&t.name) {
@@ -1482,6 +1533,47 @@ mod tests {
             .call("run_command", json!({"id": "import-midi"}))
             .unwrap_err();
         assert!(e.contains("file chooser"), "{e}");
+    }
+
+    #[test]
+    fn a_change_wakes_a_waiting_assistant() {
+        let mut d = Driver::new();
+        let r0 = d.call("wait_for_change", json!({})).unwrap()["revision"]
+            .as_u64()
+            .unwrap();
+        let r = d
+            .call(
+                "wait_for_change",
+                json!({"revision": r0, "timeout_seconds": 0.2}),
+            )
+            .unwrap();
+        assert_eq!(r["changed"], false);
+        // A change by the person, while the assistant waits.
+        let (reply, answer) = mpsc::channel();
+        d.app()
+            .agent
+            .inbox
+            .send(Request {
+                tool: "wait_for_change".into(),
+                args: json!({"revision": r0, "timeout_seconds": 20}),
+                access: Access::Read,
+                reply,
+            })
+            .unwrap();
+        d.h.step();
+        let ctx = d.h.ctx.clone();
+        d.app().run(&ctx, Cmd::AddAudioTrack);
+        let mut got = None;
+        for _ in 0..200 {
+            d.h.step();
+            if let Ok(v) = answer.try_recv() {
+                got = Some(v.unwrap());
+                break;
+            }
+        }
+        let got = got.expect("answered");
+        assert_eq!(got["changed"], true);
+        assert!(got["revision"].as_u64().unwrap() > r0);
     }
 
     #[test]

@@ -7,6 +7,31 @@ sources and written from scratch. No code, samples or factory sounds
 from anyone else. Synths are described by their architecture and era,
 not by product name, as the project's plan rule asks.
 
+## Priority: the analogue sound
+
+The owner's priority is getting the analogue sound right, over feature
+count. That means, in order:
+
+1. **The toolkit's filters and saturation come first and are judged by
+   ear and by measurement**, not just by tests passing. The toolkit
+   thread renders a fixed set of sounds (a resonant bass sweep, a
+   self-oscillating filter, an overdriven mixer, a slow pad with drift)
+   to files in the project's shared folder for the owner to listen to,
+   and compares each filter's measured response against the published
+   one before anything is built on it.
+2. **Nonlinearity everywhere the circuits have it**: saturating filter
+   stages and feedback paths, mixer and amplifier overdrive, and
+   oversampling so that drive doesn't alias. A linear filter with drive
+   bolted on afterwards is not acceptable.
+3. **Movement**: oscillator drift and phase, envelope curves and
+   retrigger quirks, the chorus's wobble. These are what stop a sound
+   from being static.
+4. **Then the breadth**: the nine synths, with the monosynths for bass
+   and leads first, since the complaint was a bass.
+
+If a synth's thread has to choose between one more feature and the
+filter sounding right, the filter wins.
+
 ## Why the current synth sounds basic
 
 The poly-synth (`crates/instruments/src/synth.rs`) is clean and correct,

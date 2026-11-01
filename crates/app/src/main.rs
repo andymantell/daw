@@ -18,6 +18,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod agent;
+mod assistants;
 mod automation;
 mod browser;
 mod commands;
@@ -34,6 +35,7 @@ mod kits;
 mod latency;
 mod layers;
 mod lessons;
+mod listen;
 mod meters;
 mod midi;
 mod midifile;
@@ -436,6 +438,10 @@ struct App {
     video: video::Videos,
     /// Tool calls from AI assistants (roadmap 2.11).
     agent: agent::Agent,
+    /// Settings → AI assistants…, and the server they connect to.
+    assistants: assistants::Assistants,
+    /// Renders and pictures being made for assistants.
+    listening: listen::Listening,
 }
 
 /// How often to look for a lost device.
@@ -556,6 +562,8 @@ impl App {
             browser_sent: false,
             video: video::Videos::default(),
             agent: agent::Agent::default(),
+            assistants: assistants::Assistants::load(),
+            listening: listen::Listening::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -2522,6 +2530,7 @@ impl eframe::App for App {
                         Cmd::DrumKits,
                         Cmd::KeyCommands,
                         Cmd::Theme,
+                        Cmd::Assistants,
                     ] {
                         self.menu_item(ui, c);
                     }
@@ -2747,7 +2756,9 @@ impl eframe::App for App {
         self.time_window(&ctx);
         self.timing_window(&ctx);
         self.remote_tick(&ctx);
+        self.assistants_tick(&ctx);
         self.agent_tick(&ctx);
+        self.listen_tick(&ctx);
         self.template_windows(&ctx);
         self.poll_loading(&ctx);
         self.poll_sharing(&ctx);

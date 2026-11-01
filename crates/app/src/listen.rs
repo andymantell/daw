@@ -355,6 +355,7 @@ fn report_value(l: &[f32], r: &[f32], rate: u32, from: f64, what: &str) -> Value
         "sample_peak_dbfs": rep.sample_peak_db,
         "true_peak_dbtp": rep.true_peak_db,
         "rms_dbfs": rep.rms_db,
+        "crest_factor_db": rep.sample_peak_db - rep.rms_db,
         "integrated_lufs": finite(rep.integrated_lufs),
         "short_term_max_lufs": finite(rep.short_term_max_lufs),
         "loudness_range_lu": finite(rep.loudness_range_lu),

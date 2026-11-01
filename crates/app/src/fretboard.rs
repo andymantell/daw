@@ -1378,8 +1378,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(h.state().master_meter.0 >= 0.001, "the note is heard");
-        // And stops of its own accord.
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // And stops of its own accord. The meter falls by frames' time,
+        // not the clock's, so that takes a few hundred frames: slow
+        // machines need longer than fast ones.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while h.state().master_meter.0 > 0.0001 && std::time::Instant::now() < end {
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(20));

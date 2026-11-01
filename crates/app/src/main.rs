@@ -30,6 +30,7 @@ mod fx;
 mod groups;
 mod hitpoints;
 mod instrument;
+mod interchange;
 mod kits;
 mod latency;
 mod layers;
@@ -440,6 +441,8 @@ struct App {
     video: video::Videos,
     /// Tool calls from AI assistants (roadmap 2.11).
     agent: agent::Agent,
+    /// Exporting for and importing from other DAWs.
+    swap: interchange::Swap,
 }
 
 /// How often to look for a lost device.
@@ -564,6 +567,7 @@ impl App {
             browser_sent: false,
             video: video::Videos::default(),
             agent: agent::Agent::default(),
+            swap: interchange::Swap::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -2409,6 +2413,8 @@ impl eframe::App for App {
                     app.menu_gap();
                     app.menu_item(ui, Cmd::Export);
                     app.menu_item(ui, Cmd::ExportVideo);
+                    app.menu_item(ui, Cmd::ExportDawProject);
+                    app.menu_item(ui, Cmd::ImportDawProject);
                     app.menu_item(ui, Cmd::ImportMidi);
                     app.menu_item(ui, Cmd::ExportMidi);
                     app.menu_item(ui, Cmd::ImportMusicXml);
@@ -2779,6 +2785,7 @@ impl eframe::App for App {
         self.crashes.window(&ctx);
         self.start_window(&ctx);
         self.project_windows(&ctx);
+        self.interchange_windows(&ctx);
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.tempo_window(&ctx);

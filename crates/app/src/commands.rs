@@ -125,6 +125,8 @@ pub(crate) enum Cmd {
     Instrument,
     AddLayer,
     SingleInstrument,
+    ExportDawProject,
+    ImportDawProject,
     ImportMidi,
     ExportMidi,
     NotationLane,
@@ -380,6 +382,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("A copy of the video with the mix as its sound; the picture is copied as it is")
     .words("film picture movie score scoring render mp4 mov soundtrack"),
+    info(
+        Cmd::ExportDawProject,
+        "export-for-other-daws",
+        "File",
+        "Export for other DAWs…",
+        &[],
+    )
+    .hint("The project as a .dawproject file, which several other DAWs open; says first what won't go")
+    .words("dawproject interchange exchange share other daw convert"),
+    info(
+        Cmd::ImportDawProject,
+        "import-from-other-daw",
+        "File",
+        "Import from another DAW…",
+        &[],
+    )
+    .hint("Opens a .dawproject file from another DAW as a new project, and says what didn't come in")
+    .words("dawproject interchange exchange open other daw convert"),
     info(
         Cmd::ImportMidi,
         "import-midi",
@@ -2393,6 +2413,8 @@ impl App {
                     );
                 }
             }
+            Cmd::ExportDawProject => self.ask_export_dawproject(),
+            Cmd::ImportDawProject => self.pick_import_dawproject(ctx),
             Cmd::ImportMidi => self.pick_midi_file(ctx),
             Cmd::ExportMidi => self.export_midi_file(),
             Cmd::NotationLane => self.toggle_notation_lane(),

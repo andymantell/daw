@@ -212,10 +212,22 @@ impl App {
         let graph = self.render_graph(&s, &tracks, &mut plugins)?;
         let rate = self.rate as f64;
         let map = self.tempo_map();
-        let (from, to) = match (args["from_seconds"].as_f64(), args["to_seconds"].as_f64()) {
-            (Some(a), Some(b)) => ((a * rate) as i64, (b * rate) as i64),
-            (Some(a), None) => ((a * rate) as i64, graph.end().0),
-            (None, Some(b)) => (0, (b * rate) as i64),
+        let bar = |b: i64| map.frames_at(map.bar_start(b.max(1))).0;
+        let seconds = |key: &str| args[key].as_f64().map(|x| (x * rate) as i64);
+        let mut from_at = seconds("from_seconds").or(args["from_bar"].as_i64().map(bar));
+        let mut to_at = seconds("to_seconds").or(args["to_bar"].as_i64().map(bar));
+        if let Some(name) = args["section"].as_str() {
+            let all = self.sections();
+            let sec = (all.iter())
+                .find(|x| x.id == name || x.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| format!("There is no section {name}."))?;
+            from_at = Some(bar(sec.from));
+            to_at = Some(bar(sec.to));
+        }
+        let (from, to) = match (from_at, to_at) {
+            (Some(a), Some(b)) => (a, b),
+            (Some(a), None) => (a, graph.end().0),
+            (None, Some(b)) => (0, b),
             (None, None) if self.looping => (
                 map.frames_at(map.bar_start(self.loop_bars.0)).0,
                 map.frames_at(map.bar_start(self.loop_bars.1)).0,
@@ -535,6 +547,27 @@ mod tests {
         assert!(none["rms_dbfs"].as_f64().unwrap() < -100.0, "{none}");
         assert_eq!(none["integrated_lufs"], Value::Null);
         assert!(d.call("analyse", json!({"track": "nope"})).is_err());
+
+        // A section by its marker, and bars: the same stretch.
+        d.call(
+            "edit_markers",
+            json!({"add": [{"bar": 1, "name": "Intro"}, {"bar": 2, "name": "Verse"}]}),
+        )
+        .unwrap();
+        let by_section = d
+            .call("analyse", json!({"track": key, "section": "intro"}))
+            .unwrap();
+        let by_bars = d
+            .call("analyse", json!({"track": key, "from_bar": 1, "to_bar": 2}))
+            .unwrap();
+        // One bar of 4/4 at the default tempo.
+        let bar = 4.0 * 60.0 / d.project()["tempo_bpm"].as_f64().unwrap();
+        assert!(
+            (by_section["seconds"].as_f64().unwrap() - bar).abs() < 1e-3,
+            "{by_section}"
+        );
+        assert_eq!(by_section["seconds"], by_bars["seconds"]);
+        assert!(d.call("analyse", json!({"section": "Chorus"})).is_err());
     }
 
     #[test]

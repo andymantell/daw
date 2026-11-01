@@ -137,7 +137,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Puts a sound into one of a built-in instrument's sound slots, as \
                       its window's Sound menus do. Slots: the drum sampler's \"sample\"; \
                       a drum machine pad's layer, \"pad0.layer0\" (pads 0 to 15 from note \
-                      36, layers 0 to 3; the layer is set to play the sound); the \
+                      36, layers 0 to 3; the layer is set to play the sound, all of \
+                      it: shorten it with its decay); the \
                       sampler's zones, \"zone0\" on (a new zone after the last; its root \
                       note and key range are then set with set_parameter, as \
                       instrument.zone0.root, .lo and .hi). The sound \
@@ -371,9 +372,14 @@ impl App {
             if let Some((pad, l)) = pad_layer(&slot)
                 && !sound.is_empty()
             {
-                let k = format!("pad{pad}.layer{l}.source");
-                e.params.retain(|(x, _)| *x != k);
-                e.params.push((k, daw_instruments::drum_machine::SAMPLE));
+                // It plays the sound, all of it: a pad's own drum fades
+                // early, which would cut a cymbal's tail.
+                use daw_instruments::drum_machine::{NO_FADE, SAMPLE};
+                for (k, v) in [("source", SAMPLE), ("decay", NO_FADE)] {
+                    let k = format!("pad{pad}.layer{l}.{k}");
+                    e.params.retain(|(x, _)| *x != k);
+                    e.params.push((k, v));
+                }
             }
             Ok(json!({"track": key, "slot": slot}))
         })
@@ -679,6 +685,18 @@ mod tests {
             .find(|p| p["param"] == "instrument.pad0.level")
             .expect("a pad's level is listed");
         assert_eq!(level["max"], 12.0);
+        let pad = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": "instrument.pad0."}),
+            )
+            .unwrap();
+        let pad = pad[0]["params"].as_array().unwrap();
+        assert!(!pad.is_empty() && pad.len() < 60, "{}", pad.len());
+        assert!(
+            pad.iter()
+                .all(|p| p["param"].as_str().unwrap().starts_with("instrument.pad0."))
+        );
         d.call(
             "set_parameter",
             json!({"track": t, "param": "instrument.pad0.level", "value": -9.0}),
@@ -769,10 +787,12 @@ mod tests {
         let s = b.sample("pad2.layer0").expect("the pad has the sound");
         assert_eq!(s.reference, path);
         assert!(s.sample.is_some(), "and it was read");
-        let source = daw_instruments::drum_machine::layer_at(2, 0, 0);
+        use daw_instruments::drum_machine::{NO_FADE, SAMPLE, layer, layer_at};
+        assert_eq!(b.params().get(layer_at(2, 0, layer::SOURCE)), SAMPLE);
         assert_eq!(
-            b.params().get(source),
-            daw_instruments::drum_machine::SAMPLE
+            b.params().get(layer_at(2, 0, layer::DECAY)),
+            NO_FADE,
+            "played whole"
         );
 
         // Clearing it, and slots and files that aren't there.

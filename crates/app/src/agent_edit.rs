@@ -43,8 +43,10 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "edit_track",
         description: "Changes a track: its name, where its audio goes (a bus's id, or \
-                      \"master\"), the folder it sits in (a folder's id, or \"none\"), or its \
-                      place in the list. Only what is given changes.",
+                      \"master\"), the folder it sits in (a folder's id, or \"none\"), the \
+                      control group whose fader and mute act on it (a group's id from \
+                      get_project, or \"none\"; add one with the add-control-group \
+                      command), or its place in the list. Only what is given changes.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -52,6 +54,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "name": {"type": "string"},
                 "output": {"type": "string"},
                 "folder": {"type": "string"},
+                "group": {"type": "string"},
                 "index": {"type": "integer"}
             }, "required": ["track"]})
         },
@@ -113,6 +116,46 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "edit_control_group",
+        description: "Changes a control group (one fader and mute over several tracks, \
+                      without summing their audio): its name, its fader, its mute; or \
+                      deletes it, letting its tracks go. Add one with the \
+                      add-control-group command, and put tracks in it with edit_track.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "group": {"type": "string", "description": "Its id, from get_project."},
+                "name": {"type": "string"},
+                "gain_db": {"type": "number"},
+                "mute": {"type": "boolean"},
+                "delete": {"type": "boolean"}
+            }, "required": ["group"]})
+        },
+    },
+    Tool {
+        name: "set_sound",
+        description: "Puts a sound into one of a built-in instrument's sound slots, as \
+                      its window's Sound menus do. Slots: the drum sampler's \"sample\"; \
+                      a drum machine pad's layer, \"pad0.layer0\" (pads 0 to 15 from note \
+                      36, layers 0 to 3; the layer is set to play the sound); the \
+                      sampler's zones, \"zone0\" on (a new zone after the last; its root \
+                      note and key range are then set with set_parameter, as \
+                      instrument.zone0.root, .lo and .hi). The sound \
+                      is a full path to a sound file (wav, flac, mp3, ogg, opus, aiff, \
+                      m4a), or one the app makes: made:keys, made:pluck, made:kick, \
+                      made:snare, made:hat, made:loop; empty to clear the slot.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string"},
+                "layer": {"type": "string", "description": "A layer's id, for a layered \
+                          instrument; the track's own instrument if left out."},
+                "slot": {"type": "string"},
+                "sound": {"type": "string"}
+            }, "required": ["track", "slot", "sound"]})
+        },
+    },
+    Tool {
         name: "remove_effect",
         description: "Takes an effect off a track, with what is inside it if it is a \
                       container.",
@@ -125,6 +168,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
 ];
+
+/// A drum machine's pad and layer, from its slot's name ("pad3.layer0").
+fn pad_layer(slot: &str) -> Option<(usize, usize)> {
+    use daw_instruments::drum_machine::{LAYERS, PADS};
+    let (pad, layer) = slot.strip_prefix("pad")?.split_once(".layer")?;
+    let (pad, layer) = (pad.parse().ok()?, layer.parse().ok()?);
+    (pad < PADS && layer < LAYERS).then_some((pad, layer))
+}
 
 fn text<'a>(args: &'a Value, key: &str, what: &str) -> Result<&'a str, String> {
     args[key].as_str().ok_or_else(|| format!("Give {what}."))
@@ -160,6 +211,8 @@ impl App {
             "add_effect" => self.add_effect_tool(args),
             "edit_effect" => self.edit_effect_tool(args),
             "remove_effect" => self.remove_effect_tool(args),
+            "set_sound" => self.set_sound_tool(args),
+            "edit_control_group" => self.edit_group_tool(args),
             _ => {
                 return self
                     .arrange_tool(name, args)
@@ -237,6 +290,96 @@ impl App {
         ))
     }
 
+    fn edit_group_tool(&mut self, args: &Value) -> Done {
+        let key = text(args, "group", "the control group's id")?.to_string();
+        self.edit_model(|p| {
+            let i = (p.control_groups.iter())
+                .position(|g| g.id == key)
+                .ok_or_else(|| format!("There is no control group {key}."))?;
+            if args["delete"].as_bool() == Some(true) {
+                p.control_groups.remove(i);
+                for t in &mut p.tracks {
+                    if t.group.as_deref() == Some(key.as_str()) {
+                        t.group = None;
+                    }
+                }
+                return Ok(json!({"group": key, "deleted": true}));
+            }
+            let g = &mut p.control_groups[i];
+            if let Some(n) = args["name"].as_str() {
+                g.name = n.into();
+            }
+            if let Some(db) = args["gain_db"].as_f64() {
+                g.gain_db = db.clamp(-60.0, 12.0);
+            }
+            if let Some(m) = args["mute"].as_bool() {
+                g.mute = m;
+            }
+            Ok(json!({"group": key}))
+        })
+        .map(|v| (v, Some("Change a control group".into())))
+    }
+
+    fn set_sound_tool(&mut self, args: &Value) -> Done {
+        let key = text(args, "track", "the track's id")?.to_string();
+        let slot = text(args, "slot", "the sound slot")?.to_string();
+        let sound = text(args, "sound", "the sound")?.to_string();
+        if !sound.is_empty()
+            && daw_instruments::made::name(&sound).is_none()
+            && !std::path::Path::new(&sound).is_file()
+        {
+            return Err(format!("There is no sound file {sound}."));
+        }
+        let layer = args["layer"].as_str().map(str::to_string);
+        self.edit_model(|p| {
+            let i = track_at(p, &key)?;
+            let t = &mut p.tracks[i];
+            let e = match &layer {
+                Some(l) => {
+                    &mut (t.layers.iter_mut())
+                        .find(|x| &x.id == l)
+                        .ok_or_else(|| format!("Track {key} has no layer {l}."))?
+                        .instrument
+                }
+                None => t
+                    .instrument
+                    .as_mut()
+                    .ok_or_else(|| format!("Track {key} has no instrument."))?,
+            };
+            let kind = daw_instruments::Kind::from_id(&e.builtin).ok_or(
+                "That instrument has no sound slots: it isn't one that comes with the app.",
+            )?;
+            let fits = match kind {
+                daw_instruments::Kind::DrumSampler => slot == "sample",
+                daw_instruments::Kind::Slicer => {
+                    return Err("The loop slicer's loop is chosen in its window for now.".into());
+                }
+                daw_instruments::Kind::Sampler => slot
+                    .strip_prefix("zone")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .is_some(),
+                daw_instruments::Kind::DrumMachine => pad_layer(&slot).is_some(),
+                daw_instruments::Kind::Synth => false,
+            };
+            if !fits {
+                return Err(format!("A {} has no sound slot {slot}.", kind.name()));
+            }
+            e.samples.retain(|(k, _)| *k != slot);
+            if !sound.is_empty() {
+                e.samples.push((slot.clone(), sound.clone()));
+            }
+            if let Some((pad, l)) = pad_layer(&slot)
+                && !sound.is_empty()
+            {
+                let k = format!("pad{pad}.layer{l}.source");
+                e.params.retain(|(x, _)| *x != k);
+                e.params.push((k, daw_instruments::drum_machine::SAMPLE));
+            }
+            Ok(json!({"track": key, "slot": slot}))
+        })
+        .map(|v| (v, Some("Choose a sound".into())))
+    }
+
     fn edit_track_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?.to_string();
         self.edit_model(|p| {
@@ -266,6 +409,13 @@ impl App {
                         }
                         Some(f.into())
                     }
+                };
+            }
+            if let Some(group) = args["group"].as_str() {
+                p.tracks[i].group = match group {
+                    "none" => None,
+                    g if p.control_groups.iter().any(|x| x.id == g) => Some(g.into()),
+                    g => return Err(format!("There is no control group {g}.")),
                 };
             }
             if let Some(to) = args["index"].as_i64() {
@@ -477,6 +627,192 @@ mod tests {
         let p = d.project();
         assert_eq!(track(&p, &audio)["output"], json!(bus));
         assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_command_acts_on_the_track_or_clip_given() {
+        let mut d = Driver::new();
+        let add = |d: &mut Driver| {
+            let t = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+            t["track"].as_str().unwrap().to_string()
+        };
+        let (a, b) = (add(&mut d), add(&mut d));
+        d.call("run_command", json!({"id": "add-arpeggiator", "track": b}))
+            .unwrap();
+        let p = d.project();
+        assert_eq!(track(&p, &a)["note_effects"].as_array().unwrap().len(), 0);
+        assert_eq!(track(&p, &b)["note_effects"].as_array().unwrap().len(), 1);
+
+        // A note tool on a clip that isn't open anywhere.
+        let c = d
+            .call("add_note_clip", json!({"track": b, "bar": 1}))
+            .unwrap();
+        let c = c["clip"].as_str().unwrap().to_string();
+        d.call(
+            "edit_notes",
+            json!({"clip": c, "add": [
+                {"beat": 0.0, "beats": 0.25, "pitch": 60},
+                {"beat": 2.0, "beats": 0.25, "pitch": 64}]}),
+        )
+        .unwrap();
+        d.call("run_command", json!({"id": "legato-notes", "clip": c}))
+            .unwrap();
+        let p = d.app().project();
+        let clip = (p.tracks.iter())
+            .flat_map(|t| &t.note_clips)
+            .find(|x| x.id == c)
+            .unwrap();
+        let first = clip.notes.iter().min_by_key(|n| n.start).unwrap();
+        assert_eq!(first.len, daw_project::PPQ * 2, "it lasts to the next");
+    }
+
+    #[test]
+    fn instrument_settings_are_set_by_value() {
+        let mut d = Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "drum-machine"}))
+            .unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let list = d.call("list_parameters", json!({"track": t})).unwrap();
+        let params = list[0]["params"].as_array().unwrap();
+        let level = (params.iter())
+            .find(|p| p["param"] == "instrument.pad0.level")
+            .expect("a pad's level is listed");
+        assert_eq!(level["max"], 12.0);
+        d.call(
+            "set_parameter",
+            json!({"track": t, "param": "instrument.pad0.level", "value": -9.0}),
+        )
+        .unwrap();
+        let app = d.app();
+        let i = app.tracks.iter().position(|x| x.key == t).unwrap();
+        let s = app.tracks[i].instrument.as_ref().unwrap().settings();
+        assert_eq!(s.iter().find(|x| x.0 == "pad0.level").unwrap().2, -9.0);
+        assert!(
+            d.call(
+                "set_parameter",
+                json!({"track": t, "param": "instrument.nothing", "value": 1.0}),
+            )
+            .is_err()
+        );
+        d.command("undo");
+        let app = d.app();
+        let s = app.tracks[i].instrument.as_ref().unwrap().settings();
+        assert_eq!(s.iter().find(|x| x.0 == "pad0.level").unwrap().2, 0.0);
+    }
+
+    #[test]
+    fn tracks_go_in_a_control_group() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "audio"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        d.command("add-control-group");
+        let p = d.project();
+        let g = p["control_groups"][0]["id"].as_str().unwrap().to_string();
+        d.call("edit_track", json!({"track": t, "group": g}))
+            .unwrap();
+        d.call(
+            "edit_control_group",
+            json!({"group": g, "gain_db": -6.0, "name": "Drums"}),
+        )
+        .unwrap();
+        let p = d.project();
+        assert_eq!(track(&p, &t)["group"], g.as_str());
+        assert_eq!(p["control_groups"][0]["gain_db"], -6.0);
+        assert_eq!(p["control_groups"][0]["name"], "Drums");
+        assert!(
+            d.call("edit_track", json!({"track": t, "group": "nope"}))
+                .is_err()
+        );
+        d.call("edit_control_group", json!({"group": g, "delete": true}))
+            .unwrap();
+        let p = d.project();
+        assert_eq!(p["control_groups"].as_array().unwrap().len(), 0);
+        assert!(track(&p, &t)["group"].is_null());
+    }
+
+    #[test]
+    fn a_drum_pad_gets_a_sound_from_a_file() {
+        let mut d = Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "drum-machine"}))
+            .unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let file = std::env::temp_dir().join(format!("pad-sound-{}.wav", std::process::id()));
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&file, spec).unwrap();
+        for i in 0..4800 {
+            w.write_sample(((i as f32 * 0.05).sin() * 8000.0) as i16)
+                .unwrap();
+        }
+        w.finalize().unwrap();
+        let path = file.to_string_lossy().into_owned();
+
+        d.call(
+            "set_sound",
+            json!({"track": t, "slot": "pad2.layer0", "sound": path}),
+        )
+        .unwrap();
+        let app = d.app();
+        let i = app.tracks.iter().position(|x| x.key == t).unwrap();
+        let b = app.tracks[i]
+            .instrument
+            .as_ref()
+            .unwrap()
+            .builtin_ref()
+            .unwrap();
+        let s = b.sample("pad2.layer0").expect("the pad has the sound");
+        assert_eq!(s.reference, path);
+        assert!(s.sample.is_some(), "and it was read");
+        let source = daw_instruments::drum_machine::layer_at(2, 0, 0);
+        assert_eq!(
+            b.params().get(source),
+            daw_instruments::drum_machine::SAMPLE
+        );
+
+        // Clearing it, and slots and files that aren't there.
+        d.call(
+            "set_sound",
+            json!({"track": t, "slot": "pad2.layer0", "sound": ""}),
+        )
+        .unwrap();
+        let app = d.app();
+        let b = app.tracks[i]
+            .instrument
+            .as_ref()
+            .unwrap()
+            .builtin_ref()
+            .unwrap();
+        assert!(b.sample("pad2.layer0").is_none());
+        d.command("undo");
+        let app = d.app();
+        let b = app.tracks[i]
+            .instrument
+            .as_ref()
+            .unwrap()
+            .builtin_ref()
+            .unwrap();
+        assert!(b.sample("pad2.layer0").is_some(), "undo brings it back");
+        for (slot, sound) in [
+            ("pad16.layer0", path.as_str()),
+            ("zone0", path.as_str()),
+            ("pad0.layer0", "/no/such.wav"),
+        ] {
+            assert!(
+                d.call(
+                    "set_sound",
+                    json!({"track": t, "slot": slot, "sound": sound})
+                )
+                .is_err(),
+                "{slot} {sound}"
+            );
+        }
+        let _ = std::fs::remove_file(file);
     }
 
     #[test]

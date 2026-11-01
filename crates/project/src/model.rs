@@ -62,6 +62,23 @@ pub struct Project {
     /// The order the sections play in (Phase 4, A4), by their markers'
     /// ids, repeats allowed; empty for the song as it lies.
     pub arrangement: Vec<String>,
+    /// The master channel: what the whole mix goes through last.
+    pub master: Master,
+}
+
+/// The master channel: the effects the summed mix goes through, in
+/// order, and the fader after them. Assistants name it as the track
+/// "master".
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Master {
+    pub gain_db: f64,
+    pub effects: Vec<Effect>,
+}
+
+impl Master {
+    /// The id tools and commands name the master channel by, where a
+    /// track's id is taken.
+    pub const KEY: &'static str = "master";
 }
 
 impl Default for Project {
@@ -92,6 +109,7 @@ impl Default for Project {
             patterns: Vec::new(),
             videos: Vec::new(),
             arrangement: Vec::new(),
+            master: Master::default(),
         }
     }
 }

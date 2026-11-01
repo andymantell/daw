@@ -63,6 +63,8 @@ pub enum Command {
         track: usize,
         mix: Mix,
     },
+    /// The master fader, in dB, without a new graph.
+    SetMasterGain(f32),
     /// A control group's fader and mute, without a new graph.
     SetGroup {
         group: usize,
@@ -833,6 +835,11 @@ impl Engine {
                 Command::SetMix { track, mix } => {
                     if let Some(g) = &mut self.graph {
                         g.set_mix(track, mix);
+                    }
+                }
+                Command::SetMasterGain(db) => {
+                    if let Some(g) = &mut self.graph {
+                        g.master = crate::graph::db_to_gain(db);
                     }
                 }
                 Command::SetGroup { group, spec } => {

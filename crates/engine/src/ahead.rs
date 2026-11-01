@@ -191,13 +191,14 @@ impl Graph {
 
     /// Whether any effect or instrument is still in this graph.
     fn holds_parts(&self) -> bool {
-        self.tracks.iter().any(|t| {
-            t.inserts.iter().any(|i| i.effect.is_some())
-                || t.instrument.as_ref().is_some_and(|i| i.inst.is_some())
-                || t.layers
-                    .iter()
-                    .any(|l| l.instrument.as_ref().is_some_and(|i| i.inst.is_some()))
-        })
+        self.holds_master()
+            || self.tracks.iter().any(|t| {
+                t.inserts.iter().any(|i| i.effect.is_some())
+                    || t.instrument.as_ref().is_some_and(|i| i.inst.is_some())
+                    || t.layers
+                        .iter()
+                        .any(|l| l.instrument.as_ref().is_some_and(|i| i.inst.is_some()))
+            })
     }
 
     fn mode(&self, ti: usize) -> Mode {
@@ -457,6 +458,10 @@ impl Engine {
             g.adopt_edges(old);
             g.adopt_cue_lines(old);
         }
+        // The master's effects run on the callback's side: the new ones
+        // handed in go across with the twin, which takes over the rest
+        // from the graph it replaces there.
+        twin.swap_master(&mut g);
         let live: Vec<bool> = (0..n).map(|ti| g.mode(ti) == Mode::Feed).collect();
         a.sent.resize(n, false);
         a.away.resize(n, false);
@@ -529,6 +534,7 @@ impl Engine {
                 track: *track,
                 mix: *mix,
             }),
+            Command::SetMasterGain(db) => Some(Command::SetMasterGain(*db)),
             Command::SetGroup { group, spec } => Some(Command::SetGroup {
                 group: *group,
                 spec: *spec,

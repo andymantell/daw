@@ -632,6 +632,11 @@ pub struct Session {
     pub tempo: TempoMap,
     pub tracks: Vec<TrackSpec>,
     pub master_db: f32,
+    /// The master channel's insert chain: run on the summed mix, after
+    /// every track and bus and before the master fader. Containers and
+    /// bypass work as on a track; sidechains are ignored. Its latency
+    /// delays the whole mix, so every track reads ahead by it too.
+    pub master_inserts: Vec<InsertSpec>,
     pub groups: Vec<GroupSpec>,
 }
 
@@ -1545,6 +1550,13 @@ pub struct Graph {
     pub(crate) tempo: TempoMap,
     pub(crate) tracks: Vec<TrackNode>,
     pub(crate) master: f32,
+    /// The master channel's effects and their chain, run on the summed
+    /// mix before the master fader. When the mix is split, they live on
+    /// the callback's side (see [`crate::ahead`]).
+    pub(crate) master_inserts: Vec<InsertNode>,
+    pub(crate) master_chain: Vec<chain::Step>,
+    /// The master chain's latency, which every track reads ahead by.
+    pub(crate) master_latency: i64,
     pub(crate) any_solo: bool,
     pub(crate) groups: Vec<GroupSpec>,
     /// Per-track scratch, two channels each, `max_block` long: the
@@ -1607,6 +1619,7 @@ impl Session {
             tempo,
             tracks: Vec::new(),
             master_db: 0.0,
+            master_inserts: Vec::new(),
             groups: Vec::new(),
         }
     }
@@ -2039,9 +2052,25 @@ impl Session {
                 }
             }
         }
+        // The master chain's latency delays the whole mix alike, so
+        // every track reads ahead by it as well, and the headphone
+        // mixes, taken before it, wait for it.
+        let master_inserts: Vec<InsertNode> = (self.master_inserts.iter())
+            .map(|i| InsertNode {
+                id: i.id,
+                bypass: i.bypass,
+                effect: new_effects
+                    .iter()
+                    .position(|(id, _)| *id == i.id)
+                    .map(|k| new_effects.swap_remove(k).1),
+                key: None,
+            })
+            .collect();
+        let master_built = chain::build(&self.master_inserts, &[], max_block);
+        let master_latency = master_built.latency;
         for (t, d) in tracks.iter_mut().zip(&downstream) {
-            t.latency += d;
-            t.cue_line = CueLine::new(*d as usize);
+            t.latency += d + master_latency;
+            t.cue_line = CueLine::new((*d + master_latency) as usize);
         }
 
         let mut g = Graph {
@@ -2063,6 +2092,9 @@ impl Session {
             order,
             tracks,
             master: db_to_gain(self.master_db),
+            master_inserts,
+            master_chain: master_built.steps,
+            master_latency,
             any_solo: false,
             groups: self.groups.clone(),
             clicks: Clicks::new(rate),
@@ -2525,20 +2557,18 @@ impl Graph {
             e.feed((&from[0][..n], &from[1][..n]), (&mut *out_l, &mut *out_r));
         }
         match part {
-            // The worker's share goes to the callback, which turns the
-            // whole mix down by the master fader.
+            // The worker's share goes to the callback, which runs the
+            // master's effects over the whole mix and turns it down by
+            // the master fader.
             Some(p) if p.ahead => {}
             Some(p) => {
                 for i in 0..n {
-                    out_l[i] = (out_l[i] + p.master[0][i]) * self.master;
-                    out_r[i] = (out_r[i] + p.master[1][i]) * self.master;
+                    out_l[i] += p.master[0][i];
+                    out_r[i] += p.master[1][i];
                 }
+                self.run_master(out_l, out_r);
             }
-            None => {
-                for s in out_l.iter_mut().chain(out_r.iter_mut()) {
-                    *s *= self.master;
-                }
-            }
+            None => self.run_master(out_l, out_r),
         }
         // Counted down here, so a note on a track the other side of a
         // split plays still ends.
@@ -2547,6 +2577,42 @@ impl Graph {
         }
         self.auditions.retain(|a| a.left > 0);
         missing
+    }
+
+    /// The master channel over one block of the summed mix: its effects,
+    /// then its fader.
+    fn run_master(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+        if !self.master_chain.is_empty() {
+            let mut keys = chain::Keys {
+                edges: &mut self.edges,
+                post: &self.post,
+                key: &mut self.key,
+            };
+            chain::run(
+                &mut self.master_chain,
+                &mut self.master_inserts,
+                &mut keys,
+                out_l,
+                out_r,
+            );
+        }
+        for s in out_l.iter_mut().chain(out_r.iter_mut()) {
+            *s *= self.master;
+        }
+    }
+
+    /// Moves the master channel's effects and chain out of `other` into
+    /// this graph, whose own go the other way: when the mix is split,
+    /// the master runs on the callback's side.
+    pub(crate) fn swap_master(&mut self, other: &mut Graph) {
+        std::mem::swap(&mut self.master_inserts, &mut other.master_inserts);
+        std::mem::swap(&mut self.master_chain, &mut other.master_chain);
+        std::mem::swap(&mut self.master_latency, &mut other.master_latency);
+    }
+
+    /// Whether any of the master channel's effects is in this graph.
+    pub(crate) fn holds_master(&self) -> bool {
+        self.master_inserts.iter().any(|i| i.effect.is_some())
     }
 
     /// The streamed clips, for [`Streamer::set_placements`](crate::stream::Streamer::set_placements).
@@ -2716,6 +2782,20 @@ impl Graph {
                     .find(|o| o.id == slot.id)
                     .and_then(|o| o.effect.take());
             }
+        }
+        // The master's effects always come along: whichever side runs
+        // the master holds them.
+        for slot in self
+            .master_inserts
+            .iter_mut()
+            .filter(|s| s.effect.is_none())
+        {
+            slot.effect = old
+                .master_inserts
+                .iter_mut()
+                .chain(old.tracks.iter_mut().flat_map(|o| o.inserts.iter_mut()))
+                .find(|o| o.id == slot.id)
+                .and_then(|o| o.effect.take());
         }
     }
 

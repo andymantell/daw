@@ -394,21 +394,31 @@ impl App {
     /// and `after`, so that [`apply`](App::apply) loads them afresh with
     /// `after`'s.
     pub(crate) fn reload_changed_fx(&mut self, before: &Project, after: &Project) {
+        let drop_changed = |fx: &mut Vec<crate::fx::FxSlot>,
+                            was: Option<&[daw_project::Effect]>,
+                            now: &[daw_project::Effect]| {
+            for pe in now {
+                let Some(state) = &pe.state else { continue };
+                let old = was
+                    .and_then(|b| b.iter().find(|e| e.id == pe.id))
+                    .and_then(|e| e.state.as_ref());
+                if old != Some(state) {
+                    fx.retain(|s| s.key != pe.id);
+                }
+            }
+        };
         for pt in &after.tracks {
             let Some(t) = self.tracks.iter_mut().find(|t| t.key == pt.id) else {
                 continue;
             };
             let was = before.tracks.iter().find(|b| b.id == pt.id);
-            for pe in &pt.effects {
-                let Some(state) = &pe.state else { continue };
-                let old = was
-                    .and_then(|b| b.effects.iter().find(|e| e.id == pe.id))
-                    .and_then(|e| e.state.as_ref());
-                if old != Some(state) {
-                    t.fx.retain(|s| s.key != pe.id);
-                }
-            }
+            drop_changed(&mut t.fx, was.map(|b| &b.effects[..]), &pt.effects);
         }
+        drop_changed(
+            &mut self.master.fx,
+            Some(&before.master.effects),
+            &after.master.effects,
+        );
     }
 }
 

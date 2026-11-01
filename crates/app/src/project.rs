@@ -243,7 +243,23 @@ impl App {
             patterns: self.patterns.clone(),
             videos: self.video.clips.iter().map(|c| c.value()).collect(),
             arrangement: self.arrangement.clone(),
+            master: daw_project::Master {
+                gain_db: self.master.mix.gain_db as f64,
+                effects: self.chain_value(&self.master),
+            },
         }
+    }
+
+    /// A track's effects as the document has them, with the ones missing
+    /// here kept in their places, so the chain's order in the document
+    /// stays as the computers with them see it.
+    fn chain_value(&self, t: &Track) -> Vec<daw_project::Effect> {
+        let mut effects: Vec<daw_project::Effect> =
+            t.fx.iter().map(crate::fx::FxSlot::value).collect();
+        for (i, e) in self.proj.missing_fx.get(&t.key).into_iter().flatten() {
+            effects.insert((*i).min(effects.len()), e.clone());
+        }
+        effects
     }
 
     pub(crate) fn track_value(&self, t: &Track) -> daw_project::Track {
@@ -287,13 +303,7 @@ impl App {
         for (i, c) in clips.iter_mut().enumerate() {
             c.seq = i as i64;
         }
-        let mut effects: Vec<daw_project::Effect> =
-            t.fx.iter().map(crate::fx::FxSlot::value).collect();
-        // Missing effects keep their places, so the chain's order in the
-        // document stays as the computers with them see it.
-        for (i, e) in self.proj.missing_fx.get(&t.key).into_iter().flatten() {
-            effects.insert((*i).min(effects.len()), e.clone());
-        }
+        let effects = self.chain_value(t);
         daw_project::Track {
             id: t.key.clone(),
             name: t.name.clone(),
@@ -659,46 +669,7 @@ impl App {
                     .collect();
                 t.clips.push(c);
             }
-            let mut had: HashMap<String, crate::fx::FxSlot> =
-                t.fx.drain(..).map(|s| (s.key.clone(), s)).collect();
-            for (i, pe) in pt.effects.iter().enumerate() {
-                match had.remove(&pe.id) {
-                    Some(mut s) => {
-                        s.bypass = pe.bypass;
-                        let before = s.layout();
-                        s.sidechain = pe.sidechain.clone();
-                        s.outputs = pe.outputs.clone();
-                        s.place = pe.container.clone().map(|c| (c, pe.branch));
-                        // A plugin's side buses are switched on as it
-                        // starts, so a change makes it again.
-                        if s.is_plugin()
-                            && s.layout() != before
-                            && let Err(e) = self.effects.reload(&mut s, self.rate)
-                        {
-                            problems.push(format!("{}: {e}", pe.name));
-                        }
-                        s.set_params(&pe.params);
-                        if s.response_ref() != pe.response
-                            && let Err(e) =
-                                self.effects.set_response(&mut s, &pe.response, self.rate)
-                        {
-                            problems.push(format!("{}: {e}", pe.name));
-                        }
-                        t.fx.push(s);
-                    }
-                    None => match self.effects.restore(pe, self.rate) {
-                        Ok(s) => t.fx.push(s),
-                        Err(e) => {
-                            problems.push(format!("{}: {e}", pe.name));
-                            self.proj
-                                .missing_fx
-                                .entry(pt.id.clone())
-                                .or_default()
-                                .push((i, pe.clone()));
-                        }
-                    },
-                }
-            }
+            self.restore_fx(&pt.id, &mut t.fx, &pt.effects, &mut problems);
             t.comps = (pt.comps.iter())
                 .map(|c| daw_project::Comp {
                     parts: (c.parts.iter())
@@ -731,6 +702,15 @@ impl App {
             tracks.push(t);
         }
         self.tracks = tracks;
+        let mut master_fx = std::mem::take(&mut self.master.fx);
+        self.restore_fx(
+            daw_project::Master::KEY,
+            &mut master_fx,
+            &p.master.effects,
+            &mut problems,
+        );
+        self.master.fx = master_fx;
+        self.master.mix.gain_db = p.master.gain_db as f32;
         // Clips and effects no longer there go with the old graph.
         let ids: std::collections::HashSet<u64> = (self.tracks.iter())
             .flat_map(|t| t.clips.iter().map(|c| c.id))
@@ -750,6 +730,58 @@ impl App {
         self.rebuild();
         self.send_loop();
         self.agent.revision += 1;
+    }
+
+    /// Makes `fx` (the slots a track or the master has now) match
+    /// `effects` as the document has them, keeping the live effects it
+    /// can; the ones that can't be made here go in `missing_fx` under
+    /// `key`.
+    fn restore_fx(
+        &mut self,
+        key: &str,
+        fx: &mut Vec<crate::fx::FxSlot>,
+        effects: &[daw_project::Effect],
+        problems: &mut Vec<String>,
+    ) {
+        let mut had: HashMap<String, crate::fx::FxSlot> =
+            fx.drain(..).map(|s| (s.key.clone(), s)).collect();
+        for (i, pe) in effects.iter().enumerate() {
+            match had.remove(&pe.id) {
+                Some(mut s) => {
+                    s.bypass = pe.bypass;
+                    let before = s.layout();
+                    s.sidechain = pe.sidechain.clone();
+                    s.outputs = pe.outputs.clone();
+                    s.place = pe.container.clone().map(|c| (c, pe.branch));
+                    // A plugin's side buses are switched on as it
+                    // starts, so a change makes it again.
+                    if s.is_plugin()
+                        && s.layout() != before
+                        && let Err(e) = self.effects.reload(&mut s, self.rate)
+                    {
+                        problems.push(format!("{}: {e}", pe.name));
+                    }
+                    s.set_params(&pe.params);
+                    if s.response_ref() != pe.response
+                        && let Err(e) = self.effects.set_response(&mut s, &pe.response, self.rate)
+                    {
+                        problems.push(format!("{}: {e}", pe.name));
+                    }
+                    fx.push(s);
+                }
+                None => match self.effects.restore(pe, self.rate) {
+                    Ok(s) => fx.push(s),
+                    Err(e) => {
+                        problems.push(format!("{}: {e}", pe.name));
+                        self.proj
+                            .missing_fx
+                            .entry(key.to_string())
+                            .or_default()
+                            .push((i, pe.clone()));
+                    }
+                },
+            }
+        }
     }
 
     /// Saves into the project folder, moving takes and copying imported

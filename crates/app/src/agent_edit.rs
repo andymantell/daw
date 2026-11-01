@@ -7,7 +7,7 @@
 //! step with it, as undo does; adding a track or an effect makes it the
 //! way the panes do.
 
-use daw_project::{Project, TrackKind};
+use daw_project::{Effect, Project, TrackKind};
 use serde_json::{Value, json};
 
 use crate::App;
@@ -90,9 +90,10 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "add_effect",
         description: "Adds an effect to a track's chain, or to a layer's or a container's \
-                      chain on the track: one that comes with the app, by id, or a plugin, \
-                      by name (list_effect_kinds gives both). Gives its id; list_parameters \
-                      then gives its settings.",
+                      chain on the track, or to the master's (track \"master\": the whole \
+                      mix, after every track and bus): one that comes with the app, by id, \
+                      or a plugin, by name (list_effect_kinds gives both). Gives its id; \
+                      list_parameters then gives its settings.",
         access: Access::Edit,
         schema: || {
             let mut props = json!({
@@ -203,6 +204,15 @@ fn track_at(p: &Project, key: &str) -> Result<usize, String> {
     (p.tracks.iter())
         .position(|t| t.id == key)
         .ok_or_else(|| format!("There is no track {key}."))
+}
+
+/// The effect chain of the track `key` names, or the master's.
+fn effects_at<'a>(p: &'a mut Project, key: &str) -> Result<&'a mut Vec<Effect>, String> {
+    if key == daw_project::Master::KEY {
+        return Ok(&mut p.master.effects);
+    }
+    let i = track_at(p, key)?;
+    Ok(&mut p.tracks[i].effects)
 }
 
 /// Moves item `from` to `to` (clamped), keeping the rest in order.
@@ -516,9 +526,14 @@ impl App {
     fn add_effect_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?;
         let which = text(args, "effect", "the effect: an id or a plugin's name")?;
-        let ti = self
-            .track_index(key)
-            .ok_or_else(|| format!("There is no track {key}."))?;
+        let ti = if key == daw_project::Master::KEY {
+            None
+        } else {
+            Some(
+                self.track_index(key)
+                    .ok_or_else(|| format!("There is no track {key}."))?,
+            )
+        };
         let place = self.place_arg(ti, args, None)?.flatten();
         let rate = self.rate;
         let mut slot = match daw_effects::Kind::from_id(which) {
@@ -538,7 +553,10 @@ impl App {
         slot.place = place.clone();
         let id = slot.key.clone();
         let name = slot.name.clone();
-        let fx = &mut self.tracks[ti].fx;
+        let fx = match ti {
+            Some(ti) => &mut self.tracks[ti].fx,
+            None => &mut self.master.fx,
+        };
         let at = (args["index"].as_i64()).map_or(fx.len(), |i| (i.max(0) as usize).min(fx.len()));
         fx.insert(at, slot);
         self.rebuild();
@@ -553,16 +571,21 @@ impl App {
     fn edit_effect_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?.to_string();
         let id = text(args, "effect", "the effect's id")?.to_string();
-        let ti = self
-            .track_index(&key)
-            .ok_or_else(|| format!("There is no track {key}."))?;
+        let ti = if key == daw_project::Master::KEY {
+            None
+        } else {
+            Some(
+                self.track_index(&key)
+                    .ok_or_else(|| format!("There is no track {key}."))?,
+            )
+        };
         let place = self.place_arg(ti, args, Some(&id))?;
-        if let Some(s) = self.tracks[ti].fx.iter().find(|s| s.key == id) {
+        let fx = ti.map_or(&self.master.fx, |ti| &self.tracks[ti].fx);
+        if let Some(s) = fx.iter().find(|s| s.key == id) {
             self.check_wiring(ti, s, args)?;
         }
         self.edit_model(|p| {
-            let i = track_at(p, &key)?;
-            let fx = &mut p.tracks[i].effects;
+            let fx = effects_at(p, &key)?;
             let j = (fx.iter().position(|e| e.id == id))
                 .ok_or_else(|| format!("The track has no effect {id}."))?;
             if let Some(b) = args["bypass"].as_bool() {
@@ -600,8 +623,7 @@ impl App {
         let key = text(args, "track", "the track's id")?.to_string();
         let id = text(args, "effect", "the effect's id")?.to_string();
         self.edit_model(|p| {
-            let i = track_at(p, &key)?;
-            let fx = &mut p.tracks[i].effects;
+            let fx = effects_at(p, &key)?;
             if !fx.iter().any(|e| e.id == id) {
                 return Err(format!("The track has no effect {id}."));
             }
@@ -939,5 +961,98 @@ mod tests {
         );
         d.command("undo");
         assert_eq!(ids(&mut d).len(), 2);
+    }
+
+    #[test]
+    fn the_master_channel_takes_effects_and_settings() {
+        let mut d = Driver::new();
+        let p = d.project();
+        assert_eq!(p["master"]["id"], "master");
+        assert_eq!(p["master"]["gain_db"], 0.0);
+        assert_eq!(p["master"]["effects"].as_array().unwrap().len(), 0);
+        let lim = d
+            .call(
+                "add_effect",
+                json!({"track": "master", "effect": "limiter"}),
+            )
+            .unwrap();
+        let lim = lim["effect"].as_str().unwrap().to_string();
+        let eq = d
+            .call(
+                "add_effect",
+                json!({"track": "master", "effect": "eq", "index": 0}),
+            )
+            .unwrap();
+        let eq = eq["effect"].as_str().unwrap().to_string();
+        let ids = |d: &mut Driver| -> Vec<String> {
+            (d.project()["master"]["effects"].as_array().unwrap().iter())
+                .map(|e| e["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids(&mut d), [eq.clone(), lim.clone()]);
+
+        // Its settings: the fader and its effects', no pan, mute or solo.
+        let params = d
+            .call("list_parameters", json!({"track": "master"}))
+            .unwrap();
+        assert_eq!(params[0]["track"], "master");
+        let names: Vec<String> = (params[0]["params"].as_array().unwrap().iter())
+            .map(|p| p["param"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"gain".to_string()), "{names:?}");
+        assert!(
+            !names
+                .iter()
+                .any(|n| n == "pan" || n == "mute" || n == "solo")
+        );
+        assert!(names.iter().any(|n| n.contains(&lim)), "{names:?}");
+        d.call(
+            "set_parameter",
+            json!({"track": "master", "param": "gain", "value": -4.0}),
+        )
+        .unwrap();
+        assert_eq!(d.project()["master"]["gain_db"], -4.0);
+        assert!(
+            d.call(
+                "set_parameter",
+                json!({"track": "master", "param": "pan", "value": 0.5})
+            )
+            .is_err()
+        );
+        let all = d.call("list_parameters", json!({})).unwrap();
+        assert_eq!(all.as_array().unwrap().last().unwrap()["track"], "master");
+
+        // The engine plays them.
+        let s = d.app().session();
+        assert_eq!(s.master_inserts.len(), 2);
+        assert_eq!(s.master_db, -4.0);
+
+        d.call(
+            "edit_effect",
+            json!({"track": "master", "effect": lim, "bypass": true, "index": 0}),
+        )
+        .unwrap();
+        assert_eq!(ids(&mut d), [lim.clone(), eq.clone()]);
+        assert_eq!(d.project()["master"]["effects"][0]["bypass"], true);
+        d.call("remove_effect", json!({"track": "master", "effect": eq}))
+            .unwrap();
+        assert_eq!(ids(&mut d), std::slice::from_ref(&lim));
+        d.command("undo");
+        assert_eq!(ids(&mut d).len(), 2);
+
+        // Saved and opened again, the master comes back as it was.
+        let p = d.app().project();
+        let mut doc = daw_project::ProjectDoc::new(1);
+        assert!(doc.set(&p));
+        let back = doc.get();
+        assert_eq!(back.master, p.master);
+        let app = d.app();
+        app.master.fx.clear();
+        app.master.mix.gain_db = 0.0;
+        app.apply(back);
+        assert_eq!(app.master.mix.gain_db, -4.0);
+        let keys: Vec<&str> = app.master.fx.iter().map(|f| f.key.as_str()).collect();
+        assert_eq!(keys, [lim.as_str(), eq.as_str()]);
+        assert!(app.master.fx[0].bypass);
     }
 }

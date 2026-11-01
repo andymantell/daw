@@ -436,6 +436,9 @@ pub struct Effects {
     pub show_manager: bool,
     /// The track whose effects window is open.
     pub open_track: Option<usize>,
+    /// The master channel's effects window is open (never with a
+    /// track's).
+    pub open_master: bool,
     /// The effect being picked in the "Add" menu.
     filter: String,
     /// The project's folder, where reverb response files are kept once
@@ -494,6 +497,7 @@ impl Effects {
             scanning: None,
             show_manager: false,
             open_track: None,
+            open_master: false,
             filter: String::new(),
             folder: None,
             responses: HashMap::new(),
@@ -1795,6 +1799,7 @@ impl Effects {
         }
         if !open {
             self.open_track = None;
+            self.open_master = false;
         }
         changed
     }

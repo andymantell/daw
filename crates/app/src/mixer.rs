@@ -34,6 +34,9 @@ pub(crate) fn alone(spec: &mut TrackSpec) {
 /// added at the end, so its sends into this bus still sound.
 pub(crate) fn through_bus(s: &Session, bus: usize) -> Session {
     let mut s = s.clone();
+    // The bus alone: not through the master's effects or fader.
+    s.master_inserts.clear();
+    s.master_db = 0.0;
     let silent = s.tracks.len();
     for (i, t) in s.tracks.iter_mut().enumerate() {
         if i == bus {
@@ -54,6 +57,8 @@ pub(crate) fn through_bus(s: &Session, bus: usize) -> Session {
 enum Action {
     /// A track's volume, pan, mute or solo.
     Mix(usize, daw_engine::graph::Mix),
+    /// The master fader, in dB.
+    MasterGain(f32),
     /// A track's send levels, as the engine numbers them.
     Sends(usize),
     Group(usize),
@@ -316,6 +321,7 @@ impl App {
                         .clicked()
                     {
                         self.effects.open_track = (!open).then_some(i);
+                        self.effects.open_master = false;
                     }
                     if !simple {
                         rebuild |= output_picker(ui, i, t, &buses, &allowed[i]);
@@ -361,6 +367,8 @@ impl App {
                         actions.push(Action::Mix(i, t.heard()));
                     }
                 }
+                // The master channel: the whole mix's level, fader and
+                // effects, with nowhere to go.
                 ui.label(RichText::new("Master").strong());
                 ui.label("");
                 if ui.button("Meters…").clicked() {
@@ -372,6 +380,43 @@ impl App {
                     .clicked()
                 {
                     self.meters.show(None);
+                }
+                let before = self.master.mix.gain_db;
+                ui.name_inputs("Master volume", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.master.mix.gain_db, -60.0..=12.0)
+                            .suffix(" dB")
+                            .step_by(0.1),
+                    )
+                });
+                if self.master.mix.gain_db != before {
+                    actions.push(Action::MasterGain(self.master.mix.gain_db));
+                }
+                ui.label("");
+                ui.label("");
+                ui.label("");
+                let fx = self.master.fx.len()
+                    + (self.proj.missing_fx.get(daw_project::Master::KEY)).map_or(0, Vec::len);
+                let label = match fx {
+                    0 => "FX".to_string(),
+                    n => format!("FX ({n})"),
+                };
+                let open = self.effects.open_master;
+                if ui
+                    .selectable_label(open, label)
+                    .accessible_name("Effects on the master")
+                    .on_hover_text(if self.master.fx.is_empty() {
+                        "Effects on the whole mix, after every track and bus".to_string()
+                    } else {
+                        (self.master.fx.iter())
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" → ")
+                    })
+                    .clicked()
+                {
+                    self.effects.open_master = !open;
+                    self.effects.open_track = None;
                 }
                 ui.end_row();
             });
@@ -467,6 +512,7 @@ impl App {
         for a in actions {
             match a {
                 Action::Mix(track, mix) => self.send(Command::SetMix { track, mix }),
+                Action::MasterGain(db) => self.send(Command::SetMasterGain(db)),
                 Action::Sends(i) => {
                     let sends: Vec<(f32, bool)> = (self.sends_of(&self.tracks[i]).iter())
                         .map(|(s, _)| (s.gain_db as f32, s.mute))

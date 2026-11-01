@@ -357,6 +357,22 @@ fn practice_speed_and_transpose_sound_the_same_split() {
 }
 
 #[test]
+fn a_queued_section_plays_next_the_same_split() {
+    let (a, b, _) = both(
+        mix,
+        || {
+            vec![
+                Command::SetLoop(Some((Frames(3_000), Frames(7_000)))),
+                Command::QueueLoop(Some((Frames(12_000), Frames(15_000)))),
+                Command::Play,
+            ]
+        },
+        16_000,
+    );
+    assert_same(&a, &b, "queued");
+}
+
+#[test]
 fn live_input_comes_out_in_the_callback_it_went_in() {
     // Only the guitar, monitored straight to the master: its input must
     // sound in the same callback, though the worker runs big blocks.

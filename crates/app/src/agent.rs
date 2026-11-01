@@ -366,7 +366,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_exports",
-        description: "The exports: how far the one running has got, those waiting in the \
+        description: "The exports: how far the one running has got (with the seconds it \
+                      has taken so far and a guess at the seconds left), those waiting in the \
                       queue, and each one finished since the queue last started from empty, \
                       with its folder and how each file went.",
         access: Access::Read,
@@ -1135,7 +1136,12 @@ impl App {
             .collect();
         let queue: Vec<&str> = self.export.queue().map(|q| q.label.as_str()).collect();
         json!({
-            "running": self.export.progress().map(|p| json!({"done": p})),
+            "running": self.export.progress().map(|p| {
+                let so_far = self.export.elapsed().unwrap_or(0.0);
+                // A guess from the pace so far, once there is one.
+                let left = (p > 0.01).then(|| so_far * (1.0 - p as f64) / p as f64);
+                json!({"done": p, "seconds_so_far": so_far, "seconds_left": left})
+            }),
             "queue": queue,
             "finished": done,
         })

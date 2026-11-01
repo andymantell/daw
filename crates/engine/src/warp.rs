@@ -263,14 +263,17 @@ impl Warper {
         self.next.is_some_and(|n| (n - out).abs() < 0.5)
     }
 
-    /// Fills `l` and `r` with output frames from `out` on, reading the
-    /// source through `feed`. Carries on from the last call when `out`
-    /// follows it; otherwise starts afresh there.
+    /// Fills `l` and `r` with output frames from `out` on, each `step`
+    /// output frames of the warp apart (1 at normal speed; the practice
+    /// speed otherwise), reading the source through `feed`. Carries on
+    /// from the last call when `out` follows it; otherwise starts afresh
+    /// there.
     pub fn process(
         &mut self,
         feed: &mut dyn Feed,
         warp: &Warp,
         out: f64,
+        step: f64,
         l: &mut [f32],
         r: &mut [f32],
     ) {
@@ -278,14 +281,16 @@ impl Warper {
         if n == 0 {
             return;
         }
+        let step = if step > 0.0 { step } else { 1.0 };
         if !self.continues_at(out) {
-            self.st.set(warp.speed_at(out), self.semitones);
+            self.st.set(warp.speed_at(out) * step, self.semitones);
             self.st.reset(warp.src_at(out));
         } else if self.st.semitones() != self.semitones {
-            self.st.set(warp.speed_at(out), self.semitones);
+            self.st.set(warp.speed_at(out) * step, self.semitones);
         }
-        self.st.process_along(feed, &|o| warp.src_at(out + o), l, r);
-        self.next = Some(out + n as f64);
+        self.st
+            .process_along(feed, &|o| warp.src_at(out + o * step), l, r);
+        self.next = Some(out + n as f64 * step);
     }
 }
 
@@ -312,6 +317,7 @@ pub fn render(
             feed,
             warp,
             at as f64,
+            1.0,
             &mut l[done..done + run],
             &mut r[done..done + run],
         );

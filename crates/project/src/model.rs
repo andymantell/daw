@@ -824,6 +824,27 @@ pub struct Clip {
     /// The gain envelope, in order: levels at frames of the asset,
     /// counted at the project's rate, so the line stays with the audio.
     pub envelope: Vec<GainPoint>,
+    /// The clip's own tempo in beats per minute, once it follows the
+    /// song's tempo (musical time, decision 0005): the audio is
+    /// stretched from this tempo to the song's. `None` keeps it on
+    /// `start`, in frames, as recorded.
+    pub tempo: Option<f64>,
+    /// Where it starts in ticks, when it follows tempo; `start` is then
+    /// where that fell when last saved.
+    pub beat: i64,
+    /// Stretch markers, in order of asset frame, all inside the clip.
+    pub markers: Vec<StretchMarker>,
+}
+
+/// A stretch marker: a frame of the asset tied to a point counted from
+/// the clip's start, in ticks when the clip follows tempo, else in
+/// frames at the project's rate. The audio between two markers is
+/// stretched evenly to fit; past the last, it carries on at the clip's
+/// own tempo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StretchMarker {
+    pub frame: i64,
+    pub at: i64,
 }
 
 impl Clip {

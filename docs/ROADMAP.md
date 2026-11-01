@@ -1172,9 +1172,18 @@ project, especially for guitarists and singers.
   and pre-arrange the structure of a performance before recording it.
 - **Audio follows tempo** (XL): high-quality stretch in real time and
   offline, with multiple algorithms.
+  *Started 2026-11-01, at risk on the 0.6 library choice. Done so far:
+  clips set to musical time follow the tempo map and the project tempo
+  in playback and export, through our own stretcher behind a small
+  interface (`engine/warp.rs`); stretch markers from attacks or by
+  hand, dragged onto beats; audio quantise with strength and a window;
+  a tempo map from a free performance (a change per beat or bar); every
+  command in the command table. Not yet: a choice of algorithms, a
+  groove template or preview for audio quantise, slicing. Sign-off in
+  `review-queue/6.1-audio-follows-tempo.md`.*
 - **Stretch markers** (M), **transient detection and slicing** (M),
   **audio quantise** (M), **tempo detection / tempo map from a free
-  performance** (M).
+  performance** (M). *First cut built with "Audio follows tempo" above.*
   - **Fit a take to the beat, full version:** detected attacks become
     stretch markers. Drag an attack onto a beat and the audio either side
     stretches to fit, with no gaps or doubled attacks, so sustained parts

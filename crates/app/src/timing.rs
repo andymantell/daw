@@ -354,7 +354,7 @@ impl Timing {
 
 impl App {
     /// The groups that move together: none while group editing is off.
-    fn timing_groups(&self) -> Vec<LaneGroup> {
+    pub(crate) fn timing_groups(&self) -> Vec<LaneGroup> {
         if self.timeline.group_edit {
             self.lane_groups()
         } else {
@@ -363,7 +363,7 @@ impl App {
     }
 
     /// The selected clips and those grouped with them, by track.
-    fn timing_clips(&mut self) -> Vec<(usize, u64)> {
+    pub(crate) fn timing_clips(&mut self) -> Vec<(usize, u64)> {
         let groups = self.timing_groups();
         let selected = self.timeline.selected.clone();
         let ids = self.with_song(|_, song| groups::with_partners(song, &groups, selected));
@@ -634,7 +634,7 @@ fn preview(ui: &mut egui::Ui, map: &TempoMap, plan: &Plan, grid: Grid) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use daw_engine::time::{Tempo, TimeSignature};
 

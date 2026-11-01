@@ -122,6 +122,7 @@ fn real_time_blocks_follow_the_warp_without_allocating_and_restart_on_a_jump() {
                 &mut feed,
                 &warp,
                 done as f64,
+                1.0,
                 &mut l[done..done + run],
                 &mut r[done..done + run],
             );
@@ -143,7 +144,7 @@ fn real_time_blocks_follow_the_warp_without_allocating_and_restart_on_a_jump() {
     assert!(w.continues_at(n as f64));
     assert!(!w.continues_at(1000.0));
     let (mut bl, mut br) = (vec![0.0; 512], vec![0.0; 512]);
-    w.process(&mut feed, &warp, (gap - 256) as f64, &mut bl, &mut br);
+    w.process(&mut feed, &warp, (gap - 256) as f64, 1.0, &mut bl, &mut br);
     let got = peak_near(&bl, 256, 200);
     assert!(
         (got as i64 - 256).abs() < 200,

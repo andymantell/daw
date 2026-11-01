@@ -59,6 +59,7 @@ mod share;
 mod simple_mode;
 mod snapshots;
 mod start;
+mod stretch;
 mod templates;
 mod tempo;
 mod theme;
@@ -248,8 +249,10 @@ struct Import {
     done: mpsc::Receiver<Result<(PathBuf, Arc<StreamSource>), String>>,
 }
 
-/// How the engine plays a clip.
-fn clip_spec(c: &Clip) -> ClipSpec {
+/// How the engine plays a clip under the song's tempo map: through the
+/// stretcher along its warp when it follows tempo or has markers.
+fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
+    let warp = c.warp(map).map(Arc::new);
     ClipSpec {
         offset: c.offset,
         len: Some(c.len),
@@ -257,6 +260,8 @@ fn clip_spec(c: &Clip) -> ClipSpec {
         fade_in: c.fade_in,
         fade_out: c.fade_out,
         envelope: c.envelope.as_slice().into(),
+        tag: if warp.is_some() { c.id } else { 0 },
+        warp,
         ..ClipSpec::new(Frames(c.start), c.source.clone())
     }
 }
@@ -311,6 +316,10 @@ struct App {
     beats_per_bar: u32,
     /// Tempo and time-signature changes, and the start's beat unit.
     time: tempo::Changes,
+    /// The tempo map changed: clips that follow tempo move to where
+    /// their beat now falls at the next rebuild, instead of their beat
+    /// following where they are.
+    retime: bool,
     tempo_ui: tempo::TempoWindow,
     rate: u32,
     ctl: Controller,
@@ -393,6 +402,8 @@ struct App {
     groups_ui: groups::Groups,
     /// The Fix timing window.
     timing: timing::Timing,
+    /// Audio that follows tempo: its windows and settings.
+    stretch: stretch::Stretch,
     takes_ui: comping::TakesPane,
     /// Automation lanes: their pane, modes and the passes being written.
     automation: automation::Automation,
@@ -495,6 +506,7 @@ impl App {
             loop_bars: (1, 5),
             master_meter: (0.0, 0.0),
             message: None,
+            retime: false,
             reconnect: None,
             saved,
             effects: Effects::new(config_dir().join("plugins.txt")),
@@ -541,6 +553,7 @@ impl App {
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
+            stretch: stretch::Stretch::default(),
             takes_ui: comping::TakesPane::default(),
             automation: automation::Automation::default(),
             comments: Vec::new(),
@@ -827,8 +840,30 @@ impl App {
         changed
     }
 
+    /// Keeps clips that follow tempo in step with the tempo map: after
+    /// a tempo change they move to where their beat now falls, after
+    /// an edit their beat follows where they are; and works out how
+    /// long every stretched clip is on the timeline.
+    fn sync_clips(&mut self) {
+        let map = self.tempo_map();
+        let retime = std::mem::take(&mut self.retime);
+        for t in &mut self.tracks {
+            for c in &mut t.clips {
+                if c.tempo.is_some() {
+                    if retime {
+                        c.start = map.frames_at(daw_engine::time::Ticks(c.beat)).0;
+                    } else {
+                        c.beat = map.ticks_at(Frames(c.start)).0;
+                    }
+                }
+                c.retime(&map);
+            }
+        }
+    }
+
     /// Compiles the session and sends it to the engine.
     fn rebuild(&mut self) {
+        self.sync_clips();
         self.fill_patterns();
         let s = self.session();
         self.pending_instruments
@@ -880,7 +915,7 @@ impl App {
             // until it is ready, but keeps its place.
             let clips = (t.clips.iter())
                 .filter(|c| !c.muted && c.source.rate == self.rate)
-                .map(clip_spec)
+                .map(|c| clip_spec(c, &s.tempo))
                 .collect();
             let mut spec = TrackSpec::new(clips);
             spec.mix = t.heard();
@@ -1474,6 +1509,9 @@ impl App {
                 self.ask_save_preset(Some(i), daw_project::PresetKind::Track)
             }
             None => {}
+        }
+        if let Some(cmd) = out.command {
+            self.run(ui.ctx(), cmd);
         }
         if out.undo {
             self.undo(ui.ctx());
@@ -2469,6 +2507,18 @@ impl eframe::App for App {
                     for c in [Cmd::EditGroups, Cmd::FixTiming] {
                         app.menu_item(ui, c);
                     }
+                    ui.separator();
+                    for c in [
+                        Cmd::FollowTempo,
+                        Cmd::ClipTempo,
+                        Cmd::StretchMarkersFromAttacks,
+                        Cmd::AddStretchMarker,
+                        Cmd::ClearStretchMarkers,
+                        Cmd::QuantiseAudio,
+                        Cmd::TempoFromClip,
+                    ] {
+                        self.menu_item(ui, c);
+                    }
                 });
                 self.top_menu(ui, "Notes", |app, ui| {
                     for c in [
@@ -2819,6 +2869,7 @@ impl eframe::App for App {
         self.sections_window(&ctx);
         self.arrangement_tick();
         self.timing_window(&ctx);
+        self.stretch_windows(&ctx);
         self.remote_tick(&ctx);
         self.agent_tick(&ctx);
         self.template_windows(&ctx);

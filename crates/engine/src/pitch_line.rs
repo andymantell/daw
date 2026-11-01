@@ -19,6 +19,11 @@ pub const HOP_SECONDS: f64 = 0.01;
 /// The range of pitches looked for: below a bass voice's low E (82 Hz)
 /// and a bass guitar's low E (41 Hz), to above a soprano's top C.
 pub const LOWEST_HZ: f32 = 40.0;
+/// Lower still, down to a five-string bass's low B (31 Hz) and a
+/// synth's sub bass, looked for only where nothing in the range above
+/// was found, as it takes a longer window that blurs a voice's vibrato
+/// and note edges.
+pub const SUB_HZ: f32 = 30.0;
 pub const HIGHEST_HZ: f32 = 1_400.0;
 /// Readings this far under the take's loudest are no pitch at all.
 const QUIET_DB: f32 = -40.0;
@@ -54,6 +59,9 @@ pub fn line(samples: &[f32], rate: u32) -> PitchLine {
     let hop = (hop_low * down) as u32;
     let mut det = Detector::with_range(low_rate, LOWEST_HZ, HIGHEST_HZ);
     let w = det.window();
+    let mut sub = Detector::with_range(low_rate, SUB_HZ, LOWEST_HZ * 1.1);
+    let ws = sub.window();
+    let mut wide = vec![0.0f32; ws];
     let n = samples.len() / hop as usize + 1;
     // Each reading is centred on its hop.
     let mut level = vec![0.0f32; n];
@@ -72,6 +80,18 @@ pub fn line(samples: &[f32], rate: u32) -> PitchLine {
         }
         *lv = (padded.iter().map(|v| v * v).sum::<f32>() / w as f32).sqrt();
         *h = det.detect(&padded);
+        if h.is_none() && *lv > 1e-4 {
+            let from = c - (ws / 2) as i64;
+            for (k, p) in wide.iter_mut().enumerate() {
+                let at = from + k as i64;
+                *p = if at >= 0 {
+                    low.get(at as usize).copied().unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+            }
+            *h = sub.detect(&wide);
+        }
     }
     let loudest = level.iter().fold(0.0f32, |a, &b| a.max(b));
     let floor = loudest * 10f32.powf(QUIET_DB / 20.0);
@@ -341,6 +361,27 @@ mod tests {
         assert!((v - 57.0).abs() < 0.05, "{v}");
         // Silence has none.
         assert!(l.get(1).is_none());
+    }
+
+    #[test]
+    fn a_sub_bass_reads_as_its_pitch_and_lower_as_none() {
+        // Song test 3: a sub bass on D1 (37 Hz) read as "D♯1 +49
+        // cents", the bottom of the range, rather than D1.
+        let (x, _) = sing(&[(26.0, 0.8)], 0.0, true);
+        let l = line(&x, RATE);
+        let mid = l.hop_of(((0.08 + 0.4) * RATE as f64) as i64);
+        let v = l.get(mid).expect("a pitch");
+        assert!((v - 26.0).abs() < 0.1, "{v}");
+        // Under the range there is no pitch, rather than its edge.
+        let (x, _) = sing(&[(19.0, 0.8)], 0.0, true);
+        let l = line(&x, RATE);
+        let mid = l.hop_of(((0.08 + 0.4) * RATE as f64) as i64);
+        assert!(
+            l.get(mid)
+                .is_none_or(|v| (v - 19.0).abs() < 0.5 || (v - 31.0).abs() < 0.5),
+            "{:?}",
+            l.get(mid)
+        );
     }
 
     #[test]

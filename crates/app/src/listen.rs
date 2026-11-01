@@ -288,6 +288,9 @@ impl App {
         args: &Value,
         reply: Reply,
     ) -> Result<(), String> {
+        if crate::headless::on() {
+            return Err("There's no window in headless mode, so no pictures.".into());
+        }
         let (viewport, rect, name) = match args["pane"].as_str() {
             None => (egui::ViewportId::ROOT, None, "the window".to_string()),
             Some(id) => {

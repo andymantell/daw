@@ -47,6 +47,11 @@ pub(crate) struct Assistants {
     asking: Vec<Client>,
     error: Option<String>,
     path: Option<PathBuf>,
+    /// The port tried first.
+    port: Option<u16>,
+    /// Every assistant may do this without asking: headless mode, where
+    /// no one is there to ask.
+    allow_all: Option<Access>,
 }
 
 fn settings_path() -> PathBuf {
@@ -108,7 +113,7 @@ impl Assistants {
                 read_only: t.access == Access::Read,
             })
             .collect();
-        let started = Server::start(DEFAULT_PORT, &self.token, tools, |m| {
+        let started = Server::start(self.port.unwrap_or(DEFAULT_PORT), &self.token, tools, |m| {
             m.name = crate::APP_NAME.into();
             m.version = env!("CARGO_PKG_VERSION").into();
             m.instructions = INSTRUCTIONS.into();
@@ -119,6 +124,29 @@ impl Assistants {
                 self.error = None;
             }
             Err(e) => self.error = Some(format!("Can't start the server: {e}")),
+        }
+    }
+
+    /// Serves without asking anyone, for headless mode: on `port` (or
+    /// the next free one) with `token`, every assistant allowed
+    /// `access`. The address, or why it can't start.
+    pub(crate) fn serve(
+        &mut self,
+        port: u16,
+        token: &str,
+        access: Access,
+    ) -> Result<String, String> {
+        // Not the window's settings: a server they started is stopped,
+        // and nothing here is saved over them.
+        self.server = None;
+        self.path = None;
+        self.port = Some(port);
+        self.token = token.into();
+        self.allow_all = Some(access);
+        self.start();
+        match &self.server {
+            Some(s) => Ok(s.url()),
+            None => Err(self.error.clone().unwrap_or_default()),
         }
     }
 
@@ -196,7 +224,9 @@ impl App {
                     reply,
                 } => {
                     let who = client.name.clone();
-                    let choice = self.assistants.chosen.get(&client.id).map(|c| c.1);
+                    let a = &self.assistants;
+                    let choice = (a.chosen.get(&client.id).map(|c| c.1))
+                        .or(a.allow_all.map(Choice::Allowed));
                     match choice {
                         Some(Choice::Allowed(access)) => {
                             let req = Request {

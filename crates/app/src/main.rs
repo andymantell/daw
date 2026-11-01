@@ -14,6 +14,9 @@
 //!
 //! `daw --version` prints the version.
 //!
+//! `daw --headless` runs the app with no window, for AI assistants and
+//! tests to drive (see `headless.rs`).
+//!
 //! `daw --scan-vst3 <bundle>` is the plugin scanner: the app runs itself
 //! that way to open each plugin safely in a separate process.
 
@@ -31,6 +34,7 @@ mod freeze;
 mod fretboard;
 mod fx;
 mod groups;
+mod headless;
 mod history;
 mod hitpoints;
 mod import_project;
@@ -505,11 +509,12 @@ impl App {
         } else {
             load_settings()
         };
-        let profile = saved
-            .current()
-            .filter(|p| audio::is_present(p))
+        // Headless, it plays silently.
+        let quiet = cfg!(test) || headless::on();
+        let profile = (saved.current())
+            .filter(|p| !quiet && audio::is_present(p))
             .cloned()
-            .or_else(|| (!cfg!(test)).then(audio::default_profile).flatten());
+            .or_else(|| (!quiet).then(audio::default_profile).flatten());
         let rate = profile.as_ref().map_or(48_000, |p| p.rate);
         let (ctl, eng, disk, recorder) = new_engine();
         let mut app = App {
@@ -3221,6 +3226,13 @@ fn main() -> eframe::Result {
             .first()
             .map_or("plugin-check.md".into(), std::path::PathBuf::from);
         std::process::exit(check_plugins(&out));
+    }
+    // The app with no window, for assistants and tests.
+    if args.first().is_some_and(|a| a == headless::ARG) {
+        let rest: Vec<String> = (args[1..].iter())
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        std::process::exit(headless::run(&rest));
     }
     if let [flag] = args.as_slice()
         && flag == "--version"

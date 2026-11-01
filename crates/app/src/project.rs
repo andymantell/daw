@@ -129,7 +129,7 @@ pub struct Proj {
     /// Audio by asset, so clips that undo brings back can play.
     pub(crate) sources: HashMap<String, Arc<StreamSource>>,
     /// Files moved into the project folder: full path before, asset now.
-    moved: HashMap<String, String>,
+    pub(crate) moved: HashMap<String, String>,
     /// Clips and effects that couldn't be loaded (audio missing, plugin
     /// not installed), by track: kept so saving doesn't lose them. Each
     /// effect is kept with its place in the chain.

@@ -1060,7 +1060,7 @@ impl<'a> Writer<'a> {
         x.close();
         for l in controllers {
             let c = Controller::from_param(&l.param).expect("checked above");
-            let (target, scale): (Vec<(&str, String)>, fn(f64) -> f64) = match c {
+            let (target, scale): (Vec<(&str, String)>, Scale) = match c {
                 Controller::Cc(n) => (
                     vec![
                         ("expression", "channelController".into()),
@@ -1156,8 +1156,7 @@ impl<'a> Writer<'a> {
     fn automation(&mut self, x: &mut Xml, t: &Track, l: &Lane) {
         let ids = &self.ids[&t.id];
         let name = format!("Track \"{}\"", t.name);
-        let (param, unit, conv): (Option<String>, &str, Box<dyn Fn(f64) -> f64>) = match l.target()
-        {
+        let (param, unit, conv): (Option<String>, &str, Conv) = match l.target() {
             LaneTarget::Gain => (
                 Some(ids.volume.clone()),
                 "linear",
@@ -1220,6 +1219,10 @@ impl<'a> Writer<'a> {
         self.points(x, &[("parameter", param)], unit, &pts);
     }
 }
+
+/// How one of our values becomes the format's.
+type Scale = fn(f64) -> f64;
+type Conv = Box<dyn Fn(f64) -> f64>;
 
 /// Whether a clip plays: not a take left out of the comp that plays.
 fn plays(t: &Track, c: &daw_project::Clip) -> bool {

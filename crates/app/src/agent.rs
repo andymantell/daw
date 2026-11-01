@@ -123,6 +123,13 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: no_args,
     },
     Tool {
+        name: "export_report",
+        description: "What exporting the project for other DAWs (a .dawproject file) would \
+                      leave out, item by item, without writing anything.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
         name: "run_command",
         description: "Runs a command by its id, as its menu entry or key would. \
                       list_commands gives the ids. Commands that save or write files need \
@@ -199,6 +206,29 @@ pub(crate) const TOOLS: &[Tool] = &[
             }, "required": ["clips"]})
         },
     },
+    Tool {
+        name: "export_project_file",
+        description: "Writes the project as a .dawproject file, which several other DAWs \
+                      open, at a full path. Answers with what was left out.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "path": {"type": "string", "description": "Where to write it, ending .dawproject."}
+            }, "required": ["path"]})
+        },
+    },
+    Tool {
+        name: "import_project_file",
+        description: "Opens a .dawproject file from another DAW, at a full path, as a new \
+                      unsaved project in place of this one. Refused while this one has \
+                      unsaved work. Answers with what didn't come in.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "path": {"type": "string", "description": "The file's full path."}
+            }, "required": ["path"]})
+        },
+    },
 ];
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
@@ -208,6 +238,8 @@ pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
 /// Commands that open the system's file chooser, which waits for a
 /// person.
 const NEEDS_A_PERSON: &[Cmd] = &[
+    Cmd::ExportDawProject,
+    Cmd::ImportDawProject,
     Cmd::ExportBundle,
     Cmd::ImportBundle,
     Cmd::ImportMidi,
@@ -229,6 +261,7 @@ pub(crate) fn command_access(cmd: Cmd) -> Access {
         | Cmd::SaveAsTemplate
         | Cmd::Export
         | Cmd::ExportVideo
+        | Cmd::ExportDawProject
         | Cmd::ExportBundle
         | Cmd::ExportMidi
         | Cmd::ExportMusicXml
@@ -365,6 +398,7 @@ impl App {
                         .collect(),
                 ))
             }
+            "export_report" => Ok(crate::interchange::report_value(&self.interchange_report())),
             _ => Err(format!("There is no tool {name}.")),
         }
     }
@@ -470,6 +504,28 @@ impl App {
                 let at = Frames(at.0.max(0));
                 self.send(Command::Seek(at));
                 Ok((json!({"frames": at.0}), None))
+            }
+            "export_project_file" => {
+                let path = args["path"].as_str().ok_or("Give the file's full path.")?;
+                let r = self.write_dawproject(std::path::Path::new(path))?;
+                Ok((
+                    json!({"written": path, "left_out": crate::interchange::report_value(&r)}),
+                    None,
+                ))
+            }
+            "import_project_file" => {
+                let path = args["path"].as_str().ok_or("Give the file's full path.")?;
+                if self.proj.dirty && self.proj.folder.is_none() && !self.tracks.is_empty() {
+                    return Err(
+                        "This project has unsaved work: save it, or start a new project, first."
+                            .into(),
+                    );
+                }
+                let r = self.import_dawproject(ctx, std::path::Path::new(path))?;
+                Ok((
+                    json!({"imported": path, "left_out": crate::interchange::report_value(&r)}),
+                    None,
+                ))
             }
             "select_clips" => {
                 let keys = args["clips"].as_array().ok_or("Give a list of clip ids.")?;

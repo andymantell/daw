@@ -29,6 +29,7 @@
 
 use std::sync::Arc;
 
+use crate::ahead::{Mode, Part};
 use crate::automation::{LaneSpec, Target};
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
@@ -1314,6 +1315,7 @@ impl Feed for TrackFeed<'_> {
 }
 
 /// Practice speed and transpose for one block of [`Graph::render`].
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Rate {
     /// Play position at the block's first frame, in unwrapped play time:
     /// it runs on past the loop end, which the feed maps back.
@@ -1544,6 +1546,13 @@ pub struct Graph {
     /// The file each stream reads, for the disk thread.
     placements: Vec<Placement>,
     max_block: usize,
+    /// When the mix is split between a worker running ahead and the
+    /// device callback (see [`crate::ahead`]): where each track plays on
+    /// this side, and the audio crossing between them.
+    pub(crate) part: Option<Box<Part>>,
+    /// The same session compiled again, for the callback's side to play;
+    /// see [`Graph::with_twin`].
+    pub(crate) twin: Option<Box<Graph>>,
 }
 
 impl Session {
@@ -2012,6 +2021,8 @@ impl Session {
             streams,
             placements,
             max_block,
+            part: None,
+            twin: None,
         };
         g.refresh_solo();
         g.settle_at(0);
@@ -2150,8 +2161,21 @@ impl Graph {
         let [out_l, out_r] = out;
         let any_solo = self.any_solo;
         let groups = &self.groups;
+        let mut part = self.part.as_deref_mut();
         for k in 0..self.order.len() {
             let ti = self.order[k];
+            let mode = part.as_ref().map_or(Mode::Run, |p| p.mode[ti]);
+            if mode == Mode::Away {
+                continue;
+            }
+            if mode == Mode::Hold {
+                // Its effects are still on their way back from the
+                // callback's side: silent until they arrive.
+                for b in self.pre[ti].iter_mut().chain(&mut self.post[ti]) {
+                    b[..n].fill(0.0);
+                }
+                continue;
+            }
             let t = &mut self.tracks[ti];
             let [sl, sr] = &mut self.scratch[ti];
             let (sl, sr) = (&mut sl[..n], &mut sr[..n]);
@@ -2161,6 +2185,11 @@ impl Graph {
             for &e in &t.incoming {
                 let e = &mut self.edges[e];
                 if matches!(e.carry, Carry::Sidechain(_)) {
+                    continue;
+                }
+                // A route from a track playing on the other side of a
+                // split arrives in this track's feed instead.
+                if part.as_ref().is_some_and(|p| !p.mode[e.from].plays()) {
                     continue;
                 }
                 if let Carry::Aux(k) = e.carry {
@@ -2185,7 +2214,17 @@ impl Graph {
                     sr[i] += input.get(i, right);
                 }
             }
-            if play {
+            if mode == Mode::Live
+                && let Some(p) = part.as_deref()
+            {
+                // Its clips, and what the rest of the mix routes here,
+                // made ahead by the worker.
+                let [fl, fr] = &p.feed[ti];
+                for i in 0..n {
+                    sl[i] += fl[i];
+                    sr[i] += fr[i];
+                }
+            } else if play {
                 match &rate {
                     Some(rate) => {
                         let st = &mut t.stretch;
@@ -2201,7 +2240,16 @@ impl Graph {
                             looping,
                             missing: 0,
                         };
-                        st.process(&mut feed, sl, sr);
+                        // Into the key buffer, free until the effects
+                        // run, so what is routed here and the monitored
+                        // input are added to, not replaced.
+                        let [kl, kr] = &mut self.key;
+                        let (kl, kr) = (&mut kl[..n], &mut kr[..n]);
+                        st.process(&mut feed, kl, kr);
+                        for i in 0..n {
+                            sl[i] += kl[i];
+                            sr[i] += kr[i];
+                        }
                         missing += feed.missing;
                     }
                     // Read ahead by the effects' latency, round the loop
@@ -2237,6 +2285,15 @@ impl Graph {
                 for w in &mut t.warped {
                     w.warper.stop();
                 }
+            }
+            if mode == Mode::Feed
+                && let Some(p) = part.as_deref_mut()
+            {
+                // The rest plays in the callback, from this feed.
+                let [fl, fr] = &mut p.feed[ti];
+                fl[..n].copy_from_slice(sl);
+                fr[..n].copy_from_slice(sr);
+                continue;
             }
 
             // Notes: those from clips for this block, then the live
@@ -2378,11 +2435,27 @@ impl Graph {
         }
         for &e in &self.to_master {
             let e = &mut self.edges[e];
+            if part.as_ref().is_some_and(|p| !p.mode[e.from].plays()) {
+                continue;
+            }
             let from = &self.post[e.from];
             e.feed((&from[0][..n], &from[1][..n]), (&mut *out_l, &mut *out_r));
         }
-        for s in out_l.iter_mut().chain(out_r.iter_mut()) {
-            *s *= self.master;
+        match part {
+            // The worker's share goes to the callback, which turns the
+            // whole mix down by the master fader.
+            Some(p) if p.ahead => {}
+            Some(p) => {
+                for i in 0..n {
+                    out_l[i] = (out_l[i] + p.master[0][i]) * self.master;
+                    out_r[i] = (out_r[i] + p.master[1][i]) * self.master;
+                }
+            }
+            None => {
+                for s in out_l.iter_mut().chain(out_r.iter_mut()) {
+                    *s *= self.master;
+                }
+            }
         }
         missing
     }
@@ -2439,7 +2512,13 @@ impl Graph {
     /// has with the same delay, so a graph change does not drop the
     /// audio in flight on them.
     pub(crate) fn adopt_edges(&mut self, old: &mut Graph) {
-        for e in &mut self.edges {
+        self.adopt_edges_where(old, &|_| true);
+    }
+
+    /// [`adopt_edges`](Self::adopt_edges) for the routes out of the
+    /// tracks `keep` picks by index.
+    pub(crate) fn adopt_edges_where(&mut self, old: &mut Graph, keep: &dyn Fn(usize) -> bool) {
+        for e in self.edges.iter_mut().filter(|e| keep(e.from)) {
             if let Some(o) = old.edges.iter_mut().find(|o| {
                 o.from == e.from && o.to == e.to && o.carry == e.carry && o.delay() == e.delay()
             }) {
@@ -2454,7 +2533,17 @@ impl Graph {
     /// with the notes they have sounding, so a graph change while
     /// playing cuts nothing off.
     pub(crate) fn adopt_instruments(&mut self, old: &mut Graph) {
-        for t in &mut self.tracks {
+        self.adopt_instruments_where(old, &|_| true);
+    }
+
+    /// [`adopt_instruments`](Self::adopt_instruments) for the tracks
+    /// `keep` picks by index.
+    pub(crate) fn adopt_instruments_where(
+        &mut self,
+        old: &mut Graph,
+        keep: &dyn Fn(usize) -> bool,
+    ) {
+        for (_, t) in (self.tracks.iter_mut().enumerate()).filter(|(ti, _)| keep(*ti)) {
             // The old track the first instrument taken over came from.
             let mut from = None;
             if let Some(i) = t.instrument.as_mut().filter(|i| i.inst.is_none())
@@ -2510,7 +2599,13 @@ impl Graph {
     }
 
     pub(crate) fn adopt_inserts(&mut self, old: &mut Graph) {
-        for t in &mut self.tracks {
+        self.adopt_inserts_where(old, &|_| true);
+    }
+
+    /// [`adopt_inserts`](Self::adopt_inserts) for the tracks `keep`
+    /// picks by index.
+    pub(crate) fn adopt_inserts_where(&mut self, old: &mut Graph, keep: &dyn Fn(usize) -> bool) {
+        for (_, t) in (self.tracks.iter_mut().enumerate()).filter(|(ti, _)| keep(*ti)) {
             for slot in t.inserts.iter_mut().filter(|s| s.effect.is_none()) {
                 slot.effect = old
                     .tracks

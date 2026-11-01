@@ -300,6 +300,9 @@ impl Graph {
     pub(crate) fn mix_cues(&mut self, n: usize, at: usize, buses: &[CueBus], cues: &mut [Stereo]) {
         let step = 1.0 / n.max(1) as f32;
         for ti in 0..self.tracks.len() {
+            if self.part.as_ref().is_some_and(|p| !p.mode[ti].plays()) {
+                continue;
+            }
             let t = &mut self.tracks[ti];
             let [sl, sr] = &mut self.scratch[ti];
             let (sl, sr) = (&mut sl[..n], &mut sr[..n]);
@@ -346,8 +349,14 @@ impl Graph {
     /// keeps the same delay, so a graph change does not drop the audio
     /// in flight on them.
     pub(crate) fn adopt_cue_lines(&mut self, old: &mut Graph) {
-        for (t, o) in self.tracks.iter_mut().zip(&mut old.tracks) {
-            if t.cue_line.delay() == o.cue_line.delay() {
+        self.adopt_cue_lines_where(old, &|_| true);
+    }
+
+    /// [`adopt_cue_lines`](Self::adopt_cue_lines) for the tracks `keep`
+    /// picks by index.
+    pub(crate) fn adopt_cue_lines_where(&mut self, old: &mut Graph, keep: &dyn Fn(usize) -> bool) {
+        for (ti, (t, o)) in self.tracks.iter_mut().zip(&mut old.tracks).enumerate() {
+            if keep(ti) && t.cue_line.delay() == o.cue_line.delay() {
                 std::mem::swap(&mut t.cue_line, &mut o.cue_line);
                 t.cue_last = o.cue_last;
             }
@@ -404,6 +413,25 @@ impl Monitor {
                 l[..self.len].fill(0.0);
                 r[..self.len].fill(0.0);
             }
+        }
+    }
+
+    /// Frame `i` of headphone mix `k` this callback; silence when no mix
+    /// has levels of its own.
+    pub(crate) fn cue_at(&self, k: usize, i: usize) -> (f32, f32) {
+        if self.any_cue() && i < self.len {
+            (self.cues[k][0][i], self.cues[k][1][i])
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    /// Adds to frame `i` of headphone mix `k`: what the worker made of
+    /// the tracks it plays (see [`crate::ahead`]).
+    pub(crate) fn add_cue(&mut self, k: usize, i: usize, (l, r): (f32, f32)) {
+        if self.any_cue() && i < self.len {
+            self.cues[k][0][i] += l;
+            self.cues[k][1][i] += r;
         }
     }
 

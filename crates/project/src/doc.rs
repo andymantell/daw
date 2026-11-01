@@ -1288,6 +1288,22 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
         if !plain("move_formants", !c.move_formants) {
             w.put(&cm, "move_formants", c.move_formants);
         }
+        // Clips whose notes were never found gain no new entries.
+        if !plain("pitch_notes", c.pitch_notes.is_empty()) {
+            let notes: Vec<LoroValue> = (c.pitch_notes.iter())
+                .map(|n| {
+                    let v: Vec<LoroValue> = [
+                        n.start, n.end, n.cents, n.shift, n.moved, n.resized, n.drift, n.vibrato,
+                        n.formant,
+                    ]
+                    .into_iter()
+                    .map(LoroValue::from)
+                    .collect();
+                    LoroValue::List(v.into())
+                })
+                .collect();
+            w.put(&cm, "pitch_notes", LoroValue::List(notes.into()));
+        }
     }
 
     write_effects(w, m, &t.effects);
@@ -2108,6 +2124,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                     .unwrap_or(0)
                     .clamp(-crate::MAX_TRANSPOSE_CENTS, crate::MAX_TRANSPOSE_CENTS),
                 move_formants: boolean(c, "move_formants").unwrap_or(false),
+                pitch_notes: read_pitch_notes(c),
             });
         }
     }
@@ -2267,6 +2284,62 @@ fn read_envelope(c: &LoroMapValue) -> Vec<GainPoint> {
 
 /// A clip's stretch markers, in order of frame, each later than the
 /// one before on both sides; anything odd is left out.
+/// A clip's pitch-editing notes, kept in order, apart, and with each
+/// edit within its range; anything malformed is dropped.
+fn read_pitch_notes(c: &LoroMapValue) -> Vec<crate::PitchNote> {
+    let Some(LoroValue::List(l)) = c.get("pitch_notes") else {
+        return Vec::new();
+    };
+    let cap = crate::MAX_TRANSPOSE_CENTS;
+    let mut notes: Vec<crate::PitchNote> = (l.iter())
+        .filter_map(|n| {
+            let LoroValue::List(n) = n else { return None };
+            let v: Vec<i64> = n
+                .iter()
+                .map(|x| match x {
+                    LoroValue::I64(i) => Some(*i),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?;
+            let [
+                start,
+                end,
+                cents,
+                shift,
+                moved,
+                resized,
+                drift,
+                vibrato,
+                formant,
+            ] = v[..]
+            else {
+                return None;
+            };
+            (start >= 0 && end > start).then_some(crate::PitchNote {
+                start,
+                end,
+                cents: cents.clamp(0, 12_700),
+                shift: shift.clamp(-cap, cap),
+                moved,
+                resized: resized.max(1 - (end - start)),
+                drift: drift.clamp(0, 100),
+                vibrato: vibrato.clamp(0, crate::MAX_VIBRATO_PCT),
+                formant: formant.clamp(-cap, cap),
+            })
+        })
+        .collect();
+    notes.sort_by_key(|n| n.start);
+    let mut last = 0;
+    notes.retain(|n| {
+        let keep = n.start >= last;
+        if keep {
+            last = n.end;
+        }
+        keep
+    });
+    notes
+}
+
 fn read_markers(c: &LoroMapValue) -> Vec<StretchMarker> {
     let Some(LoroValue::List(l)) = c.get("markers") else {
         return Vec::new();
@@ -2755,6 +2828,40 @@ mod tests {
         p.tracks[0].clips[0].cents = 5000;
         doc.set(&p);
         assert_eq!(clip(&doc).cents, crate::MAX_TRANSPOSE_CENTS);
+    }
+
+    #[test]
+    fn a_clips_pitch_notes_and_their_edits_are_kept() {
+        let mut p = Project::default();
+        let mut t = Track::new("t".into(), "Vocal".into());
+        t.clips.push(Clip {
+            id: "c".into(),
+            asset: "a.wav".into(),
+            len: 100_000,
+            ..Clip::default()
+        });
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let clip = |doc: &ProjectDoc| doc.get().tracks[0].clips[0].clone();
+        assert!(clip(&doc).pitch_notes.is_empty());
+        let mut a = crate::PitchNote::found(1_000, 20_000, 6_412);
+        a.shift = -12;
+        a.moved = 480;
+        a.drift = 40;
+        a.vibrato = 150;
+        a.formant = -200;
+        let b = crate::PitchNote::found(30_000, 50_000, 6_700);
+        p.tracks[0].clips[0].pitch_notes = vec![a, b];
+        doc.set(&p);
+        assert_eq!(clip(&doc).pitch_notes, vec![a, b]);
+        // Out of range edits are held in range when read.
+        p.tracks[0].clips[0].pitch_notes[0].vibrato = 9_999;
+        p.tracks[0].clips[0].pitch_notes[0].drift = -5;
+        doc.set(&p);
+        let n = clip(&doc).pitch_notes[0];
+        assert_eq!((n.vibrato, n.drift), (crate::MAX_VIBRATO_PCT, 0));
+        assert!(a.is_edited() && !b.is_edited());
     }
 
     #[test]

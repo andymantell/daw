@@ -98,6 +98,9 @@ pub struct Clip {
     /// A transpose moves the formants with the pitch instead of keeping
     /// them where they were.
     pub move_formants: bool,
+    /// Pitch editing: the notes found in the clip's audio, with their
+    /// edits, in source frames (plan B2).
+    pub pitch_notes: Vec<daw_project::PitchNote>,
     /// How many timeline frames the clip takes once stretched; `len`
     /// for a clip that isn't. Kept up to date by [`Clip::retime`].
     pub span: usize,
@@ -182,6 +185,7 @@ impl Clip {
             markers: Vec::new(),
             cents: 0,
             move_formants: false,
+            pitch_notes: Vec::new(),
             span: 0,
             out_unit: 0.0,
         };

@@ -606,7 +606,10 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                 if b.muted != c.muted {
                     if c.muted { &mut muted } else { &mut unmuted }.push(c);
                 }
-                if b.cents != c.cents || b.move_formants != c.move_formants {
+                if b.cents != c.cents
+                    || b.move_formants != c.move_formants
+                    || b.pitch_notes != c.pitch_notes
+                {
                     pitched.push(c);
                 }
             }

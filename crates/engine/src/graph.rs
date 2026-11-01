@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 use crate::ahead::{Mode, Part};
 use crate::automation::{LaneSpec, Target};
+use crate::bend::PitchBend;
 use crate::chain::{self, Step};
 use crate::fade::{Fade, GainPoint, Shape};
 use crate::layers::{self, Held, LayerNode, LayerSpec};
@@ -178,6 +179,10 @@ pub struct ClipSpec {
     /// Whether a transpose keeps the clip's formants where they are, so
     /// a voice keeps its character; otherwise they move with the pitch.
     pub formants: bool,
+    /// Pitch editing: how far each moment of the source is moved in
+    /// pitch and formants, on top of `semitones`. A bent clip plays
+    /// through the stretcher, at its own time when it has no `warp`.
+    pub bend: Option<Arc<PitchBend>>,
 }
 
 impl ClipSpec {
@@ -195,6 +200,7 @@ impl ClipSpec {
             tag: 0,
             semitones: 0.0,
             formants: true,
+            bend: None,
         }
     }
 }
@@ -759,6 +765,8 @@ pub(crate) struct WarpNode {
     pub semitones: f64,
     /// Keep its formants when transposed.
     pub formants: bool,
+    /// Pitch edits, followed as it plays.
+    pub bend: Option<Arc<PitchBend>>,
 }
 
 /// A clip's source as its stretcher reads it: by source frame, silent
@@ -817,6 +825,10 @@ impl Feed for SrcFeed<'_> {
         }
     }
 }
+
+/// Output frames a pitch-edited clip plays between updates of its
+/// pitch: under 3 ms at 48 kHz, well inside the stretcher's hop.
+const BEND_BLOCK: usize = 128;
 
 /// Plays `w` for `n` output frames from timeline position `from` (in
 /// unwrapped play time, which `looping` sends back round the loop),
@@ -877,7 +889,31 @@ fn render_warped(
                 hi: (w.offset + w.len) as i64,
                 missing: 0,
             };
-            w.warper.process(&mut feed, &w.warp, out0, step, tl, tr);
+            match w.bend.clone() {
+                None => w.warper.process(&mut feed, &w.warp, out0, step, tl, tr),
+                Some(b) => {
+                    // The pitch moves as the clip plays: set it afresh
+                    // every few milliseconds, from where each run starts.
+                    let mut k = 0;
+                    while k < m {
+                        let run = BEND_BLOCK.min(m - k);
+                        let at = out0 + k as f64 * step;
+                        let (semis, formants) = b.at(w.warp.src_at(at));
+                        w.warper
+                            .set_pitch((total + semis).clamp(-SEMITONES, SEMITONES));
+                        w.warper.set_formant_shift(formants);
+                        w.warper.process(
+                            &mut feed,
+                            &w.warp,
+                            at,
+                            step,
+                            &mut tl[k..k + run],
+                            &mut tr[k..k + run],
+                        );
+                        k += run;
+                    }
+                }
+            }
             missing += feed.missing;
             let flat = w.shape.is_flat();
             for k in 0..m {
@@ -1760,7 +1796,7 @@ impl Session {
                 // A transposed clip with no warp of its own plays through
                 // the stretcher at its own time.
                 let warp = match &c.warp {
-                    None if c.semitones != 0.0 && c.semitones.is_finite() => {
+                    None if (c.semitones != 0.0 && c.semitones.is_finite()) || c.bend.is_some() => {
                         let start = c.start.frames(&self.tempo).0;
                         let src = c.offset as i64..(c.offset + len) as i64;
                         Warp::even(src, start, 1.0).ok().map(Arc::new)
@@ -1821,6 +1857,7 @@ impl Session {
                             0.0
                         },
                         formants: c.formants,
+                        bend: c.bend.clone(),
                     }),
                     None => clips.push(ClipNode {
                         start,

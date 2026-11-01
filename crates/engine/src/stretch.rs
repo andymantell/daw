@@ -165,6 +165,11 @@ pub struct Stretcher {
     max_block: usize,
     /// Keep the spectral envelope where it is when transposing.
     formants: bool,
+    /// Moves the spectral envelope by this ratio on top (1 for none):
+    /// a voice made bigger (below 1) or smaller (above).
+    formant_ratio: f64,
+    /// The low-pass cutoff the resampler's kernel was built for.
+    kernel_fc: f32,
     /// Room for the envelope's cepstrum and its spectrum.
     cep: Vec<f32>,
     cep_spec: Vec<Complex32>,
@@ -208,6 +213,8 @@ impl Stretcher {
             kernel: vec![0.0; PHASES * TAPS],
             max_block: max_block.max(1),
             formants: false,
+            formant_ratio: 1.0,
+            kernel_fc: f32::NAN,
             cep: vec![0.0; FRAME],
             cep_spec: vec![Complex32::default(); bins],
         };
@@ -224,8 +231,26 @@ impl Stretcher {
         let ratio = 2f64.powf(semitones.clamp(-SEMITONES, SEMITONES) / 12.0);
         if ratio != self.ratio {
             self.ratio = ratio;
-            self.build_kernel();
+            // The kernel only depends on the cutoff, which only changes
+            // when pitching up; a cutoff a little off is inaudible, so a
+            // pitch that moves every block (pitch editing) doesn't
+            // rebuild it every block.
+            if (kernel_cutoff(ratio) - self.kernel_fc).abs() > 0.004 || self.kernel_fc.is_nan() {
+                self.build_kernel();
+            }
         }
+    }
+
+    /// Moves the formants by `semitones` (±[`SEMITONES`]) on top of
+    /// whatever the transpose does to them: down makes a voice sound
+    /// bigger, up smaller. Takes effect from the next frame made.
+    pub fn set_formant_shift(&mut self, semitones: f64) {
+        self.formant_ratio = 2f64.powf(semitones.clamp(-SEMITONES, SEMITONES) / 12.0);
+    }
+
+    /// The formant shift set, in semitones.
+    pub fn formant_shift(&self) -> f64 {
+        12.0 * self.formant_ratio.log2()
     }
 
     /// Whether a transpose keeps the formants (the resonances of a voice
@@ -295,7 +320,8 @@ impl Stretcher {
     /// Blackman-windowed sinc, low-passed below the new Nyquist when
     /// pitching up so the resampler does not alias.
     fn build_kernel(&mut self) {
-        let fc = (1.0 / self.ratio).min(1.0) as f32 * 0.95;
+        let fc = kernel_cutoff(self.ratio);
+        self.kernel_fc = fc;
         let half = (TAPS / 2) as f32;
         for p in 0..PHASES {
             let frac = p as f32 / PHASES as f32;
@@ -412,7 +438,11 @@ impl Stretcher {
                 }
             }
 
-            if self.formants && self.ratio != 1.0 {
+            // Where each final frequency's envelope comes from, as a
+            // ratio: 1 keeps the formants, the pitch ratio moves them
+            // with it, and a formant shift multiplies in.
+            let moved = self.formant_ratio * if self.formants { 1.0 } else { self.ratio };
+            if moved != self.ratio {
                 envelope(
                     &c.mag,
                     &mut c.env,
@@ -423,8 +453,8 @@ impl Stretcher {
                     &mut self.scratch,
                 );
                 // Bin k comes out at k × ratio once resampled: give it the
-                // envelope there instead of its own.
-                let ratio = self.ratio as f32;
+                // envelope from k × ratio / moved instead of its own.
+                let ratio = (self.ratio / moved) as f32;
                 let last = (bins - 1) as f32;
                 for k in 0..bins {
                     let at = (k as f32 * ratio).min(last);
@@ -540,6 +570,13 @@ impl Stretcher {
             self.s_base += drop as f64;
         }
     }
+}
+
+/// The resampler's low-pass cutoff at pitch ratio `ratio`, as a
+/// fraction of the input's Nyquist: below the new Nyquist when pitching
+/// up so it does not alias.
+fn kernel_cutoff(ratio: f64) -> f32 {
+    (1.0 / ratio).min(1.0) as f32 * 0.95
 }
 
 /// The spectral envelope of magnitudes `mag` into `env`, as natural log

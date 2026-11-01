@@ -58,6 +58,9 @@ pub trait Stretch: Send {
     /// Whether a transpose keeps the formants where they are. A
     /// stretcher that can't leaves them moving with the pitch.
     fn set_formants(&mut self, _keep: bool) {}
+    /// Moves the formants by `semitones` on top of what the transpose
+    /// does to them. A stretcher that can't leaves them be.
+    fn set_formant_shift(&mut self, _semitones: f64) {}
 }
 
 impl Stretch for Stretcher {
@@ -93,6 +96,10 @@ impl Stretch for Stretcher {
 
     fn set_formants(&mut self, keep: bool) {
         Stretcher::set_formants(self, keep)
+    }
+
+    fn set_formant_shift(&mut self, semitones: f64) {
+        Stretcher::set_formant_shift(self, semitones)
     }
 }
 
@@ -222,6 +229,42 @@ impl Warp {
         (b.src - a.src) as f64 / (b.out - a.out) as f64
     }
 
+    /// This warp followed by `inner`, whose output frames are this
+    /// warp's source frames: output frame `o` plays `inner`'s source at
+    /// `inner.src_at(self.src_at(o))`. Pitch editing uses it to move
+    /// notes in time inside a clip that is itself stretched. Points
+    /// that round onto a neighbour are dropped; a result steeper than
+    /// the stretcher takes is refused.
+    pub fn then(&self, inner: &Warp) -> Result<Warp, WarpError> {
+        let src = self.src_range();
+        let mut pts: Vec<(f64, f64)> = self
+            .points
+            .iter()
+            .map(|p| (p.out as f64, inner.src_at(p.src as f64)))
+            .collect();
+        for q in &inner.points {
+            if q.out > src.start && q.out < src.end {
+                pts.push((self.out_at(q.out as f64), q.src as f64));
+            }
+        }
+        pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut points: Vec<WarpPoint> = Vec::with_capacity(pts.len());
+        for (out, s) in pts {
+            let p = WarpPoint {
+                src: s.round() as i64,
+                out: out.round() as i64,
+            };
+            if points.last().is_none_or(|l| p.src > l.src && p.out > l.out) {
+                points.push(p);
+            }
+        }
+        // Keep the ends exact: the clip's first and last frames.
+        if let (Some(l), Some(e)) = (points.last_mut(), self.points.last()) {
+            l.out = e.out;
+        }
+        Warp::new(points)
+    }
+
     /// The output frame source frame `src` lands on.
     pub fn out_at(&self, src: f64) -> f64 {
         let n = self.points.len();
@@ -264,6 +307,12 @@ impl Warper {
     /// still sounds like the same person) or moves them with the pitch.
     pub fn set_formants(&mut self, keep: bool) {
         self.st.set_formants(keep);
+    }
+
+    /// Moves the formants by `semitones` on top of what the transpose
+    /// does to them (pitch editing's formant control).
+    pub fn set_formant_shift(&mut self, semitones: f64) {
+        self.st.set_formant_shift(semitones);
     }
 
     /// Forget where playback was: the next call starts afresh.
@@ -391,6 +440,21 @@ mod tests {
         assert_eq!(w.src_at(3000.0), 3000.0);
         assert_eq!(w.out_range(), 0..2500);
         assert_eq!(w.src_range(), 0..2000);
+    }
+
+    #[test]
+    fn warps_compose() {
+        // The clip plays its source at half speed; inside it a note
+        // from 400 to 600 is moved 100 later, squeezing the gap after.
+        let outer = Warp::new(vec![pt(0, 0), pt(1000, 2000)]).unwrap();
+        let inner = Warp::new(vec![pt(0, 0), pt(400, 500), pt(600, 700), pt(1000, 1000)]).unwrap();
+        let w = outer.then(&inner).unwrap();
+        assert_eq!(w.out_range(), 0..2000);
+        // Output 1000 plays outer source 500, which inner ties to 400.
+        assert_eq!(w.src_at(1000.0), 400.0);
+        assert_eq!(w.src_at(1400.0), 600.0);
+        assert_eq!(w.src_at(2000.0), 1000.0);
+        assert_eq!(w.src_at(500.0), 200.0);
     }
 
     #[test]

@@ -53,10 +53,17 @@ pub(crate) const TOOLS: &[Tool] = &[
                       length and offset into its notes (beats), its own key (\"none\" \
                       for the song's), the pattern it plays, pattern_unique (a copy of \
                       its pattern of its own) or pattern_to_notes (its notes, no longer \
-                      following the pattern). An audio clip can also be moved by a point in \
-                      it: anchor_seconds (timeline seconds, as analyse gives note starts \
-                      and beats) lands on the bar or seconds given, or on the nearest beat or \
-                      bar with snap. Only what is given changes; duplicate_clip copies one.",
+                      following the pattern). A pattern clip longer than its pattern plays \
+                      the pattern over and over. A note clip loops its notes with loop \
+                      true (the notes from its start to its end as it is now) or \
+                      loop_beats (that much of its start); then a longer len_beats plays \
+                      them again and again, and editing the notes changes every time \
+                      round (a 4-bar bass part looped to 128 beats plays 8 times, one \
+                      clip). loop false plays the notes once again. An audio clip can also \
+                      be moved by a point in it: anchor_seconds (timeline seconds, as \
+                      analyse gives note starts and beats) lands on the bar or seconds \
+                      given, or on the nearest beat or bar with snap. Only what is given \
+                      changes; duplicate_clip copies one.",
         access: Access::Edit,
         schema: || {
             with_time(
@@ -75,6 +82,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                     "muted": {"type": "boolean"},
                     "name": {"type": "string"},
                     "len_beats": {"type": "number", "description": "Note clips."},
+                    "loop": {"type": "boolean", "description": "Note clips: true loops its notes, false stops."},
+                    "loop_beats": {"type": "number", "description": "Note clips: loop this many beats of its notes from its content start."},
                     "offset_beats": {"type": "number", "description": "Note clips."},
                     "key": {"type": "string", "description": "Note clips: such as \"A minor\", or \"none\"."},
                     "pattern": {"type": "string", "description": "Note clips: a pattern's id."},
@@ -328,6 +337,9 @@ impl App {
         let id = text(args, "clip", "the clip's id")?.to_string();
         if let Ok(Found::Notes(..)) = find_clip(&self.project(), &id) {
             return self.edit_note_clip(args);
+        }
+        if args["loop"].is_boolean() || args["loop_beats"].is_number() {
+            return Err("Only note clips loop; duplicate_clip repeats an audio clip.".into());
         }
         let start = self.time_arg(args);
         let rate = self.rate as f64;

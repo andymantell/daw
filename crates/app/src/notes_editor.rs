@@ -1138,14 +1138,34 @@ impl Editor {
             }
         }
 
+        // A looping clip: where its loop ends; notes after it don't play.
+        if let Some(l) = clip.looped() {
+            let x = x_of(clip.start - clip.offset + l);
+            if grid_rect.x_range().contains(x) {
+                let stroke = Stroke::new(2.0, tc.accent);
+                painter.line_segment(
+                    [pos2(x, grid_rect.top()), pos2(x, grid_rect.bottom())],
+                    stroke,
+                );
+                painter.text(
+                    pos2(x + 3.0, grid_rect.top() + 2.0),
+                    Align2::LEFT_TOP,
+                    "Loop end",
+                    look.font(look.small),
+                    tc.accent,
+                );
+            }
+        }
+
         // Draw the notes and their velocities.
         let colour = tc.accent;
         let grid_painter = painter.with_clip_rect(grid_rect);
         let vel_painter = painter.with_clip_rect(vel_rect);
+        let spans = clip.spans();
         for n in &clip.notes {
             let r = note_rect(n);
             let selected = self.selected.contains(&n.id);
-            let inside = n.start >= clip.offset && n.start < clip.offset + clip.len;
+            let inside = (spans.iter()).any(|&(a, b, _)| n.start >= a && n.start < b);
             let shade = (0.45 + 0.55 * n.velocity as f32 / 127.0).min(1.0);
             let fill = if inside {
                 colour.gamma_multiply(shade)

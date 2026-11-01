@@ -564,10 +564,9 @@ pub(crate) fn render_clip(
     clip: &daw_project::NoteClip,
 ) -> Vec<daw_project::Note> {
     let origin = clip.start - clip.offset;
-    let notes: Vec<RenderNote> = (clip.notes.iter())
-        .filter(|n| n.start >= clip.offset && n.start < clip.offset + clip.len)
-        .map(|n| RenderNote {
-            start: origin + n.start,
+    let notes: Vec<RenderNote> = (clip.sounding().into_iter())
+        .map(|(_, n)| RenderNote {
+            start: n.start,
             len: n.len,
             pitch: n.pitch,
             velocity: n.velocity,
@@ -816,6 +815,8 @@ impl crate::App {
         for c in t.note_clips.iter_mut().filter(|c| !c.muted) {
             c.pattern = None;
             c.notes = render_clip(&list, scale, c);
+            // The rendered notes run the clip's whole length.
+            c.loop_len = None;
             made += c.notes.len();
         }
         for f in &mut t.note_fx {

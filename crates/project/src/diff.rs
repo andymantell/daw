@@ -658,6 +658,7 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                     || (c.pattern.is_none() && b.notes != c.notes)
                     || b.controllers != c.controllers
                     || b.scale != c.scale
+                    || b.loop_len != c.loop_len
                 {
                     edited.push(c);
                 }

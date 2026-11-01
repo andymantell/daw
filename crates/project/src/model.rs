@@ -2075,7 +2075,16 @@ pub struct NoteClip {
     /// The pattern it plays, by id (roadmap 3.3): its notes are then
     /// made from the pattern, see [`crate::fill_pattern_clips`].
     pub pattern: Option<String>,
+    /// Loops its notes: the content from its start to this many ticks
+    /// plays over and over, as far as the clip runs, so a 4-bar riff
+    /// in a 32-bar clip plays 8 times and editing it changes every
+    /// time round. `None` plays the notes once. Pattern clips loop
+    /// their pattern anyway and ignore it.
+    pub loop_len: Option<i64>,
 }
+
+/// The shortest note loop: a sixteenth note.
+pub const SHORTEST_LOOP: i64 = PPQ / 4;
 
 impl NoteClip {
     pub fn new(id: String, name: String, start: i64, len: i64) -> NoteClip {
@@ -2091,7 +2100,62 @@ impl NoteClip {
             scale: None,
             controllers: Vec::new(),
             pattern: None,
+            loop_len: None,
         }
+    }
+
+    /// How long its note loop is, in ticks, if it loops its notes.
+    pub fn looped(&self) -> Option<i64> {
+        self.loop_len
+            .filter(|_| self.pattern.is_none())
+            .map(|l| l.max(SHORTEST_LOOP))
+    }
+
+    /// The stretches of the content that play, in order: each is where
+    /// it starts and stops in the content and how far later than the
+    /// content's own place it falls. A clip that doesn't loop plays
+    /// one; a looping one plays a stretch for each time round.
+    pub fn spans(&self) -> Vec<(i64, i64, i64)> {
+        let (lo, hi) = (self.offset, self.offset + self.len);
+        let Some(l) = self.looped() else {
+            return vec![(lo, hi, 0)];
+        };
+        let (first, last) = (lo.div_euclid(l), (hi - 1).div_euclid(l));
+        // Bound the work for an absurdly long clip.
+        let last = last.min(first + 100_000);
+        (first..=last)
+            .map(|k| {
+                let shift = k * l;
+                ((lo - shift).max(0), (hi - shift).min(l), shift)
+            })
+            .filter(|(a, b, _)| b > a)
+            .collect()
+    }
+
+    /// The notes that begin where the clip plays, each with the time
+    /// round of its loop it is in (0 for a clip that doesn't loop), with
+    /// its start on the timeline. A looping note is cut at the loop's
+    /// end, not at the clip's.
+    pub fn sounding(&self) -> Vec<(u32, Note)> {
+        let looped = self.looped();
+        let mut out = Vec::new();
+        for (k, (a, b, shift)) in self.spans().into_iter().enumerate() {
+            for n in self.notes.iter().filter(|n| n.start >= a && n.start < b) {
+                let len = match looped {
+                    Some(l) => n.len.min(l - n.start),
+                    None => n.len,
+                };
+                out.push((
+                    k as u32,
+                    Note {
+                        start: self.place(n.start + shift),
+                        len: len.max(1),
+                        ..n.clone()
+                    },
+                ));
+            }
+        }
+        out
     }
 
     /// The clip's controller lane for `c`, made if missing.
@@ -2117,20 +2181,15 @@ impl NoteClip {
         self.start - self.offset + rel
     }
 
-    /// The notes that play: those that begin inside the clip, with their
-    /// starts on the timeline, each cut short at the clip's end.
+    /// The notes that play: those that begin inside the clip (each time
+    /// round, if it loops), with their starts on the timeline, each cut
+    /// short at the clip's end.
     pub fn placed(&self) -> impl Iterator<Item = Note> + '_ {
-        self.notes
-            .iter()
-            .filter(|n| n.start >= self.offset && n.start < self.offset + self.len)
-            .map(|n| {
-                let start = self.place(n.start);
-                Note {
-                    start,
-                    len: n.len.min(self.end() - start).max(1),
-                    ..n.clone()
-                }
-            })
+        let end = self.end();
+        self.sounding().into_iter().map(move |(_, n)| Note {
+            len: n.len.min(end - n.start).max(1),
+            ..n
+        })
     }
 
     /// Puts the notes in time order, as the document keeps them.
@@ -2157,6 +2216,39 @@ mod tests {
         ];
         let placed: Vec<(i64, i64, u8)> = c.placed().map(|n| (n.start, n.len, n.pitch)).collect();
         assert_eq!(placed, [(PPQ * 4, PPQ, 62), (PPQ * 5, PPQ, 64)]);
+    }
+
+    #[test]
+    fn a_looping_clip_plays_its_notes_each_time_round() {
+        // A 1-bar riff in a clip 3 bars long, trimmed to start half a
+        // bar in: the riff plays from its second half, then twice more.
+        let bar = PPQ * 4;
+        let mut c = NoteClip::new("c".into(), "Riff".into(), bar * 10, bar * 3);
+        c.offset = bar / 2;
+        c.loop_len = Some(bar);
+        c.notes = vec![
+            Note::new(0, PPQ, 60, 100),
+            Note::new(PPQ * 3, PPQ * 4, 64, 100), // runs past the loop: cut there
+            Note::new(bar + PPQ, PPQ, 70, 100),   // after the loop: never plays
+        ];
+        let placed: Vec<(i64, i64, u8)> = c.placed().map(|n| (n.start, n.len, n.pitch)).collect();
+        let origin = bar * 10 - bar / 2;
+        assert_eq!(
+            placed,
+            [
+                (origin + PPQ * 3, PPQ, 64),
+                (origin + bar, PPQ, 60),
+                (origin + bar + PPQ * 3, PPQ, 64),
+                (origin + bar * 2, PPQ, 60),
+                (origin + bar * 2 + PPQ * 3, PPQ, 64),
+                (origin + bar * 3, PPQ, 60),
+            ]
+        );
+        let rounds: Vec<u32> = c.sounding().iter().map(|(k, _)| *k).collect();
+        assert_eq!(rounds, [0, 1, 1, 2, 2, 3]);
+        // A pattern clip ignores it.
+        c.pattern = Some("p".into());
+        assert_eq!(c.looped(), None);
     }
 
     #[test]

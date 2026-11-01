@@ -151,9 +151,13 @@ pub(crate) fn specs(clips: &[NoteClip]) -> (Vec<NoteSpec>, Vec<ExprSpec>, Vec<Co
             };
             let (lo, hi, _) = ctl.range();
             let origin = c.start - c.offset;
-            let pts = steps(l, c.offset, c.offset + c.len, origin, |v| {
-                v.clamp(lo, hi).round() as i32
-            });
+            // Each time round, if the clip loops its notes.
+            let mut pts = Vec::new();
+            for (a, b, shift) in c.spans() {
+                pts.extend(steps(l, a, b, origin + shift, |v| {
+                    v.clamp(lo, hi).round() as i32
+                }));
+            }
             let i = match controls.iter().position(|(k, _)| *k == ctl) {
                 Some(i) => i,
                 None => {

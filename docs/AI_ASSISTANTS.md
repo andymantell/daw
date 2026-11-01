@@ -167,11 +167,14 @@ assistant finds them for itself. In outline:
   groups, expression, controller lanes, the clip's key), `edit_notes`
   (add, change, remove, group), `edit_note_lanes` (controller lanes and
   per-note expression), `duplicate_clip` (linked or not, as many
-  copies as asked, back to back), `note_tool`
+  copies as asked, back to back, every so many bars, or one on each of
+  a list of `bars` or `at_seconds`), `note_tool`
   (quantise, humanise, legato, fit to scale, apply or make a groove,
   each with its settings), `list_grooves`, `get_patterns` and
   `edit_pattern` (the step sequencer: patterns, lanes and steps).
-  `edit_clip` moves, resizes, mutes and keys note clips too, and
+  `edit_clip` moves, resizes, mutes and keys note clips too, loops
+  their notes (`loop`, `loop_beats`; `add_note_clip` takes
+  `loop_bars`) so a longer clip plays them again and again, and
   transposes audio clips (`transpose_semitones`, fractions for cents,
   with `move_formants`). An audio clip's `offset_seconds` and
   `len_seconds` are in the file's own seconds; for a clip that follows

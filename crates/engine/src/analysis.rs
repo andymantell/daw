@@ -194,18 +194,30 @@ fn key(left: &[f32], right: &[f32], rate: u32) -> Option<KeyGuess> {
     })
 }
 
-/// How loud each short step of the audio is getting: the rise in its
-/// level from the step before, at `STEPS_PER_SECOND`.
+/// How sharply each short step of the audio gets louder, at
+/// `STEPS_PER_SECOND`: its rise above the loudest of the steps just
+/// before it. A sound that dips and comes back (notes beating against
+/// each other in a held chord) only returns to where it was, so it
+/// scores nothing; a new hit rises above what came before.
 fn attack_curve(left: &[f32], right: &[f32], rate: u32) -> Vec<f32> {
+    const BEFORE: usize = 12; // 60 ms
     let hop = (rate / STEPS_PER_SECOND).max(1) as usize;
-    let mut last = None;
-    (left.chunks(hop).zip(right.chunks(hop)))
+    let levels: Vec<f32> = (left.chunks(hop).zip(right.chunks(hop)))
         .map(|(l, r)| {
             let e: f32 = l.iter().zip(r).map(|(a, b)| a * a + b * b).sum::<f32>() / hop as f32;
-            let db = 10.0 * (e + 1e-10).log10();
-            let rise = last.map_or(0.0, |p: f32| (db - p).max(0.0));
-            last = Some(db);
-            rise
+            10.0 * (e + 1e-10).log10()
+        })
+        .collect();
+    (0..levels.len())
+        .map(|i| {
+            // Leaving out the last two steps, so a hit that takes a
+            // few steps to arrive counts all of its rise.
+            let before = levels[i.saturating_sub(BEFORE)..i.saturating_sub(2)]
+                .iter()
+                .copied();
+            before
+                .reduce(f32::max)
+                .map_or(0.0, |p| (levels[i] - p).max(0.0))
         })
         .collect()
 }
@@ -216,8 +228,13 @@ const STEPS_PER_SECOND: u32 = 200;
 /// leaning towards the usual middle of that range.
 fn tempo(left: &[f32], right: &[f32], rate: u32) -> Option<TempoGuess> {
     let mut a = attack_curve(left, right, rate);
-    // At least a few seconds, with attacks in them: rises of 3 dB or more.
-    if a.len() < 4 * STEPS_PER_SECOND as usize || a.iter().filter(|&&v| v >= 3.0).count() < 8 {
+    // At least a few seconds, with attacks all through them: sudden
+    // rises of 3 dB or more above what came just before, at least one
+    // every two seconds. A held note that swells and fades (a pad, a
+    // tremolo) has none.
+    let secs = a.len() / STEPS_PER_SECOND as usize;
+    let attacks = (a.windows(2)).filter(|w| w[0] < 3.0 && w[1] >= 3.0).count();
+    if secs < 4 || attacks < 8.max(secs / 2) {
         return None;
     }
     let mean = a.iter().sum::<f32>() / a.len() as f32;
@@ -435,6 +452,30 @@ mod tests {
             None,
             "a steady tone has no beat"
         );
+        // Nor does a held chord that swells and fades, as a pad with a
+        // slow wobble does.
+        let x: Vec<f32> = (chords(&[(57.0, true)], 8.0).iter().enumerate())
+            .map(|(i, v)| {
+                let t = i as f32 / RATE as f32;
+                v * (0.75 + 0.25 * (std::f32::consts::TAU * 2.2 * t).sin())
+            })
+            .collect();
+        assert_eq!(
+            analyse(&x, &x, RATE).tempo,
+            None,
+            "a swelling pad has no beat"
+        );
+        // Hits over that held chord still keep their beat.
+        let pad = chords(&[(57.0, true)], 8.0);
+        let beat = (60.0 / 100.0 * RATE as f64) as usize;
+        let x: Vec<f32> = (pad.iter().enumerate())
+            .map(|(i, v)| {
+                let k = (i % beat) as f32;
+                v + 1.0 * (-k / 2000.0).exp() * (k * 0.05).sin()
+            })
+            .collect();
+        let t = analyse(&x, &x, RATE).tempo.unwrap();
+        assert!((t.bpm - 100.0).abs() <= 1.0, "hits over a pad: {t:?}");
     }
 
     #[test]

@@ -131,6 +131,7 @@ pub(crate) enum Cmd {
     FretboardPositionUp,
     FretboardPositionDown,
     FretboardType,
+    FretboardHear,
     FretLeft,
     FretRight,
     FretUp,
@@ -329,7 +330,7 @@ impl Info {
 }
 
 /// The fretboard's commands, in its menu.
-pub(crate) const FRETBOARD_MENU: [Cmd; 18] = [
+pub(crate) const FRETBOARD_MENU: [Cmd; 19] = [
     Cmd::FretboardView,
     Cmd::FretboardScale,
     Cmd::FretboardChord,
@@ -343,6 +344,7 @@ pub(crate) const FRETBOARD_MENU: [Cmd; 18] = [
     Cmd::FretboardPositionDown,
     Cmd::FretboardLabels,
     Cmd::FretboardType,
+    Cmd::FretboardHear,
     Cmd::FretLeft,
     Cmd::FretRight,
     Cmd::FretUp,
@@ -1489,6 +1491,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Arrows move a box on the neck, Enter enters its note at the playhead, Escape stops")
     .words("guitar neck enter notes keyboard"),
+    info(
+        Cmd::FretboardHear,
+        "fretboard-hear",
+        "Fretboard",
+        "Hear notes entered on the fretboard",
+        &[],
+    )
+    .hint("Play each note entered on the fretboard on the track's instrument, or stop")
+    .words("guitar neck sound audition listen"),
     info(Cmd::FretLeft, "fret-left", "Fretboard", "Fretboard box down a fret", &[])
         .hint("Move the fretboard's typing box towards the nut")
         .words("guitar neck cursor"),
@@ -3092,6 +3103,7 @@ impl App {
             | Cmd::FretboardPositionUp
             | Cmd::FretboardPositionDown
             | Cmd::FretboardType
+            | Cmd::FretboardHear
             | Cmd::FretLeft
             | Cmd::FretRight
             | Cmd::FretUp

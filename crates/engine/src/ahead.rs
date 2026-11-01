@@ -553,6 +553,18 @@ impl Engine {
                 target: *target,
                 live: *live,
             }),
+            // Played by whichever side has the track's instrument.
+            Command::Audition {
+                track,
+                pitch,
+                velocity,
+                frames,
+            } => Some(Command::Audition {
+                track: *track,
+                pitch: *pitch,
+                velocity: *velocity,
+                frames: *frames,
+            }),
             Command::SetMetronome(m) => Some(Command::SetMetronome(*m)),
             Command::SetMeterTap(t) => Some(Command::SetMeterTap(*t)),
             Command::SetCueBus { cue, bus } => Some(Command::SetCueBus {

@@ -1579,7 +1579,27 @@ pub struct Graph {
     /// The same session compiled again, for the callback's side to play;
     /// see [`Graph::with_twin`].
     pub(crate) twin: Option<Box<Graph>>,
+    /// Notes played on a track's instrument from the interface, such as
+    /// a fret clicked, while they last.
+    auditions: Vec<Audition>,
 }
+
+/// A note played on one track's instrument for a while, from the
+/// interface rather than the song or a MIDI device.
+#[derive(Clone, Copy, Debug)]
+struct Audition {
+    track: usize,
+    pitch: u8,
+    velocity: u8,
+    /// Frames until it stops.
+    left: i64,
+    started: bool,
+}
+
+/// The most auditioned notes sounding at once; more are left out.
+const MAX_AUDITIONS: usize = 16;
+/// Auditioned notes' ids, clear of the song's and the devices'.
+const AUDITION_ID: u32 = 0xA0D1_0000;
 
 impl Session {
     pub fn new(tempo: TempoMap) -> Session {
@@ -2051,6 +2071,7 @@ impl Session {
             max_block,
             part: None,
             twin: None,
+            auditions: Vec::with_capacity(MAX_AUDITIONS),
         };
         g.refresh_solo();
         g.settle_at(0);
@@ -2061,6 +2082,21 @@ impl Session {
 impl Graph {
     pub fn tempo(&self) -> &TempoMap {
         &self.tempo
+    }
+
+    /// Plays `pitch` on track `track`'s instrument for `frames` frames,
+    /// whether or not the track listens to live notes. Left out when
+    /// too many are sounding.
+    pub(crate) fn audition(&mut self, track: usize, pitch: u8, velocity: u8, frames: i64) {
+        if track < self.tracks.len() && self.auditions.len() < MAX_AUDITIONS {
+            self.auditions.push(Audition {
+                track,
+                pitch: pitch.min(127),
+                velocity: velocity.clamp(1, 127),
+                left: frames.max(1),
+                started: false,
+            });
+        }
     }
 
     pub fn track_count(&self) -> usize {
@@ -2354,6 +2390,17 @@ impl Graph {
             if t.notes_live {
                 live_notes(t, live, n);
             }
+            for a in self.auditions.iter_mut().filter(|a| a.track == ti) {
+                let id = AUDITION_ID + u32::from(a.pitch);
+                if !a.started && t.events.len() < MAX_EVENTS {
+                    t.events.push(Event::note_on(0, 0, a.pitch, a.velocity, id));
+                    a.started = true;
+                }
+                if a.left <= n as i64 && t.events.len() < MAX_EVENTS {
+                    let at = (a.left - 1).clamp(0, n as i64 - 1) as u32;
+                    t.events.push(Event::note_off(at, 0, a.pitch, id));
+                }
+            }
             let shift = rate.as_ref().map_or(0, |r| r.semitones.round() as i32);
             if shift != 0 {
                 for e in &mut t.events {
@@ -2493,6 +2540,12 @@ impl Graph {
                 }
             }
         }
+        // Counted down here, so a note on a track the other side of a
+        // split plays still ends.
+        for a in &mut self.auditions {
+            a.left -= n as i64;
+        }
+        self.auditions.retain(|a| a.left > 0);
         missing
     }
 

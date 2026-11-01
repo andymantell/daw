@@ -698,14 +698,19 @@ replace the app's own UI. See
   owner's machine and report what it saw.
 - Scripting (Phase 7) is the same command layer with a sandboxed language
   instead of a protocol.
-- Status (2026-11-01): server, token, permission per assistant, stop
-  key, the headless test driver, every command by id, any track or
-  effect setting by value, seek and clip selection, and the read side
-  (project, transport, selection, settings, meters, analysis with crest
-  factor and mix-minus-one, rendered audio, pane pictures) are built.
-  Still to do: detected key and tempo, tools of their own for editing
-  notes and clips and adding effects (today only as far as commands
-  reach), and resources and subscriptions.
+- Status (2026-11-01): built. Server, token, permission per assistant,
+  stop key; every command by id, with a CI test that each runs from an
+  assistant and that each command asking for a file has a tool that
+  takes it; tools of their own for tracks, routing, effects, clips,
+  notes, markers, tempo, key, loop, comments, saving, opening and
+  exporting; the read side (project, transport, selection, settings,
+  meters, history, analysis with crest factor, mix-minus-one, key and
+  tempo, rendered audio, pane pictures); `wait_for_change` so an
+  assistant hears of edits; `daw --headless`; and the headless test
+  driver. Claude Code drove a headless build in the cloud. How to
+  connect one, and the rule for new features:
+  [AI_ASSISTANTS.md](AI_ASSISTANTS.md). Not built: MCP resources and
+  subscriptions (wait_for_change does that job), and a stdio launcher.
 
 **Exit criteria**
 - A 24+-track song with 10+ plugins can be recorded, comped, mixed with

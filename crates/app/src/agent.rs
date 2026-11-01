@@ -854,10 +854,29 @@ pub(crate) mod driver {
             for _ in 0..20 {
                 self.h.step();
                 if let Ok(a) = answer.try_recv() {
+                    if tool == "seek"
+                        && let Ok(v) = &a
+                    {
+                        self.wait_for_playhead(v["frames"].as_i64().unwrap_or(0));
+                    }
                     return a;
                 }
             }
             panic!("{tool} was not answered");
+        }
+
+        /// Waits for the engine to move the playhead: it does so on its
+        /// own thread, which a slow machine may not have run yet.
+        fn wait_for_playhead(&mut self, at: i64) {
+            for _ in 0..200 {
+                // Playing, it may have moved on a little already.
+                let pos = self.h.state().ctl.status().position().0;
+                if (at..at + 4800).contains(&pos) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                self.h.step();
+            }
         }
 
         /// Runs a command by id; panics if it is refused.

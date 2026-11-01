@@ -49,8 +49,8 @@ use crate::{
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
     GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, MeterChange, MidiMap, Notation,
     NotationView, Note, NoteClip, Practice, Project, Scale, Send, StretchMarker, TabBlock,
-    Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrainerSettings, VideoClip,
-    differences, is_asset_name,
+    Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion, TrainerSettings,
+    VideoClip, differences, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -1073,8 +1073,6 @@ pub(crate) fn import_lenient(doc: &LoroDoc, bytes: &[u8]) -> Result<(), String> 
 
 fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     w.put(m, "name", t.name.as_str());
-    w.put(m, "gain_db", t.gain_db);
-    w.put(m, "pan", t.pan);
     w.put(m, "mute", t.mute);
     w.put(m, "solo", t.solo);
     // Routing: plain audio tracks to the master, as every track was
@@ -1122,6 +1120,71 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         }
     }
 
+    // The notation lane: one map. Tracks that never had one gain no entry.
+    match &t.notation {
+        Some(n) => {
+            let nm = w.child(m, "notation");
+            w.put(&nm, "view", n.view.name());
+            let tuning: Vec<LoroValue> = n.tuning.iter().map(|&p| i64::from(p).into()).collect();
+            w.put(&nm, "tuning", LoroValue::List(tuning.into()));
+            w.put(&nm, "tuning_name", n.tuning_name.as_str());
+            w.put(&nm, "capo", i64::from(n.capo));
+            w.put(&nm, "staff", n.staff);
+            w.put(&nm, "rhythm", n.rhythm);
+        }
+        None if m.get("notation").is_some() => w.delete(m, "notation"),
+        None => {}
+    }
+    write_versions(w, m, t);
+}
+
+/// A track's versions: a `versions` map from id to its name and place,
+/// and for each but the first a `body` map laid out as a track's own
+/// fields are; the first's body is the track's own fields, as before it
+/// had versions. `version` names the one playing. So switching writes
+/// one value, and an edit made at the same time to the version that was
+/// playing stays in that version. Tracks never given versions gain no
+/// entries.
+fn write_versions(w: &mut Writer, m: &LoroMap, t: &Track) {
+    if t.versions.is_empty() {
+        write_body(w, m, t);
+        if m.get("versions").is_some() {
+            let vs = w.fixed(m, "versions");
+            for id in keys(&vs) {
+                w.delete(&vs, &id);
+            }
+            w.put(m, "version", LoroValue::Null);
+        }
+        return;
+    }
+    let vs = w.fixed(m, "versions");
+    let keep: HashSet<&str> = t.versions.iter().map(|v| v.id.as_str()).collect();
+    for id in keys(&vs) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&vs, &id);
+        }
+    }
+    for (i, v) in t.versions.iter().enumerate() {
+        let vm = w.child(&vs, &v.id);
+        w.put(&vm, "name", v.name.as_str());
+        w.put(&vm, "n", i as i64);
+        let body = v.body.as_ref().unwrap_or(t);
+        if v.id == TrackVersion::FIRST {
+            write_body(w, m, body);
+        } else {
+            let bm = w.child(&vm, "body");
+            write_body(w, &bm, body);
+        }
+    }
+    w.put(m, "version", opt_str(&t.version));
+}
+
+/// What a version of a track holds, into `m`: the track's own map, or a
+/// version's body.
+fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
+    w.put(m, "gain_db", t.gain_db);
+    w.put(m, "pan", t.pan);
+    let plain = |k: &str, unset: bool| unset && m.get(k).is_none();
     // Lanes: one entry per setting, each its points as one list, so two
     // people writing different settings keep both. Tracks never
     // automated gain no entries.
@@ -1226,21 +1289,6 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
     }
     write_layers(w, m, t);
     write_note_clips(w, m, t);
-    // The notation lane: one map. Tracks that never had one gain no entry.
-    match &t.notation {
-        Some(n) => {
-            let nm = w.child(m, "notation");
-            w.put(&nm, "view", n.view.name());
-            let tuning: Vec<LoroValue> = n.tuning.iter().map(|&p| i64::from(p).into()).collect();
-            w.put(&nm, "tuning", LoroValue::List(tuning.into()));
-            w.put(&nm, "tuning_name", n.tuning_name.as_str());
-            w.put(&nm, "capo", i64::from(n.capo));
-            w.put(&nm, "staff", n.staff);
-            w.put(&nm, "rhythm", n.rhythm);
-        }
-        None if m.get("notation").is_some() => w.delete(m, "notation"),
-        None => {}
-    }
     write_comps(w, m, t);
     match &t.frozen {
         Some(f) => {
@@ -1849,6 +1897,8 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         group: string(t, "group").filter(|s| !s.is_empty()),
         automation: Vec::new(),
         notation: None,
+        versions: Vec::new(),
+        version: None,
     };
     if let Some(LoroValue::Map(nm)) = t.get("notation") {
         let tuning = match nm.get("tuning") {
@@ -1965,7 +2015,50 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
     }
     track.layers = read_layers(t);
     track.note_clips = read_note_clips(t);
+    read_versions(id, t, &mut track);
     track
+}
+
+/// A track's versions, as [`write_versions`] keeps them, in order, with
+/// the one playing in the track itself.
+fn read_versions(id: &str, t: &LoroMapValue, track: &mut Track) {
+    let Some(LoroValue::Map(vs)) = t.get("versions") else {
+        return;
+    };
+    let mut found: Vec<(i64, TrackVersion)> = Vec::new();
+    for (vid, v) in vs.iter() {
+        let LoroValue::Map(v) = v else { continue };
+        let body = if vid == TrackVersion::FIRST {
+            track.version_body()
+        } else {
+            match v.get("body") {
+                Some(LoroValue::Map(b)) => read_track(id, b).version_body(),
+                _ => Track::new(id.to_string(), String::new()),
+            }
+        };
+        found.push((
+            int(v, "n").unwrap_or(i64::MAX),
+            TrackVersion {
+                id: vid.to_string(),
+                name: string(v, "name").unwrap_or_default(),
+                body: Some(body),
+            },
+        ));
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+    let mut versions: Vec<TrackVersion> = found.into_iter().map(|(_, v)| v).collect();
+    let playing = string(t, "version")
+        .and_then(|p| versions.iter().position(|v| v.id == p))
+        .unwrap_or(0);
+    let Some(body) = versions.get_mut(playing).and_then(|v| v.body.take()) else {
+        return;
+    };
+    track.take_body(body);
+    // One left (another's deleted while it was made): no versions.
+    if versions.len() > 1 {
+        track.version = Some(versions[playing].id.clone());
+        track.versions = versions;
+    }
 }
 
 /// An effect (or instrument) from its map.
@@ -3207,5 +3300,146 @@ mod tests {
             .map(|n| n.id.clone())
             .collect();
         assert_eq!(ids, ["na", "nb"]);
+    }
+
+    /// A track with one clip, `c1`, and a built-in effect.
+    fn versioned_track() -> Track {
+        let mut t = Track::new("t1".into(), "Guitar".into());
+        t.clips.push(Clip {
+            id: "c1".into(),
+            asset: "a.wav".into(),
+            name: "Verse".into(),
+            len: 100,
+            ..Default::default()
+        });
+        t.effects.push(Effect {
+            id: "e1".into(),
+            name: "Drive".into(),
+            builtin: "gain".into(),
+            params: vec![("gain_db".into(), 3.0)],
+            ..Default::default()
+        });
+        t
+    }
+
+    #[test]
+    fn track_versions_round_trip_and_switch() {
+        let mut t = versioned_track();
+        t.add_version("v2".into(), "Version 2".into(), "Version 1", true);
+        // The copy plays: change it.
+        t.clips[0].start = 500;
+        t.effects[0].params[0].1 = 9.0;
+        t.gain_db = -6.0;
+        let mut p = Project {
+            tracks: vec![t],
+            ..Project::default()
+        };
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        assert_eq!(doc.get(), p);
+        // A new empty version keeps the sound but not the clips.
+        p.tracks[0].add_version("v3".into(), "Empty".into(), "", false);
+        doc.set(&p);
+        let got = doc.get();
+        assert_eq!(got, p);
+        let t = &got.tracks[0];
+        assert_eq!(t.version.as_deref(), Some("v3"));
+        assert!(t.clips.is_empty());
+        assert_eq!(t.effects[0].params[0].1, 9.0);
+        // Back to the first: as it was before the copy.
+        p.tracks[0].switch_version(TrackVersion::FIRST);
+        doc.set(&p);
+        let t = &doc.get().tracks[0];
+        assert_eq!(t.clips[0].start, 0);
+        assert_eq!(t.effects[0].params[0].1, 3.0);
+        assert_eq!(t.gain_db, 0.0);
+        let names: Vec<&str> = t.versions.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["Version 1", "Version 2", "Empty"]);
+        // The first keeps its place in the track's own map, as before it
+        // had versions.
+        let LoroValue::Map(ts) = doc.tracks().get_deep_value() else {
+            panic!()
+        };
+        let Some(LoroValue::Map(m)) = ts.get("t1") else {
+            panic!()
+        };
+        let Some(LoroValue::Map(clips)) = m.get("clips") else {
+            panic!()
+        };
+        assert!(clips.contains_key("c1"));
+        // An undo puts back the version that played.
+        assert!(doc.undo());
+        assert_eq!(doc.get().tracks[0].version.as_deref(), Some("v3"));
+    }
+
+    #[test]
+    fn deleting_versions_down_to_one_leaves_none() {
+        let mut t = versioned_track();
+        t.add_version("v2".into(), "Version 2".into(), "Version 1", true);
+        t.clips[0].start = 500;
+        let mut p = Project {
+            tracks: vec![t],
+            ..Project::default()
+        };
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        // Deleting the first, playing the second: the second is what
+        // the track plays from then on.
+        assert!(p.tracks[0].delete_version(TrackVersion::FIRST));
+        assert!(p.tracks[0].versions.is_empty() && p.tracks[0].version.is_none());
+        assert_eq!(p.tracks[0].clips[0].start, 500);
+        doc.set(&p);
+        let reopened = ProjectDoc::from_bytes(&doc.to_bytes(), 2).unwrap();
+        assert_eq!(reopened.get(), p);
+        // A track never given versions gains no entries.
+        let mut doc = ProjectDoc::new(3);
+        doc.set(&Project {
+            tracks: vec![versioned_track()],
+            ..Project::default()
+        });
+        let LoroValue::Map(ts) = doc.tracks().get_deep_value() else {
+            panic!()
+        };
+        let Some(LoroValue::Map(m)) = ts.get("t1") else {
+            panic!()
+        };
+        assert!(m.get("versions").is_none() && m.get("version").is_none());
+    }
+
+    #[test]
+    fn switching_versions_keeps_an_edit_made_at_once_to_the_one_left() {
+        let mut t = versioned_track();
+        t.add_version("v2".into(), "Version 2".into(), "Version 1", false);
+        t.switch_version(TrackVersion::FIRST);
+        let p = Project {
+            tracks: vec![t],
+            ..Project::default()
+        };
+        let mut a = ProjectDoc::new(1);
+        a.set(&p);
+        let mut b = ProjectDoc::from_bytes(&a.to_bytes(), 2).unwrap();
+        // One person switches to version 2 while the other moves a clip
+        // of version 1 and adds a version of their own.
+        let mut pa = a.get();
+        assert!(pa.tracks[0].switch_version("v2"));
+        a.set(&pa);
+        let mut pb = b.get();
+        pb.tracks[0].clips[0].start = 777;
+        pb.tracks[0].add_version("v3".into(), "Bass idea".into(), "", false);
+        pb.tracks[0].switch_version(TrackVersion::FIRST);
+        b.set(&pb);
+        a.merge(&b.to_bytes()).unwrap();
+        b.merge(&a.to_bytes()).unwrap();
+        let got = a.get();
+        assert_eq!(got, b.get());
+        let t = &got.tracks[0];
+        let ids: Vec<&str> = t.versions.iter().map(|v| v.id.as_str()).collect();
+        assert_eq!(ids, ["first", "v2", "v3"]);
+        // Whichever plays, version 1 has the moved clip.
+        let first = match t.version.as_deref() {
+            Some(TrackVersion::FIRST) => t.clone(),
+            _ => t.versions[0].body.clone().unwrap(),
+        };
+        assert_eq!(first.clips[0].start, 777);
     }
 }

@@ -30,6 +30,7 @@ use eframe::egui::{
 use crate::commands::Cmd;
 use crate::groups::{self, LaneGroup};
 use crate::theme::{Look, LoopFill, Texture, WaveStyle};
+use crate::versions::VersionAsk;
 use daw_project::{NoteClip, PPQ, StretchMarker};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -1073,6 +1074,9 @@ pub struct View<'a> {
     pub hits: &'a [daw_project::HitPoint],
     /// Each lane's track: whether it can be frozen, and whether it is.
     pub freeze: &'a [(bool, bool)],
+    /// Each lane's track versions: their names and the place of the one
+    /// playing; no names for a track without versions.
+    pub versions: &'a [(Vec<String>, usize)],
     /// Clips have been copied.
     pub can_paste: bool,
     /// Each lane's notation band under its row, if it shows one.
@@ -1087,6 +1091,8 @@ pub enum TrackAsk {
     RenderInPlace,
     /// Save it as a track preset.
     SavePreset,
+    /// Something to do with its versions.
+    Version(crate::versions::VersionAsk),
 }
 
 /// What the app should do after the timeline is drawn.
@@ -3620,6 +3626,18 @@ impl Timeline {
                 daw_project::TrackKind::Bus => Some("bus"),
                 daw_project::TrackKind::Folder => Some("folder"),
             };
+            // The version playing, if it has others.
+            if let Some((names, at)) = view.versions.get(i)
+                && let Some(v) = names.get(*at)
+            {
+                lanes.text(
+                    name_rect.right_bottom() + vec2(-8.0, -6.0),
+                    Align2::RIGHT_BOTTOM,
+                    format!("{v} ({}/{})", at + 1, names.len()),
+                    look.font(look.small),
+                    tc.text_dim,
+                );
+            }
             if let Some(tag) = tag {
                 lanes.text(
                     pos2(name_end.right() + 6.0, name_rect.center().y),
@@ -4244,6 +4262,44 @@ impl Timeline {
                     {
                         out.track = Some((l, TrackAsk::SavePreset));
                         ui.close();
+                    }
+                    if !lane.kind.is_bus() {
+                        let ask = |a| Some((l, TrackAsk::Version(a)));
+                        ui.menu_button("Versions", |ui| {
+                            let (names, at) = view.versions.get(l).cloned().unwrap_or_default();
+                            for (i, n) in names.iter().enumerate() {
+                                if ui.radio(i == at, n).clicked() {
+                                    out.track = ask(VersionAsk::Switch(i));
+                                    ui.close();
+                                }
+                            }
+                            if !names.is_empty() {
+                                ui.separator();
+                            }
+                            if ui
+                                .button("Duplicate this version")
+                                .on_hover_text("A copy of what the track plays, to change and compare")
+                                .clicked()
+                            {
+                                out.track = ask(VersionAsk::Duplicate);
+                                ui.close();
+                            }
+                            if ui
+                                .button("New empty version")
+                                .on_hover_text(
+                                    "Same instrument, effects and fader, no clips, notes or \
+                                     automation",
+                                )
+                                .clicked()
+                            {
+                                out.track = ask(VersionAsk::New);
+                                ui.close();
+                            }
+                            if ui.button("Track versions…").clicked() {
+                                out.track = ask(VersionAsk::Window);
+                                ui.close();
+                            }
+                        });
                     }
                     ui.separator();
                 }

@@ -71,6 +71,7 @@ mod timing;
 mod trainer;
 mod tuner;
 mod update;
+mod versions;
 mod video;
 mod workspace;
 
@@ -154,6 +155,10 @@ struct Track {
     automation: Vec<daw_project::Lane>,
     /// Its notes shown as tab or a staff under it (roadmap 3.8).
     notation: Option<daw_project::Notation>,
+    /// Its other versions, as the document has them, and the one playing
+    /// (see [`daw_project::Track::versions`]).
+    versions: Vec<daw_project::TrackVersion>,
+    version: Option<String>,
 }
 
 impl Track {
@@ -195,6 +200,8 @@ impl Track {
             group: None,
             automation: Vec::new(),
             notation: None,
+            versions: Vec::new(),
+            version: None,
         }
     }
 
@@ -417,6 +424,7 @@ struct App {
     snapshot_ui: snapshots::Snapshots,
     /// The undo list and activity window.
     history: history::History,
+    versions_ui: versions::Versions,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
     preset_ui: presets::Presets,
@@ -569,6 +577,7 @@ impl App {
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
             history: history::History::default(),
+            versions_ui: versions::Versions::default(),
             template_ui: templates::Templates::default(),
             preset_ui: presets::Presets::default(),
             parts: import_project::Parts::default(),
@@ -1407,6 +1416,7 @@ impl App {
         let freeze: Vec<(bool, bool)> = (self.tracks.iter())
             .map(|t| (render::can_freeze(t), t.freeze))
             .collect();
+        let versions = self.lane_versions();
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -1420,6 +1430,7 @@ impl App {
             timecode: self.shown_clock(),
             hits: &hits,
             freeze: &freeze,
+            versions: &versions,
             can_paste: !self.renders.copied.is_empty(),
             bands: &[],
         };
@@ -1536,6 +1547,7 @@ impl App {
             Some((i, timeline::TrackAsk::SavePreset)) => {
                 self.ask_save_preset(Some(i), daw_project::PresetKind::Track)
             }
+            Some((i, timeline::TrackAsk::Version(ask))) => self.ask_version(ui.ctx(), i, ask),
             None => {}
         }
         if let Some(cmd) = out.command {
@@ -2564,6 +2576,17 @@ impl eframe::App for App {
                     ] {
                         app.menu_item(ui, c);
                     }
+                    ui.separator();
+                    for c in [
+                        Cmd::TrackVersions,
+                        Cmd::DuplicateVersion,
+                        Cmd::NewVersion,
+                        Cmd::NextVersion,
+                        Cmd::PrevVersion,
+                        Cmd::DeleteVersion,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
                 });
                 self.top_menu(ui, "Notes", |app, ui| {
                     for c in [
@@ -2909,6 +2932,7 @@ impl eframe::App for App {
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.history_window(&ctx);
+        self.versions_window(&ctx);
         self.tempo_window(&ctx);
         self.hit_points_window(&ctx);
         self.select_notes_window(&ctx);

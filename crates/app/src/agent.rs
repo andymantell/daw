@@ -213,6 +213,18 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "switch_version",
+        description: "Plays another version of a track, by the version's id as get_project \
+                      lists it. Commands such as duplicate-track-version make versions.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string", "description": "The track's id."},
+                "version": {"type": "string", "description": "The version's id."}
+            }, "required": ["track", "version"]})
+        },
+    },
+    Tool {
         name: "seek",
         description: "Moves the playhead to a bar (counted from 1) or to a time in seconds.",
         access: Access::Edit,
@@ -603,6 +615,26 @@ impl App {
                 // Undoing is no new step: it moves steps between the lists.
                 Ok((json!({"done": done}), None))
             }
+            "switch_version" => {
+                let track = args["track"].as_str().ok_or("Give the track's id.")?;
+                let version = args["version"].as_str().ok_or("Give the version's id.")?;
+                let ti = (self.tracks.iter())
+                    .position(|t| t.key == track)
+                    .ok_or_else(|| format!("There is no track {track}."))?;
+                if !self.tracks[ti].versions.iter().any(|v| v.id == version) {
+                    return Err(format!("The track has no version {version}."));
+                }
+                if !self.switch_version(ctx, ti, version) {
+                    return Err(self
+                        .message
+                        .take()
+                        .unwrap_or("That version already plays.".into()));
+                }
+                Ok((
+                    json!({"playing": version}),
+                    Some("Switch track version".into()),
+                ))
+            }
             "seek" => {
                 let map = self.tempo_map();
                 let at = match (args["bar"].as_f64(), args["seconds"].as_f64()) {
@@ -860,6 +892,10 @@ impl App {
                     "automated": t.automation.iter().map(|l| &l.param).collect::<Vec<_>>(),
                     "clips": clips,
                     "note_clips": note_clips,
+                    "versions": t.versions.iter().map(|v| json!({
+                        "id": v.id, "name": v.name,
+                        "playing": t.version.as_ref() == Some(&v.id),
+                    })).collect::<Vec<_>>(),
                 })
             })
             .collect();

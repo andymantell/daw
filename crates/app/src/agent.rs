@@ -86,7 +86,10 @@ pub(crate) const TOOLS: &[Tool] = &[
             json!({"type": "object", "properties": {
                 "notes": {"type": "boolean",
                           "description": "Include every note of every note clip (get_note_clip gives one clip's)."},
-                "track": {"type": "string", "description": "Only this track, by id."}
+                "track": {"type": "string", "description": "Only this track, by id."},
+                "summary": {"type": "boolean",
+                            "description": "Each track's clips as a count and where they \
+                             start and end, rather than one by one."}
             }})
         },
     },
@@ -168,7 +171,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                       correlation, the level in each third-octave band from 20 Hz to \
                       20 kHz, and the key and tempo it sounds in, when it can tell. Of one track or bus on its own (after its fader), or of the \
                       mix (no track, or the track \"master\": through the master's \
-                      effects and fader), maybe without one track. Over a section, bars or seconds; \
+                      effects and fader), maybe without one track, or of one clip. Over a section, bars or seconds; \
                       without any: the loop if it is on, else the whole song (at most 10 \
                       minutes). get_meters gives each track's level as it plays.",
         access: Access::Read,
@@ -457,7 +460,15 @@ fn region_args() -> Value {
         "from_bar": {"type": "integer", "description": "From the start of this bar (from 1)."},
         "to_bar": {"type": "integer", "description": "To the start of this bar."},
         "section": {"type": "string", "description": "A section by its marker's name or id: \
-                    from its marker to the next."}
+                    from its marker to the next."},
+        "clip": {"type": "string", "description": "An audio clip's id: it alone, through its \
+                 track's effects and fader, from its start to its end unless a stretch is given."},
+        "transpose_semitones": {"type": "number", "description": "Hear the track or clip as if \
+                 its audio clips were moved by this much more (-12 to 12; fractions are cents), \
+                 without changing them: to try a shift before making it."},
+        "notes": {"type": "boolean", "description": "analyse only: also read the notes of one \
+                 voice or instrument, one at a time: each note with its start, length and cents \
+                 off, seconds of each of the 12 notes, the overall tuning, and the key they fit."}
     }})
 }
 
@@ -722,6 +733,9 @@ impl App {
                     if tracks.is_empty() {
                         return Err(format!("There is no track {only}."));
                     }
+                }
+                if args["summary"].as_bool() == Some(true) {
+                    self.summarise_clips(&mut v);
                 }
                 Ok(v)
             }
@@ -1165,6 +1179,60 @@ impl App {
             })
             .collect();
         Value::Array(list)
+    }
+
+    /// Puts a count and a span in place of each track's clip lists.
+    fn summarise_clips(&self, v: &mut Value) {
+        let rate = self.rate.max(1) as f64;
+        let map = self.tempo_map();
+        let Some(tracks) = v["tracks"].as_array_mut() else {
+            return;
+        };
+        for t in tracks {
+            let Some(app) = t["id"].as_str().and_then(|k| self.track_index(k)) else {
+                continue;
+            };
+            let app = &self.tracks[app];
+            let from = app.clips.iter().map(|c| c.start).min();
+            let to = app.clips.iter().map(|c| c.end()).max();
+            let o = t.as_object_mut().expect("a track is an object");
+            o.remove("clips");
+            o.insert(
+                "clips_summary".into(),
+                json!({
+                    "count": app.clips.len(),
+                    "muted": app.clips.iter().filter(|c| c.muted).count(),
+                    "transposed": app.clips.iter().filter(|c| c.cents != 0).count(),
+                    "follow_tempo": app.clips.iter().filter(|c| c.tempo.is_some()).count(),
+                    "from_seconds": from.map(|f| f as f64 / rate),
+                    "to_seconds": to.map(|f| f as f64 / rate),
+                }),
+            );
+            let notes = o.remove("note_clips");
+            let ticks = |k: &str| {
+                (app.note_clips.iter())
+                    .map(|c| {
+                        if k == "from" {
+                            c.start
+                        } else {
+                            c.start + c.len
+                        }
+                    })
+                    .reduce(if k == "from" { i64::min } else { i64::max })
+                    .map(|t| map.frames_at(daw_engine::time::Ticks(t)).0 as f64 / rate)
+            };
+            if notes.is_some_and(|n| n.as_array().is_some_and(|a| !a.is_empty())) {
+                o.insert(
+                    "note_clips_summary".into(),
+                    json!({
+                        "count": app.note_clips.len(),
+                        "notes": app.note_clips.iter().map(|c| c.notes.len()).sum::<usize>(),
+                        "from_seconds": ticks("from"),
+                        "to_seconds": ticks("to"),
+                    }),
+                );
+            }
+        }
     }
 
     fn project_value(&self, notes: bool) -> Value {

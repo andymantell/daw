@@ -11,6 +11,7 @@ pub mod fade;
 pub mod graph;
 pub mod import;
 pub mod layers;
+pub mod melody;
 pub mod meter;
 pub mod metronome;
 pub mod midi;

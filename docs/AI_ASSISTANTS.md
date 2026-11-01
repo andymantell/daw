@@ -89,9 +89,16 @@ assistant finds them for itself. In outline:
   `limit` to narrow and page them.
 - **Hearing and seeing:** `analyse` (peak, true peak, RMS, crest factor,
   loudness and its range, stereo correlation, third-octave bands, and
-  the key and tempo when it can tell) of a track, a bus or the mix, over
-  a time range, with or without one track; `render_audio` (a WAV file);
-  `get_picture` (the window or one pane).
+  the key and tempo when it can tell) of a track, a bus, one clip or the
+  mix, over a time range, with or without one track. With `notes` it also
+  reads one voice or instrument note by note: each note with its start,
+  length and how many cents off it is, the seconds of each of the 12
+  notes, the overall tuning and the key they fit. `transpose_semitones`
+  hears a track or clip as if moved, without changing it, so a shift can
+  be tried before it is made. `render_audio` (a WAV file);
+  `get_picture` (the window or one pane). `get_project` with `summary`
+  gives each track's clips as a count and a span, for a first look at a
+  big project.
 - **Following the person:** `wait_for_change` answers when the project
   next changes, by anyone.
 - **Tracks, routing and effects:** `add_track`, `edit_track`,

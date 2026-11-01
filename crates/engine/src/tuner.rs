@@ -99,6 +99,11 @@ impl Detector {
         while tau + 1 < max_tau && d[tau + 1] < d[tau] {
             tau += 1;
         }
+        // Still falling at the end of the range: the pitch is lower than
+        // looked for, and the edge isn't it.
+        if tau + 1 >= max_tau && d[max_tau] < d[tau] {
+            return None;
+        }
         // Parabolic interpolation between neighbours.
         let (a, b, c) = (d[tau - 1], d[tau], d[tau + 1]);
         let den = a - 2.0 * b + c;

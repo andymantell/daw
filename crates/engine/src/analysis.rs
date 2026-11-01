@@ -132,6 +132,12 @@ fn pearson(a: &[f32; 12], b: &[f32; 12]) -> f32 {
 
 /// How much of each of the twelve notes sounds, from the spectrum
 /// between 55 Hz and 4 kHz, over Hann-windowed frames.
+///
+/// Each spectral peak counts once, for the note at its frequency
+/// worked out between bins. Low down a bin is wider than a semitone, so
+/// counting every bin gave a loud bass's spill into the bins beside it
+/// to the notes either side: an A minor song with its bass read as A♯
+/// minor.
 fn chroma(left: &[f32], right: &[f32], rate: u32) -> [f32; 12] {
     let size = SPECTRUM_SIZE;
     let fft = RealFftPlanner::<f32>::new().plan_fft_forward(size);
@@ -139,18 +145,9 @@ fn chroma(left: &[f32], right: &[f32], rate: u32) -> [f32; 12] {
         .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / size as f32).cos())
         .collect();
     let bin_hz = rate as f32 / size as f32;
-    // Each bin's note, or none outside the range.
-    let class: Vec<Option<usize>> = (0..size / 2 + 1)
-        .map(|k| {
-            let f = k as f32 * bin_hz;
-            (55.0..4000.0).contains(&f).then(|| {
-                let pitch = 69.0 + 12.0 * (f / 440.0).log2();
-                (pitch.round() as i64).rem_euclid(12) as usize
-            })
-        })
-        .collect();
     let mut buf = vec![0.0; size];
     let mut out = fft.make_output_vec();
+    let mut mag = vec![0.0f32; out.len()];
     let mut c = [0.0f32; 12];
     let mut at = 0;
     while at + size <= left.len() {
@@ -158,10 +155,28 @@ fn chroma(left: &[f32], right: &[f32], rate: u32) -> [f32; 12] {
             *b = 0.5 * (left[at + i] + right[at + i]) * window[i];
         }
         if fft.process(&mut buf, &mut out).is_ok() {
-            for (k, v) in out.iter().enumerate() {
-                if let Some(pc) = class[k] {
-                    c[pc] += v.norm();
+            for (m, v) in mag.iter_mut().zip(&out) {
+                *m = v.norm();
+            }
+            for k in 1..mag.len() - 1 {
+                let (a, b, n) = (mag[k - 1], mag[k], mag[k + 1]);
+                if !(b > a && b >= n) {
+                    continue;
                 }
+                // Parabolic interpolation on the log magnitudes.
+                let (la, lb, ln) = (a.max(1e-12).ln(), b.ln(), n.max(1e-12).ln());
+                let den = la - 2.0 * lb + ln;
+                let shift = if den.abs() > f32::EPSILON {
+                    (0.5 * (la - ln) / den).clamp(-0.5, 0.5)
+                } else {
+                    0.0
+                };
+                let f = (k as f32 + shift) * bin_hz;
+                if !(55.0..4000.0).contains(&f) {
+                    continue;
+                }
+                let pitch = 69.0 + 12.0 * (f / 440.0).log2();
+                c[(pitch.round() as i64).rem_euclid(12) as usize] += a + b + n;
             }
         }
         at += size;
@@ -432,6 +447,26 @@ mod tests {
         assert_eq!((k.root, k.minor), (9, true), "{k:?}");
         let z = vec![0.0; RATE as usize * 2];
         assert_eq!(analyse(&z, &z, RATE).key, None);
+    }
+
+    #[test]
+    fn a_loud_low_bass_does_not_pull_the_key_a_semitone_up() {
+        // Song test 3: i iv v i in A minor over a loud bass an octave
+        // or two down (A1 is 55 Hz, where a bin is wider than a
+        // semitone) read as A♯ minor.
+        let roots = [(57.0, true), (62.0, true), (64.0, true), (57.0, true)];
+        let x = chords(&roots, 1.0);
+        let n = RATE as usize;
+        let bass: Vec<f32> = (roots.iter())
+            .flat_map(|&(r, _)| {
+                let hz = note(r - 24.0);
+                (0..n)
+                    .map(move |i| 0.8 * (std::f32::consts::TAU * hz * i as f32 / RATE as f32).sin())
+            })
+            .collect();
+        let x: Vec<f32> = x.iter().zip(&bass).map(|(a, b)| a + b).collect();
+        let k = analyse(&x, &x, RATE).key.unwrap();
+        assert_eq!((k.root, k.minor), (9, true), "{k:?}");
     }
 
     #[test]

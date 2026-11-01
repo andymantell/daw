@@ -150,6 +150,7 @@ impl App {
         let notes = args["notes"].as_bool().unwrap_or(false);
         let beats = args["beats"].as_bool().unwrap_or(false);
         let map = self.tempo_map();
+        let page = notes_page(args)?;
         let thread = std::thread::Builder::new()
             .name("assistant-render".into())
             .spawn(move || {
@@ -158,7 +159,7 @@ impl App {
                 let answer = if analysing {
                     let mut v = report_value(&l, &r, rate, from_s, &what);
                     if notes {
-                        v["notes"] = notes_value(&l, &r, rate, from_s);
+                        v["notes"] = notes_value(&l, &r, rate, from_s, page);
                     }
                     if beats {
                         v["beat_grid"] = beat_grid_value(&l, &r, &map, from);
@@ -463,10 +464,30 @@ fn describe(app: &App, args: &Value) -> String {
     s
 }
 
-/// The notes read from one voice or instrument, for `analyse`.
-fn notes_value(l: &[f32], r: &[f32], rate: u32, from: f64) -> Value {
-    /// Notes listed in full; the totals cover them all.
-    const MOST: usize = 200;
+/// Notes `analyse` lists in full unless asked for more; the totals
+/// cover them all.
+const NOTES_LISTED: usize = 200;
+
+/// Which of the notes `analyse` lists: from which, and how many. With
+/// `out_file` every note is listed unless a limit is given.
+fn notes_page(args: &Value) -> Result<(usize, usize), String> {
+    let count = |key: &str| match &args[key] {
+        Value::Null => Ok(None),
+        v => v
+            .as_u64()
+            .map(|n| Some(n as usize))
+            .ok_or_else(|| format!("{key} is a whole number, from 0.")),
+    };
+    let to_file = !matches!(args["out_file"], Value::Null | Value::Bool(false));
+    let from = count("notes_from")?.unwrap_or(0);
+    let limit = count("notes_limit")?.unwrap_or(if to_file { usize::MAX } else { NOTES_LISTED });
+    Ok((from, limit))
+}
+
+/// The notes read from one voice or instrument, for `analyse`: those
+/// `page` picks, and the totals of all of them.
+fn notes_value(l: &[f32], r: &[f32], rate: u32, from: f64, page: (usize, usize)) -> Value {
+    let (skip, most) = page;
     let m = daw_engine::melody::melody(l, r, rate);
     const NAMES: [&str; 12] = [
         "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
@@ -493,10 +514,13 @@ fn notes_value(l: &[f32], r: &[f32], rate: u32, from: f64) -> Value {
             .unwrap_or(0.0)
             .total_cmp(&a["seconds"].as_f64().unwrap_or(0.0))
     });
+    let shown = m.notes.len().saturating_sub(skip).min(most);
     json!({
         "count": m.notes.len(),
-        "listed": m.notes.len().min(MOST),
-        "notes": m.notes.iter().take(MOST).map(|n| json!({
+        "listed": shown,
+        "notes_from": skip,
+        "next_from": (skip + shown < m.notes.len()).then_some(skip + shown),
+        "notes": m.notes.iter().skip(skip).take(most).map(|n| json!({
             "note": name(n.midi),
             "midi": n.midi,
             "start_seconds": round(from + n.start, 1000.0),
@@ -938,6 +962,85 @@ pub(crate) mod tests {
                 .is_err()
         );
         assert!(d.call("analyse", json!({"clip": "nope"})).is_err());
+    }
+
+    #[test]
+    fn the_notes_are_read_a_page_at_a_time_or_kept_in_a_file() {
+        let mut d = Driver::new();
+        let clip = sung(&mut d, 1.0);
+        let first = d
+            .call(
+                "analyse",
+                json!({"clip": clip, "notes": true, "notes_limit": 1}),
+            )
+            .unwrap();
+        let n = &first["notes"];
+        assert_eq!(n["count"], 2, "{first}");
+        assert_eq!(n["listed"], 1, "{first}");
+        assert_eq!(n["notes"][0]["note"], "E4", "{first}");
+        assert_eq!(n["next_from"], 1, "{first}");
+        let next = d
+            .call(
+                "analyse",
+                json!({"clip": clip, "notes": true, "notes_from": n["next_from"], "notes_limit": 1}),
+            )
+            .unwrap();
+        let n = &next["notes"];
+        assert_eq!(n["notes"][0]["note"], "G4", "{next}");
+        assert!(n["next_from"].is_null(), "the last page: {next}");
+        assert!(
+            d.call(
+                "analyse",
+                json!({"clip": clip, "notes": true, "notes_from": -1})
+            )
+            .is_err()
+        );
+
+        // Kept in a file for a script: the answer says where, and the
+        // file holds what the answer would have been, every note.
+        let r = d
+            .call(
+                "analyse",
+                json!({"clip": clip, "notes": true, "out_file": true}),
+            )
+            .unwrap();
+        let path = r["out_file"].as_str().unwrap_or_else(|| panic!("{r}"));
+        assert!(
+            r.get("third_octave_bands").is_none(),
+            "only where it went: {r}"
+        );
+        assert_eq!(r["contents"]["third_octave_bands"], "31 items", "{r}");
+        let kept: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(kept["notes"]["listed"], 2, "{kept}");
+        assert_eq!(r["bytes"], std::fs::read(path).unwrap().len());
+        let _ = std::fs::remove_file(path);
+
+        // A path of its own needs the export permission, and a full
+        // path to a .json file.
+        let dir = std::env::temp_dir().join(format!("daw-out-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let own = dir.join("notes.json");
+        let ask = json!({"clip": clip, "notes": true, "out_file": own});
+        d.access = crate::agent::Access::Read;
+        let e = d.call("analyse", ask.clone()).unwrap_err();
+        assert!(e.contains("permission"), "{e}");
+        d.access = crate::agent::Access::EditExport;
+        let r = d.call("analyse", ask).unwrap();
+        assert_eq!(r["out_file"], own.display().to_string());
+        assert!(own.exists());
+        for bad in [
+            json!("notes.json"),
+            json!("/no/such/folder/x.json"),
+            json!(3),
+        ] {
+            assert!(
+                d.call("analyse", json!({"clip": clip, "out_file": bad}))
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

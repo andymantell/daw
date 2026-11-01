@@ -163,6 +163,9 @@ pub struct Export {
     /// Each export finished since the queue last started from empty:
     /// its folder, and a line about each file.
     results: Vec<Done>,
+    /// How many exports have finished (or failed to start) since the
+    /// app started: the last of `results` is this one.
+    finished: u64,
     /// Exports waiting for the one running to finish.
     queue: VecDeque<Queued>,
     /// What the window exports: the whole song, the loop, or a file per
@@ -458,11 +461,32 @@ impl Export {
         }
         self.results
             .push((PathBuf::new(), vec![(label, Err(error))]));
+        self.finished += 1;
     }
 
     /// Each export finished in this run, oldest first.
     pub fn results(&self) -> &[Done] {
         &self.results
+    }
+
+    /// How many exports have finished since the app started, counting
+    /// those that couldn't start.
+    pub fn finished_count(&self) -> u64 {
+        self.finished
+    }
+
+    /// The `n`th export to finish since the app started (from 1), while
+    /// it is still among this run's results.
+    pub fn numbered(&self, n: u64) -> Option<&Done> {
+        let first = self.finished + 1 - self.results.len() as u64;
+        let i = n.checked_sub(first)?;
+        self.results.get(i as usize)
+    }
+
+    /// How many exports must finish before one asked for now: the one
+    /// running and those queued.
+    pub fn ahead(&self) -> u64 {
+        u64::from(self.busy()) + self.queue.len() as u64
     }
 
     /// How far the running export has got, from 0 to 1.
@@ -496,6 +520,7 @@ impl Export {
                 .join()
                 .unwrap_or_else(|_| vec![("Export".into(), Err("the export stopped".into()))]);
             self.results.push((job.folder, lines));
+            self.finished += 1;
         }
     }
 

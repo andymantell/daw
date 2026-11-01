@@ -1318,11 +1318,31 @@ pub(crate) mod tests {
                     json!({"clip": key, "notes": [1], "to_midi": 65}),
                 )
                 .unwrap();
-            assert_eq!(v["notes"][1]["now"], "F4");
+            // Only the note changed comes back, and how many there are.
+            assert_eq!(v["count"], 3, "{v}");
+            assert_eq!(v["notes"].as_array().unwrap().len(), 1, "{v}");
+            assert_eq!(v["notes"][0]["index"], 1);
+            assert_eq!(v["notes"][0]["now"], "F4");
+            // Again changes nothing, so nothing comes back; all: true
+            // gives every note, the others where they were.
+            let v = d
+                .call(
+                    "edit_pitch_notes",
+                    json!({"clip": key, "notes": [1], "to_midi": 65, "all": true}),
+                )
+                .unwrap();
+            assert_eq!(v["notes"].as_array().unwrap().len(), 3, "{v}");
             assert!(
                 v["notes"][0]["now"].as_str().unwrap().starts_with("C4"),
                 "the others stay"
             );
+            let v = d
+                .call(
+                    "edit_pitch_notes",
+                    json!({"clip": key, "notes": [1], "to_midi": 65}),
+                )
+                .unwrap();
+            assert_eq!(v["notes"].as_array().unwrap().len(), 0, "{v}");
             // Heard: the middle note sounds at F, the others where they were.
             let out = render(&mut d);
             let (mid, _) = pitch_over(&out, 0.7, 0.9);
@@ -1392,7 +1412,9 @@ pub(crate) mod tests {
                     json!({"clip": key, "notes": [1], "to_plays_midi": 62}),
                 )
                 .unwrap();
-            let n = &v["notes"][1];
+            // Only the note changed comes back.
+            let n = &v["notes"][0];
+            assert_eq!(n["index"], 1, "{v}");
             assert!(n["now"].as_str().unwrap().starts_with("E4"), "{v}");
             assert!(n["plays"].as_str().unwrap().starts_with("D4"), "{v}");
             assert!(
@@ -1416,7 +1438,8 @@ pub(crate) mod tests {
                     json!({"clip": key, "notes": [2], "snap": true}),
                 )
                 .unwrap();
-            let heard = v["notes"][2]["plays_midi"].as_f64().unwrap();
+            assert_eq!(v["notes"][0]["index"], 2, "{v}");
+            let heard = v["notes"][0]["plays_midi"].as_f64().unwrap();
             assert!(
                 (heard - heard.round()).abs() < 0.005,
                 "on a whole note: {v}"
@@ -1469,7 +1492,11 @@ pub(crate) mod tests {
             assert_eq!(v["key"], "C major", "{v}");
             assert_eq!(v["snapped"], 1, "{v}");
             assert_eq!(v["notes"][0]["now"], "C4", "{v}");
-            assert_eq!(v["notes"][1]["shift_semitones"], 0.0, "within 30 ct: left");
+            assert_eq!(
+                v["notes"].as_array().unwrap().len(),
+                1,
+                "within 30 ct: left, so not listed: {v}"
+            );
             // Heard: the first note now sounds at C, not C♯.
             let out = render(&mut d);
             let (first, _) = pitch_over(&out, 0.2, 0.4);
@@ -1510,7 +1537,10 @@ pub(crate) mod tests {
                     json!({"clip": key, "notes": [1], "move_seconds": 0.1}),
                 )
                 .unwrap();
-            assert_eq!(v["notes"][1]["moved_seconds"], 0.1);
+            let moved = (v["notes"].as_array().unwrap().iter())
+                .find(|n| n["index"] == 1)
+                .unwrap_or_else(|| panic!("{v}"));
+            assert_eq!(moved["moved_seconds"], 0.1);
             let out = render(&mut d);
             let line = daw_engine::pitch_line::line(&out, RATE);
             let at = |s: f64| line.get(line.hop_of((s * RATE as f64) as i64));

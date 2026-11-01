@@ -111,7 +111,7 @@ impl Assistants {
             .map(|t| ToolInfo {
                 name: t.name.into(),
                 description: t.description.into(),
-                input_schema: (t.schema)(),
+                input_schema: crate::agent::schema_of(t),
                 read_only: t.access == Access::Read,
             })
             .collect();

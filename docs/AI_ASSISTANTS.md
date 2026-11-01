@@ -252,6 +252,29 @@ seeing need Look only (`render_audio` writes its WAV to the app's cache
 folder), changes need Edit, and saving and exporting need Edit and
 export.
 
+### Keeping answers small
+
+Some answers can be big. To keep them short:
+
+- `analyse` with `notes` lists 200 notes at a time. `notes_from` and
+  `notes_limit` page through them, and `next_from` says where the next
+  page starts.
+- `get_patterns` with `summary: true` gives each lane as a line such as
+  `x...x...`. Only the steps that aren't a plain hit are spelled out.
+- `get_note_clip` with `compact: true` groups notes that start together
+  into chords, and leaves out the usual values.
+- `edit_pitch_notes` answers with only the notes it changed, unless
+  `all: true` or `find: true` is given.
+- `export_mix` with `wait: true` answers once the export has finished,
+  with each file's full path.
+- `out_file` writes the whole answer to a JSON file for a script to
+  read, and the call answers with the file's path, size and top-level
+  keys. It works on `analyse`, `get_project`, `get_note_clip`,
+  `get_patterns`, `get_pitch_notes`, `list_parameters` and
+  `stretch_clips`. `true` writes to the app's cache folder, with any
+  permission. A full path ending `.json` writes there, which needs Edit
+  and export.
+
 ## The rule for new features
 
 A feature is not done until an assistant can use it. In practice:

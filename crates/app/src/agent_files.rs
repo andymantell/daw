@@ -107,8 +107,11 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "export_mix",
         description: "Exports the mix, and stems if asked, into a new numbered folder: the \
                       whole song, the loop, or bars given. Starts now, or waits in the \
-                      export queue. Answers with the revision now: wait_for_change with \
-                      it answers when the export (or anything else) finishes, then \
+                      export queue. With wait: true it answers once this export has \
+                      finished, with its folder and each file's full path (or after \
+                      timeout_seconds, 600 if left out, saying it hasn't finished). \
+                      Otherwise it answers at once with the revision now: wait_for_change \
+                      with it answers when the export (or anything else) finishes, then \
                       get_exports says where the files are.",
         access: Access::EditExport,
         schema: || {
@@ -125,7 +128,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "play_along": {"type": "boolean",
                                "description": "Leave out the tracks muted for practice."},
                 "folder": {"type": "string",
-                           "description": "A full path to make the numbered folder in; the project's Exports folder if left out."}
+                           "description": "A full path to make the numbered folder in; the project's Exports folder if left out."},
+                "wait": {"type": "boolean", "description": "Answer once it has finished, with the files' paths."},
+                "timeout_seconds": {"type": "number", "description": "With wait: how long to wait at most; 600 if left out, at most 3600."}
             }})
         },
     },
@@ -351,13 +356,18 @@ impl App {
             req.only = Some(only);
         }
         let queued = self.export.busy() || self.export.queue().next().is_some();
+        // This export is the one to finish after those ahead of it.
+        let number = self.export.finished_count() + self.export.ahead() + 1;
         self.export_or_queue(req)?;
         // wait_for_change with this revision answers when it is done.
         let revision = self.agent.revision;
-        Ok((
-            json!({"started": !queued, "queued": queued, "revision": revision}),
-            None,
-        ))
+        let mut v = json!({"started": !queued, "queued": queued, "revision": revision});
+        if args["wait"].as_bool() == Some(true) {
+            let secs = args["timeout_seconds"].as_f64().unwrap_or(600.0);
+            // The agent holds the answer until it has finished.
+            v[crate::agent::WAIT_FOR_EXPORT] = json!({"number": number, "seconds": secs});
+        }
+        Ok((v, None))
     }
 }
 
@@ -435,6 +445,50 @@ mod tests {
         assert!(files.as_array().is_some_and(|f| !f.is_empty()), "{done}");
         assert!(files[0].get("error").is_none(), "{done}");
         assert!(dir.exists(), "{done}");
+
+        // With wait, each answers once its own export has finished, with
+        // the files' paths: the second waits in the queue behind the
+        // first, asked for in the same frame.
+        let ask = |d: &mut Driver, args: serde_json::Value| {
+            let (reply, answer) = std::sync::mpsc::channel();
+            let req = crate::agent::Request {
+                tool: "export_mix".into(),
+                args,
+                access: crate::agent::Access::EditExport,
+                reply,
+            };
+            d.app().agent.inbox.send(req).unwrap();
+            answer
+        };
+        let args =
+            json!({"format": "wav", "from_bar": 1, "to_bar": 2, "folder": dir, "wait": true});
+        let (a, b) = (ask(&mut d, args.clone()), ask(&mut d, args));
+        let mut answers = [None, None];
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while answers.iter().any(Option::is_none) && std::time::Instant::now() < until {
+            d.h.step();
+            for (i, rx) in [&a, &b].into_iter().enumerate() {
+                if let Ok(r) = rx.try_recv() {
+                    answers[i] = Some(r.unwrap());
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let [Some(a), Some(b)] = answers else {
+            panic!("export_mix with wait wasn't answered")
+        };
+        assert_eq!(a["queued"], false, "{a}");
+        assert_eq!(b["queued"], true, "{b}");
+        assert!(a.get(crate::agent::WAIT_FOR_EXPORT).is_none(), "{a}");
+        for r in [&a, &b] {
+            assert_eq!(r["finished"], true, "{r}");
+            let path = r["files"][0]["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{r}"));
+            assert!(std::path::Path::new(path).exists(), "{r}");
+            assert!(path.starts_with(r["folder"].as_str().unwrap()), "{r}");
+        }
+        assert_ne!(a["folder"], b["folder"], "each its own: {a} {b}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

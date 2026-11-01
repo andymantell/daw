@@ -199,7 +199,10 @@ impl App {
         self.write_plugin_states();
         let mut p = self.proj.doc.get();
         let brought = p.bring_in(part, pick);
-        self.proj.doc.set(&p);
+        match &self.proj.label {
+            Some(label) => self.proj.doc.set_labelled(&p, label),
+            None => self.proj.doc.set(&p),
+        };
         self.apply(p);
         self.proj.dirty = true;
         let n = brought.tracks.len();
@@ -976,6 +979,43 @@ mod tests {
         assert!(text.contains("Stems 1/01 riff.wav"));
         assert!(text.contains("Stems 1/About these stems.txt"));
         assert!(text.contains("Stems 1/02 Keys.mid"), "the notes as MIDI");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_assistant_brings_tracks_in_and_sends_them_out() {
+        use serde_json::json;
+        let dir = scratch("agent");
+        let lesson = lesson(&dir);
+        let mut d = crate::agent::driver::Driver::new();
+        let got = d
+            .call(
+                "import_from_project",
+                json!({"project": lesson.display().to_string(),
+                       "tracks": ["Backing track"], "markers": true}),
+            )
+            .unwrap();
+        assert_eq!(got["tracks"].as_array().unwrap().len(), 1, "{got}");
+        let p = d.project();
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 1, "{p}");
+        assert!(
+            d.call(
+                "import_from_project",
+                json!({"project": lesson.display().to_string(), "tracks": ["Nope"]})
+            )
+            .is_err()
+        );
+        d.app().export.set_default_dir(dir.clone());
+        let started = d
+            .call("export_stem_package", json!({"from_bar": 1, "to_bar": 1}))
+            .unwrap();
+        assert_eq!(started["started"], true);
+        assert!(
+            d.call("export_stem_package", json!({"from_bar": 3, "to_bar": 2}))
+                .is_err()
+        );
+        d.command("undo");
+        assert!(d.app().tracks.is_empty(), "one undo step");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

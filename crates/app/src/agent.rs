@@ -418,6 +418,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
     (TOOLS.iter())
         .chain(crate::agent_edit::TOOLS)
         .chain(crate::agent_arrange::TOOLS)
+        .chain(crate::agent_files::TOOLS)
 }
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
@@ -634,6 +635,7 @@ impl App {
             "get_exports" => Ok(self.exports_value()),
             "list_effect_kinds" => Ok(self.effect_kinds_value()),
             "get_comments" => Ok(self.comments_value()),
+            "list_projects" => Ok(self.projects_value()),
             _ => Err(format!("There is no tool {name}.")),
         }
     }

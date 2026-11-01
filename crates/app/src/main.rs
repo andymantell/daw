@@ -23,6 +23,7 @@
 mod agent;
 mod agent_arrange;
 mod agent_edit;
+mod agent_files;
 mod assistants;
 mod audio_setup;
 mod automation;

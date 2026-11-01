@@ -891,7 +891,7 @@ impl App {
     }
 
     /// Makes a project folder called `name` and saves into it.
-    fn save_as(&mut self, ctx: &egui::Context, name: &str) -> Result<(), String> {
+    pub(crate) fn save_as(&mut self, ctx: &egui::Context, name: &str) -> Result<(), String> {
         let name = name.trim();
         if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
             return Err("Choose a name without / \\ : * ? \" < > |".into());

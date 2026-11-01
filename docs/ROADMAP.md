@@ -698,6 +698,14 @@ replace the app's own UI. See
   owner's machine and report what it saw.
 - Scripting (Phase 7) is the same command layer with a sandboxed language
   instead of a protocol.
+- Status (2026-11-01): server, token, permission per assistant, stop
+  key, the headless test driver, every command by id, any track or
+  effect setting by value, seek and clip selection, and the read side
+  (project, transport, selection, settings, meters, analysis with crest
+  factor and mix-minus-one, rendered audio, pane pictures) are built.
+  Still to do: detected key and tempo, tools of their own for editing
+  notes and clips and adding effects (today only as far as commands
+  reach), and resources and subscriptions.
 
 **Exit criteria**
 - A 24+-track song with 10+ plugins can be recorded, comped, mixed with

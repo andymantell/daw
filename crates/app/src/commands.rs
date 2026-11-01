@@ -220,6 +220,8 @@ pub(crate) enum Cmd {
     ImportKit,
     ExportKit,
     KeyCommands,
+    Assistants,
+    StopAssistants,
     Theme,
     NextTheme,
     LightDark,
@@ -1831,6 +1833,25 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("See and change the key for each command")
     .words("keyboard shortcuts keys"),
+    info(
+        Cmd::Assistants,
+        "assistants",
+        "Settings",
+        "AI assistants…",
+        &[],
+    )
+    .hint("Let an AI assistant on this computer read the project and use the app")
+    .words("agent mcp ai claude automation"),
+    info(
+        Cmd::StopAssistants,
+        "stop-assistants",
+        "Settings",
+        "Stop assistants",
+        &[key(CTRL_SHIFT, Key::Backspace)],
+    )
+    .hint("Turn the assistants' server off and forget what each may do")
+    .words("agent mcp ai halt off")
+    .typing(),
     info(Cmd::Theme, "theme", "Settings", "Theme…", &[])
         .hint("Choose how the app looks on this computer")
         .words("look colours colors appearance skin dark light")
@@ -3152,6 +3173,11 @@ impl App {
             | Cmd::ImportKit
             | Cmd::ExportKit => self.kit_command(cmd),
             Cmd::KeyCommands => self.commands.editor.open = true,
+            Cmd::Assistants => self.assistants.open = true,
+            Cmd::StopAssistants => {
+                self.assistants.stop();
+                self.message = Some("Assistants stopped: their server is off.".into());
+            }
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
             Cmd::TrackVersions => {

@@ -1190,9 +1190,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "daw-agent"
+version = "0.0.0"
+dependencies = [
+ "daw-remote",
+ "serde_json",
+]
+
+[[package]]
 name = "daw-app"
 version = "0.0.0"
 dependencies = [
+ "daw-agent",
  "daw-audio-io",
  "daw-collab",
  "daw-effects",
@@ -1209,6 +1218,7 @@ dependencies = [
  "egui_kittest",
  "hound",
  "minisign-verify",
+ "png",
  "rfd",
  "rustls",
  "serde_json",

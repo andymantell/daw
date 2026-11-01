@@ -56,7 +56,7 @@ pub(crate) const PANES: [Pane; 14] = [
 
 impl Pane {
     /// Kept in `layout.txt`: never change one.
-    fn id(self) -> &'static str {
+    pub(crate) fn id(self) -> &'static str {
         match self {
             Pane::Timeline => "timeline",
             Pane::Mixer => "mixer",
@@ -1736,6 +1736,9 @@ impl crate::App {
 
 impl Host for crate::App {
     fn pane(&mut self, ui: &mut egui::Ui, pane: Pane) {
+        // Where it is, for an assistant's picture of it.
+        let at = (pane, ui.ctx().viewport_id(), ui.max_rect());
+        self.listening.drawn.push(at);
         match pane {
             Pane::Timeline => self.timeline(ui),
             Pane::Mixer => {

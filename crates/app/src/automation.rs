@@ -1384,7 +1384,8 @@ mod tests {
         app.tracks[0].mix.pan = 0.5;
         app.send(Command::Seek(Frames(0)));
         app.rebuild();
-        h.step();
+        // The engine's thread may take more than a frame to get there.
+        assert!(until(&mut h, 2, |a| a.ctl.status().position().0 < 4800));
         h.state_mut().toggle_play();
         assert!(until(&mut h, 3, |a| a.ctl.status().position().0 > 24_000));
         assert!(h.state().automation.writing(&key, Lane::PAN));

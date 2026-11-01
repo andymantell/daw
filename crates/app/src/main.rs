@@ -18,6 +18,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod agent;
+mod assistants;
 mod audio_setup;
 mod automation;
 mod browser;
@@ -39,6 +40,7 @@ mod kits;
 mod latency;
 mod layers;
 mod lessons;
+mod listen;
 mod meters;
 mod midi;
 mod midifile;
@@ -483,6 +485,10 @@ struct App {
     agent: agent::Agent,
     /// Exporting for and importing from other DAWs.
     swap: interchange::Swap,
+    /// Settings → AI assistants…, and the server they connect to.
+    assistants: assistants::Assistants,
+    /// Renders and pictures being made for assistants.
+    listening: listen::Listening,
     /// The fretboard pane's settings.
     fretboard: fretboard::Fretboard,
 }
@@ -623,6 +629,8 @@ impl App {
             video: video::Videos::default(),
             agent: agent::Agent::default(),
             swap: interchange::Swap::default(),
+            assistants: assistants::Assistants::load(),
+            listening: listen::Listening::default(),
         };
         if !cfg!(test) {
             app.effects.start_scan();
@@ -2879,6 +2887,7 @@ impl eframe::App for App {
                         Cmd::DrumKits,
                         Cmd::KeyCommands,
                         Cmd::Theme,
+                        Cmd::Assistants,
                     ] {
                         app.menu_item(ui, c);
                     }
@@ -3131,7 +3140,9 @@ impl eframe::App for App {
         self.timing_window(&ctx);
         self.stretch_windows(&ctx);
         self.remote_tick(&ctx);
+        self.assistants_tick(&ctx);
         self.agent_tick(&ctx);
+        self.listen_tick(&ctx);
         self.template_windows(&ctx);
         self.preset_windows(&ctx);
         self.parts_windows(&ctx);

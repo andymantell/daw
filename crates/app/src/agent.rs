@@ -14,8 +14,9 @@
 //! one frame after it starts, and the project waits to be written
 //! until then.
 //!
-//! The local server that assistants connect to is still to come; the
-//! test [`driver`] makes the same calls without it.
+//! Assistants reach the tools through the local server
+//! ([`crate::assistants`]); the test [`driver`] makes the same calls
+//! without it.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -54,11 +55,8 @@ impl Access {
 /// as a JSON schema.
 pub(crate) struct Tool {
     pub(crate) name: &'static str,
-    // This and `schema` are read by the server, still to come.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) description: &'static str,
     pub(crate) access: Access,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) schema: fn() -> Value,
 }
 
@@ -135,11 +133,48 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: no_args,
     },
     Tool {
+        name: "get_meters",
+        description: "The meters now: peak and RMS of every track and the master, left \
+                      and right, in dBFS. They move only while playing.",
+        access: Access::Read,
+        schema: no_args,
+    },
+    Tool {
         name: "export_report",
         description: "What exporting the project for other DAWs (a .dawproject file) would \
                       leave out, item by item, without writing anything.",
         access: Access::Read,
         schema: no_args,
+    },
+    Tool {
+        name: "analyse",
+        description: "Renders a stretch offline and measures it: sample and true peak, \
+                      RMS, integrated and short-term loudness, loudness range, stereo \
+                      correlation, and the level in each third-octave band from 20 Hz to \
+                      20 kHz. Of one track or bus on its own (after its fader), or of the \
+                      mix, maybe without one track. Without times: the loop if it is on, \
+                      else the whole song (at most 10 minutes).",
+        access: Access::Read,
+        schema: region_args,
+    },
+    Tool {
+        name: "render_audio",
+        description: "Renders a stretch to a 16-bit WAV file, as analyse chooses it, and \
+                      gives its path; up to 10 seconds is sent in the answer as audio too.",
+        access: Access::Read,
+        schema: region_args,
+    },
+    Tool {
+        name: "get_picture",
+        description: "A picture (PNG) of the app's window as it is drawn next, or of one \
+                      pane: timeline, mixer, comments, notes, lessons, tuner, takes, \
+                      monitor, notes-editor, automation, browser, patterns or video.",
+        access: Access::Read,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "pane": {"type": "string", "description": "A pane's id; the whole window if left out."}
+            }})
+        },
     },
     Tool {
         name: "get_history",
@@ -369,6 +404,15 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
 ];
 
+fn region_args() -> Value {
+    json!({"type": "object", "properties": {
+        "track": {"type": "string", "description": "A track or bus id: it alone. Left out: the mix."},
+        "without": {"type": "string", "description": "A track id to leave out of the mix."},
+        "from_seconds": {"type": "number"},
+        "to_seconds": {"type": "number"}
+    }})
+}
+
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
     TOOLS.iter().find(|t| t.name == name)
 }
@@ -441,13 +485,14 @@ struct Running {
     label: Option<String>,
     /// The frame it acted in has to be followed by one more.
     frames: u8,
+    /// A seek waits for the engine to get there (or a second to pass),
+    /// so what is asked next sees the new place.
+    until: Option<(Frames, std::time::Instant)>,
 }
 
 /// The tools' side of the app: requests waiting, and those answered
 /// after the next frame.
 pub(crate) struct Agent {
-    /// Only the test driver sends here until the server comes.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) inbox: Sender<Request>,
     requests: Receiver<Request>,
     running: Vec<Running>,
@@ -472,6 +517,9 @@ impl Agent {
     }
 }
 
+/// How long a seek waits for the engine at most.
+const SEEK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 impl App {
     /// Called once a frame: answers requests that have had their frame,
     /// then starts those that came since.
@@ -481,8 +529,11 @@ impl App {
         }
         let (done, wait): (Vec<_>, Vec<_>) = std::mem::take(&mut self.agent.running)
             .into_iter()
-            .partition(|r| r.frames == 0);
+            .partition(|r| r.frames == 0 && !self.waiting(r));
         self.agent.running = wait;
+        if !self.agent.running.is_empty() {
+            ctx.request_repaint();
+        }
         for r in done {
             if let Some(label) = r.label {
                 self.proj.label = Some(format!("Assistant: {label}"));
@@ -507,6 +558,10 @@ impl App {
                 )));
                 continue;
             }
+            if crate::listen::LATER.contains(&t.name) {
+                self.listen_tool(ctx, t.name, &req.args, req.reply);
+                continue;
+            }
             if t.access == Access::Read {
                 let _ = req.reply.send(self.read_tool(t.name, &req.args));
                 continue;
@@ -517,14 +572,29 @@ impl App {
                 Ok((v, label)) => (Ok(v), label),
                 Err(e) => (Err(e), None),
             };
+            let until = (t.name == "seek")
+                .then(|| result.as_ref().ok()?["frames"].as_i64())
+                .flatten()
+                .map(|f| (Frames(f), std::time::Instant::now() + SEEK_WAIT));
             self.agent.running.push(Running {
                 reply: req.reply,
                 result,
                 label,
                 frames: 1,
+                until,
             });
             ctx.request_repaint();
         }
+    }
+
+    /// The engine hasn't reached a seek's place yet.
+    fn waiting(&self, r: &Running) -> bool {
+        let Some((at, by)) = r.until else {
+            return false;
+        };
+        // Playing moves on from it, so near is there.
+        let near = (self.ctl.status().position().0 - at.0).abs() < self.rate as i64 / 4;
+        !near && std::time::Instant::now() < by
     }
 
     fn read_tool(&mut self, name: &str, args: &Value) -> Result<Value, String> {
@@ -552,6 +622,7 @@ impl App {
                 ))
             }
             "export_report" => Ok(crate::interchange::report_value(&self.interchange_report())),
+            "get_meters" => Ok(self.meters_value()),
             "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
             "get_exports" => Ok(self.exports_value()),
             _ => Err(format!("There is no tool {name}.")),
@@ -1204,7 +1275,9 @@ pub(crate) mod driver {
                 .inbox
                 .send(req)
                 .expect("the app is there");
-            for _ in 0..20 {
+            // Renders answer from a thread of their own, so allow time.
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while std::time::Instant::now() < until {
                 self.h.step();
                 if let Ok(a) = answer.try_recv() {
                     if tool == "seek"
@@ -1214,6 +1287,7 @@ pub(crate) mod driver {
                     }
                     return a;
                 }
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             panic!("{tool} was not answered");
         }

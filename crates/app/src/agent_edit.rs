@@ -89,30 +89,40 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "add_effect",
-        description: "Adds an effect to a track's chain: one that comes with the app, by \
-                      id, or a plugin, by name (list_effect_kinds gives both). Gives its \
-                      id; list_parameters then gives its settings.",
+        description: "Adds an effect to a track's chain, or to a layer's or a container's \
+                      chain on the track: one that comes with the app, by id, or a plugin, \
+                      by name (list_effect_kinds gives both). Gives its id; list_parameters \
+                      then gives its settings.",
         access: Access::Edit,
         schema: || {
-            json!({"type": "object", "properties": {
+            let mut props = json!({
                 "track": {"type": "string"},
                 "effect": {"type": "string"},
-                "index": {"type": "integer", "description": "Where in the chain, from 0; the end if left out."}
-            }, "required": ["track", "effect"]})
+                "index": {"type": "integer", "description": "Where in the track's list of effects, from 0; the end if left out. Effects in one chain play in the list's order."}
+            });
+            extend(&mut props, crate::agent_routing::place_schema());
+            json!({"type": "object", "properties": props, "required": ["track", "effect"]})
         },
     },
     Tool {
         name: "edit_effect",
-        description: "Switches an effect off or on (bypass) or moves it in its track's \
-                      chain. Its settings are set with set_parameter.",
+        description: "Switches an effect off or on (bypass), moves it in its track's list \
+                      or into another chain (a layer's, a container's, or the track's own), \
+                      and wires it: the track it listens to, a plugin's extra outputs heard, \
+                      and the file a reverb, cabinet or amp capture player uses. get_effects \
+                      shows all of these. Only what is given changes; settings are set with \
+                      set_parameter.",
         access: Access::Edit,
         schema: || {
-            json!({"type": "object", "properties": {
+            let mut props = json!({
                 "track": {"type": "string"},
                 "effect": {"type": "string", "description": "The effect's id."},
                 "bypass": {"type": "boolean"},
                 "index": {"type": "integer"}
-            }, "required": ["track", "effect"]})
+            });
+            extend(&mut props, crate::agent_routing::place_schema());
+            extend(&mut props, crate::agent_routing::wiring_schema());
+            json!({"type": "object", "properties": props, "required": ["track", "effect"]})
         },
     },
     Tool {
@@ -178,6 +188,13 @@ fn pad_layer(slot: &str) -> Option<(usize, usize)> {
     (pad < PADS && layer < LAYERS).then_some((pad, layer))
 }
 
+/// Adds `more`'s properties to `props`.
+fn extend(props: &mut Value, more: Value) {
+    if let (Some(a), Value::Object(b)) = (props.as_object_mut(), more) {
+        a.extend(b);
+    }
+}
+
 fn text<'a>(args: &'a Value, key: &str, what: &str) -> Result<&'a str, String> {
     args[key].as_str().ok_or_else(|| format!("Give {what}."))
 }
@@ -219,7 +236,9 @@ impl App {
                     .arrange_tool(name, args)
                     .or_else(|| self.files_tool(ctx, name, args, access))
                     .or_else(|| self.takes_tool(ctx, name, args))
-                    .or_else(|| self.notes_tool(name, args));
+                    .or_else(|| self.notes_tool(name, args))
+                    .or_else(|| self.layers_tool(name, args))
+                    .or_else(|| self.routing_tool(name, args));
             }
         })
     }
@@ -499,8 +518,9 @@ impl App {
         let ti = self
             .track_index(key)
             .ok_or_else(|| format!("There is no track {key}."))?;
+        let place = self.place_arg(ti, args, None)?.flatten();
         let rate = self.rate;
-        let slot = match daw_effects::Kind::from_id(which) {
+        let mut slot = match daw_effects::Kind::from_id(which) {
             Some(k) => self.effects.create_builtin(k, rate),
             None => {
                 let a = (self.effects.list.plugins().into_iter())
@@ -514,6 +534,7 @@ impl App {
                     .map_err(|e| format!("{}: {e}", a.class.name))?
             }
         };
+        slot.place = place.clone();
         let id = slot.key.clone();
         let name = slot.name.clone();
         let fx = &mut self.tracks[ti].fx;
@@ -521,7 +542,9 @@ impl App {
         fx.insert(at, slot);
         self.rebuild();
         Ok((
-            json!({"effect": id, "name": name, "index": at}),
+            json!({"effect": id, "name": name, "index": at,
+                   "container": place.as_ref().map(|p| &p.0),
+                   "branch": place.as_ref().map(|p| p.1)}),
             Some(format!("Add {name}")),
         ))
     }
@@ -529,6 +552,13 @@ impl App {
     fn edit_effect_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?.to_string();
         let id = text(args, "effect", "the effect's id")?.to_string();
+        let ti = self
+            .track_index(&key)
+            .ok_or_else(|| format!("There is no track {key}."))?;
+        let place = self.place_arg(ti, args, Some(&id))?;
+        if let Some(s) = self.tracks[ti].fx.iter().find(|s| s.key == id) {
+            self.check_wiring(ti, s, args)?;
+        }
         self.edit_model(|p| {
             let i = track_at(p, &key)?;
             let fx = &mut p.tracks[i].effects;
@@ -536,6 +566,26 @@ impl App {
                 .ok_or_else(|| format!("The track has no effect {id}."))?;
             if let Some(b) = args["bypass"].as_bool() {
                 fx[j].bypass = b;
+            }
+            if let Some(place) = place {
+                fx[j].branch = place.as_ref().map_or(0, |p| p.1);
+                fx[j].container = place.map(|p| p.0);
+            }
+            if let Some(sc) = args["sidechain"].as_str() {
+                fx[j].sidechain = (sc != "none").then(|| sc.to_string());
+            }
+            if let Some(outs) = args["outputs"].as_array() {
+                let mut o: Vec<u32> = outs
+                    .iter()
+                    .filter_map(|v| v.as_u64())
+                    .map(|v| v as u32)
+                    .collect();
+                o.sort_unstable();
+                o.dedup();
+                fx[j].outputs = o;
+            }
+            if let Some(f) = args["file"].as_str() {
+                fx[j].response = f.to_string();
             }
             if let Some(to) = args["index"].as_i64() {
                 move_to(fx, j, to);

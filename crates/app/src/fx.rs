@@ -323,6 +323,71 @@ impl FxSlot {
         self.latency = plugin.latency();
         Ok(())
     }
+
+    /// A plugin's presets (the user's own saved in `dir`, and the
+    /// plugin's own files) and its program lists; `None` for a built-in
+    /// effect. As the effects window's presets menu offers them.
+    pub(crate) fn preset_choices(&self, dir: &Path) -> Option<(Vec<Preset>, Vec<ProgramList>)> {
+        let cid = *self.cid()?;
+        let programs = self.plugin().map(Plugin::programs).unwrap_or_default();
+        Some((presets::list(dir, &cid), programs))
+    }
+
+    /// Saves the plugin's settings as a preset of the user's own.
+    pub(crate) fn save_preset(&mut self, dir: &Path, name: &str) -> Result<Preset, String> {
+        let cid = *self.cid().ok_or("Only a plugin has presets.")?;
+        let state = self
+            .plugin()
+            .ok_or("Only a plugin has presets.")?
+            .save_state()?;
+        let p = presets::save(dir, &cid, name, &state)?;
+        self.presets = None;
+        Ok(p)
+    }
+
+    /// Loads a preset `preset_choices` gave.
+    pub(crate) fn load_preset(&mut self, p: &Preset) -> Result<(), String> {
+        let cid = *self.cid().ok_or("Only a plugin has presets.")?;
+        let state = presets::load(&p.path, &cid)?;
+        self.load(&state)
+    }
+
+    /// Deletes a preset of the user's own.
+    pub(crate) fn delete_preset(&mut self, p: &Preset) -> Result<(), String> {
+        presets::delete(p)?;
+        self.presets = None;
+        Ok(())
+    }
+
+    /// Picks program `index` of one of the plugin's program lists.
+    pub(crate) fn choose_program(&self, list: &ProgramList, index: usize) -> Result<(), String> {
+        let p = self.plugin().ok_or("Only a plugin has programs.")?;
+        p.select_program(list, index)
+    }
+
+    /// A plugin's extra outputs, by bus index, with their names.
+    pub(crate) fn extra_outputs(&self) -> Vec<(u32, String)> {
+        (self.plugin().into_iter())
+            .flat_map(|p| {
+                (p.buses().extra_outputs())
+                    .map(|(i, b)| {
+                        let name = if b.name.is_empty() {
+                            format!("Output {}", i + 1)
+                        } else {
+                            b.name.clone()
+                        };
+                        (i as u32, name)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// What a built-in effect uses a file for, if anything.
+    pub(crate) fn uses(&self) -> daw_effects::Uses {
+        self.builtin_kind()
+            .map_or(daw_effects::Uses::Nothing, daw_effects::Kind::uses)
+    }
 }
 
 /// Counts editor windows opened, so the oldest can be told apart.

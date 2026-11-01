@@ -83,7 +83,10 @@ assistant finds them for itself. In outline:
 - **Reading:** `get_project`, `get_transport`, `get_selection`,
   `list_parameters`, `get_meters`, `get_history`, `get_comments`,
   `get_fretboard`, `get_exports`, `list_presets`, `list_effect_kinds`,
-  `list_projects`, `export_report`, `get_takes`, `list_snapshots`.
+  `list_projects`, `export_report`, `get_takes`, `list_snapshots`,
+  `get_instrument`, `get_effects`. `list_parameters` lists every
+  parameter of a plugin, and takes `effect`, `search`, `offset` and
+  `limit` to narrow and page them.
 - **Hearing and seeing:** `analyse` (peak, true peak, RMS, crest factor,
   loudness and its range, stereo correlation, third-octave bands, and
   the key and tempo when it can tell) of a track, a bus or the mix, over
@@ -97,7 +100,18 @@ assistant finds them for itself. In outline:
   drum pad, a sampler zone or the drum sampler), `edit_control_group`,
   `add_effect`,
   `edit_effect`, `remove_effect`, `add_preset`, `save_preset`,
-  `switch_version`.
+  `switch_version`. `add_effect` and `edit_effect` place an effect in a
+  layer's chain or a container's chain (`container`, `branch`), and
+  `edit_effect` wires it: `sidechain`, a plugin's extra `outputs`, and
+  the `file` a convolution reverb, speaker cabinet or amp capture
+  player uses. `plugin_preset` loads, saves or deletes a plugin's
+  presets and picks its programs.
+- **Instruments and layers:** `set_instrument` (a built-in or plugin
+  instrument, for a track or one layer), `edit_layer` (add, remove,
+  reorder, switch on or off, instrument, level, pan, note and velocity
+  ranges, transpose, and its instrument's settings), `edit_pad_effect`
+  (a drum machine pad's effects) and `set_instrument_output` (an
+  instrument's extra outputs to buses).
 - **Arranging:** `import_audio`, `edit_clip`, `delete_clip`,
   `add_note_clip`, `edit_notes`, `edit_markers`, `set_tempo`, `set_key`,
   `set_loop`, `seek`, `select_clips`, `undo_steps`, `add_comment`,

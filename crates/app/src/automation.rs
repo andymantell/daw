@@ -357,6 +357,11 @@ pub(crate) fn text_of(t: &Track, param: &str, v: f64) -> String {
 
 /// Every setting of the track a lane can be on, the track's own first.
 pub(crate) fn choices(t: &Track, buses: &[(String, String)]) -> Vec<Choice> {
+    choices_up_to(t, buses, MOST_PLUGIN_PARAMS)
+}
+
+/// As [`choices`], with at most `most` parameters of each plugin.
+pub(crate) fn choices_up_to(t: &Track, buses: &[(String, String)], most: usize) -> Vec<Choice> {
     let mut out = vec![
         Choice {
             param: Lane::GAIN.into(),
@@ -385,7 +390,7 @@ pub(crate) fn choices(t: &Track, buses: &[(String, String)]) -> Vec<Choice> {
         } else if let Some(p) = s.plugin() {
             for p in (p.params().into_iter())
                 .filter(|p| p.automatable && !p.bypass && !p.program_change)
-                .take(MOST_PLUGIN_PARAMS)
+                .take(most)
             {
                 out.push(Choice {
                     param: format!("{}{}:{}", Lane::PLUGIN, s.key, p.id),

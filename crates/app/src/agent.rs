@@ -117,14 +117,21 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Every setting of a track that can be set by value (volume, pan, \
                       mute, solo, sends, each effect's settings, and its built-in \
                       instrument's, named instrument.<key>), with its value, range and \
-                      how it reads. Without a track, every track's. A drum machine has \
-                      hundreds: give a prefix such as \"instrument.pad0.\".",
+                      how it reads. Without a track, every track's; a drum machine has \
+                      hundreds, so ask for one track, or give a prefix such as \
+                      \"instrument.pad0.\". Every parameter of a plugin is listed: narrow \
+                      them with effect, prefix or search, and page through them with offset \
+                      and limit (each track's list says how many it has in all).",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
                 "track": {"type": "string", "description": "A track's id."},
                 "prefix": {"type": "string", "description": "Only the settings whose param \
-                           starts so, such as \"instrument.pad0.\" or \"fx:\"."}
+                           starts so, such as \"instrument.pad0.\" or \"fx:\"."},
+                "effect": {"type": "string", "description": "Only this effect's settings, by its id."},
+                "search": {"type": "string", "description": "Only settings whose name or id has this text in it."},
+                "offset": {"type": "integer", "description": "Skip this many of each track's settings (after the filters)."},
+                "limit": {"type": "integer", "description": "At most this many of each track's settings; 500 if left out."}
             }})
         },
     },
@@ -453,6 +460,8 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_files::TOOLS)
         .chain(crate::agent_takes::TOOLS)
         .chain(crate::agent_notes::TOOLS)
+        .chain(crate::agent_layers::TOOLS)
+        .chain(crate::agent_routing::TOOLS)
 }
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
@@ -692,19 +701,9 @@ impl App {
             "get_transport" => Ok(self.transport_value()),
             "get_selection" => Ok(self.selection_value()),
             "get_fretboard" => Ok(self.fretboard_value()),
-            "list_parameters" => {
-                let mut v = self.parameters_value(args["track"].as_str())?;
-                if let Some(pre) = args["prefix"].as_str()
-                    && let Some(tracks) = v.as_array_mut()
-                {
-                    for t in tracks {
-                        if let Some(ps) = t["params"].as_array_mut() {
-                            ps.retain(|p| p["param"].as_str().is_some_and(|x| x.starts_with(pre)));
-                        }
-                    }
-                }
-                Ok(v)
-            }
+            "list_parameters" => self
+                .parameters_value(args["track"].as_str())
+                .map(|v| narrow(v, args)),
             "list_presets" => {
                 let (list, _) = crate::presets::all_presets(self.preset_ui.dir.as_deref());
                 Ok(Value::Array(
@@ -730,6 +729,8 @@ impl App {
             "list_projects" => Ok(self.projects_value()),
             _ => (self.takes_read(name, args))
                 .or_else(|| self.notes_read_tool(name, args))
+                .or_else(|| self.layers_read(name, args))
+                .or_else(|| self.routing_read(name, args))
                 .unwrap_or_else(|| Err(format!("There is no tool {name}."))),
         }
     }
@@ -1317,7 +1318,7 @@ impl App {
                 json!({"param": MUTE, "name": "Mute", "value": t.mix.mute as u8, "min": 0, "max": 1}),
                 json!({"param": SOLO, "name": "Solo", "value": t.mix.solo as u8, "min": 0, "max": 1}),
             ];
-            for c in crate::automation::choices(t, &buses) {
+            for c in crate::automation::choices_up_to(t, &buses, usize::MAX) {
                 let (Some(v), Some(r)) = (
                     crate::automation::control(t, &c.param),
                     crate::automation::range(t, &c.param),
@@ -1417,6 +1418,49 @@ impl App {
         self.rebuild();
         Ok(label)
     }
+}
+
+/// `list_parameters`' answer narrowed to what `args` ask for: one
+/// effect's, those matching a search, and a page of each track's.
+fn narrow(mut v: Value, args: &Value) -> Value {
+    let effect = args["effect"].as_str();
+    let prefix = args["prefix"].as_str();
+    let search = args["search"].as_str().map(str::to_lowercase);
+    let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+    let limit = args["limit"].as_u64().unwrap_or(500) as usize;
+    for t in v.as_array_mut().into_iter().flatten() {
+        let all = t["params"].take();
+        let kept: Vec<Value> = (all.as_array().into_iter().flatten())
+            .filter(|p| {
+                let param = p["param"].as_str().unwrap_or_default();
+                if prefix.is_some_and(|pre| !param.starts_with(pre)) {
+                    return false;
+                }
+                effect.is_none_or(|e| {
+                    let of = |prefix: &str| {
+                        (param.strip_prefix(prefix))
+                            .and_then(|r| r.strip_prefix(e))
+                            .is_some_and(|r| r.starts_with(':'))
+                    };
+                    of(daw_project::Lane::FX) || of(daw_project::Lane::PLUGIN)
+                }) && search.as_ref().is_none_or(|s| {
+                    param.to_lowercase().contains(s)
+                        || p["name"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_lowercase()
+                            .contains(s)
+                })
+            })
+            .cloned()
+            .collect();
+        t["total"] = json!(kept.len());
+        if offset > 0 {
+            t["offset"] = json!(offset);
+        }
+        t["params"] = kept.into_iter().skip(offset).take(limit).collect();
+    }
+    v
 }
 
 /// Mute and solo, which aren't automation lanes, by the names

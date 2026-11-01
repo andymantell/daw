@@ -381,9 +381,11 @@ impl App {
         self.sync_doc(ctx, true);
         // Plugins as they are now, so Undo can bring their settings back.
         self.write_plugin_states();
-        let before = self.proj.doc.get();
-        let p = (self.proj.doc.restore_snapshot(id))
+        let before = self.shown_project();
+        // While suggesting edits, restoring is suggested too.
+        let p = (self.proj.doc.snapshot_project(id))
             .ok_or("This snapshot can't be restored from this copy of the project.")?;
+        self.set_song(&p, None);
         self.reload_changed_fx(&before, &p);
         self.apply(p);
         self.proj.dirty = true;

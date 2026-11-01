@@ -21,6 +21,7 @@ pub mod noteops;
 mod parts;
 mod pattern;
 mod presets;
+mod review;
 mod scale;
 mod sections;
 mod snapshots;
@@ -50,6 +51,7 @@ pub use pattern::{
     Step, StepRate, euclid, fill_pattern_clip, fill_pattern_clips, next_group,
 };
 pub use presets::{Dropped, MAX_TAG, MAX_TAGS, PRESET_EXTENSION, Preset, PresetKind, parse_tags};
+pub use review::{Decision, MAX_SUGGESTION_NAME, SuggestedChange, Suggestion};
 pub use scale::{ROOTS, Scale, ScaleKind};
 pub use sections::{Clock, Section, bars_between, flatten, paste_bars, piece, sections};
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};

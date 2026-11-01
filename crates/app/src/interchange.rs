@@ -32,7 +32,7 @@ impl App {
     /// The project with each plugin's settings read in now.
     fn project_with_plugin_states(&mut self) -> daw_project::Project {
         self.write_plugin_states();
-        let mut p = self.proj.doc.get();
+        let mut p = self.shown_project();
         p.rate = self.rate;
         p
     }

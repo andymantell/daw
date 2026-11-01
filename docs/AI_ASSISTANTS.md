@@ -141,6 +141,13 @@ assistant finds them for itself. In outline:
   (fade shapes and the volume line), `edit_groups`, `edit_snapshot`, and
   `set_track_input` (arm, monitor, input and MIDI out, which belong to
   this computer, not the project).
+- **Suggesting edits (review mode):** `edit_suggestion` with `start`
+  makes every later edit, by any tool, go to a suggestion instead of
+  the song, until `stop`; `resume` carries on an earlier one.
+  `get_suggestions` lists each suggestion's changes by key, in words,
+  with what was decided; `edit_suggestion` with `accept` or `reject`
+  takes or turns down changes by key (all open ones if none are given).
+  Accepting is one undoable edit.
 - **Notes and patterns:** `get_note_clip` (notes with their chance and
   groups, expression, controller lanes, the clip's key), `edit_notes`
   (add, change, remove, group), `edit_note_lanes` (controller lanes and

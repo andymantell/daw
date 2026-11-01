@@ -186,7 +186,7 @@ impl App {
         // use it: once it does, they are loaded again.
         let waiting = audio && !self.proj.missing_clips.is_empty();
         if self.proj.doc.version() != before || waiting {
-            self.apply(self.proj.doc.get());
+            self.apply(self.shown_project());
         }
         if !failed.is_empty() {
             self.message = Some(format!(
@@ -329,7 +329,7 @@ impl App {
                         return;
                     }
                 }
-                self.apply(self.proj.doc.get());
+                self.apply(self.shown_project());
                 self.proj.dirty = true;
             }
             Dest::Saved => {

@@ -110,7 +110,7 @@ impl App {
     /// Writes an edit made to the whole project, as one undo step, and
     /// takes it up.
     fn commit(&mut self, p: daw_project::Project) {
-        self.proj.doc.set(&p);
+        self.set_song(&p, None);
         self.apply(p);
         self.proj.dirty = true;
     }

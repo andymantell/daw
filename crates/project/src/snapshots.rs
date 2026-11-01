@@ -147,7 +147,7 @@ impl ProjectDoc {
     }
 
     /// The assets (clips' audio and frozen audio) that the project uses
-    /// now or that any snapshot would bring back, so a bundle can carry
+    /// now, that any snapshot would bring back or a suggestion adds, so a bundle can carry
     /// all of them. Sorted, once each.
     pub fn assets_in_use(&self) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
@@ -162,6 +162,12 @@ impl ProjectDoc {
         add(&self.get());
         for s in self.snapshots() {
             if let Some(p) = self.snapshot_project(&s.id) {
+                add(&p);
+            }
+        }
+        // Audio a suggestion records is needed to review it elsewhere.
+        for s in self.suggestions() {
+            if let Some(p) = self.suggested_project(&s.id) {
                 add(&p);
             }
         }

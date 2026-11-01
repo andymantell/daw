@@ -46,6 +46,9 @@ pub(crate) enum Cmd {
     Redo,
     History,
     Activity,
+    SuggestEdits,
+    StopSuggesting,
+    SuggestedEdits,
     Split,
     Delete,
     Marker,
@@ -881,6 +884,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Activity, "activity", "Edit", "Activity…", &[])
         .hint("Who changed what in the project, and when")
         .words("history changes log who when"),
+    info(Cmd::SuggestEdits, "suggest-edits", "Edit", "Suggest edits", &[])
+        .hint("Edit a copy of the song, for its owner to accept or reject")
+        .words("review mode teacher propose branch"),
+    info(Cmd::StopSuggesting, "stop-suggesting", "Edit", "Stop suggesting", &[])
+        .hint("Keep the suggested edits and go back to the song")
+        .words("review mode teacher propose branch finish"),
+    info(Cmd::SuggestedEdits, "suggested-edits", "Edit", "Suggested edits…", &[])
+        .hint("Accept or reject the edits someone suggested, one at a time")
+        .words("review mode teacher proposals diff accept reject"),
     info(
         Cmd::Split,
         "split",
@@ -2927,6 +2939,8 @@ impl App {
         match cmd {
             Cmd::Layout(n) => (n as usize) < self.workspace.saved.len(),
             Cmd::Undo => self.can_undo(),
+            Cmd::SuggestEdits => self.suggesting().is_none(),
+            Cmd::StopSuggesting => self.suggesting().is_some(),
             Cmd::Redo => self.can_redo(),
             Cmd::ExportBundle | Cmd::ImportBundle => self.proj.bundle_job.is_none(),
             Cmd::ImportFromProject => self.may_edit_song(),
@@ -3056,6 +3070,11 @@ impl App {
             Cmd::Redo => self.redo(ctx),
             Cmd::History => self.history.show(crate::history::View::Undo),
             Cmd::Activity => self.history.show(crate::history::View::Activity),
+            Cmd::SuggestEdits => {
+                self.start_suggesting(ctx, "");
+            }
+            Cmd::StopSuggesting => self.stop_suggesting(ctx),
+            Cmd::SuggestedEdits => self.review.open = true,
             Cmd::PlayStop => self.toggle_play(),
             Cmd::ToStart => self.send(Command::Seek(Frames(0))),
             Cmd::Record => {

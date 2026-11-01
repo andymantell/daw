@@ -197,12 +197,10 @@ impl App {
         self.sync_doc(ctx, true);
         // Plugins as they are now, so Undo brings their settings back.
         self.write_plugin_states();
-        let mut p = self.proj.doc.get();
+        let mut p = self.shown_project();
         let brought = p.bring_in(part, pick);
-        match &self.proj.label {
-            Some(label) => self.proj.doc.set_labelled(&p, label),
-            None => self.proj.doc.set(&p),
-        };
+        let label = self.proj.label.clone();
+        self.set_song(&p, label.as_deref());
         self.apply(p);
         self.proj.dirty = true;
         let n = brought.tracks.len();
@@ -264,7 +262,7 @@ impl App {
             tempo: true,
             ..pick.clone()
         };
-        let mut part = self.proj.doc.get().part(&pick);
+        let mut part = self.shown_project().part(&pick);
         if let Some(bars) = bars {
             part.cut_to(self.range_of(bars));
         }

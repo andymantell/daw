@@ -117,7 +117,12 @@ pub struct Loaded {
 }
 
 pub struct Proj {
+    /// The project. While suggesting edits, the song being edited is
+    /// the suggestion's branch instead (see [`song`](Proj::song)).
     pub doc: ProjectDoc,
+    /// Edits being suggested (review mode, `review.rs`): the song's
+    /// edits go to this branch, not the project's song.
+    pub(crate) suggesting: Option<crate::review::Branch>,
     pub folder: Option<ProjectFolder>,
     /// The project as last written to the document.
     pub(crate) committed: Project,
@@ -169,6 +174,27 @@ pub struct Proj {
 }
 
 impl Proj {
+    /// Where the song's edits go: the project, or the branch edits are
+    /// being suggested on.
+    pub(crate) fn song(&self) -> &ProjectDoc {
+        self.suggesting.as_ref().map_or(&self.doc, |b| &b.doc)
+    }
+
+    pub(crate) fn song_mut(&mut self) -> &mut ProjectDoc {
+        match &mut self.suggesting {
+            Some(b) => &mut b.doc,
+            None => &mut self.doc,
+        }
+    }
+
+    /// Keeps the edits suggested so far with the project, so saving
+    /// and sharing carry them.
+    pub(crate) fn keep_suggestion(&mut self) {
+        if let Some(b) = &self.suggesting {
+            self.doc.keep_suggestion(&b.id, &b.doc);
+        }
+    }
+
     pub fn new() -> Proj {
         let doc = ProjectDoc::new(daw_project::new_peer());
         let committed = doc.get();
@@ -199,6 +225,7 @@ impl Proj {
             recovery_version: Vec::new(),
             last_recovery: Instant::now(),
             found: None,
+            suggesting: None,
         }
     }
 
@@ -379,12 +406,18 @@ impl App {
                 .entry(c.asset.clone())
                 .or_insert_with(|| c.source.clone());
         }
-        if std::mem::take(&mut self.proj.quiet_next) {
-            self.proj.doc.set_quietly(&p);
-        } else if let Some(label) = &self.proj.label {
-            self.proj.doc.set_labelled(&p, label);
+        // While suggesting, comments and assignments still go to the
+        // project: only the song's edits are suggested.
+        let song = self.write_outside_suggestion(&p);
+        let quiet = std::mem::take(&mut self.proj.quiet_next);
+        let label = self.proj.label.clone();
+        let doc = self.proj.song_mut();
+        if quiet {
+            doc.set_quietly(&song);
+        } else if let Some(label) = &label {
+            doc.set_labelled(&song, label);
         } else {
-            self.proj.doc.set(&p);
+            doc.set(&song);
         }
         self.proj.committed = p;
         self.proj.dirty = true;
@@ -392,11 +425,11 @@ impl App {
     }
 
     pub(crate) fn can_undo(&self) -> bool {
-        self.proj.doc.can_undo()
+        self.proj.song().can_undo()
     }
 
     pub(crate) fn can_redo(&self) -> bool {
-        self.proj.doc.can_redo()
+        self.proj.song().can_redo()
     }
 
     pub(crate) fn undo(&mut self, ctx: &egui::Context) {
@@ -411,8 +444,8 @@ impl App {
     /// list, `history.rs`). Returns how many were undone.
     pub(crate) fn undo_steps(&mut self, ctx: &egui::Context, n: usize) -> usize {
         self.sync_doc(ctx, true);
-        let before = self.proj.doc.get();
-        let done = self.proj.doc.undo_steps(n);
+        let before = self.shown_project();
+        let done = self.proj.song_mut().undo_steps(n);
         self.after_undo(before, done);
         done
     }
@@ -420,15 +453,15 @@ impl App {
     /// Redoes up to `n` steps. Returns how many were redone.
     pub(crate) fn redo_steps(&mut self, ctx: &egui::Context, n: usize) -> usize {
         self.sync_doc(ctx, true);
-        let before = self.proj.doc.get();
-        let done = self.proj.doc.redo_steps(n);
+        let before = self.shown_project();
+        let done = self.proj.song_mut().redo_steps(n);
         self.after_undo(before, done);
         done
     }
 
     fn after_undo(&mut self, before: Project, done: usize) {
         if done > 0 {
-            let after = self.proj.doc.get();
+            let after = self.shown_project();
             // Plugin settings a restore changed come back too.
             self.reload_changed_fx(&before, &after);
             self.apply(after);
@@ -885,6 +918,7 @@ impl App {
         self.effects.folder = Some(folder.dir.clone());
         self.rebuild();
         self.write_plugin_states();
+        self.proj.keep_suggestion();
         let bytes = self.proj.doc.to_bytes();
         if self.proj.doc.take_dropped() {
             folder.save_dropping_backup(&bytes)?;
@@ -905,7 +939,8 @@ impl App {
     /// kept out of undo.
     pub(crate) fn write_plugin_states(&mut self) {
         let p = self.project_and_plugin_states();
-        self.proj.doc.set_quietly(&p);
+        let p = self.write_outside_suggestion(&p);
+        self.proj.song_mut().set_quietly(&p);
         self.proj.committed = self.project();
     }
 
@@ -914,7 +949,8 @@ impl App {
     /// preset loaded), which the project otherwise leaves out.
     pub(crate) fn write_plugin_step(&mut self, label: &str) {
         let p = self.project_and_plugin_states();
-        self.proj.doc.set_labelled(&p, label);
+        let p = self.write_outside_suggestion(&p);
+        self.proj.song_mut().set_labelled(&p, label);
         self.proj.committed = self.project();
         self.proj.dirty = true;
         self.agent.revision += 1;
@@ -1015,6 +1051,7 @@ impl App {
             return Ok(());
         };
         self.write_plugin_states();
+        self.proj.keep_suggestion();
         let version = self.proj.doc.version();
         if version == self.proj.recovery_version {
             return Ok(());
@@ -1102,7 +1139,7 @@ impl App {
         proj.recovery_version = proj.doc.version();
         self.proj = proj;
         self.sign_in();
-        self.apply(self.proj.doc.get());
+        self.apply(self.shown_project());
         // Unsaved, so it asks before being left and stays recoverable.
         self.proj.dirty = true;
         if self.message.is_none() {
@@ -1177,7 +1214,7 @@ impl App {
                 self.proj = proj;
                 self.remember_recent(&dir);
                 self.sign_in();
-                self.apply(self.proj.doc.get());
+                self.apply(self.shown_project());
                 self.practice_log = Default::default();
                 self.apply_practice();
                 self.watch_folder();

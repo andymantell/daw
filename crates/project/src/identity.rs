@@ -52,6 +52,8 @@ const PEERS: &str = "peers";
 const COMMENTS: &str = "comments";
 /// The practice log: each member writes only under their own key.
 const PRACTICE_LOG: &str = "practice_log";
+/// Where suggested edits live (see `review.rs`).
+const SUGGESTIONS: &str = crate::review::SUGGESTIONS;
 
 /// This install: a secret that never leaves the computer, and the name
 /// others see.
@@ -376,6 +378,8 @@ pub(crate) fn check_new(before: &LoroDoc, after: &LoroDoc) -> Check {
     };
     let base_comments = comment_authors(before);
     let after_comments = comment_authors(after);
+    let base_suggestions = crate::review::suggestion_authors(before);
+    let after_suggestions = crate::review::suggestion_authors(after);
     let mut refused = BTreeSet::new();
     for change in &json.changes {
         if before_owner.includes_id(change.id) {
@@ -400,6 +404,10 @@ pub(crate) fn check_new(before: &LoroDoc, after: &LoroDoc) -> Check {
                 Some(author) => author == key,
                 None => after_comments.get(c).is_none_or(|a| a == key),
             };
+            let own_suggestion = |s: &str| match base_suggestions.get(s) {
+                Some(author) => author == key,
+                None => after_suggestions.get(s).is_none_or(|a| a == key),
+            };
             let allowed = match p.as_slice() {
                 // Anyone may say which run of the app was them, and give
                 // their own name.
@@ -408,6 +416,13 @@ pub(crate) fn check_new(before: &LoroDoc, after: &LoroDoc) -> Check {
                 [MEMBERS, k, "name"] => k == key,
                 [MEMBERS, ..] | [META, ..] => false,
                 [PRACTICE_LOG, k, ..] => role.is_some() && k == key,
+                // Commenters may suggest edits, and change only their
+                // own suggestions.
+                [SUGGESTIONS, s, ..] => match role {
+                    Some(Role::Editor) => true,
+                    Some(Role::Commenter) => own_suggestion(s),
+                    _ => false,
+                },
                 [COMMENTS, c, ..] => match role {
                     Some(Role::Editor) => true,
                     Some(Role::Commenter) => own_comment(c),
@@ -776,6 +791,35 @@ mod tests {
         theirs.set(&p);
         assert!(mine.merge(&theirs.to_bytes()).is_err());
         assert_eq!(mine.get().tempo_bpm, 120.0);
+    }
+
+    #[test]
+    fn commenters_may_suggest_edits_but_only_change_their_own() {
+        let (_, mut mine, _, mut theirs) = shared();
+        let pat = pat_key(&theirs);
+        mine.set_role(&pat, Some(Role::Commenter)).unwrap();
+        let my_key = mine.my_key().unwrap().to_string();
+        let owners = mine.start_suggestion("Owner's idea", &my_key, 1);
+        theirs.merge(&mine.to_bytes()).unwrap();
+
+        // The teacher's suggestion goes in, though they can't edit the
+        // song itself.
+        let id = theirs.start_suggestion("Try it slower", &pat, 2);
+        let mut branch = theirs.suggestion_branch(&id).unwrap();
+        let mut p: Project = branch.get();
+        p.tempo_bpm = 90.0;
+        branch.set(&p);
+        assert!(theirs.keep_suggestion(&id, &branch));
+        mine.merge(&theirs.to_bytes()).unwrap();
+        assert_eq!(mine.get().tempo_bpm, 120.0);
+        let changes = mine.suggested_changes(&id).unwrap();
+        assert_eq!(changes[0].text, ["Tempo 120 → 90 BPM"]);
+        assert_eq!(mine.accept_change(&id, "tempo").unwrap().tempo_bpm, 90.0);
+
+        // Someone else's suggestion is out of bounds.
+        theirs.merge(&mine.to_bytes()).unwrap();
+        theirs.rename_suggestion(&owners, "Mine now");
+        assert!(!mine.check(&theirs.to_bytes()).unwrap().ok());
     }
 
     #[test]

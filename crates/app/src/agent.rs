@@ -487,6 +487,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_monitor::TOOLS)
         .chain(crate::agent_practice::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
+        .chain(crate::review::TOOLS)
 }
 
 pub(crate) fn tool(name: &str) -> Option<&'static Tool> {
@@ -769,6 +770,7 @@ impl App {
             "get_comments" => Ok(self.comments_value()),
             "list_projects" => Ok(self.projects_value()),
             "get_automation" => self.automation_value(args["track"].as_str()),
+            "get_suggestions" => Ok(self.suggestions_value()),
             _ => (self.takes_read(name, args))
                 .or_else(|| self.notes_read_tool(name, args))
                 .or_else(|| self.layers_read(name, args))

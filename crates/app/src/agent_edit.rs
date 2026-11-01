@@ -246,6 +246,7 @@ impl App {
             "remove_effect" => self.remove_effect_tool(args),
             "set_sound" => self.set_sound_tool(args),
             "edit_control_group" => self.edit_group_tool(args),
+            "edit_suggestion" => self.review_tool(ctx, args),
             _ => {
                 return self
                     .arrange_tool(name, args)

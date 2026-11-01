@@ -76,8 +76,10 @@ The server lists every tool with its settings (`tools/list`), so an
 assistant finds them for itself. In outline:
 
 - **Commands:** `list_commands` and `run_command` reach every command in
-  the menus, keys and command search, by id. `file_command` runs one
-  that would ask for a file, with the file given instead.
+  the menus, keys and command search, by id. A command that acts on an
+  instrument track or a note clip (note effects, layers, the note tools,
+  patterns) takes the `track` or `clip` to act on. `file_command` runs
+  one that would ask for a file, with the file given instead.
 - **Reading:** `get_project`, `get_transport`, `get_selection`,
   `list_parameters`, `get_meters`, `get_history`, `get_comments`,
   `get_fretboard`, `get_exports`, `list_presets`, `list_effect_kinds`,
@@ -90,7 +92,10 @@ assistant finds them for itself. In outline:
 - **Following the person:** `wait_for_change` answers when the project
   next changes, by anyone.
 - **Tracks, routing and effects:** `add_track`, `edit_track`,
-  `delete_track`, `set_send`, `set_parameter`, `add_effect`,
+  `delete_track`, `set_send`, `set_parameter` (a built-in instrument's
+  settings too, as `instrument.<key>`), `set_sound` (a sound file on a
+  drum pad, a sampler zone or the drum sampler), `edit_control_group`,
+  `add_effect`,
   `edit_effect`, `remove_effect`, `add_preset`, `save_preset`,
   `switch_version`.
 - **Arranging:** `import_audio`, `edit_clip`, `delete_clip`,
@@ -113,6 +118,10 @@ A feature is not done until an assistant can use it. In practice:
 - Every action goes through the command table (`COMMANDS` in
   `crates/app/src/commands.rs`), so menus, keys, command search, the
   phone remote and assistants all call the same thing.
+- A button, menu or control in a pane or window that changes the
+  project runs a command, or does what an assistant tool also does.
+  The coverage tests can't see a button that changes things by itself,
+  so check new panes by hand.
 - The tests in `agent::coverage` run every command from an assistant
   with no one at the computer. A new command that can't run that way
   fails CI.

@@ -130,6 +130,36 @@ impl Slot {
         }
     }
 
+    /// Its settings, for assistants: (key, name, value, min, max, as
+    /// text). None for a plugin, whose settings it keeps itself.
+    pub fn settings(&self) -> Vec<(String, String, f64, f64, f64, String)> {
+        match &self.inner {
+            Inner::Simple(p) => (PARAMS.iter())
+                .map(|&(k, lo, hi, _)| {
+                    let v = p.get(k);
+                    (
+                        k.to_string(),
+                        k.replace('_', " "),
+                        v,
+                        lo,
+                        hi,
+                        format!("{v:.3}"),
+                    )
+                })
+                .collect(),
+            Inner::Builtin(b) => {
+                let p = b.params();
+                (p.list().iter().enumerate())
+                    .map(|(i, x)| {
+                        let v = p.get(i);
+                        (x.key.clone(), x.name.clone(), v, x.min, x.max, x.text(v))
+                    })
+                    .collect()
+            }
+            Inner::Plugin(_) | Inner::Missing(_) => Vec::new(),
+        }
+    }
+
     pub fn builtin_ref(&self) -> Option<&Builtin> {
         match &self.inner {
             Inner::Builtin(b) => Some(b),

@@ -2705,6 +2705,7 @@ impl eframe::App for App {
                     app.menu_item(ui, Cmd::AddInstrumentTrack);
                     app.menu_item(ui, Cmd::AddBus);
                     app.menu_item(ui, Cmd::AddFolder);
+                    app.menu_item(ui, Cmd::AddControlGroup);
                     app.menu_gap();
                     for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
                         app.menu_item(ui, c);

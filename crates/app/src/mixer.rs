@@ -65,6 +65,16 @@ enum Action {
 }
 
 impl App {
+    /// Adds a control group, numbered after those there.
+    pub(crate) fn add_control_group(&mut self) {
+        let n = self.groups.len() + 1;
+        self.groups.push(ControlGroup::new(
+            daw_project::new_id(),
+            format!("Group {n}"),
+        ));
+        self.rebuild();
+    }
+
     /// Adds a bus or a folder, numbered after those there.
     pub(crate) fn add_bus(&mut self, kind: TrackKind) {
         let n = self.tracks.iter().filter(|t| t.kind == kind).count();
@@ -415,12 +425,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    let n = self.groups.len() + 1;
-                    self.groups.push(ControlGroup::new(
-                        daw_project::new_id(),
-                        format!("Group {n}"),
-                    ));
-                    rebuild = true;
+                    self.add_control_group();
                 }
             }
             rebuild |= self.input_tracks_button(ui, inputs);

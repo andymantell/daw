@@ -115,8 +115,10 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "list_parameters",
         description: "Every setting of a track that can be set by value (volume, pan, \
-                      mute, solo, sends, and each effect's settings), with its value, \
-                      range and how it reads. Without a track, every track's.",
+                      mute, solo, sends, each effect's settings, and its built-in \
+                      instrument's, named instrument.<key>), with its value, range and \
+                      how it reads. Without a track, every track's; a drum machine has \
+                      hundreds, so ask for one track.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -207,13 +209,19 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "run_command",
         description: "Runs a command by its id, as its menu entry or key would. \
-                      list_commands gives the ids. Commands that save or write files need \
-                      the edit and export permission; commands that open a file chooser \
-                      need a person and are refused.",
+                      list_commands gives the ids. Commands that act on an instrument \
+                      track or a note clip (note effects, layers, quantise and the other \
+                      note tools, patterns) act on the track or clip given, as if it \
+                      were open; otherwise on the one open or chosen, or the first. \
+                      Commands that save or write files need the edit and export \
+                      permission; commands that open a file chooser need a person and \
+                      are refused.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
-                "id": {"type": "string", "description": "The command's id, such as \"split\"."}
+                "id": {"type": "string", "description": "The command's id, such as \"split\"."},
+                "track": {"type": "string", "description": "The track it acts on, by id."},
+                "clip": {"type": "string", "description": "The note clip it acts on, by id."}
             }, "required": ["id"]})
         },
     },
@@ -722,10 +730,39 @@ impl App {
                          {instead}."
                     ));
                 }
+                // What it acts on, when given: a note clip (as if chosen
+                // on the timeline and open in the note editor), a track
+                // (as if its instrument window were open).
+                if let Some(clip) = args["clip"].as_str() {
+                    let ti = (self.tracks.iter())
+                        .position(|t| t.note_clips.iter().any(|c| c.id == clip))
+                        .ok_or_else(|| format!("There is no note clip {clip}."))?;
+                    self.timeline.note_sel = Some(clip.to_string());
+                    self.notes_editor.edit(clip);
+                    if args["track"].is_null() {
+                        self.instrument_open = Some(ti);
+                    }
+                }
+                let before = self.instrument_open;
+                let mut focus = None;
+                if let Some(key) = args["track"].as_str() {
+                    let ti = self
+                        .track_index(key)
+                        .ok_or_else(|| format!("There is no track {key}."))?;
+                    self.instrument_open = Some(ti);
+                    focus = Some(ti);
+                }
                 if !self.can_run(cmd) {
+                    self.instrument_open = before;
                     return Err(format!("{id} can't run now."));
                 }
                 self.run(ctx, cmd);
+                // Lend the focus for this command only, unless the command
+                // opened the window itself.
+                if focus.is_some() && cmd != Cmd::InstrumentWindow && self.instrument_open == focus
+                {
+                    self.instrument_open = before;
+                }
                 let name = self.commands.name(cmd).to_string();
                 Ok((
                     json!({"ran": id, "message": self.message.clone()}),
@@ -1059,6 +1096,10 @@ impl App {
                 "builtin": (!e.builtin.is_empty()).then_some(&e.builtin),
                 "bypass": e.bypass,
                 "container": e.container,
+                "sounds": (!e.samples.is_empty()).then(|| {
+                    e.samples.iter().map(|(slot, sound)| json!({"slot": slot, "sound": sound}))
+                        .collect::<Vec<_>>()
+                }),
             })
         };
         let tracks: Vec<Value> = (p.tracks.iter())
@@ -1119,12 +1160,20 @@ impl App {
                     "mute": t.mute,
                     "solo": t.solo,
                     "folder": t.parent,
+                    "group": t.group,
                     "output": t.output,
                     "sends": t.sends.iter().map(|s| json!({
                         "to": s.to, "gain_db": s.gain_db,
                         "pre_fader": s.pre_fader, "mute": s.mute,
                     })).collect::<Vec<_>>(),
                     "instrument": t.instrument.as_ref().map(effect),
+                    "layers": t.layers.iter().map(|l| json!({
+                        "id": l.id, "instrument": effect(&l.instrument),
+                        "gain_db": l.gain_db, "pan": l.pan, "mute": l.mute,
+                        "keys": [l.keys.0, l.keys.1],
+                        "velocities": [l.velocities.0, l.velocities.1],
+                        "transpose": l.transpose,
+                    })).collect::<Vec<_>>(),
                     "effects": t.effects.iter().map(effect).collect::<Vec<_>>(),
                     "note_effects": t.note_fx.iter().map(|f| json!({
                         "id": f.id, "kind": f.kind, "bypass": f.bypass,
@@ -1158,6 +1207,9 @@ impl App {
                 "id": m.id, "bar": m.bar, "name": m.name,
             })).collect::<Vec<_>>(),
             "tracks": tracks,
+            "control_groups": p.control_groups.iter().map(|g| json!({
+                "id": g.id, "name": g.name, "gain_db": g.gain_db, "mute": g.mute,
+            })).collect::<Vec<_>>(),
             "comments": p.comments.len(),
             "lesson_notes": p.notes,
         })
@@ -1238,9 +1290,39 @@ impl App {
                 }));
             }
             params.extend(crate::notefx::parameters(&t.note_fx));
+            if let Some(slot) = &t.instrument {
+                for (k, name, v, min, max, text) in slot.settings() {
+                    params.push(json!({
+                        "param": format!("{INSTRUMENT}{k}"), "name": name, "value": v,
+                        "text": text, "min": min, "max": max,
+                    }));
+                }
+            }
             out.push(json!({"track": t.key, "name": t.name, "params": params}));
         }
         Ok(Value::Array(out))
+    }
+
+    /// Sets one of a track's instrument's settings, through the project
+    /// as the document has it, so the instrument takes it as on undo.
+    fn set_instrument_setting(&mut self, i: usize, k: &str, v: f64) -> Result<String, String> {
+        let t = &self.tracks[i];
+        let (name, min, max) = (t.instrument.as_ref())
+            .and_then(|s| s.settings().into_iter().find(|x| x.0 == k))
+            .map(|x| (x.1, x.3, x.4))
+            .ok_or_else(|| format!("{}'s instrument has no setting {k}.", t.name))?;
+        let (track, key) = (t.name.clone(), t.key.clone());
+        let v = v.clamp(min, max);
+        self.edit_model(|p| {
+            let e = (p.tracks.iter_mut())
+                .find(|t| t.id == key)
+                .and_then(|t| t.instrument.as_mut())
+                .ok_or("The instrument has gone.")?;
+            e.params.retain(|(x, _)| x != k);
+            e.params.push((k.to_string(), v));
+            Ok(Value::Null)
+        })?;
+        Ok(format!("Set {track} {name} to {v}"))
     }
 
     /// Sets a track's setting. The undo step's name, or why it can't.
@@ -1255,6 +1337,9 @@ impl App {
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
             .collect();
+        if let Some(k) = param.strip_prefix(INSTRUMENT) {
+            return self.set_instrument_setting(i, k, v);
+        }
         let t = &mut self.tracks[i];
         let label = match param {
             p if p.starts_with(crate::notefx::PARAM_PREFIX) => {
@@ -1292,6 +1377,8 @@ impl App {
 /// Mute and solo, which aren't automation lanes, by the names
 /// `set_parameter` takes.
 const MUTE: &str = "mute";
+/// How an instrument's settings are named to assistants.
+const INSTRUMENT: &str = "instrument.";
 const SOLO: &str = "solo";
 
 /// Drives the app headless through the tools, for end-to-end tests:

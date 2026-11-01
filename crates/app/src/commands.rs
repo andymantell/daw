@@ -167,6 +167,7 @@ pub(crate) enum Cmd {
     AddAudioTrack,
     AddBus,
     AddFolder,
+    AddControlGroup,
     /// Adds a track with one of the built-in instruments, by its place
     /// in `daw_instruments::Kind::ALL`.
     AddInstrument(u8),
@@ -581,6 +582,9 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::AddFolder, "add-folder", "Edit", "Add folder", &[])
         .hint("A folder: tracks put in it sit under it and go through its fader and effects")
         .words("group submix"),
+    info(Cmd::AddControlGroup, "add-control-group", "Edit", "Add control group", &[])
+        .hint("One fader and mute over several tracks, without summing their audio")
+        .words("vca link faders"),
     info(
         Cmd::AddInstrumentTrack,
         "add-instrument-track",
@@ -3064,6 +3068,7 @@ impl App {
             }
             Cmd::AddBus => self.add_bus(daw_project::TrackKind::Bus),
             Cmd::AddFolder => self.add_bus(daw_project::TrackKind::Folder),
+            Cmd::AddControlGroup => self.add_control_group(),
             Cmd::AddInstrumentTrack => {
                 let n = self.tracks.iter().filter(|t| t.kind.plays_notes()).count() + 1;
                 let t = crate::Track::instrument(format!("Instrument {n}"));

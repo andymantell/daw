@@ -30,6 +30,7 @@ mod agent_lessons;
 mod agent_midi;
 mod agent_monitor;
 mod agent_notes;
+mod agent_pitch;
 mod agent_plugins;
 mod agent_practice;
 mod agent_routing;
@@ -71,6 +72,7 @@ mod notes_editor;
 mod patterns;
 mod people;
 mod perf;
+mod pitch_edit;
 mod practice;
 mod presets;
 mod process;
@@ -328,8 +330,20 @@ struct Import {
 /// stretcher along its warp when it follows tempo or has markers, or
 /// when it is transposed.
 fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
-    let warp = c.warp(map).map(Arc::new);
-    let stretched = warp.is_some() || c.cents != 0;
+    let mut warp = c.warp(map).map(Arc::new);
+    // Notes moved in time by pitch editing: a warp inside the clip's own.
+    if let Some(inner) = c.note_warp() {
+        let range = c.offset as i64..(c.offset + c.len) as i64;
+        let outer = match &warp {
+            Some(w) => Some(w.as_ref().clone()),
+            None => daw_engine::warp::Warp::even(range, c.start, 1.0).ok(),
+        };
+        if let Some(w) = outer.and_then(|o| o.then(&inner).ok()) {
+            warp = Some(Arc::new(w));
+        }
+    }
+    let bend = c.pitch_bend().map(Arc::new);
+    let stretched = warp.is_some() || c.cents != 0 || bend.is_some();
     ClipSpec {
         offset: c.offset,
         len: Some(c.len),
@@ -341,6 +355,7 @@ fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
         warp,
         semitones: c.semitones(),
         formants: !c.move_formants,
+        bend,
         ..ClipSpec::new(Frames(c.start), c.source.clone())
     }
 }
@@ -492,6 +507,8 @@ struct App {
     /// Audio that follows tempo: its windows and settings.
     stretch: stretch::Stretch,
     transpose: transpose::Transpose,
+    /// Pitch editing: lines worked out, the notes chosen, a drag.
+    pitch: pitch_edit::PitchEdit,
     takes_ui: comping::TakesPane,
     /// Automation lanes: their pane, modes and the passes being written.
     automation: automation::Automation,
@@ -662,6 +679,7 @@ impl App {
             timing: timing::Timing::default(),
             stretch: stretch::Stretch::default(),
             transpose: transpose::Transpose::default(),
+            pitch: pitch_edit::PitchEdit::default(),
             takes_ui: comping::TakesPane::default(),
             automation: automation::Automation::default(),
             comments: Vec::new(),
@@ -2891,6 +2909,7 @@ impl eframe::App for App {
                         Cmd::FollowTempo,
                         Cmd::ClipTempo,
                         Cmd::TransposeClips,
+                        Cmd::PitchEditor,
                         Cmd::StretchMarkersFromAttacks,
                         Cmd::AddStretchMarker,
                         Cmd::ClearStretchMarkers,
@@ -3320,6 +3339,7 @@ impl eframe::App for App {
         self.timing_window(&ctx);
         self.stretch_windows(&ctx);
         self.transpose_window(&ctx);
+        self.pitch_tick(&ctx);
         self.remote_tick(&ctx);
         self.assistants_tick(&ctx);
         self.listen_tick(&ctx);

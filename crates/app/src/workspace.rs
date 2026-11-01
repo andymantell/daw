@@ -35,9 +35,10 @@ pub(crate) enum Pane {
     Patterns,
     Video,
     Fretboard,
+    PitchEditor,
 }
 
-pub(crate) const PANES: [Pane; 14] = [
+pub(crate) const PANES: [Pane; 15] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -52,6 +53,7 @@ pub(crate) const PANES: [Pane; 14] = [
     Pane::Patterns,
     Pane::Video,
     Pane::Fretboard,
+    Pane::PitchEditor,
 ];
 
 impl Pane {
@@ -72,6 +74,7 @@ impl Pane {
             Pane::Patterns => "patterns",
             Pane::Video => "video",
             Pane::Fretboard => "fretboard",
+            Pane::PitchEditor => "pitch-editor",
         }
     }
 
@@ -95,6 +98,7 @@ impl Pane {
             Pane::Patterns => "Pattern editor",
             Pane::Video => "Video",
             Pane::Fretboard => "Fretboard",
+            Pane::PitchEditor => "Pitch editor",
         }
     }
 
@@ -405,7 +409,8 @@ impl Layout {
             | Pane::NotesEditor
             | Pane::Automation
             | Pane::Patterns
-            | Pane::Fretboard => (Pane::Timeline, Side::Below),
+            | Pane::Fretboard
+            | Pane::PitchEditor => (Pane::Timeline, Side::Below),
             Pane::Video => (Pane::Timeline, Side::Right),
             // Below the side panes open now, so all can be seen.
             _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
@@ -1568,6 +1573,7 @@ impl crate::App {
             Cmd::Browser,
             Cmd::Video,
             Cmd::Fretboard,
+            Cmd::PitchEditor,
             Cmd::Comments,
             Cmd::LessonNotes,
             Cmd::Lessons,
@@ -1585,6 +1591,7 @@ impl crate::App {
                 Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
                 Cmd::Video => self.workspace.layout.is_open(Pane::Video),
                 Cmd::Fretboard => self.workspace.layout.is_open(Pane::Fretboard),
+                Cmd::PitchEditor => self.workspace.layout.is_open(Pane::PitchEditor),
                 Cmd::Comments => self.comment_ui.open,
                 Cmd::LessonNotes => self.notes_ui.open,
                 Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
@@ -1611,7 +1618,8 @@ impl crate::App {
                             | Cmd::Browser
                             | Cmd::PatternEditor
                             | Cmd::Video
-                            | Cmd::Fretboard,
+                            | Cmd::Fretboard
+                            | Cmd::PitchEditor,
                             _,
                         ) => self.run(&ctx, c),
                         (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
@@ -1761,6 +1769,13 @@ impl Host for crate::App {
                     .id_salt("fretboard-pane")
                     .auto_shrink([false, false])
                     .show(ui, |ui| self.fretboard_pane(ui))
+                    .inner
+            }
+            Pane::PitchEditor => {
+                egui::ScrollArea::vertical()
+                    .id_salt("pitch-editor-pane")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.pitch_editor_pane(ui))
                     .inner
             }
             Pane::Notes => self.notes_pane(ui),

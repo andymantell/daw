@@ -159,13 +159,13 @@ impl App {
             "add_effect" => self.add_effect_tool(args),
             "edit_effect" => self.edit_effect_tool(args),
             "remove_effect" => self.remove_effect_tool(args),
-            _ => return None,
+            _ => return self.arrange_tool(name, args),
         })
     }
 
     /// Edits the project as the document has it and puts the app in
     /// step; the change is written as the request's undo step.
-    fn edit_model(
+    pub(crate) fn edit_model(
         &mut self,
         f: impl FnOnce(&mut Project) -> Result<Value, String>,
     ) -> Result<Value, String> {

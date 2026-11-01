@@ -87,6 +87,11 @@ pub(crate) enum Cmd {
     FixTiming,
     FollowTempo,
     ClipTempo,
+    TransposeClips,
+    TransposeUp,
+    TransposeDown,
+    ResetTranspose,
+    MoveFormants,
     StretchMarkersFromAttacks,
     AddStretchMarker,
     ClearStretchMarkers,
@@ -1212,6 +1217,48 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::ClipTempo, "clip-tempo", "Edit", "Clip tempo…", &[])
         .hint("The tempo the selected clips were played at, which they follow the song from")
         .words("original bpm warp stretch loop"),
+    info(Cmd::TransposeClips, "transpose-clips", "Edit", "Transpose clips…", &[])
+        .hint("Move the selected audio clips' pitch by semitones and cents, keeping their timing")
+        .words("pitch shift key change semitone cents formant tune"),
+    info(
+        Cmd::TransposeUp,
+        "transpose-up",
+        "Edit",
+        "Transpose clips up a semitone",
+        &[],
+    )
+    .hint("Raise the selected audio clips' pitch by a semitone")
+    .words("pitch shift key higher"),
+    info(
+        Cmd::TransposeDown,
+        "transpose-down",
+        "Edit",
+        "Transpose clips down a semitone",
+        &[],
+    )
+    .hint("Lower the selected audio clips' pitch by a semitone")
+    .words("pitch shift key lower"),
+    info(
+        Cmd::ResetTranspose,
+        "reset-transpose",
+        "Edit",
+        "Clips back to their own pitch",
+        &[],
+    )
+    .hint("Take the transpose off the selected audio clips")
+    .words("pitch shift reset original key"),
+    info(
+        Cmd::MoveFormants,
+        "move-formants",
+        "Edit",
+        "Move formants with the pitch",
+        &[],
+    )
+    .hint(
+        "Whether transposing the selected clips changes their character too, like tape \
+         played faster, instead of keeping a voice sounding like the same person",
+    )
+    .words("formant preserve timbre chipmunk voice character"),
     info(
         Cmd::StretchMarkersFromAttacks,
         "stretch-markers-from-attacks",
@@ -2911,6 +2958,11 @@ impl App {
             Cmd::PlayOrder | Cmd::WriteOrder | Cmd::ClearPlayOrder => !self.arrangement.is_empty(),
             Cmd::FollowTempo
             | Cmd::ClipTempo
+            | Cmd::TransposeClips
+            | Cmd::TransposeUp
+            | Cmd::TransposeDown
+            | Cmd::ResetTranspose
+            | Cmd::MoveFormants
             | Cmd::StretchMarkersFromAttacks
             | Cmd::AddStretchMarker
             | Cmd::ClearStretchMarkers
@@ -3292,6 +3344,13 @@ impl App {
             | Cmd::TempoFromClip
             | Cmd::TempoFromClipApply => {
                 self.run_stretch(cmd);
+            }
+            Cmd::TransposeClips
+            | Cmd::TransposeUp
+            | Cmd::TransposeDown
+            | Cmd::ResetTranspose
+            | Cmd::MoveFormants => {
+                self.run_transpose(cmd);
             }
             Cmd::HitPoint => {
                 let at = self.ctl.status().position().0;

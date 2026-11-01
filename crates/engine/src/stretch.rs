@@ -16,6 +16,16 @@
 //!   Duxbury, Davies & Sandler (DAFx 2002) and Röbel (ICMC 2003).
 //! - Pitch change by time-stretching then resampling with a windowed-sinc
 //!   interpolator (Smith, "Digital Audio Resampling", CCRMA).
+//! - Keeping formants when transposing: each frame's spectral envelope
+//!   is taken by cepstral smoothing (low-quefrency liftering of the log
+//!   magnitude; Oppenheim & Schafer, "Discrete-Time Signal Processing",
+//!   on the real cepstrum), and every bin is scaled by the envelope where
+//!   the resampler will move it over the envelope where it is, so the
+//!   harmonics move and the resonances stay (after Röbel & Rodet,
+//!   "Efficient spectral envelope estimation and its application to
+//!   pitch shifting and envelope preservation", DAFx 2005, which uses a
+//!   refined "true envelope"; plain cepstral smoothing is the simpler
+//!   first step it starts from).
 //!
 //! Timing: after [`Stretcher::reset`] at input position `u0`, output
 //! frame `o` plays input position `u0 + o × speed`, so a stretched track
@@ -57,6 +67,15 @@ const PHASES: usize = 256;
 /// Frame centres remembered: enough to cover the stretched signal held
 /// for a block of any likely size.
 const CENTRES: usize = 64;
+/// Cepstral coefficients kept for the spectral envelope: about 1 ms at
+/// 48 kHz, shorter than the period of any sung or spoken pitch up to
+/// about 1 kHz, so the envelope follows the resonances and not the
+/// harmonics.
+const LIFTER: usize = 48;
+/// The most a bin is raised or lowered to keep the envelope, in natural
+/// log units (about ±24 dB): beyond it the envelope of a near-silent
+/// region is guesswork.
+const MAX_FORMANT_LOG: f32 = 2.77;
 
 /// Slowest and fastest practice speeds, and the widest transpose,
 /// offered.
@@ -84,6 +103,8 @@ struct Chan {
     st: Vec<f32>,
     /// Input read for one hop's two analysis frames.
     input: Vec<f32>,
+    /// The frame's spectral envelope, as a natural log of magnitude.
+    env: Vec<f32>,
 }
 
 impl Chan {
@@ -99,6 +120,7 @@ impl Chan {
             ola: vec![0.0; FRAME],
             st: vec![0.0; st_len(max_block)],
             input: vec![0.0; FRAME + HOP],
+            env: vec![0.0; bins],
         }
     }
 }
@@ -141,6 +163,11 @@ pub struct Stretcher {
     ratio: f64,
     kernel: Vec<f32>,
     max_block: usize,
+    /// Keep the spectral envelope where it is when transposing.
+    formants: bool,
+    /// Room for the envelope's cepstrum and its spectrum.
+    cep: Vec<f32>,
+    cep_spec: Vec<Complex32>,
 }
 
 impl Stretcher {
@@ -180,6 +207,9 @@ impl Stretcher {
             ratio: 1.0,
             kernel: vec![0.0; PHASES * TAPS],
             max_block: max_block.max(1),
+            formants: false,
+            cep: vec![0.0; FRAME],
+            cep_spec: vec![Complex32::default(); bins],
         };
         s.build_kernel();
         s.reset(0.0);
@@ -196,6 +226,19 @@ impl Stretcher {
             self.ratio = ratio;
             self.build_kernel();
         }
+    }
+
+    /// Whether a transpose keeps the formants (the resonances of a voice
+    /// or body) where they are, moving only the pitch, rather than
+    /// moving them with it as a tape sped up does. Off at first; takes
+    /// effect from the next frame made.
+    pub fn set_formants(&mut self, keep: bool) {
+        self.formants = keep;
+    }
+
+    /// Whether a transpose keeps the formants.
+    pub fn formants(&self) -> bool {
+        self.formants
     }
 
     /// Starts again so that the next output frame plays input `u0`.
@@ -369,6 +412,32 @@ impl Stretcher {
                 }
             }
 
+            if self.formants && self.ratio != 1.0 {
+                envelope(
+                    &c.mag,
+                    &mut c.env,
+                    &mut self.cep,
+                    &mut self.cep_spec,
+                    &self.r2c,
+                    &self.c2r,
+                    &mut self.scratch,
+                );
+                // Bin k comes out at k × ratio once resampled: give it the
+                // envelope there instead of its own.
+                let ratio = self.ratio as f32;
+                let last = (bins - 1) as f32;
+                for k in 0..bins {
+                    let at = (k as f32 * ratio).min(last);
+                    let i = at as usize;
+                    let f = at - i as f32;
+                    let there = match c.env.get(i + 1) {
+                        Some(&b) => c.env[i] + f * (b - c.env[i]),
+                        None => c.env[i],
+                    };
+                    let gain = (there - c.env[k]).clamp(-MAX_FORMANT_LOG, MAX_FORMANT_LOG);
+                    c.mag[k] *= gain.exp();
+                }
+            }
             for k in 0..bins {
                 c.spec_a[k] = Complex32::from_polar(c.mag[k], c.syn_phase[k]);
             }
@@ -470,6 +539,48 @@ impl Stretcher {
             self.rpos -= drop as f64;
             self.s_base += drop as f64;
         }
+    }
+}
+
+/// The spectral envelope of magnitudes `mag` into `env`, as natural log
+/// magnitude per bin: the log spectrum's real cepstrum, cut to its first
+/// [`LIFTER`] coefficients and turned back. Doesn't allocate.
+fn envelope(
+    mag: &[f32],
+    env: &mut [f32],
+    cep: &mut [f32],
+    spec: &mut [Complex32],
+    r2c: &Arc<dyn RealToComplex<f32>>,
+    c2r: &Arc<dyn ComplexToReal<f32>>,
+    scratch: &mut [Complex32],
+) {
+    let peak = mag.iter().fold(0.0f32, |m, &x| m.max(x));
+    // A floor well under the loudest bin keeps silent bins from pulling
+    // the envelope down without end.
+    let floor = (peak * 1e-5).max(1e-12);
+    for (s, &m) in spec.iter_mut().zip(mag) {
+        *s = Complex32::new(m.max(floor).ln(), 0.0);
+    }
+    c2r.process_with_scratch(spec, cep, scratch)
+        .expect("inverse FFT sizes");
+    let n = cep.len();
+    // Keep the low quefrencies (both ends, the cepstrum being even),
+    // tapering the last few so the envelope doesn't ring.
+    for (i, x) in cep.iter_mut().enumerate() {
+        let q = i.min(n - i);
+        let w = if q < LIFTER / 2 {
+            1.0
+        } else if q < LIFTER {
+            0.5 + 0.5 * (PI * (q - LIFTER / 2) as f32 / (LIFTER / 2) as f32).cos()
+        } else {
+            0.0
+        };
+        *x *= w / n as f32;
+    }
+    r2c.process_with_scratch(cep, spec, scratch)
+        .expect("forward FFT sizes");
+    for (e, s) in env.iter_mut().zip(spec.iter()) {
+        *e = s.re;
     }
 }
 

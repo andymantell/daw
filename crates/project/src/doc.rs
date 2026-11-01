@@ -1280,6 +1280,14 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
                 .collect();
             w.put(&cm, "markers", LoroValue::List(points.into()));
         }
+        // Clips at their own pitch, as all were before transposing, gain
+        // no new entries.
+        if !plain("cents", c.cents == 0) {
+            w.put(&cm, "cents", c.cents);
+        }
+        if !plain("move_formants", !c.move_formants) {
+            w.put(&cm, "move_formants", c.move_formants);
+        }
     }
 
     write_effects(w, m, &t.effects);
@@ -2096,6 +2104,10 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
                 tempo: float(c, "tempo").filter(|t| t.is_finite() && *t > 0.0),
                 beat: int(c, "beat").unwrap_or(0).max(0),
                 markers: read_markers(c),
+                cents: int(c, "cents")
+                    .unwrap_or(0)
+                    .clamp(-crate::MAX_TRANSPOSE_CENTS, crate::MAX_TRANSPOSE_CENTS),
+                move_formants: boolean(c, "move_formants").unwrap_or(false),
             });
         }
     }
@@ -2717,6 +2729,32 @@ mod tests {
         let c = &doc.get().tracks[0].clips[0];
         assert_eq!(c.tempo, None);
         assert!(c.markers.is_empty());
+    }
+
+    #[test]
+    fn a_clips_transpose_is_kept_and_held_within_an_octave() {
+        let mut p = Project::default();
+        let mut t = Track::new("t".into(), "Vocal".into());
+        t.clips.push(Clip {
+            id: "c".into(),
+            asset: "a.wav".into(),
+            len: 1000,
+            ..Clip::default()
+        });
+        p.tracks.push(t);
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&p);
+        let clip = |doc: &ProjectDoc| doc.get().tracks[0].clips[0].clone();
+        assert_eq!(clip(&doc).cents, 0);
+        assert!(!clip(&doc).move_formants);
+        p.tracks[0].clips[0].cents = -650;
+        p.tracks[0].clips[0].move_formants = true;
+        doc.set(&p);
+        assert_eq!(clip(&doc).cents, -650);
+        assert!(clip(&doc).move_formants);
+        p.tracks[0].clips[0].cents = 5000;
+        doc.set(&p);
+        assert_eq!(clip(&doc).cents, crate::MAX_TRANSPOSE_CENTS);
     }
 
     #[test]

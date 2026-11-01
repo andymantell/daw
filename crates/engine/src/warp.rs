@@ -55,6 +55,9 @@ pub trait Stretch: Send {
     }
     /// The transpose last set.
     fn semitones(&self) -> f64;
+    /// Whether a transpose keeps the formants where they are. A
+    /// stretcher that can't leaves them moving with the pitch.
+    fn set_formants(&mut self, _keep: bool) {}
 }
 
 impl Stretch for Stretcher {
@@ -86,6 +89,10 @@ impl Stretch for Stretcher {
 
     fn semitones(&self) -> f64 {
         Stretcher::semitones(self)
+    }
+
+    fn set_formants(&mut self, keep: bool) {
+        Stretcher::set_formants(self, keep)
     }
 }
 
@@ -253,6 +260,12 @@ impl Warper {
         self.semitones = semitones;
     }
 
+    /// Whether a transpose keeps the formants where they are (a voice
+    /// still sounds like the same person) or moves them with the pitch.
+    pub fn set_formants(&mut self, keep: bool) {
+        self.st.set_formants(keep);
+    }
+
     /// Forget where playback was: the next call starts afresh.
     pub fn stop(&mut self) {
         self.next = None;
@@ -305,9 +318,23 @@ pub fn render(
     l: &mut [f32],
     r: &mut [f32],
 ) {
+    render_with(feed, warp, semitones, false, from, l, r)
+}
+
+/// As [`render`], keeping the formants where they are when `formants`.
+pub fn render_with(
+    feed: &mut dyn Feed,
+    warp: &Warp,
+    semitones: f64,
+    formants: bool,
+    from: i64,
+    l: &mut [f32],
+    r: &mut [f32],
+) {
     const BLOCK: usize = 256;
     let mut w = Warper::new(BLOCK);
     w.set_pitch(semitones);
+    w.set_formants(formants);
     let n = l.len().min(r.len());
     let mut done = 0;
     while done < n {

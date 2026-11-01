@@ -1062,7 +1062,17 @@ pub struct Clip {
     pub beat: i64,
     /// Stretch markers, in order of asset frame, all inside the clip.
     pub markers: Vec<StretchMarker>,
+    /// The clip's own transpose, in cents (100 to a semitone), within
+    /// ±[`MAX_TRANSPOSE_CENTS`]; 0 plays it at its own pitch.
+    pub cents: i64,
+    /// A transposed clip's formants move with its pitch (as tape sped up
+    /// does) rather than staying where they were (the default, so a
+    /// voice still sounds like the same person).
+    pub move_formants: bool,
 }
+
+/// The widest transpose a clip takes, in cents: an octave either way.
+pub const MAX_TRANSPOSE_CENTS: i64 = 1200;
 
 /// A stretch marker: a frame of the asset tied to a point counted from
 /// the clip's start, in ticks when the clip follows tempo, else in
@@ -1085,6 +1095,7 @@ impl Clip {
             && self.fade_in.len == 0
             && self.fade_out.len == 0
             && self.envelope.is_empty()
+            && self.cents == 0
         {
             return String::new();
         }
@@ -1099,6 +1110,13 @@ impl Clip {
         for p in &self.envelope {
             h.update(ms(p.at).to_le_bytes());
             h.update(p.db.to_le_bytes());
+        }
+        // Only a transposed clip adds to it, so prints made before
+        // transposing stay as they were.
+        if self.cents != 0 {
+            h.update(b"transpose");
+            h.update(self.cents.to_le_bytes());
+            h.update([self.move_formants as u8]);
         }
         h.finalize()[..8]
             .iter()

@@ -39,7 +39,7 @@ use crate::midi::{Event, Expression, Instrument, Kind, MAX_EVENTS, Outputs};
 use crate::monitor::{CueLine, CueSend, MAX_CUES};
 use crate::notefx::{self, NoteFxSpec, ScaleSpec};
 use crate::stream::{CHUNK, Chunk, Placement, StreamNode, StreamSource};
-use crate::stretch::{Feed, Stretcher};
+use crate::stretch::{Feed, SEMITONES, Stretcher};
 use crate::time::{Frames, TempoMap, Ticks};
 use crate::warp::{Warp, Warper};
 
@@ -169,6 +169,15 @@ pub struct ClipSpec {
     /// Tells a warped clip apart across graph changes, so its stretcher
     /// carries on instead of starting afresh; 0 for none.
     pub tag: u64,
+    /// The clip's own transpose in semitones (fractions for cents), on
+    /// top of any practice transpose; the two together are held within
+    /// the stretcher's ±[`crate::stretch::SEMITONES`]. A transposed
+    /// clip plays through the stretcher, at its own time when it has no
+    /// `warp`.
+    pub semitones: f64,
+    /// Whether a transpose keeps the clip's formants where they are, so
+    /// a voice keeps its character; otherwise they move with the pitch.
+    pub formants: bool,
 }
 
 impl ClipSpec {
@@ -184,6 +193,8 @@ impl ClipSpec {
             envelope: Arc::new([]),
             warp: None,
             tag: 0,
+            semitones: 0.0,
+            formants: true,
         }
     }
 }
@@ -744,6 +755,10 @@ pub(crate) struct WarpNode {
     pub len: usize,
     pub shape: Shape,
     pub src: NodeSrc,
+    /// The clip's own transpose, added to the practice transpose.
+    pub semitones: f64,
+    /// Keep its formants when transposed.
+    pub formants: bool,
 }
 
 /// A clip's source as its stretcher reads it: by source frame, silent
@@ -822,7 +837,9 @@ fn render_warped(
     sr: &mut [f32],
 ) -> usize {
     let step = if step > 0.0 { step } else { 1.0 };
-    w.warper.set_pitch(semitones);
+    let total = semitones + w.semitones;
+    w.warper.set_pitch(total.clamp(-SEMITONES, SEMITONES));
+    w.warper.set_formants(w.formants);
     let mut missing = 0;
     let mut done = 0usize;
     while done < n {
@@ -1740,7 +1757,17 @@ impl Session {
                 if len == 0 {
                     continue;
                 }
-                let (start, end) = match &c.warp {
+                // A transposed clip with no warp of its own plays through
+                // the stretcher at its own time.
+                let warp = match &c.warp {
+                    None if c.semitones != 0.0 && c.semitones.is_finite() => {
+                        let start = c.start.frames(&self.tempo).0;
+                        let src = c.offset as i64..(c.offset + len) as i64;
+                        Warp::even(src, start, 1.0).ok().map(Arc::new)
+                    }
+                    w => w.clone(),
+                };
+                let (start, end) = match &warp {
                     Some(w) => (w.out_range().start, w.out_range().end),
                     None => {
                         let start = c.start.frames(&self.tempo).0;
@@ -1755,7 +1782,7 @@ impl Session {
                             start,
                             end,
                             offset: c.offset,
-                            warp: c.warp.clone(),
+                            warp: warp.clone(),
                         });
                         let i = match streams.iter().position(|s| s.id == f.id) {
                             Some(i) => i,
@@ -1777,10 +1804,10 @@ impl Session {
                     ..Shape::flat(c.gain_db)
                 }
                 .fitted(len);
-                match &c.warp {
+                match warp {
                     Some(w) => warped.push(WarpNode {
                         tag: c.tag,
-                        warp: w.clone(),
+                        warp: w,
                         warper: Warper::new(max_block),
                         start,
                         end,
@@ -1788,6 +1815,12 @@ impl Session {
                         len,
                         shape,
                         src,
+                        semitones: if c.semitones.is_finite() {
+                            c.semitones
+                        } else {
+                            0.0
+                        },
+                        formants: c.formants,
                     }),
                     None => clips.push(ClipNode {
                         start,

@@ -577,8 +577,8 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
     let now: HashSet<&str> = after.clips.iter().map(|c| c.id.as_str()).collect();
     let scale = |v: i64| (v as f64 * k).round() as i64;
     let near = |a: i64, b: i64| (scale(a) - b).abs() <= SLACK;
-    let (mut added, mut changed, mut level, mut muted, mut unmuted) =
-        (vec![], vec![], vec![], vec![], vec![]);
+    let (mut added, mut changed, mut level, mut muted, mut unmuted, mut pitched) =
+        (vec![], vec![], vec![], vec![], vec![], vec![]);
     for c in &after.clips {
         match was.get(c.id.as_str()) {
             None => added.push(c),
@@ -606,6 +606,9 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
                 if b.muted != c.muted {
                     if c.muted { &mut muted } else { &mut unmuted }.push(c);
                 }
+                if b.cents != c.cents || b.move_formants != c.move_formants {
+                    pitched.push(c);
+                }
             }
         }
     }
@@ -623,6 +626,7 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
         ),
         (&muted, "Muted clip", "clips muted"),
         (&unmuted, "Unmuted clip", "clips unmuted"),
+        (&pitched, "Transposed clip", "clips transposed"),
     ] {
         match clips.as_slice() {
             [] => {}

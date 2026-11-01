@@ -216,7 +216,8 @@ impl App {
             _ => {
                 return self
                     .arrange_tool(name, args)
-                    .or_else(|| self.files_tool(ctx, name, args, access));
+                    .or_else(|| self.files_tool(ctx, name, args, access))
+                    .or_else(|| self.takes_tool(ctx, name, args));
             }
         })
     }

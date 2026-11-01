@@ -374,7 +374,7 @@ impl App {
     }
 
     /// What Fix timing would do to the selection now.
-    fn timing_plan(&mut self) -> Plan {
+    pub(crate) fn timing_plan(&mut self) -> Plan {
         let map = self.tempo_map();
         let groups = self.timing_groups();
         let chosen = self.timing_clips();
@@ -409,7 +409,7 @@ impl App {
     }
 
     /// Cuts and moves the clips as `p` says, selecting the pieces.
-    fn apply_timing(&mut self, p: &Plan) {
+    pub(crate) fn apply_timing(&mut self, p: &Plan) {
         let join = frames(self.rate, JOIN_SECONDS);
         let mut pieces = HashSet::new();
         for (l, id, ms) in &p.clips {

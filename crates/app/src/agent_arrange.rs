@@ -140,8 +140,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "set_tempo",
         description: "Sets the song's starting tempo and time signature, and, if given, \
-                      the tempo changes after the start (replacing those there). Clips \
-                      that follow tempo move with it; others stay where they are.",
+                      the tempo changes after the start, or the time signature changes \
+                      (each list replacing those there). Clips that follow tempo move \
+                      with it; others stay where they are.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -151,7 +152,12 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "changes": {"type": "array", "items": {"type": "object", "properties": {
                     "bar": {"type": "integer"}, "beat": {"type": "integer"},
                     "bpm": {"type": "number"}, "glide": {"type": "boolean"}
-                }, "required": ["bar", "bpm"]}}
+                }, "required": ["bar", "bpm"]}},
+                "meters": {"type": "array", "description": "Time signature changes, each on a bar after the first.",
+                           "items": {"type": "object", "properties": {
+                    "bar": {"type": "integer"}, "beats_per_bar": {"type": "integer"},
+                    "beat_unit": {"type": "integer"}
+                }, "required": ["bar", "beats_per_bar"]}}
             }})
         },
     },
@@ -577,9 +583,39 @@ impl App {
                 v.sort_by_key(|c| (c.bar, c.beat));
                 p.tempo_changes = v;
             }
+            if let Some(meters) = args["meters"].as_array() {
+                let mut v: Vec<daw_project::MeterChange> = Vec::new();
+                for m in meters {
+                    let (Some(bar), Some(beats)) = (m["bar"].as_i64(), m["beats_per_bar"].as_u64())
+                    else {
+                        return Err(
+                            "Each time signature change needs a bar and beats_per_bar.".into()
+                        );
+                    };
+                    let unit = m["beat_unit"].as_u64().unwrap_or(4);
+                    if ![1, 2, 4, 8, 16, 32].contains(&unit) {
+                        return Err("A beat unit is 1, 2, 4, 8, 16 or 32.".into());
+                    }
+                    if bar < 2 || v.iter().any(|o| o.bar == bar) {
+                        return Err(format!(
+                            "A time signature change goes on a bar after the first, one to a \
+                             bar (bar {bar})."
+                        ));
+                    }
+                    v.push(daw_project::MeterChange {
+                        id: daw_project::new_id(),
+                        bar,
+                        beats: (beats as u32).clamp(1, 32),
+                        unit: unit as u32,
+                    });
+                }
+                v.sort_by_key(|m| m.bar);
+                p.meter_changes = v;
+            }
             Ok(
                 json!({"tempo_bpm": p.tempo_bpm, "beats_per_bar": p.beats_per_bar,
-                      "beat_unit": p.beat_unit, "changes": p.tempo_changes.len()}),
+                      "beat_unit": p.beat_unit, "changes": p.tempo_changes.len(),
+                      "meters": p.meter_changes.len()}),
             )
         })
         .map(|v| (v, Some("Change the tempo".into())))
@@ -851,6 +887,22 @@ mod tests {
             (json!(90.0), json!(3))
         );
         assert_eq!(p["tempo_changes"][0]["bpm"], 120.0);
+        d.call(
+            "set_tempo",
+            json!({"meters": [{"bar": 9, "beats_per_bar": 7, "beat_unit": 8}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            d.project()["meter_changes"],
+            json!([{"bar": 9, "beats_per_bar": 7, "beat_unit": 8}])
+        );
+        assert!(
+            d.call(
+                "set_tempo",
+                json!({"meters": [{"bar": 1, "beats_per_bar": 3}]})
+            )
+            .is_err()
+        );
         assert_eq!(p["scale"], "E minor");
         assert_eq!(p["loop_bars"], json!([2, 4]));
         assert_eq!(d.call("get_transport", json!({})).unwrap()["loop"], true);

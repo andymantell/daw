@@ -83,7 +83,7 @@ assistant finds them for itself. In outline:
 - **Reading:** `get_project`, `get_transport`, `get_selection`,
   `list_parameters`, `get_meters`, `get_history`, `get_comments`,
   `get_fretboard`, `get_exports`, `list_presets`, `list_effect_kinds`,
-  `list_projects`, `export_report`.
+  `list_projects`, `export_report`, `get_takes`, `list_snapshots`.
 - **Hearing and seeing:** `analyse` (peak, true peak, RMS, crest factor,
   loudness and its range, stereo correlation, third-octave bands, and
   the key and tempo when it can tell) of a track, a bus or the mix, over
@@ -101,7 +101,17 @@ assistant finds them for itself. In outline:
 - **Arranging:** `import_audio`, `edit_clip`, `delete_clip`,
   `add_note_clip`, `edit_notes`, `edit_markers`, `set_tempo`, `set_key`,
   `set_loop`, `seek`, `select_clips`, `undo_steps`, `add_comment`,
-  `resolve_comment`.
+  `resolve_comment`. `set_tempo` takes time signature changes too.
+- **Takes, timing and clip processing:** `edit_comp` (new, duplicate,
+  choose, rename, delete, flatten, swipe, clear, use a take, choose a
+  take), `fix_timing` (with its grid, strength and sensitivity, or a
+  preview), `stretch_clips` (follow tempo, a clip's own tempo, stretch
+  markers placed, moved, removed or quantised), `tempo_from_clip`,
+  `freeze_track`, `render_track` (render in place, or bounce clips),
+  `process_clips` (normalise, reverse, change gain), `edit_clip_volume`
+  (fade shapes and the volume line), `edit_groups`, `edit_snapshot`, and
+  `set_track_input` (arm, monitor, input and MIDI out, which belong to
+  this computer, not the project).
 - **Files:** `save_project`, `open_project`, `new_project`, `export_mix`,
   `export_sections`, `export_as_project`, `export_stem_package`,
   `import_from_project`, `export_project_file`, `import_project_file`.

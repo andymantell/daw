@@ -821,6 +821,37 @@ mod tests {
         assert!(!AudioSetup::new(None).first_run(false));
     }
 
+    /// End to end, as an assistant would: every step through the
+    /// command table, taking what each offers.
+    #[test]
+    fn an_assistant_walks_the_guide_by_commands() {
+        let mut d = crate::agent::driver::Driver::new();
+        d.command("audio-setup");
+        assert!(d.app().audio_setup.open);
+        assert_eq!(d.app().audio_setup.step, Step::Device);
+        for (id, then) in [
+            ("audio-setup-skip", Step::Monitoring),
+            ("audio-setup-next", Step::Buffer),
+            ("audio-setup-skip", Step::Input),
+            ("audio-setup-back", Step::Buffer),
+            ("audio-setup-skip", Step::Input),
+            ("audio-setup-next", Step::Latency),
+            ("audio-setup-skip", Step::Done),
+        ] {
+            d.command(id);
+            assert_eq!(d.app().audio_setup.step, then, "after {id}");
+        }
+        d.command("measure-latency");
+        assert!(d.app().latency.open);
+        d.command("audio-setup-next");
+        assert!(!d.app().audio_setup.open);
+        // With the guide closed its steps are refused.
+        assert!(
+            d.call("run_command", serde_json::json!({"id": "audio-setup-next"}))
+                .is_err()
+        );
+    }
+
     mod ui {
         use super::*;
         use egui_kittest::Harness;

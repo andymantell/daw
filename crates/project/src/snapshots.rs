@@ -152,7 +152,11 @@ impl ProjectDoc {
     pub fn assets_in_use(&self) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
         let mut add = |p: &Project| {
-            v.extend(p.tracks.iter().flat_map(Track::assets));
+            v.extend(
+                (p.tracks.iter())
+                    .flat_map(|t| std::iter::once(t).chain(t.stored_versions()))
+                    .flat_map(Track::assets),
+            );
             v.extend(p.videos.iter().map(|c| c.asset.clone()));
         };
         add(&self.get());

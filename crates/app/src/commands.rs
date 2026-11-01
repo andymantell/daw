@@ -74,6 +74,12 @@ pub(crate) enum Cmd {
     Copy,
     Paste,
     Bounce,
+    TrackVersions,
+    NewVersion,
+    DuplicateVersion,
+    NextVersion,
+    PrevVersion,
+    DeleteVersion,
     EditGroups,
     FixTiming,
     FollowTempo,
@@ -969,6 +975,60 @@ pub(crate) const COMMANDS: &[Info] = &[
              it; they are muted where they are",
         )
         .words("render in place consolidate print"),
+    info(
+        Cmd::TrackVersions,
+        "track-versions",
+        "Edit",
+        "Track versions…",
+        &[],
+    )
+    .hint("Keep other versions of a track's clips and sound side by side, and switch between them")
+    .words("alternative alternate playlist arrangement take idea compare"),
+    info(
+        Cmd::NewVersion,
+        "new-track-version",
+        "Edit",
+        "New empty track version",
+        &[],
+    )
+    .hint("A version of the track with its instrument, effects and fader, and no clips, notes, takes and automation")
+    .words("alternative alternate playlist blank"),
+    info(
+        Cmd::DuplicateVersion,
+        "duplicate-track-version",
+        "Edit",
+        "Duplicate track version",
+        &[],
+    )
+    .hint("A copy of the version the track plays, to change and compare")
+    .words("alternative alternate playlist copy"),
+    info(
+        Cmd::NextVersion,
+        "next-track-version",
+        "Edit",
+        "Next track version",
+        &[],
+    )
+    .hint("Play the track's next version")
+    .words("alternative alternate playlist switch"),
+    info(
+        Cmd::PrevVersion,
+        "previous-track-version",
+        "Edit",
+        "Previous track version",
+        &[],
+    )
+    .hint("Play the track's previous version")
+    .words("alternative alternate playlist switch"),
+    info(
+        Cmd::DeleteVersion,
+        "delete-track-version",
+        "Edit",
+        "Delete track version",
+        &[],
+    )
+    .hint("Delete the version the track plays; the one before it plays instead")
+    .words("alternative alternate playlist remove"),
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
@@ -2490,6 +2550,9 @@ impl App {
             Cmd::ExportStemPackage => !self.export.busy(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
+            Cmd::NextVersion | Cmd::PrevVersion | Cmd::DeleteVersion => self
+                .version_track()
+                .is_some_and(|i| !self.tracks[i].versions.is_empty()),
             Cmd::InstrumentOutputBuses => self.plugin_instrument_track().is_some(),
             Cmd::ExportVideo => {
                 daw_video::CAN_WRAP && !self.video.clips.is_empty() && !self.export.busy()
@@ -2791,6 +2854,25 @@ impl App {
             Cmd::KeyCommands => self.commands.editor.open = true,
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
+            Cmd::TrackVersions => {
+                self.versions_ui.track = self.version_track().map(|i| self.tracks[i].key.clone());
+                self.versions_ui.open = true;
+            }
+            Cmd::NewVersion => {
+                self.new_version(ctx, false);
+            }
+            Cmd::DuplicateVersion => {
+                self.new_version(ctx, true);
+            }
+            Cmd::NextVersion => {
+                self.step_version(ctx, false);
+            }
+            Cmd::PrevVersion => {
+                self.step_version(ctx, true);
+            }
+            Cmd::DeleteVersion => {
+                self.delete_playing_version(ctx);
+            }
             Cmd::FixTiming => self.timing.open = true,
             Cmd::FollowTempo
             | Cmd::ClipTempo

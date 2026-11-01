@@ -455,6 +455,31 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
     if before.name != after.name {
         out.push(format!("Renamed from “{}”", before.name));
     }
+    let names = |t: &Track| -> Vec<(String, String)> {
+        (t.versions.iter())
+            .map(|v| (v.id.clone(), v.name.clone()))
+            .collect()
+    };
+    let (was, now) = (names(before), names(after));
+    for (id, name) in &now {
+        match was.iter().find(|(i, _)| i == id) {
+            None => out.push(format!("Added version “{name}”")),
+            Some((_, old)) if old != name => {
+                out.push(format!("Renamed version “{old}” to “{name}”"))
+            }
+            Some(_) => {}
+        }
+    }
+    for (id, name) in &was {
+        if !now.iter().any(|(i, _)| i == id) {
+            out.push(format!("Removed version “{name}”"));
+        }
+    }
+    if before.version != after.version
+        && let Some(v) = after.playing_version()
+    {
+        out.push(format!("Now plays version “{}”", v.name));
+    }
     if before.gain_db != after.gain_db {
         out.push(format!(
             "Volume {} → {}",

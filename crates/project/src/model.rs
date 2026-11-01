@@ -203,6 +203,32 @@ pub struct Track {
     /// Its notes shown as tab or a staff under it (roadmap 3.8), or
     /// `None` for no notation lane.
     pub notation: Option<Notation>,
+    /// Other versions of what the track plays and how it sounds, kept
+    /// side by side to switch between, in the order made: none, or two
+    /// or more. The one playing is the track itself, its entry's `body`
+    /// `None`.
+    pub versions: Vec<TrackVersion>,
+    /// The version playing, by id, while there are versions.
+    pub version: Option<String>,
+}
+
+/// A version of a track: its clips, note clips, comps, effects,
+/// instrument, automation and fader, without its name, routing or
+/// notation lane, which every version shares.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackVersion {
+    pub id: String,
+    pub name: String,
+    /// What it holds, as a track whose other fields are blank, or `None`
+    /// for the one playing (held by the track itself).
+    pub body: Option<Track>,
+}
+
+impl TrackVersion {
+    /// The id of the version a track had before it had others. The
+    /// document keeps its body where the track's was, so two people
+    /// making a track's first versions at once share it.
+    pub const FIRST: &'static str = "first";
 }
 
 /// How a track's notes are shown as notation (roadmap 3.8, decision
@@ -324,6 +350,172 @@ impl Track {
             group: None,
             automation: Vec::new(),
             notation: None,
+            versions: Vec::new(),
+            version: None,
+        }
+    }
+
+    /// The version playing, if the track has versions.
+    pub fn playing_version(&self) -> Option<&TrackVersion> {
+        let id = self.version.as_deref()?;
+        self.versions.iter().find(|v| v.id == id)
+    }
+
+    /// What a version of the track as it is now would hold: a track with
+    /// only those fields filled.
+    pub fn version_body(&self) -> Track {
+        let mut b = Track::new(self.id.clone(), String::new());
+        b.gain_db = self.gain_db;
+        b.pan = self.pan;
+        b.clips = self.clips.clone();
+        b.note_clips = self.note_clips.clone();
+        b.instrument = self.instrument.clone();
+        b.layers = self.layers.clone();
+        b.effects = self.effects.clone();
+        b.frozen = self.frozen.clone();
+        b.freeze = self.freeze;
+        b.comps = self.comps.clone();
+        b.comp = self.comp.clone();
+        b.automation = self.automation.clone();
+        b
+    }
+
+    /// Makes the track play what version body `b` holds.
+    pub fn take_body(&mut self, b: Track) {
+        self.gain_db = b.gain_db;
+        self.pan = b.pan;
+        self.clips = b.clips;
+        self.note_clips = b.note_clips;
+        self.instrument = b.instrument;
+        self.layers = b.layers;
+        self.effects = b.effects;
+        self.frozen = b.frozen;
+        self.freeze = b.freeze;
+        self.comps = b.comps;
+        self.comp = b.comp;
+        self.automation = b.automation;
+    }
+
+    /// The bodies of the versions not playing.
+    pub fn stored_versions(&self) -> impl Iterator<Item = &Track> {
+        self.versions.iter().filter_map(|v| v.body.as_ref())
+    }
+
+    /// Plays version `id` instead of the one playing, keeping that one as
+    /// it was left. False if there is no such version, or it is playing.
+    pub fn switch_version(&mut self, id: &str) -> bool {
+        if self.version.as_deref() == Some(id) {
+            return false;
+        }
+        let Some(to) = self.versions.iter().position(|v| v.id == id) else {
+            return false;
+        };
+        let Some(body) = self.versions[to].body.take() else {
+            return false;
+        };
+        let now = self.version_body();
+        if let Some(v) = (self.versions.iter_mut()).find(|v| Some(&v.id) == self.version.as_ref()) {
+            v.body = Some(now);
+        }
+        self.take_body(body);
+        self.version = Some(id.to_string());
+        true
+    }
+
+    /// Adds a version called `name` with id `id` and plays it: a copy of
+    /// the one playing, or (`copy` false) one with the same instrument,
+    /// effects and fader but no clips, notes or automation. A track with
+    /// no versions yet first gets one for what it plays now, called
+    /// `first_name`.
+    pub fn add_version(&mut self, id: String, name: String, first_name: &str, copy: bool) {
+        if self.versions.is_empty() {
+            self.versions.push(TrackVersion {
+                id: TrackVersion::FIRST.to_string(),
+                name: first_name.to_string(),
+                body: None,
+            });
+            self.version = Some(TrackVersion::FIRST.to_string());
+        }
+        let mut body = self.version_body();
+        if !copy {
+            body.clips.clear();
+            body.note_clips.clear();
+            body.comps.clear();
+            body.comp = None;
+            body.automation.clear();
+            body.frozen = None;
+            body.freeze = false;
+        }
+        self.versions.push(TrackVersion {
+            id: id.clone(),
+            name,
+            body: Some(body),
+        });
+        self.switch_version(&id);
+    }
+
+    /// Deletes version `id`. If it is playing, the one before it (or
+    /// after, for the first) plays instead. Left with one version, the
+    /// track goes back to having none, playing that one. False if there
+    /// is no such version.
+    pub fn delete_version(&mut self, id: &str) -> bool {
+        let Some(i) = self.versions.iter().position(|v| v.id == id) else {
+            return false;
+        };
+        if self.version.as_deref() == Some(id) {
+            let next = if i > 0 { i - 1 } else { 1 };
+            let Some(other) = self.versions.get(next).map(|v| v.id.clone()) else {
+                return false;
+            };
+            self.switch_version(&other);
+        }
+        self.versions.remove(i);
+        if self.versions.len() < 2 {
+            self.versions.clear();
+            self.version = None;
+        }
+        true
+    }
+
+    /// Renames version `id`. False if there is no such version.
+    pub fn rename_version(&mut self, id: &str, name: &str) -> bool {
+        match self.versions.iter_mut().find(|v| v.id == id) {
+            Some(v) => {
+                v.name = name.to_string();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Changes every frame position the stored versions hold with `f`
+    /// (to read them at another sample rate).
+    pub fn scale_stored_versions(&mut self, f: impl Fn(i64) -> i64) {
+        for b in self.versions.iter_mut().filter_map(|v| v.body.as_mut()) {
+            for c in &mut b.clips {
+                c.start = f(c.start).max(0);
+                c.offset = f(c.offset).max(0);
+                c.len = f(c.len).max(0);
+                c.fade_in.len = f(c.fade_in.len).max(0);
+                c.fade_out.len = f(c.fade_out.len).max(0);
+                for p in &mut c.envelope {
+                    p.at = f(p.at).max(0);
+                }
+                let frames = c.tempo.is_none();
+                for m in &mut c.markers {
+                    m.frame = f(m.frame);
+                    if frames {
+                        m.at = f(m.at);
+                    }
+                }
+            }
+            for p in b.automation.iter_mut().flat_map(|l| &mut l.points) {
+                p.at = f(p.at).max(0);
+            }
+            for p in b.comps.iter_mut().flat_map(|c| &mut c.parts) {
+                p.start = f(p.start);
+                p.end = f(p.end);
+            }
         }
     }
 

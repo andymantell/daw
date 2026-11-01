@@ -112,6 +112,14 @@ assistant finds them for itself. In outline:
   (fade shapes and the volume line), `edit_groups`, `edit_snapshot`, and
   `set_track_input` (arm, monitor, input and MIDI out, which belong to
   this computer, not the project).
+- **Notes and patterns:** `get_note_clip` (notes with their chance and
+  groups, expression, controller lanes, the clip's key), `edit_notes`
+  (add, change, remove, group), `edit_note_lanes` (controller lanes and
+  per-note expression), `duplicate_clip` (linked or not), `note_tool`
+  (quantise, humanise, legato, fit to scale, apply or make a groove,
+  each with its settings), `list_grooves`, `get_patterns` and
+  `edit_pattern` (the step sequencer: patterns, lanes and steps).
+  `edit_clip` moves, resizes, mutes and keys note clips too.
 - **Files:** `save_project`, `open_project`, `new_project`, `export_mix`,
   `export_sections`, `export_as_project`, `export_stem_package`,
   `import_from_project`, `export_project_file`, `import_project_file`.

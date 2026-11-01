@@ -242,6 +242,7 @@ impl App {
             midi_maps: self.midi_maps.clone(),
             patterns: self.patterns.clone(),
             videos: self.video.clips.iter().map(|c| c.value()).collect(),
+            arrangement: self.arrangement.clone(),
         }
     }
 
@@ -448,6 +449,7 @@ impl App {
         self.notes = p.notes.clone();
         self.tabs = p.tabs.clone();
         self.assignments = p.assignments.clone();
+        self.arrangement = p.arrangement.clone();
         self.comments = p.comments.clone();
         self.edit_groups = p.edit_groups.clone();
         self.groups = p.control_groups.clone();

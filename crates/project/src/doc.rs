@@ -359,6 +359,10 @@ impl ProjectDoc {
             w.put(&song, "tc_offset", p.timecode.offset);
             w.put(&song, "tc_shown", p.timecode.shown);
         }
+        if !p.arrangement.is_empty() || song.get("arrangement").is_some() {
+            let ids: Vec<LoroValue> = p.arrangement.iter().map(|s| s.as_str().into()).collect();
+            w.put(&song, "arrangement", LoroValue::List(ids.into()));
+        }
         if p.scale.is_some() || song.get("scale").is_some() {
             w.put(
                 &song,
@@ -641,6 +645,14 @@ impl ProjectDoc {
             tc.offset = int(s, "tc_offset").unwrap_or(tc.offset);
             tc.shown = boolean(s, "tc_shown").unwrap_or(tc.shown);
             p.scale = string(s, "scale").and_then(|t| Scale::from_text(&t));
+            if let Some(LoroValue::List(l)) = s.get("arrangement") {
+                p.arrangement = (l.iter())
+                    .filter_map(|v| match v {
+                        LoroValue::String(s) => Some(s.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+            }
         }
         if let Some(LoroValue::Map(gs)) = root.get("grooves") {
             for (id, g) in gs.iter() {
@@ -2348,6 +2360,19 @@ mod tests {
         assert_eq!(back.tracks[1].effects[0].sidechain, None);
         assert!(back.tracks[1].effects[1].outputs.is_empty());
         assert!(back.control_groups.is_empty());
+    }
+
+    #[test]
+    fn the_order_sections_play_in_is_kept() {
+        let mut doc = ProjectDoc::new(1);
+        doc.set(&Project::default());
+        let mut p = doc.get();
+        p.arrangement = vec!["a".into(), "b".into(), "a".into()];
+        doc.set(&p);
+        assert_eq!(doc.get().arrangement, p.arrangement);
+        p.arrangement.clear();
+        doc.set(&p);
+        assert!(doc.get().arrangement.is_empty());
     }
 
     #[test]

@@ -59,6 +59,9 @@ pub struct Project {
     /// Video clips, shown above the tracks, in the order added. Their
     /// sound is an ordinary audio clip on a track of its own.
     pub videos: Vec<VideoClip>,
+    /// The order the sections play in (Phase 4, A4), by their markers'
+    /// ids, repeats allowed; empty for the song as it lies.
+    pub arrangement: Vec<String>,
 }
 
 impl Default for Project {
@@ -88,6 +91,7 @@ impl Default for Project {
             midi_maps: Vec::new(),
             patterns: Vec::new(),
             videos: Vec::new(),
+            arrangement: Vec::new(),
         }
     }
 }

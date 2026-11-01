@@ -519,6 +519,10 @@ fn keys_are_changed_in_the_key_commands_window() {
         .type_text("o on or");
     h.run();
     assert!(h.query_by_label("Add a key for Save").is_none());
+    // More commands match than fit: bring it into view first.
+    h.get_by_label("Add a key for Loop on or off")
+        .scroll_to_me();
+    h.run();
     h.get_by_label("Add a key for Loop on or off").click();
     h.run();
     assert!(h.state().commands.editor.capturing.is_some());

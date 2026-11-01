@@ -238,6 +238,19 @@ pub fn differences(before: &Project, after: &Project) -> Vec<Difference> {
         say("Markers", format!("Removed “{}” (bar {})", m.name, m.bar));
     }
 
+    if before.arrangement != after.arrangement {
+        let names: Vec<&str> = (after.arrangement.iter())
+            .filter_map(|id| after.markers.iter().find(|m| &m.id == id))
+            .map(|m| m.name.as_str())
+            .collect();
+        let text = if names.is_empty() {
+            "Cleared the order the sections play in".into()
+        } else {
+            format!("Sections play in the order {}", names.join(", "))
+        };
+        say("Markers", text);
+    }
+
     // Hit points, in seconds as they are placed in time.
     let was: HashMap<&str, _> = (before.hit_points.iter())
         .map(|h| (h.id.as_str(), h))

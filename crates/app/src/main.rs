@@ -365,6 +365,10 @@ struct App {
     hit_points: Vec<daw_project::HitPoint>,
     hits_ui: hitpoints::HitPointsWindow,
     time_ui: sections::TimeWindow,
+    sections_ui: sections::SectionsWindow,
+    /// The order the song's sections play in, by marker id.
+    arrangement: Vec<String>,
+    arranging: Option<sections::Arranging>,
     /// The song's key and scale, its groove templates and its MIDI
     /// learn ties, as in the project, and the note tools' settings.
     scale: Option<daw_project::Scale>,
@@ -516,6 +520,9 @@ impl App {
             notation: notation::Lanes::default(),
             hits_ui: hitpoints::HitPointsWindow::default(),
             time_ui: sections::TimeWindow::default(),
+            sections_ui: sections::SectionsWindow::default(),
+            arrangement: Vec::new(),
+            arranging: None,
             timeline: timeline::Timeline::default(),
             perf: perf::Perf::default(),
             notes: String::new(),
@@ -2433,6 +2440,20 @@ impl eframe::App for App {
                         app.menu_item(ui, c);
                     }
                     app.menu_gap();
+                    for c in [
+                        Cmd::Sections,
+                        Cmd::LoopSection,
+                        Cmd::DuplicateSection,
+                        Cmd::DeleteSection,
+                        Cmd::SectionEarlier,
+                        Cmd::SectionLater,
+                        Cmd::AddToPlayOrder,
+                        Cmd::WriteOrder,
+                        Cmd::ClearPlayOrder,
+                    ] {
+                        app.menu_item(ui, c);
+                    }
+                    app.menu_gap();
                     for c in [Cmd::HitPoint, Cmd::HitPoints, Cmd::TimecodeFromFilm] {
                         app.menu_item(ui, c);
                     }
@@ -2507,6 +2528,7 @@ impl eframe::App for App {
                         Cmd::Metronome,
                         Cmd::CountIn,
                         Cmd::KeepNotes,
+                        Cmd::PlayOrder,
                     ] {
                         app.menu_item(ui, c);
                     }
@@ -2794,6 +2816,8 @@ impl eframe::App for App {
         self.midi_learn_window(&ctx);
         self.groups_window(&ctx);
         self.time_window(&ctx);
+        self.sections_window(&ctx);
+        self.arrangement_tick();
         self.timing_window(&ctx);
         self.remote_tick(&ctx);
         self.agent_tick(&ctx);

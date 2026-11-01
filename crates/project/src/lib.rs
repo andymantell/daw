@@ -20,6 +20,7 @@ pub mod noteops;
 mod pattern;
 mod presets;
 mod scale;
+mod sections;
 mod snapshots;
 mod templates;
 mod timeshift;
@@ -45,6 +46,7 @@ pub use pattern::{
 };
 pub use presets::{Dropped, MAX_TAG, MAX_TAGS, PRESET_EXTENSION, Preset, PresetKind, parse_tags};
 pub use scale::{ROOTS, Scale, ScaleKind};
+pub use sections::{Clock, Section, bars_between, flatten, paste_bars, piece, sections};
 pub use snapshots::{MAX_SNAPSHOT_NAME, Snapshot};
 pub use templates::{
     TEMPLATE_EXTENSION, Template, built_in_templates, template_from_bytes, template_to_bytes,

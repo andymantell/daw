@@ -50,6 +50,10 @@ pub enum Command {
     Seek(Frames),
     /// Loops `[start, end)` while playing; `None` turns looping off.
     SetLoop(Option<(Frames, Frames)>),
+    /// The loop to go on to when play next reaches the end of the one
+    /// playing, instead of going round it again: how song sections play
+    /// in any order. `None` goes round as usual.
+    QueueLoop(Option<(Frames, Frames)>),
     /// A whole new graph. Ownership moves through the queue, so the audio
     /// thread only swaps a pointer.
     SetGraph(Box<Graph>),
@@ -488,6 +492,9 @@ pub struct Engine {
     playing: bool,
     pos: i64,
     looping: Option<(i64, i64)>,
+    /// Where play goes at the loop's end instead of its start, which
+    /// then becomes the loop (see [`Command::QueueLoop`]).
+    next_loop: Option<(i64, i64)>,
     metronome: Metronome,
     voice: Option<Voice>,
     /// During a count-in: where playback starts. `pos` runs up to it.
@@ -622,6 +629,7 @@ pub fn new(max_block: usize) -> (Controller, Engine) {
             playing: false,
             pos: 0,
             looping: None,
+            next_loop: None,
             metronome: Metronome::default(),
             voice: None,
             count_in_to: None,
@@ -724,7 +732,11 @@ impl Engine {
                 }
                 Command::SetLoop(l) => {
                     self.looping = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
+                    self.next_loop = None;
                     self.stretch_reset = true;
+                }
+                Command::QueueLoop(l) => {
+                    self.next_loop = l.filter(|(a, b)| b > a).map(|(a, b)| (a.0, b.0));
                 }
                 Command::SetGraph(mut g) => {
                     if let Some(old) = &mut self.graph {
@@ -947,6 +959,11 @@ impl Engine {
                 && self.pos == end
             {
                 self.pos = start;
+                if let Some(next) = self.next_loop.take() {
+                    self.looping = Some(next);
+                    self.pos = next.0;
+                    self.stretch_reset = true;
+                }
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1301,6 +1318,12 @@ impl Engine {
             {
                 // The stretchers carry on round the loop by themselves.
                 self.posf = start as f64 + (self.posf - end as f64);
+                if let Some(next) = self.next_loop.take() {
+                    self.posf += (next.0 - start) as f64;
+                    self.u = self.posf;
+                    self.looping = Some(next);
+                    self.stretch_reset = true;
+                }
                 self.status.loops.fetch_add(1, Ordering::Relaxed);
                 self.slow_at = None;
             }

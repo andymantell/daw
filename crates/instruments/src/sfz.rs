@@ -1381,6 +1381,11 @@ mod tests {
         }
     }
 
+    /// A path with Windows' separators as `/`, to compare on any system.
+    fn slashed(p: &str) -> String {
+        p.replace('\\', "/")
+    }
+
     #[test]
     fn headers_pass_their_settings_down_and_includes_and_defines_are_followed() {
         let text = r#"
@@ -1405,7 +1410,7 @@ mod tests {
         assert!(sfz.problems.is_empty(), "{:?}", sfz.problems);
         assert_eq!(sfz.regions.len(), 4);
         let r = &sfz.regions;
-        assert_eq!(r[0].sample, "/lib/samples/kick soft 1.wav");
+        assert_eq!(slashed(&r[0].sample), "/lib/samples/kick soft 1.wav");
         assert_eq!(r[0].keys, Some((36, 36)));
         assert_eq!(r[0].keycenter, 36);
         assert_eq!(r[0].vel, (1, 64));
@@ -1413,7 +1418,7 @@ mod tests {
         assert_eq!(r[0].eg.release, 0.2);
         assert_eq!((r[0].seq_length, r[0].seq_position), (2, 1));
         assert_eq!(r[1].seq_position, 2);
-        assert_eq!(r[1].sample, "/lib/samples/kick soft 2.wav");
+        assert_eq!(slashed(&r[1].sample), "/lib/samples/kick soft 2.wav");
         assert_eq!(r[0].cc, [(70, 1.0, 127.0)]);
         assert_eq!(
             r[0].mods,
@@ -1427,7 +1432,7 @@ mod tests {
         assert_eq!((r[0].group, r[0].off_by), (1, Some(1)));
         // The second group starts afresh.
         assert_eq!(r[2].vel, (65, 127));
-        assert_eq!(r[2].sample, "/lib/samples/kick/hard.wav");
+        assert_eq!(slashed(&r[2].sample), "/lib/samples/kick/hard.wav");
         assert!(r[2].mods.is_empty());
         assert_eq!((r[2].pan, r[2].tune), (-20.0, -5.0));
         assert!((r[2].velocity_gain(100) - 0.5).abs() < 1e-6);

@@ -77,6 +77,7 @@ mod project;
 mod recording;
 mod remote;
 mod render;
+mod review;
 mod sections;
 mod share;
 mod simple_mode;
@@ -496,6 +497,7 @@ struct App {
     snapshot_ui: snapshots::Snapshots,
     /// The undo list and activity window.
     history: history::History,
+    review: review::Review,
     versions_ui: versions::Versions,
     /// The New from template and Save as template windows.
     template_ui: templates::Templates,
@@ -660,6 +662,7 @@ impl App {
             comment_ui: comments::Comments::default(),
             snapshot_ui: snapshots::Snapshots::default(),
             history: history::History::default(),
+            review: review::Review::default(),
             versions_ui: versions::Versions::default(),
             template_ui: templates::Templates::default(),
             preset_ui: presets::Presets::default(),
@@ -1552,8 +1555,10 @@ impl App {
     }
 
     /// Whether this user may change the song, not only comment on it.
+    /// While suggesting edits, anyone may: they go to the suggestion.
     fn may_edit_song(&self) -> bool {
-        self.proj.doc.my_role() != Some(daw_project::Role::Commenter)
+        self.proj.suggesting.is_some()
+            || self.proj.doc.my_role() != Some(daw_project::Role::Commenter)
     }
 
     /// Who this user is, for the comments they write: this computer's id
@@ -2812,6 +2817,12 @@ impl eframe::App for App {
                     app.menu_item(ui, Cmd::History);
                     app.menu_item(ui, Cmd::Activity);
                     app.menu_gap();
+                    match app.suggesting() {
+                        None => app.menu_item(ui, Cmd::SuggestEdits),
+                        Some(_) => app.menu_item(ui, Cmd::StopSuggesting),
+                    }
+                    app.menu_item(ui, Cmd::SuggestedEdits);
+                    app.menu_gap();
                     app.menu_item(ui, Cmd::AddAudioTrack);
                     app.menu_item(ui, Cmd::AddInstrumentTrack);
                     app.menu_item(ui, Cmd::AddBus);
@@ -3271,6 +3282,7 @@ impl eframe::App for App {
         self.people_windows(&ctx);
         self.snapshots_window(&ctx);
         self.history_window(&ctx);
+        self.review_window(&ctx);
         self.versions_window(&ctx);
         self.tempo_window(&ctx);
         self.hit_points_window(&ctx);

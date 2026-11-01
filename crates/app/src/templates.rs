@@ -296,7 +296,7 @@ impl App {
         };
         self.sync_doc(ctx, true);
         self.write_plugin_states();
-        let bytes = daw_project::template_to_bytes(&self.proj.doc.get());
+        let bytes = daw_project::template_to_bytes(&self.shown_project());
         std::fs::create_dir_all(&dir)
             .and_then(|()| {
                 // Written aside first, so a failed write leaves any old

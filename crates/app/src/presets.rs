@@ -391,7 +391,7 @@ impl App {
         };
         self.sync_doc(ctx, true);
         self.write_plugin_states();
-        let p = self.proj.doc.get();
+        let p = self.shown_project();
         let key = self
             .tracks
             .get(track)

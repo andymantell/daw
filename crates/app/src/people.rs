@@ -134,7 +134,7 @@ impl App {
         self.sync_doc(ctx, true);
         match self.merge_or_ask(&bytes) {
             Ok(true) => {
-                self.apply(self.proj.doc.get());
+                self.apply(self.shown_project());
                 self.proj.dirty = true;
             }
             Ok(false) => {}
@@ -164,7 +164,7 @@ impl App {
             }
         }
         if merged {
-            self.apply(self.proj.doc.get());
+            self.apply(self.shown_project());
         }
         self.proj.dirty = true;
     }

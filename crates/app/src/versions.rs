@@ -109,7 +109,7 @@ impl App {
         // Plugins as they are now, so the version left keeps their
         // settings.
         self.write_plugin_states();
-        let before = self.proj.doc.get();
+        let before = self.shown_project();
         let mut p = before.clone();
         let Some(t) = p.tracks.iter_mut().find(|t| t.id == key) else {
             return false;
@@ -117,7 +117,7 @@ impl App {
         if !f(t) {
             return false;
         }
-        self.proj.doc.set(&p);
+        self.set_song(&p, None);
         self.reload_changed_fx(&before, &p);
         self.apply(p);
         self.proj.dirty = true;

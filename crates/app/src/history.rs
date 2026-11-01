@@ -260,7 +260,7 @@ impl App {
             return;
         }
         self.history.find(&self.proj.doc);
-        let (undo, redo) = (self.proj.doc.undo_list(), self.proj.doc.redo_list());
+        let (undo, redo) = (self.proj.song().undo_list(), self.proj.song().redo_list());
         match self.history.window(ctx, &undo, &redo, now_ms()) {
             Some(Action::Undo(n)) => {
                 self.undo_steps(ctx, n);

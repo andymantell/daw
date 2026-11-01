@@ -77,7 +77,7 @@ impl App {
         if self.proj.folder.is_none() {
             return;
         }
-        let doc = self.proj.doc.get();
+        let doc = self.shown_project();
         let mut dropped = Vec::new();
         for i in 0..self.tracks.len() {
             let key = self.tracks[i].key.clone();
@@ -256,7 +256,8 @@ impl App {
     /// kept out of undo.
     fn write_frozen(&mut self) {
         let p = self.project();
-        self.proj.doc.set_quietly(&p);
+        let song = self.write_outside_suggestion(&p);
+        self.proj.song_mut().set_quietly(&song);
         self.proj.committed = p;
         self.proj.dirty = true;
     }

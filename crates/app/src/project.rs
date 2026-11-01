@@ -376,6 +376,7 @@ impl App {
         }
         self.proj.committed = p;
         self.proj.dirty = true;
+        self.agent.revision += 1;
     }
 
     pub(crate) fn can_undo(&self) -> bool {
@@ -748,6 +749,7 @@ impl App {
         self.retime = true;
         self.rebuild();
         self.send_loop();
+        self.agent.revision += 1;
     }
 
     /// Saves into the project folder, moving takes and copying imported

@@ -21,6 +21,7 @@
 //! that way to open each plugin safely in a separate process.
 
 mod agent;
+mod agent_edit;
 mod assistants;
 mod audio_setup;
 mod automation;
@@ -2698,7 +2699,10 @@ impl eframe::App for App {
                     app.menu_item(ui, Cmd::History);
                     app.menu_item(ui, Cmd::Activity);
                     app.menu_gap();
+                    app.menu_item(ui, Cmd::AddAudioTrack);
                     app.menu_item(ui, Cmd::AddInstrumentTrack);
+                    app.menu_item(ui, Cmd::AddBus);
+                    app.menu_item(ui, Cmd::AddFolder);
                     app.menu_gap();
                     for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
                         app.menu_item(ui, c);

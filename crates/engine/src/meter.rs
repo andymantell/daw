@@ -269,7 +269,7 @@ fn mean(v: &[f64]) -> f64 {
 /// The 48-tap, 4-phase interpolating filter of BS.1770 Annex 2, one row
 /// per phase, digit for digit as the standard prints them.
 #[allow(clippy::excessive_precision)]
-const TRUE_PEAK_FIR: [[f32; 12]; 4] = [
+pub const TRUE_PEAK_FIR: [[f32; 12]; 4] = [
     [
         0.0017089843750,
         0.0109863281250,

@@ -511,6 +511,52 @@ mod tests {
         assert!(found["total"].as_u64().unwrap() >= 1, "{found}");
     }
 
+    /// The lo-fi effects (a worn record, a worn tape, a bit crusher) are
+    /// added by id, and every one of their settings is listed and set by
+    /// value.
+    #[test]
+    fn lofi_effects_are_reached_by_value() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "audio"})).unwrap(),
+            "track",
+        );
+        for kind in [
+            daw_effects::Kind::Vinyl,
+            daw_effects::Kind::Tape,
+            daw_effects::Kind::BitCrusher,
+        ] {
+            let kinds = d.call("list_effect_kinds", json!({})).unwrap();
+            assert!(kinds.to_string().contains(kind.id()), "{kinds}");
+            let e = add(&mut d, json!({"track": t, "effect": kind.id()}));
+            let list = d
+                .call("list_parameters", json!({"track": t, "effect": e}))
+                .unwrap();
+            let params = list[0]["params"].as_array().unwrap().clone();
+            assert_eq!(params.len(), kind.params().len(), "{list}");
+            for (p, want) in params.iter().zip(kind.params()) {
+                let name = p["param"].as_str().unwrap();
+                assert!(name.ends_with(want.key), "{name} {}", want.key);
+                d.call(
+                    "set_parameter",
+                    json!({"track": t, "param": name, "value": want.max}),
+                )
+                .unwrap();
+            }
+            let list = d
+                .call("list_parameters", json!({"track": t, "effect": e}))
+                .unwrap();
+            for (p, want) in list[0]["params"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(kind.params())
+            {
+                assert_eq!(p["value"].as_f64().unwrap(), want.max, "{p}");
+            }
+        }
+    }
+
     /// A driver that has the test plugins, with presets kept in `name`'s
     /// own folder.
     fn with_plugins(name: &str) -> Driver {

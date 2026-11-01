@@ -2766,7 +2766,7 @@ impl Graph {
                         fx.set_param(param, v as f64);
                     }
                 }
-                Target::Pan | Target::Send(_) => {}
+                Target::Pan | Target::Send(_) | Target::Instrument(_) => {}
             }
         }
         gain

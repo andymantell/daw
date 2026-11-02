@@ -4746,6 +4746,7 @@ impl Timeline {
                 {
                     let audio = lane.kind == daw_project::TrackKind::Audio;
                     if audio {
+                        // ai: paste_clips.track
                         if ui
                             .add_enabled(view.can_paste, egui::Button::new("Paste here"))
                             .clicked()
@@ -4756,6 +4757,7 @@ impl Timeline {
                         if ui
                             .add_enabled(
                                 view.can_paste,
+                                // ai: paste_clips.rendered
                                 egui::Button::new("Paste here as rendered audio"),
                             )
                             .on_hover_text(

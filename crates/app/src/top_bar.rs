@@ -1086,6 +1086,13 @@ mod tests {
         assert!(d.app().ctl.status().playing(), "Space played");
         assert_eq!(open(&mut d), json!("speed"), "and the panel stayed open");
         d.h.key_press(egui::Key::Space);
+        for _ in 0..50 {
+            d.h.step();
+            if !d.app().ctl.status().playing() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         // Escape closes it, as clicking elsewhere does.
         d.h.key_press(egui::Key::Escape);
         d.h.run();

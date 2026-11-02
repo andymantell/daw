@@ -117,7 +117,11 @@ pub(crate) const TOOLS: &[Tool] = &[
                       inspector says whether the inspector pane is open (the inspector \
                       command shows or hides it), the track it shows and the clip: the \
                       track chosen with select_track or by clicking its header, or the \
-                      track of the clip or mixer strip selected last.",
+                      track of the clip or mixer strip selected last. \
+                      top_bar is the top bar's option panel showing (record, loop, \
+                      metronome, time-signature, key, speed or status; null when none); \
+                      record-options, loop-options, metronome-options and speed-options \
+                      open one for the person to see.",
         access: Access::Read,
         schema: no_args,
     },
@@ -1676,6 +1680,7 @@ impl App {
             "loop_bars": [self.loop_bars.0, self.loop_bars.1],
             "metronome": self.metronome.enabled,
             "count_in": self.count_in,
+            "record_options": self.record_options_value(),
             "speed_pct": self.speed_pct,
             "semitones": self.semitones,
             "cents": self.cents,
@@ -1695,6 +1700,7 @@ impl App {
             "mixer_narrow": self.desk.narrow,
             "settings": self.settings_section().map(|s| s.id()),
             "inspector": self.inspector_value(),
+            "top_bar": self.top_bar_open(),
         })
     }
 

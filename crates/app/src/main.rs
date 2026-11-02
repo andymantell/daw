@@ -103,6 +103,7 @@ mod tempo;
 mod theme;
 mod timeline;
 mod timing;
+mod top_bar;
 mod trainer;
 mod transpose;
 mod tuner;
@@ -116,7 +117,6 @@ mod workspace;
 #[cfg(test)]
 mod a11y;
 
-use crate::icons::{Icon, IconButton};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -477,6 +477,7 @@ struct App {
     semitones: i32,
     cents: i32,
     trainer: trainer::Trainer,
+    top: top_bar::TopBar,
     /// A track's tuning being measured, and the last result.
     detecting: Option<(String, mpsc::Receiver<Option<f32>>)>,
     detected: Option<(String, Option<f32>)>,
@@ -661,6 +662,7 @@ impl App {
             semitones: 0,
             cents: 0,
             trainer: trainer::Trainer::default(),
+            top: top_bar::TopBar::default(),
             detecting: None,
             detected: None,
             markers: Vec::new(),
@@ -1888,334 +1890,10 @@ impl App {
         }
     }
 
-    fn transport(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let playing = self.ctl.status().playing();
-            // As wide playing or not, so the controls after it stay put.
-            let (icon, word) = if playing {
-                (Icon::Stop, "Stop")
-            } else {
-                (Icon::Play, "Play")
-            };
-            // ai: play
-            let play = IconButton::labelled(icon, word).min_size(egui::vec2(64.0, 0.0));
-            if ui
-                // ai: play
-                .add(play)
-                .on_hover_text(self.commands.hover(Cmd::PlayStop))
-                .clicked()
-            {
-                self.toggle_play();
-            }
-            if ui
-                // ai: to-start
-                .add(
-                    IconButton::new(Icon::ToStart, "Back to the start")
-                        .tip(self.commands.hover(Cmd::ToStart)),
-                )
-                .clicked()
-            {
-                self.send(Command::Seek(Frames(0)));
-            }
-            // The dot is always the theme's record colour; the word turns
-            // that colour too while recording.
-            let record = crate::theme::look(ui.ctx()).c().record;
-            let rec = RichText::new("Record").color(if self.recording {
-                record
-            } else {
-                ui.visuals().text_color()
-            });
-            if ui
-                // ai: record
-                .add(
-                    IconButton::labelled(Icon::Record, rec)
-                        .selected(self.recording)
-                        .frame(self.recording)
-                        .colour(record),
-                )
-                .on_hover_text(self.commands.hover(Cmd::Record))
-                .clicked()
-            {
-                self.recording = !self.recording;
-                self.send(Command::SetRecording(self.recording));
-            }
-            let map = self.tempo_map();
-            let pos = self.ctl.status().position();
-            let bb = map.bar_beat(map.ticks_at(pos));
-            let label = if self.ctl.status().counting_in() {
-                "count-in".to_string()
-            } else if let Some(c) = self.shown_clock() {
-                format!(
-                    "{bb}   {}   {:.2} s",
-                    c.timecode(pos.0, self.rate),
-                    map.seconds(pos)
-                )
-            } else {
-                format!("{bb}   {:.2} s", map.seconds(pos))
-            };
-            let font = theme::look(ui.ctx()).numerals_font();
-            let clock = ui.label(RichText::new(label).font(font));
-            // Room for the clock as it counts, so the controls after it
-            // stay put.
-            let room = if self.shown_clock().is_some() {
-                300.0
-            } else {
-                170.0
-            };
-            ui.add_space((room - clock.rect.width()).max(0.0));
-            ui.separator();
-
-            ui.label("Tempo");
-            let t = ui
-                .add(
-                    // ai: set_tempo
-                    egui::DragValue::new(&mut self.tempo_bpm)
-                        .range(20.0..=300.0)
-                        .speed(0.2)
-                        .suffix(" BPM"),
-                )
-                .accessible_name("Tempo");
-            ui.label("Time signature");
-            let b = ui
-                // ai: set_tempo
-                .add(egui::DragValue::new(&mut self.beats_per_bar).range(1..=12))
-                .accessible_name("Beats per bar");
-            ui.label("/");
-            let u = tempo::unit_picker(ui, &mut self.time.beat_unit);
-            if t.changed() || b.changed() || u {
-                self.time_changed();
-            }
-            if ui
-                // ai: view
-                .button("Changes…")
-                .on_hover_text("Tempo and time signature changes later in the song")
-                .clicked()
-            {
-                self.tempo_ui.open = !self.tempo_ui.open;
-            }
-        });
-        ui.horizontal(|ui| {
-            let mut m = self.metronome;
-            // ai: metronome
-            ui.checkbox(&mut m.enabled, "Metronome")
-                .on_hover_text(self.commands.hover(Cmd::Metronome));
-            egui::ComboBox::from_id_salt("subdivision")
-                .width(90.0)
-                .selected_text(match m.subdivision {
-                    1 => "Beats",
-                    2 => "Eighths",
-                    3 => "Triplets",
-                    _ => "Sixteenths",
-                })
-                .show_ui(ui, |ui| {
-                    for (n, label) in [
-                        (1, "Beats"),
-                        (2, "Eighths"),
-                        (3, "Triplets"),
-                        (4, "Sixteenths"),
-                    ] {
-                        // ai: set_practice
-                        ui.selectable_value(&mut m.subdivision, n, label);
-                    }
-                })
-                .response
-                .accessible_name("Clicks per beat");
-            ui.label("Click level");
-            let first = spoken::start(ui);
-            // ai: set_practice
-            ui.add(egui::Slider::new(&mut m.level_db, -40.0..=0.0).suffix(" dB"))
-                .accessible_name("Click level");
-            spoken::level(ui, first, m.level_db as f64);
-            if m != self.metronome {
-                self.metronome = m;
-                self.send(Command::SetMetronome(m));
-            }
-            // ai: count-in
-            ui.checkbox(&mut self.count_in, "Count-in")
-                .on_hover_text(self.commands.hover(Cmd::CountIn));
-            ui.separator();
-
-            let mut changed = ui
-                // ai: loop
-                .checkbox(&mut self.looping, "Loop bars")
-                .on_hover_text(self.commands.hover(Cmd::Loop))
-                .changed();
-            changed |= ui
-                // ai: set_loop
-                .add(egui::DragValue::new(&mut self.loop_bars.0).range(1..=999))
-                .accessible_name("Loop from bar")
-                .changed();
-            ui.label("to");
-            changed |= ui
-                // ai: set_loop
-                .add(egui::DragValue::new(&mut self.loop_bars.1).range(2..=1000))
-                .accessible_name("Loop to bar")
-                .changed();
-            if self.loop_bars.1 <= self.loop_bars.0 {
-                self.loop_bars.1 = self.loop_bars.0 + 1;
-            }
-            if changed {
-                self.send_loop();
-            }
-            ui.separator();
-            self.trainer.controls(ui);
-        });
-        ui.horizontal(|ui| self.practice_controls(ui));
-        ui.horizontal(|ui| self.recording_controls(ui));
-    }
-
-    fn practice(&self) -> Command {
+    pub(crate) fn practice(&self) -> Command {
         Command::SetPractice {
             speed: self.speed_pct / 100.0,
             semitones: self.semitones as f64 + self.cents as f64 / 100.0,
-        }
-    }
-
-    /// Speed, transpose and tuning presets.
-    fn practice_controls(&mut self, ui: &mut egui::Ui) {
-        let before = (self.speed_pct, self.semitones, self.cents);
-        ui.label("Speed");
-        ui.add(
-            // ai: set_practice
-            egui::DragValue::new(&mut self.speed_pct)
-                .range(50.0..=150.0)
-                .speed(0.5)
-                .fixed_decimals(0)
-                .suffix(" %"),
-        )
-        .accessible_name("Speed")
-        .on_hover_text("Slow down or speed up without changing pitch");
-        for pct in [50.0, 75.0, 100.0] {
-            if ui
-                // ai: set_practice
-                .selectable_label(self.speed_pct == pct, format!("{pct:.0}%"))
-                .clicked()
-            {
-                self.speed_pct = pct;
-            }
-        }
-        ui.separator();
-        ui.label("Transpose");
-        ui.add(
-            // ai: set_practice
-            egui::DragValue::new(&mut self.semitones)
-                .range(-12..=12)
-                .suffix(" st"),
-        )
-        .accessible_name("Transpose, semitones")
-        .on_hover_text("Semitones, without changing speed");
-        ui.add(
-            // ai: set_practice
-            egui::DragValue::new(&mut self.cents)
-                .range(-50..=50)
-                .suffix(" ¢"),
-        )
-        .accessible_name("Fine pitch, cents")
-        .on_hover_text("Fine pitch, in cents");
-        egui::ComboBox::from_id_salt("tuning-preset")
-            .width(200.0)
-            .selected_text("Tuning presets")
-            .show_ui(ui, |ui| {
-                for (label, st) in [
-                    ("As recorded", 0),
-                    ("Half step down → standard (+1)", 1),
-                    ("Whole step down → standard (+2)", 2),
-                    ("Standard → half step down (−1)", -1),
-                    ("Standard → whole step down (−2)", -2),
-                ] {
-                    // ai: set_practice
-                    if ui.selectable_label(false, label).clicked() {
-                        self.semitones = st;
-                        self.cents = 0;
-                    }
-                }
-                ui.separator();
-                for t in &self.tracks {
-                    // The newest clip that plays.
-                    let source = t.clips.iter().rev().find(|c| !c.muted);
-                    let Some(src) = source.map(|c| c.source.clone()) else {
-                        continue;
-                    };
-                    if ui
-                        // ai: set_practice
-                        .selectable_label(false, format!("Detect tuning of {}", t.name))
-                        .on_hover_text(
-                            "Measures how far the recording is from concert pitch \
-                             (A = the tuner's reference) and suggests a fine-pitch shift. \
-                             Whole-step tunings like E♭ read as in tune.",
-                        )
-                        .clicked()
-                    {
-                        let (tx, rx) = mpsc::channel();
-                        let a4 = self.tuner.a4;
-                        std::thread::spawn(move || {
-                            // The first minute and a half is plenty.
-                            let r = src
-                                .read_mono(90 * src.rate as usize)
-                                .ok()
-                                .and_then(|x| daw_engine::tuner::tuning_offset(&x, src.rate, a4));
-                            let _ = tx.send(r);
-                        });
-                        self.detecting = Some((t.name.clone(), rx));
-                        self.detected = None;
-                    }
-                }
-            })
-            .response
-            .accessible_name("Tuning presets");
-        if let Some((name, rx)) = &self.detecting
-            && let Ok(r) = rx.try_recv()
-        {
-            self.detected = Some((name.clone(), r));
-            self.detecting = None;
-        }
-        if self.detecting.is_some() {
-            ui.spinner();
-        }
-        if let Some((name, r)) = self.detected.clone() {
-            match r {
-                Some(c) if c.abs() >= 2.0 => {
-                    ui.label(format!("{name} is {c:+.0} ¢ off"));
-                    // ai: set_practice
-                    if ui.button(format!("Shift {:+.0} ¢", -c)).clicked() {
-                        self.cents = (-c).round() as i32;
-                        self.detected = None;
-                    }
-                }
-                Some(_) => {
-                    ui.label(format!("{name} is at concert pitch"));
-                }
-                None => {
-                    ui.label(format!("{name}: no clear pitch to measure"));
-                }
-            }
-            // ai: view
-            if ui
-                .add(IconButton::new(Icon::Close, "Dismiss").small())
-                .clicked()
-            {
-                self.detected = None;
-            }
-        }
-        if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
-            && ui
-                // ai: normal-speed
-                .button("Reset")
-                .on_hover_text(self.commands.hover(Cmd::NormalSpeed))
-                .clicked()
-        {
-            (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
-        }
-        let loops = self.ctl.status().loops();
-        if self.looping && self.ctl.status().playing() {
-            self.trainer.update(loops, &mut self.speed_pct);
-        }
-        if (self.speed_pct, self.semitones, self.cents) != before {
-            let c = self.practice();
-            self.send(c);
-        }
-        if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
-            ui.label(self.slowed_note());
         }
     }
 
@@ -2875,94 +2553,7 @@ impl eframe::App for App {
         // Controls with a lane show the lane's value while it is drawn.
         self.show_automation();
 
-        egui::Panel::top("menu").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                self.menu_bar(ui);
-                self.simple_badge(ui);
-                ui.separator();
-                match &self.audio {
-                    Audio::Running(r) => {
-                        ui.label(format!(
-                            "{} · {} Hz",
-                            self.profile.as_ref().map_or("", |p| &p.device),
-                            r.rate
-                        ));
-                        let load = self.perf.load();
-                        let text = format!("DSP {:.0}%", load * 100.0);
-                        let l = if load > 0.8 {
-                            ui.colored_label(ui.visuals().error_fg_color, text)
-                        } else {
-                            ui.label(RichText::new(text).weak())
-                        };
-                        if l.on_hover_text("Settings → Performance").clicked() {
-                            self.perf.open = true;
-                        }
-                    }
-                    Audio::Silent(..) | Audio::Stopped => {
-                        ui.colored_label(
-                            ui.visuals().error_fg_color,
-                            "No audio device: playing silently",
-                        );
-                    }
-                }
-                if let Some(s) = self.effects.scanning() {
-                    ui.spinner();
-                    ui.label(s);
-                }
-                if self.proj.loading() {
-                    ui.spinner();
-                    ui.label(match self.proj.progress.get() {
-                        (_, 0) => "Opening project…".to_string(),
-                        (done, total) => format!("Opening project: {done} of {total} files…"),
-                    });
-                }
-                if !self.imports.is_empty() {
-                    ui.spinner();
-                    ui.label(match self.imports.len() {
-                        1 => "Opening 1 file…".to_string(),
-                        n => format!("Opening {n} files…"),
-                    });
-                }
-                if self.renders.busy() > 0 {
-                    ui.spinner();
-                    let n = self.renders.busy();
-                    ui.label(format!(
-                        "Rendering{}… {:.0}%",
-                        if n > 1 {
-                            format!(" {n}")
-                        } else {
-                            String::new()
-                        },
-                        100.0 * self.renders.progress()
-                    ));
-                    if ui.small_button("Cancel").clicked() {
-                        self.renders.cancel();
-                    }
-                }
-                if self.processing.busy() > 0 {
-                    ui.spinner();
-                    ui.label(match self.processing.busy() {
-                        1 => "Processing 1 clip…".to_string(),
-                        n => format!("Processing {n} clips…"),
-                    });
-                }
-                let lost = self.ctl.status().rec_dropped();
-                if lost > 0 {
-                    ui.colored_label(
-                        ui.visuals().error_fg_color,
-                        format!("recording fell behind: {lost} frames lost"),
-                    );
-                }
-                let under = self.ctl.status().underruns();
-                if under > 0 {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!("disk too slow: {under} frames missed"),
-                    );
-                }
-            });
-        });
-        egui::Panel::top("transport").show(ui, |ui| self.transport(ui));
+        egui::Panel::top("top bar").show(ui, |ui| self.top_bar(ui));
         if let Some(m) = self.message.clone() {
             egui::Panel::bottom("message").show(ui, |ui| {
                 ui.horizontal(|ui| {

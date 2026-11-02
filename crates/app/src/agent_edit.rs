@@ -124,7 +124,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                       and wires it: the track it listens to, a plugin's extra outputs heard, \
                       and the file a reverb, cabinet or amp capture player uses. get_effects \
                       shows all of these. Only what is given changes; settings are set with \
-                      set_parameter.",
+                      set_parameter. A note effect's id (get_project lists them as \
+                      note_effects) moves it among the note effects, or bypasses it.",
         access: Access::Edit,
         schema: || {
             let mut props = json!({
@@ -187,7 +188,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "remove_effect",
         description: "Takes an effect off a track, with what is inside it if it is a \
-                      container.",
+                      container, or one of its note effects.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -614,9 +615,47 @@ impl App {
         ))
     }
 
+    /// For an effect id that is one of the track's note effects: bypass
+    /// it, move it in their list, or (`remove`) take it off.
+    fn note_effect_edit(
+        &mut self,
+        key: &str,
+        id: &str,
+        args: &Value,
+        remove: bool,
+    ) -> Option<Done> {
+        let t = self.tracks.iter().find(|t| t.key == key)?;
+        t.note_fx.iter().any(|f| f.id == id).then_some(())?;
+        let done = self.edit_model(|p| {
+            let i = track_at(p, key)?;
+            let fx = &mut p.tracks[i].note_fx;
+            let j = fx.iter().position(|f| f.id == id).expect("looked for");
+            if remove {
+                fx.remove(j);
+                return Ok(json!({"removed": [id]}));
+            }
+            if let Some(b) = args["bypass"].as_bool() {
+                fx[j].bypass = b;
+            }
+            if let Some(to) = args["index"].as_i64() {
+                move_to(fx, j, to);
+            }
+            Ok(json!({"effect": id}))
+        });
+        let what = if remove {
+            "Remove a note effect"
+        } else {
+            "Change a note effect"
+        };
+        Some(done.map(|v| (v, Some(what.into()))))
+    }
+
     fn edit_effect_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?.to_string();
         let id = text(args, "effect", "the effect's id")?.to_string();
+        if let Some(done) = self.note_effect_edit(&key, &id, args, false) {
+            return done;
+        }
         let ti = if key == daw_project::Master::KEY {
             None
         } else {
@@ -668,6 +707,9 @@ impl App {
     fn remove_effect_tool(&mut self, args: &Value) -> Done {
         let key = text(args, "track", "the track's id")?.to_string();
         let id = text(args, "effect", "the effect's id")?.to_string();
+        if let Some(done) = self.note_effect_edit(&key, &id, args, true) {
+            return done;
+        }
         self.edit_model(|p| {
             let fx = effects_at(p, &key)?;
             if !fx.iter().any(|e| e.id == id) {

@@ -685,12 +685,14 @@ pub(crate) fn controls(
                     out.changed = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // ai: remove_effect.effect
                     if ui
                         .add(IconButton::new(Icon::Close, "Remove").small())
                         .clicked()
                     {
                         remove = Some(i);
                     }
+                    // ai: edit_effect.index
                     if i + 1 < n
                         && ui
                             .add(IconButton::new(Icon::MoveDown, "Move down").small())
@@ -698,6 +700,7 @@ pub(crate) fn controls(
                     {
                         swap = Some(i);
                     }
+                    // ai: edit_effect.index
                     if i > 0
                         && ui
                             .add(IconButton::new(Icon::MoveUp, "Move up").small())
@@ -970,6 +973,41 @@ mod tests {
         let pitches: Vec<u64> = notes.iter().map(|n| n["pitch"].as_u64().unwrap()).collect();
         assert_eq!(pitches, [67, 64]);
         assert_eq!(p["tracks"][0]["note_effects"][0]["bypass"], true);
+    }
+
+    #[test]
+    fn an_assistant_moves_and_removes_one_note_effect() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.command("add-instrument-track");
+        d.command("add-arpeggiator");
+        d.command("add-chord-effect");
+        d.command("add-velocity-effect");
+        let p = d.project();
+        let track = p["tracks"][0]["id"].as_str().unwrap().to_string();
+        let kinds = |d: &mut crate::agent::driver::Driver| -> Vec<String> {
+            (d.project()["tracks"][0]["note_effects"].as_array().unwrap())
+                .iter()
+                .map(|f| f["kind"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(kinds(&mut d), ["arpeggiator", "chord", "velocity"]);
+        let chord = p["tracks"][0]["note_effects"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        d.call(
+            "edit_effect",
+            json!({"track": track, "effect": chord, "index": 0, "bypass": true}),
+        )
+        .unwrap();
+        assert_eq!(kinds(&mut d), ["chord", "arpeggiator", "velocity"]);
+        assert_eq!(d.project()["tracks"][0]["note_effects"][0]["bypass"], true);
+        d.call("remove_effect", json!({"track": track, "effect": chord}))
+            .unwrap();
+        assert_eq!(kinds(&mut d), ["arpeggiator", "velocity"]);
+        d.command("undo");
+        assert_eq!(kinds(&mut d).len(), 3, "one undo step");
     }
 
     mod app {

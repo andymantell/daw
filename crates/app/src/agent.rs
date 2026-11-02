@@ -330,6 +330,34 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "manage_preset",
+        description: "Deletes one of the user's presets, by name (those that come with the \
+                      app can't be), or writes a preset to a file, with its sound files, to \
+                      send.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "name": {"type": "string", "description": "As list_presets gives it."},
+                "delete": {"type": "boolean"},
+                "export_to": {"type": "string", "description": "The file's full path."}
+            }, "required": ["name"]})
+        },
+    },
+    Tool {
+        name: "save_template",
+        description: "Keeps the project open now as one of the user's templates, to start \
+                      new projects from (its tracks, effects, sections, tempo and notes; \
+                      not its audio or comments), replacing one of that name; or with \
+                      delete: true deletes the user's template of that name.",
+        access: Access::EditExport,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "name": {"type": "string"},
+                "delete": {"type": "boolean"}
+            }, "required": ["name"]})
+        },
+    },
+    Tool {
         name: "undo_steps",
         description: "Undoes several steps at once (undo), or redoes them (redo), as \
                       choosing a step on the undo list does. Each stays a step of its own.",
@@ -1157,6 +1185,41 @@ impl App {
                 let about = args["about"].as_str().unwrap_or("");
                 let (_, left_out) = self.save_preset(ctx, i, kind, name, &tags, about)?;
                 Ok((json!({"saved": name, "files_left_out": left_out}), None))
+            }
+            "manage_preset" => {
+                let name = args["name"].as_str().ok_or("Give the preset's name.")?;
+                let (list, _) = crate::presets::all_presets(self.preset_ui.dir.as_deref());
+                let e = (list.into_iter())
+                    .find(|e| e.preset.name == name)
+                    .ok_or_else(|| format!("There is no preset {name}."))?;
+                if let Some(dest) = args["export_to"].as_str() {
+                    self.export_preset(&e, std::path::Path::new(dest))?;
+                    return Ok((json!({"exported": dest}), None));
+                }
+                if args["delete"].as_bool() != Some(true) {
+                    return Err("Give export_to, or delete: true.".into());
+                }
+                self.delete_preset(&e)?;
+                Ok((json!({"deleted": name}), None))
+            }
+            "save_template" => {
+                let name = args["name"]
+                    .as_str()
+                    .ok_or("Give the template's name.")?
+                    .trim();
+                if args["delete"].as_bool() == Some(true) {
+                    let (list, _) =
+                        crate::templates::all_templates(self.template_ui.dir.as_deref());
+                    let (_, file) = (list.into_iter())
+                        .find(|(t, _)| t.name == name)
+                        .ok_or_else(|| format!("There is no template {name}."))?;
+                    let file = file.ok_or("Templates that come with the app can't be deleted.")?;
+                    std::fs::remove_file(file)
+                        .map_err(|e| format!("Couldn't delete the template: {e}"))?;
+                    return Ok((json!({"deleted": name}), None));
+                }
+                self.save_template(ctx, name)?;
+                Ok((json!({"saved": name}), None))
             }
             "undo_steps" => {
                 let undo = args["undo"].as_u64().unwrap_or(0) as usize;

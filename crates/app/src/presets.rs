@@ -905,6 +905,7 @@ impl App {
                         lib.list[i].preset.name
                     ));
                     ui.horizontal(|ui| {
+                        // ai: manage_preset.delete
                         if ui.button("Delete").clicked() {
                             delete = Some(i);
                         }
@@ -953,6 +954,7 @@ impl App {
                         .accessible_name("Track to put it on");
                 });
                 ui.horizontal(|ui| {
+                    // ai: manage_preset.export_to
                     if ui
                         .add_enabled(picked.is_some(), egui::Button::new("Export…"))
                         .on_hover_text("Write it to a file, with its sound files, to send")
@@ -961,6 +963,7 @@ impl App {
                         export = picked;
                     }
                     let mine = picked.is_some_and(|i| lib.list[i].file.is_some());
+                    // ai: manage_preset.delete
                     if ui.add_enabled(mine, egui::Button::new("Delete…")).clicked() {
                         lib.deleting = picked;
                     }
@@ -1548,6 +1551,22 @@ mod tests {
         d.app().undo(&ctx);
         assert_eq!(d.project()["tracks"].as_array().unwrap().len(), 0);
         assert!(d.call("add_preset", json!({"name": "No such"})).is_err());
+
+        // Written to a file to send, then deleted; one that comes with
+        // the app can be exported but not deleted.
+        let sent = dir.join("sent.dawpreset");
+        d.call("manage_preset", json!({"name": "Mine", "export_to": sent}))
+            .unwrap();
+        assert!(sent.is_file());
+        d.call("manage_preset", json!({"name": "Mine", "delete": true}))
+            .unwrap();
+        let list = d.call("list_presets", json!({})).unwrap();
+        assert!(list.as_array().unwrap().iter().all(|p| p["name"] != "Mine"));
+        assert!(
+            d.call("manage_preset", json!({"name": "Vocal", "delete": true}))
+                .is_err()
+        );
+        assert!(d.call("manage_preset", json!({"name": "Vocal"})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

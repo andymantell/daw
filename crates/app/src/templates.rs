@@ -189,6 +189,7 @@ impl App {
                         c.list[i].0.name
                     ));
                     ui.horizontal(|ui| {
+                        // ai: save_template.delete
                         if ui.button("Delete").clicked() {
                             delete = Some(i);
                         }
@@ -209,6 +210,7 @@ impl App {
                         keep = false;
                     }
                     let mine = c.list.get(c.picked).is_some_and(|(_, f)| f.is_some());
+                    // ai: save_template.delete
                     if mine && ui.button("Delete…").clicked() {
                         c.deleting = Some(c.picked);
                     }
@@ -253,6 +255,7 @@ impl App {
                 );
                 ui.horizontal(|ui| {
                     let l = ui.label("Name");
+                    // ai: save_template.name
                     let r = ui
                         .add(egui::TextEdit::singleline(&mut name).hint_text("e.g. Tuesday lesson"))
                         .labelled_by(l.id);
@@ -270,6 +273,7 @@ impl App {
                     );
                 }
                 ui.horizontal(|ui| {
+                    // ai: save_template.name
                     go |= ui.button(if exists { "Replace" } else { "Save" }).clicked();
                     // ai: view
                     if ui.button("Cancel").clicked() {
@@ -430,5 +434,35 @@ mod tests {
         for bad in ["", "a/b", "a:b", ".hidden", "what?"] {
             assert!(!super::file_name_ok(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn an_assistant_saves_and_deletes_a_template() {
+        use serde_json::json;
+        let dir = scratch("assistant");
+        let mut d = crate::agent::driver::Driver::new();
+        d.app().template_ui.dir = Some(dir.clone());
+        d.call("add_track", json!({"kind": "instrument", "name": "Keys"}))
+            .unwrap();
+        d.call("save_template", json!({"name": "Lesson set-up"}))
+            .unwrap();
+        let list = d.call("list_projects", json!({})).unwrap();
+        assert!(list.to_string().contains("Lesson set-up"), "{list}");
+        assert!(d.call("save_template", json!({"name": "a/b"})).is_err());
+        d.call(
+            "save_template",
+            json!({"name": "Lesson set-up", "delete": true}),
+        )
+        .unwrap();
+        let list = d.call("list_projects", json!({})).unwrap();
+        assert!(!list.to_string().contains("Lesson set-up"), "{list}");
+        assert!(
+            d.call(
+                "save_template",
+                json!({"name": "Lesson set-up", "delete": true})
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

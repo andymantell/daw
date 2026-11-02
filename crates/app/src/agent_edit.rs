@@ -284,6 +284,7 @@ impl App {
                     .or_else(|| self.keys_tool(name, args))
                     .or_else(|| self.theme_tool(name, args))
                     .or_else(|| self.device_tool(name, args))
+                    .or_else(|| self.setup_tool(name, args))
                     .or_else(|| self.plugins_tool(name, args))
                     .or_else(|| self.midi_tool(name, args));
             }

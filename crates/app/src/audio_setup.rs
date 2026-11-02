@@ -521,6 +521,7 @@ impl AudioSetup {
                         "{}  ({}, {} in, {} out)",
                         c.device.name, c.host, c.device.input_channels, c.device.output_channels
                     );
+                    // ai: audio_setup.device
                     ui.radio_value(&mut self.pick, i, text);
                     ui.indent(("why", i), |ui| {
                         ui.label(RichText::new(&c.why).small().weak());
@@ -536,6 +537,7 @@ impl AudioSetup {
                     "When you play, you hear yourself one of two ways. Pick the one you'll use.",
                 );
                 ui.add_space(4.0);
+                // ai: audio_setup.through_app
                 ui.radio_value(&mut self.through_app, true, "Through the app");
                 ui.indent("app", |ui| {
                     ui.label(
@@ -547,6 +549,7 @@ impl AudioSetup {
                         .small(),
                     );
                 });
+                // ai: audio_setup.through_app
                 ui.radio_value(
                     &mut self.through_app,
                     false,
@@ -582,6 +585,7 @@ impl AudioSetup {
                         if b == suggested {
                             text += "  (suggested)";
                         }
+                        // ai: audio_setup.buffer
                         ui.radio_value(&mut self.buffer, Some(b), text);
                     }
                 });
@@ -615,6 +619,7 @@ impl AudioSetup {
                         .selected_text(format!("Input {}", self.channel + 1))
                         .show_ui(ui, |ui| {
                             for c in 0..v.inputs {
+                                // ai: audio_setup.input
                                 ui.selectable_value(
                                     &mut self.channel,
                                     c,
@@ -747,6 +752,103 @@ impl AudioSetup {
             }
         }
         cmd
+    }
+}
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "audio_setup",
+    description: "The guided audio setup (command audio-setup opens it; audio-setup-next, \
+                  -skip, -back and -cancel move through it): its step, the interfaces found \
+                  (best first) and the one picked, whether the player listens through the app \
+                  or the interface, the buffer size, the input listened to and how loud it \
+                  is, and any problems with what to do. device picks an interface (its \
+                  number in the list, from 0), through_app how they listen, buffer the size \
+                  to try, input the input to listen to (from 1). Only what is given changes.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        serde_json::json!({"type": "object", "properties": {
+            "device": {"type": "integer"},
+            "through_app": {"type": "boolean"},
+            "buffer": {"type": "integer"},
+            "input": {"type": "integer"}
+        }})
+    },
+}];
+
+impl App {
+    pub(crate) fn setup_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "audio_setup").then(|| self.setup_tool_run(args).map(|v| (v, None)))
+    }
+
+    fn setup_tool_run(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let inputs = self.input_count();
+        let s = &mut self.audio_setup;
+        let range = |s: &AudioSetup| s.picked().and_then(|c| c.device.buffer_range);
+        // Check everything before changing anything.
+        if let Some(d) = args["device"].as_u64()
+            && d as usize >= s.cands.len()
+        {
+            return Err(format!("{} interfaces were found, from 0.", s.cands.len()));
+        }
+        if let Some(b) = args["buffer"].as_u64() {
+            let b = b as u32;
+            let ok = range(s).is_none_or(|(lo, hi)| (lo..=hi).contains(&b));
+            if !BUFFERS.contains(&b) || !ok {
+                return Err(format!(
+                    "{b} samples isn't a buffer size the interface takes."
+                ));
+            }
+        }
+        if let Some(c) = args["input"].as_u64()
+            && !(1..=inputs as u64).contains(&c)
+        {
+            return Err(format!("The interface has inputs 1 to {inputs}."));
+        }
+        if let Some(d) = args["device"].as_u64() {
+            s.pick = d as usize;
+        }
+        if let Some(t) = args["through_app"].as_bool() {
+            s.through_app = t;
+        }
+        if let Some(b) = args["buffer"].as_u64() {
+            s.buffer = Some(b as u32);
+        }
+        if let Some(c) = args["input"].as_u64() {
+            s.channel = c as usize - 1;
+        }
+        let r = range(s);
+        let devices: Vec<serde_json::Value> = (s.cands.iter())
+            .map(|c| {
+                json!({"name": c.device.name, "driver": c.host, "inputs": c.device.input_channels,
+                       "outputs": c.device.output_channels, "why": c.why})
+            })
+            .collect();
+        let buffers: Vec<u32> = (BUFFERS.into_iter())
+            .filter(|&b| r.is_none_or(|(lo, hi)| (lo..=hi).contains(&b)))
+            .collect();
+        Ok(json!({
+            "open": s.open,
+            "step": s.step.index() + 1,
+            "of": STEPS.len(),
+            "title": s.step.title(),
+            "devices": devices,
+            "device": s.pick,
+            "through_app": s.through_app,
+            "buffer": s.buffer,
+            "buffers": buffers,
+            "suggested_buffer": setup::buffer_for(r, s.through_app),
+            "checking_buffer": s.checking.is_some(),
+            "input": s.channel + 1,
+            "inputs": inputs,
+            "level": s.heard.map(|l| format!("{l:?}").to_lowercase()),
+            "advice": s.heard.map(Level::advice),
+            "problems": s.problems.iter().map(Problem::explain).collect::<Vec<_>>(),
+        }))
     }
 }
 
@@ -927,5 +1029,47 @@ mod tests {
             assert!(!h.state().audio_setup.open);
             assert_eq!(h.state().audio_setup.tap(), None);
         }
+    }
+
+    #[test]
+    fn an_assistant_steps_through_the_guided_setup() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.command("audio-setup");
+        // As if these were found.
+        let hosts = hosts();
+        d.app()
+            .audio_setup
+            .offer(&hosts, |_| vec!["Interface ASIO".into()], None);
+        let r = d.call("audio_setup", json!({})).unwrap();
+        assert_eq!(
+            (r["open"].clone(), r["step"].clone()),
+            (json!(true), json!(1)),
+            "{r}"
+        );
+        assert_eq!(r["devices"][0]["name"], "Interface ASIO");
+        assert!(d.call("audio_setup", json!({"device": 9})).is_err());
+        let r = d.call("audio_setup", json!({"device": 1})).unwrap();
+        assert_eq!(r["device"], 1);
+        d.call("audio_setup", json!({"device": 0})).unwrap();
+        assert!(
+            d.call("audio_setup", json!({"buffer": 2048})).is_err(),
+            "over its range"
+        );
+        let r = d
+            .call("audio_setup", json!({"through_app": false, "buffer": 512}))
+            .unwrap();
+        assert_eq!(
+            (r["through_app"].clone(), r["buffer"].clone()),
+            (json!(false), json!(512))
+        );
+        assert!(!r["buffers"].as_array().unwrap().contains(&json!(2048)));
+        assert!(d.call("audio_setup", json!({"input": 99})).is_err());
+        // The test interface can't open: the step says so.
+        d.command("audio-setup-next");
+        let r = d.call("audio_setup", json!({})).unwrap();
+        assert!(!r["problems"].as_array().unwrap().is_empty(), "{r}");
+        d.command("audio-setup-cancel");
+        assert_eq!(d.call("audio_setup", json!({})).unwrap()["open"], false);
     }
 }

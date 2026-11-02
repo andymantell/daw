@@ -273,6 +273,7 @@ impl App {
                     .or_else(|| self.practice_tool(name, args))
                     .or_else(|| self.pitch_tool(name, args))
                     .or_else(|| self.lyrics_tool(name, args))
+                    .or_else(|| self.timecode_tool(name, args))
                     .or_else(|| self.plugins_tool(name, args))
                     .or_else(|| self.midi_tool(name, args));
             }

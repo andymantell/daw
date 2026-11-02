@@ -82,19 +82,9 @@ Step 0 (the first PR) adds the `person` mark and argument checking, and marks ev
 
 After that, one small PR per area below. Each adds its tools with an end-to-end test through the assistant interface, marks the controls, and lowers the counts in `widgets-unmarked.txt`.
 
-### 1. Hit points and timecode (9)
+### 1. Hit points and timecode (done)
 
-New `edit_timecode` tool: frame rate, start timecode and its offset in seconds, and add, rename, move (by seconds, timecode or a frame) and delete hit points. `get_project` lists the timecode setup and hit points.
-
-- `hitpoints.rs:413` Timecode field (start timecode, and each hit point's timecode) (gap)
-- `hitpoints.rs:493` Frame rate choice (partial)
-- `hitpoints.rs:526` Where the start timecode falls (seconds) (gap)
-- `hitpoints.rs:539` At the playhead (gap)
-- `hitpoints.rs:582` Hit point name (gap)
-- `hitpoints.rs:600` Hit point a frame earlier (gap)
-- `hitpoints.rs:610` Hit point a frame later (gap)
-- `hitpoints.rs:638` Go (to hit point) (partial)
-- `hitpoints.rs:646` Delete hit point (gap)
+`edit_timecode` sets whether timecode shows, the frame rate, the start timecode and where it falls, and adds, renames, moves (to seconds, a timecode, or by frames) and removes hit points. `get_project` lists the timecode setup and hit points.
 
 ### 2. Sound browser (12)
 

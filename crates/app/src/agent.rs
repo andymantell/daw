@@ -77,13 +77,13 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_project",
-        description: "The project: tempo and time signature, loop, markers, and each track \
-                      with its mix, routing, effects and clips. Times are given in frames \
-                      at the project's rate and in seconds; note positions in ticks (960 \
-                      to a quarter note). An audio clip's start and end_seconds are on \
-                      the timeline; its offset and len are in the file's own audio, so \
-                      a clip that follows tempo or has stretch markers can end before or \
-                      after start + len.",
+        description: "The project: tempo and time signature, loop, markers, timecode and hit \
+                      points, and each track with its mix, routing, effects and clips. Times \
+                      are given in frames at the project's rate and in seconds; note \
+                      positions in ticks (960 to a quarter note). An audio clip's start and \
+                      end_seconds are on the timeline; its offset and len are in the file's \
+                      own audio, so a clip that follows tempo or has stretch markers can end \
+                      before or after start + len.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -548,6 +548,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_practice::TOOLS)
         .chain(crate::agent_pitch::TOOLS)
         .chain(crate::lyrics::TOOLS)
+        .chain(crate::hitpoints::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)
@@ -1515,6 +1516,8 @@ impl App {
 
     fn project_value(&self, notes: bool) -> Value {
         let p = self.project();
+        let (timecode, hit_points) =
+            crate::hitpoints::timecode_value(&p.timecode, &p.hit_points, &self.tempo_map(), p.rate);
         let rate = p.rate.max(1) as f64;
         let secs = |f: i64| f as f64 / rate;
         let effect = |e: &daw_project::Effect| {
@@ -1658,6 +1661,8 @@ impl App {
             })).collect::<Vec<_>>(),
             "comments": p.comments.len(),
             "lesson_notes": p.notes,
+            "timecode": timecode,
+            "hit_points": hit_points,
         })
     }
 

@@ -6,7 +6,6 @@ commands.rs 4
 comments.rs 5
 export.rs 3
 fx.rs 2
-hitpoints.rs 9
 instrument.rs 6
 kits.rs 4
 latency.rs 3

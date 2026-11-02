@@ -4,7 +4,6 @@ audio_setup.rs 5
 commands.rs 4
 export.rs 3
 fx.rs 2
-instrument.rs 6
 kits.rs 4
 latency.rs 3
 main.rs 15

@@ -474,6 +474,7 @@ impl Videos {
                 let Some(i) = self.clips.iter().position(|c| c.key == key) else {
                     return;
                 };
+                // ai: edit_video.seconds
                 if ui
                     .button("Move to the start of the song")
                     .on_hover_text("Its sound moves with it")
@@ -490,6 +491,7 @@ impl Videos {
                     }
                     ui.close();
                 }
+                // ai: edit_video.remove
                 if ui
                     .button("Remove the picture")
                     .on_hover_text("Its sound stays on its own track")
@@ -1012,6 +1014,149 @@ fn clock_text(seconds: f64) -> String {
 fn file_name(path: &Path) -> String {
     path.file_stem()
         .map_or("Video".into(), |s| s.to_string_lossy().into_owned())
+}
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "edit_video",
+    description: "Moves a video's picture (get_project lists them as videos) to a bar or \
+                  seconds, its sound clip and its hit points going with it, or removes the \
+                  picture (its sound stays on its own track).",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        serde_json::json!({"type": "object", "properties": {
+            "video": {"type": "string", "description": "The video's id."},
+            "bar": {"type": "number"},
+            "seconds": {"type": "number", "description": "0 is the start of the song."},
+            "remove": {"type": "boolean"}
+        }, "required": ["video"]})
+    },
+}];
+
+impl App {
+    pub(crate) fn video_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "edit_video").then(|| self.edit_video(args))
+    }
+
+    fn edit_video(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>), String> {
+        use serde_json::json;
+        let key = args["video"].as_str().ok_or("Give the video's id.")?;
+        let i = (self.video.clips.iter().position(|c| c.key == key))
+            .ok_or_else(|| format!("There is no video {key}."))?;
+        if args["remove"].as_bool() == Some(true) {
+            self.video.clips.remove(i);
+            if self.video.selected.as_deref() == Some(key) {
+                self.video.selected = None;
+            }
+            return Ok((json!({"removed": key}), Some("Remove the picture".into())));
+        }
+        let to = self
+            .time_arg(args)
+            .ok_or("Give the bar or seconds to move it to.")?;
+        let c = &mut self.video.clips[i];
+        let by = to - c.start;
+        let moved = (c.zero(), c.start, c.end(), by);
+        let sound = c.sound.clone();
+        c.start = to;
+        if by != 0 {
+            if let Some(s) = sound
+                && let Some(a) = (self.tracks.iter_mut())
+                    .flat_map(|t| t.clips.iter_mut())
+                    .find(|a| a.key == s)
+            {
+                a.start = (a.start + by).max(0);
+            }
+            self.picture_moved(moved);
+            self.rebuild();
+        }
+        let secs = to as f64 / self.rate.max(1) as f64;
+        Ok((
+            json!({"video": key, "start_seconds": secs}),
+            Some("Move the picture".into()),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tool_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::VideoClip;
+
+    #[test]
+    fn an_assistant_moves_and_removes_a_picture() {
+        let dir = std::env::temp_dir().join(format!("daw-video-tool-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("sound.wav");
+        let mut d = crate::agent::driver::Driver::new();
+        let rate = d.app().rate;
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        for _ in 0..rate {
+            w.write_sample(0i16).unwrap();
+        }
+        w.finalize().unwrap();
+        d.call("import_audio", json!({"path": wav})).unwrap();
+        for _ in 0..500 {
+            if !d.app().tracks.is_empty() {
+                break;
+            }
+            d.h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // A picture whose sound is that clip, as a video file brings.
+        let film = dir.join("film.mp4");
+        let sound = d.app().tracks[0].clips[0].key.clone();
+        d.app().video.clips.push(VideoClip {
+            key: "film".into(),
+            asset: film.display().to_string(),
+            path: film.clone(),
+            name: "film".into(),
+            start: 0,
+            offset: 0,
+            len: rate as i64,
+            sound: Some(sound.clone()),
+            thumbs: Arc::new(daw_video::thumbs::Thumbs::start(&film)),
+        });
+        let p = d.project();
+        assert_eq!(p["videos"][0]["id"], "film", "{}", p["videos"]);
+        assert!(
+            d.call("edit_video", json!({"video": "nothing", "seconds": 1}))
+                .is_err()
+        );
+        assert!(d.call("edit_video", json!({"video": "film"})).is_err());
+        d.call("edit_video", json!({"video": "film", "seconds": 2.0}))
+            .unwrap();
+        let p = d.project();
+        assert_eq!(p["videos"][0]["start_seconds"], 2.0);
+        assert_eq!(
+            p["tracks"][0]["clips"][0]["start_seconds"], 2.0,
+            "the sound went too"
+        );
+        d.call("edit_video", json!({"video": "film", "remove": true}))
+            .unwrap();
+        let p = d.project();
+        assert_eq!(p["videos"], json!([]));
+        assert_eq!(
+            p["tracks"][0]["clips"].as_array().unwrap().len(),
+            1,
+            "the sound stays"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,3 @@
 # Controls drawn before every control had to say how an assistant reaches
 # it (see src/widget_check.rs), by file. Counts may only go down.
-video.rs 2
 workspace.rs 3

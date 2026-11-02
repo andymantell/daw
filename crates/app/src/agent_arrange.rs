@@ -366,7 +366,7 @@ impl App {
     }
 
     /// The frame `args` gives as a bar or seconds, if it gives one.
-    fn time_arg(&self, args: &Value) -> Option<i64> {
+    pub(crate) fn time_arg(&self, args: &Value) -> Option<i64> {
         match (args["bar"].as_f64(), args["seconds"].as_f64()) {
             (Some(bar), _) => Some(bar_frames(&self.tempo_map(), bar.max(1.0))),
             (None, Some(s)) => Some((s.max(0.0) * self.rate as f64).round() as i64),

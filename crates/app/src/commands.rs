@@ -667,6 +667,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Cuts a loop at each hit and plays the slices from the keys")
     .words("instrument loop break chop slices"),
     info(
+        Cmd::AddInstrument(6),
+        "add-oh-one-track",
+        "Edit",
+        "Add Oh-One track",
+        &[],
+    )
+    .hint("An instrument track with the Oh-One: a one-oscillator bass and lead monosynth with a sub, a 24 dB filter that sings and portamento")
+    .words("instrument mono synth bass lead house acid classic analogue"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

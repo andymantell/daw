@@ -20,7 +20,7 @@ use crate::instrument::Slot;
 type Done = Result<(Value, Option<String>), String>;
 
 const INSTRUMENT: &str = "The instrument: synth (the simple synth), one that comes with the \
-                          app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer), \
+                          app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer, patch-twenty, oh-one), \
                           or a plugin instrument by name (list_effect_kinds gives them).";
 
 pub(crate) const TOOLS: &[Tool] = &[

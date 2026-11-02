@@ -1678,6 +1678,7 @@ impl crate::App {
             .default_width(360.0)
             .show(ctx, |ui| {
                 ui.label("The panes as they are now, and where their windows are.");
+                // ai: layouts.save
                 let field = ui
                     .add(egui::TextEdit::singleline(&mut name).hint_text("Name, such as Mixing"))
                     .accessible_name("Layout name");
@@ -1698,6 +1699,7 @@ impl crate::App {
                 });
                 let ok = !name.trim().is_empty() && !full;
                 ui.horizontal(|ui| {
+                    // ai: layouts.save
                     if ui.add_enabled(ok, egui::Button::new("Save")).clicked() || (enter && ok) {
                         ws.save_as(&name);
                         done = true;
@@ -1718,6 +1720,7 @@ impl crate::App {
                                 name = saved.clone();
                             }
                             ui.weak(self.commands.keymap.text(Cmd::Layout(n as u8)));
+                            // ai: layouts.remove
                             if ui
                                 .add(
                                     IconButton::new(
@@ -1742,6 +1745,56 @@ impl crate::App {
         if open && !done {
             self.workspace.saving = Some(name);
         }
+    }
+}
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "layouts",
+    description: "The saved layouts of the panes (each used with its command, layout-1 to \
+                  layout-9): save keeps the panes as they are now under a name, replacing a \
+                  layout of that name; remove takes one away by name (those after it move \
+                  up one). Answers with the layouts saved.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        serde_json::json!({"type": "object", "properties": {
+            "save": {"type": "string", "description": "A name, such as Mixing."},
+            "remove": {"type": "string"}
+        }})
+    },
+}];
+
+impl crate::App {
+    pub(crate) fn layouts_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "layouts").then(|| self.layouts(args).map(|v| (v, None)))
+    }
+
+    fn layouts(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let ws = &mut self.workspace;
+        if let Some(n) = args["remove"].as_str() {
+            let i = (ws.saved.iter().position(|s| s.0 == n.trim()))
+                .ok_or_else(|| format!("There is no layout {n}."))?;
+            ws.saved.remove(i);
+            ws.changed();
+        }
+        if let Some(n) = args["save"].as_str() {
+            if n.trim().is_empty() {
+                return Err("Give the layout a name.".into());
+            }
+            if !ws.save_as(n) {
+                return Err(format!(
+                    "{SLOTS} layouts are saved: remove one, or use one's name to replace it."
+                ));
+            }
+        }
+        let saved: Vec<serde_json::Value> = (ws.saved.iter().enumerate())
+            .map(|(i, s)| json!({"name": s.0, "command": format!("layout-{}", i + 1)}))
+            .collect();
+        Ok(json!({"layouts": saved}))
     }
 }
 
@@ -2217,5 +2270,30 @@ mod tests {
             assert!(found.contains(&Cmd::Layout(2)));
             assert!(h.query_by_label("Layout 1: Recording").is_some());
         }
+    }
+
+    #[test]
+    fn an_assistant_saves_and_removes_layouts() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        let before = d.call("layouts", json!({})).unwrap()["layouts"]
+            .as_array()
+            .unwrap()
+            .len();
+        assert!(d.call("layouts", json!({"save": "  "})).is_err());
+        let r = d.call("layouts", json!({"save": "Vocal edit"})).unwrap();
+        assert_eq!(
+            r["layouts"][before],
+            json!({"name": "Vocal edit", "command": format!("layout-{}", before + 1)})
+        );
+        let r = d.call("layouts", json!({"save": "Vocal edit"})).unwrap();
+        assert_eq!(
+            r["layouts"].as_array().unwrap().len(),
+            before + 1,
+            "replaced"
+        );
+        assert!(d.call("layouts", json!({"remove": "Nothing"})).is_err());
+        let r = d.call("layouts", json!({"remove": "Vocal edit"})).unwrap();
+        assert_eq!(r["layouts"].as_array().unwrap().len(), before);
     }
 }

@@ -1131,12 +1131,15 @@ impl App {
             ));
         }
         let notes = t.kind.plays_notes();
+        let takes_input = t.instrument.as_ref().is_some_and(|i| i.takes_input());
         let input = match args["input"].as_u64() {
             None => t.input,
             Some(0) => None,
             Some(ch) => {
-                if notes {
-                    return Err("An instrument track plays its notes, not a device input.".into());
+                if notes && !takes_input {
+                    return Err("An instrument track plays its notes, not a device input \
+                                (unless its instrument takes one, as Patch Twenty does)."
+                        .into());
                 }
                 let stereo = args["stereo"]
                     .as_bool()

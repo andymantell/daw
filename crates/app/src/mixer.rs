@@ -500,6 +500,7 @@ impl App {
                         Some(daw_instruments::Kind::DrumSampler) => "Drum",
                         Some(daw_instruments::Kind::DrumMachine) => "Drums",
                         Some(daw_instruments::Kind::Slicer) => "Slicer",
+                        Some(daw_instruments::Kind::PatchTwenty) => "Patch",
                     },
                 );
                 // ai: view
@@ -512,6 +513,13 @@ impl App {
                     .clicked()
                 {
                     self.instrument_open = (!open).then_some(i);
+                }
+                // An instrument that plays the track's input through
+                // itself (a guitar through a synth's filters) takes an
+                // input like an audio track; Monitor sends it in.
+                if t.instrument.as_ref().is_some_and(|i| i.takes_input()) {
+                    // ai: set_track_input
+                    rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, r.inputs);
                 }
             }
             Part::Source => {

@@ -27,6 +27,7 @@ pub mod dsp;
 pub mod library;
 pub mod made;
 pub mod params;
+pub mod patch_twenty;
 pub mod sample;
 pub mod sampler;
 pub mod sfz;
@@ -53,15 +54,18 @@ pub enum Kind {
     DrumSampler,
     DrumMachine,
     Slicer,
+    /// The semi-modular dual-filter monosynth (classic synths, S7).
+    PatchTwenty,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 6] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
         Kind::DrumMachine,
         Kind::Slicer,
+        Kind::PatchTwenty,
     ];
 
     /// How projects name it. Never change one.
@@ -72,6 +76,7 @@ impl Kind {
             Kind::DrumSampler => "drum-sampler",
             Kind::DrumMachine => "drum-machine",
             Kind::Slicer => "slicer",
+            Kind::PatchTwenty => "patch-twenty",
         }
     }
 
@@ -86,6 +91,7 @@ impl Kind {
             Kind::DrumSampler => "Drum sampler",
             Kind::DrumMachine => "Drum machine",
             Kind::Slicer => "Loop slicer",
+            Kind::PatchTwenty => "Patch Twenty",
         }
     }
 
@@ -100,6 +106,9 @@ impl Kind {
                 "Sixteen pads of layered samples and drums made here, with choke groups, effects, outputs and sends"
             }
             Kind::Slicer => "Cuts a loop at each hit and puts the slices on the keys",
+            Kind::PatchTwenty => {
+                "A semi-modular monosynth: two oscillators through a screaming high-pass and low-pass, two envelopes, a mod generator, patch cords, and a guitar input through its filters"
+            }
         }
     }
 }
@@ -181,6 +190,7 @@ impl Builtin {
                 b.set_loop(made_sound("loop"), 0.5);
                 b
             }
+            Kind::PatchTwenty => Builtin::of(kind, patch_twenty::params(), Vec::new()),
         }
     }
 
@@ -246,6 +256,7 @@ impl Builtin {
             Kind::DrumSampler => drum_sampler::params(),
             Kind::DrumMachine => drum_machine::params(),
             Kind::Slicer => slicer::params(count("slice", false)),
+            Kind::PatchTwenty => patch_twenty::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -601,7 +612,14 @@ impl Builtin {
                 let scale = rate as f64 / original.max(1) as f64;
                 Box::new(slicer::Slicer::new(rate, p, at("loop"), scale))
             }
+            Kind::PatchTwenty => Box::new(patch_twenty::PatchTwenty::new(rate, p)),
         }
+    }
+
+    /// Whether the instrument takes the track's audio (its input, when
+    /// monitored) as an external signal and plays it through itself.
+    pub fn takes_input(&self) -> bool {
+        self.kind == Kind::PatchTwenty
     }
 }
 

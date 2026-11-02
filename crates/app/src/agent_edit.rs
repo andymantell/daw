@@ -33,8 +33,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: || {
             json!({"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["audio", "instrument", "poly-synth",
-                         "sampler", "drum-sampler", "drum-machine", "slicer", "bus", "folder"],
-                         "description": "instrument has the simple synth; poly-synth the bigger one."},
+                         "sampler", "drum-sampler", "drum-machine", "slicer", "patch-twenty", "bus", "folder"],
+                         "description": "instrument has the simple synth; poly-synth the bigger one; patch-twenty the semi-modular monosynth."},
                 "name": {"type": "string"},
                 "index": {"type": "integer", "description": "Where in the track list, from 0; the end if left out."}
             }, "required": ["kind"]})
@@ -410,7 +410,7 @@ impl App {
                             .is_some()
                 }
                 daw_instruments::Kind::DrumMachine => pad_layer(&slot).is_some(),
-                daw_instruments::Kind::Synth => false,
+                daw_instruments::Kind::Synth | daw_instruments::Kind::PatchTwenty => false,
             };
             if !fits {
                 return Err(format!("A {} has no sound slot {slot}.", kind.name()));

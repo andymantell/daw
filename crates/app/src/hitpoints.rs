@@ -20,8 +20,10 @@ use eframe::egui::{
 };
 
 use crate::App;
+use crate::agent::{Access, Tool};
 use crate::tempo::Changes;
 use crate::theme::Look;
+use serde_json::{Value, json};
 
 /// The line under the toolbar that holds the timecode and hit points.
 pub(crate) const STRIP: f32 = 30.0;
@@ -38,6 +40,21 @@ pub(crate) fn clock(s: &TimecodeSetup) -> Clock {
         start,
         offset: s.offset,
     }
+}
+
+/// Changes the frame rate. The start keeps its hours, minutes and
+/// seconds, written the new rate's way.
+pub(crate) fn set_rate(setup: &mut TimecodeSetup, r: Rate) {
+    let c = clock(setup);
+    let start = Timecode::from_label(c.rate, c.start);
+    let fixed = Timecode {
+        frames: start.frames.min(r.nominal() - 1),
+        drop_frame: r.drop_frame(),
+        ..start
+    };
+    let fixed = Timecode::parse(r, &fixed.to_string()).unwrap_or(Timecode { frames: 2, ..fixed });
+    setup.rate = r.id().into();
+    setup.start = fixed.to_string();
 }
 
 /// A new hit point's name: "Hit 1", "Hit 2", … the first not taken.
@@ -410,6 +427,7 @@ fn tc_field(
 ) -> Option<Timecode> {
     let mut text = typing.get(key).cloned().unwrap_or_else(|| tc.to_string());
     let parsed = Timecode::parse(rate, &text);
+    // ai: edit_timecode.start edit_timecode.change.timecode
     let mut edit = egui::TextEdit::singleline(&mut text)
         .desired_width(96.0)
         .font(egui::TextStyle::Monospace);
@@ -490,22 +508,12 @@ impl HitPointsWindow {
                 .selected_text(format!("{} fps", c.rate.label()))
                 .show_ui(ui, |ui| {
                     for r in Rate::ALL {
+                        // ai: edit_timecode.rate
                         if ui
                             .selectable_label(r == c.rate, format!("{} fps", r.label()))
                             .clicked()
                         {
-                            // The start keeps its hours, minutes and
-                            // seconds, written the new rate's way.
-                            let start = Timecode::from_label(c.rate, c.start);
-                            let fixed = Timecode {
-                                frames: start.frames.min(r.nominal() - 1),
-                                drop_frame: r.drop_frame(),
-                                ..start
-                            };
-                            let fixed = Timecode::parse(r, &fixed.to_string())
-                                .unwrap_or(Timecode { frames: 2, ..fixed });
-                            setup.rate = r.id().into();
-                            setup.start = fixed.to_string();
+                            set_rate(setup, r);
                             asks.changed = true;
                         }
                     }
@@ -522,6 +530,7 @@ impl HitPointsWindow {
             }
             ui.label("at");
             let mut secs = setup.offset as f64 / rate as f64;
+            // ai: edit_timecode.start_at_seconds
             if ui
                 .add(
                     egui::DragValue::new(&mut secs)
@@ -536,6 +545,7 @@ impl HitPointsWindow {
                 setup.offset = (secs * rate as f64).round() as i64;
                 asks.changed = true;
             }
+            // ai: edit_timecode.start_at_playhead
             if ui
                 .button("At the playhead")
                 .on_hover_text("Put the start timecode where the playhead is")
@@ -580,6 +590,7 @@ impl HitPointsWindow {
             let n = i + 1;
             ui.horizontal(|ui| {
                 asks.changed |= ui
+                    // ai: edit_timecode.change.name
                     .add(egui::TextEdit::singleline(&mut h.name).desired_width(140.0))
                     .accessible_name(format!("Hit point {n} name"))
                     .changed();
@@ -596,6 +607,7 @@ impl HitPointsWindow {
                     moved = Some((h.id.clone(), at));
                 }
                 let frame = c.frame_at(h.at, rate);
+                // ai: edit_timecode.change.frames
                 if ui
                     .add(
                         IconButton::new(Icon::FrameBack, format!("Hit point {n} a frame earlier"))
@@ -606,6 +618,7 @@ impl HitPointsWindow {
                 {
                     moved = Some((h.id.clone(), c.frame_start(frame - 1, rate)));
                 }
+                // ai: edit_timecode.change.frames
                 if ui
                     .add(
                         IconButton::new(Icon::FrameForward, format!("Hit point {n} a frame later"))
@@ -638,6 +651,7 @@ impl HitPointsWindow {
                     Some(l) => self.lands.insert(h.id.clone(), l),
                     None => self.lands.remove(&h.id),
                 };
+                // ai: seek.seconds
                 if ui
                     .small_button("Go")
                     .on_hover_text("Move the playhead here")
@@ -646,6 +660,7 @@ impl HitPointsWindow {
                 {
                     asks.seek = Some(h.at);
                 }
+                // ai: edit_timecode.remove
                 if ui
                     .small_button("Delete")
                     .accessible_name(format!("Delete hit point {n}"))
@@ -988,6 +1003,176 @@ impl App {
     }
 }
 
+// ---- For assistants ----
+
+pub(crate) const TOOLS: &[Tool] = &[Tool {
+    name: "edit_timecode",
+    description: "The picture's timecode and the hit points on it (the Timecode and hit \
+                  points window). Sets whether timecode shows, the frame rate, the start \
+                  timecode and where on the timeline it falls; adds hit points (at seconds \
+                  or a timecode, on the start of that frame), renames them, moves them (to \
+                  seconds, a timecode, or by whole frames) and removes them by id. Hit points \
+                  move with the picture when its start or rate changes. Answers with the \
+                  setup and every hit point, as get_project lists them.",
+    access: Access::Edit,
+    schema: || {
+        let at = json!({
+            "seconds": {"type": "number", "description": "On the timeline."},
+            "timecode": {"type": "string", "description": "Such as 01:00:12:05; ; before the frames for drop frame."}
+        });
+        let mut add = at.clone();
+        add["name"] = json!({"type": "string", "description": "Hit 1, Hit 2… if not given."});
+        let mut change = at;
+        change["id"] = json!({"type": "string"});
+        change["name"] = json!({"type": "string"});
+        change["frames"] =
+            json!({"type": "integer", "description": "Move by this many frames (− earlier)."});
+        json!({"type": "object", "properties": {
+            "shown": {"type": "boolean", "description": "Timecode on the ruler and in the transport bar."},
+            "rate": {"type": "string", "enum": Rate::ALL.map(Rate::id),
+                     "description": "Frames per second; df is drop frame. The start keeps its hours, minutes and seconds."},
+            "start": {"type": "string", "description": "The start timecode, such as 01:00:00:00."},
+            "start_at_seconds": {"type": "number", "description": "Where on the timeline the start timecode falls."},
+            "start_at_playhead": {"type": "boolean", "description": "Put the start timecode where the playhead is."},
+            "add": {"type": "array", "items": {"type": "object", "properties": add}},
+            "change": {"type": "array", "items": {"type": "object", "properties": change, "required": ["id"]}},
+            "remove": {"type": "array", "items": {"type": "string"}, "description": "Hit point ids."}
+        }})
+    },
+}];
+
+/// Where `v` puts a moment, by `seconds` or `timecode`.
+fn at_arg(v: &Value, c: &Clock, rate: u32) -> Result<Option<i64>, String> {
+    if let Some(s) = v["seconds"].as_f64() {
+        return Ok(Some((s.max(0.0) * rate as f64).round() as i64));
+    }
+    match v["timecode"].as_str() {
+        None => Ok(None),
+        Some(t) => Timecode::parse(c.rate, t)
+            .and_then(|tc| c.position(tc, rate))
+            .map(Some)
+            .ok_or_else(|| format!("{t} isn't a timecode at {} fps.", c.rate.label())),
+    }
+}
+
+/// The setup and hit points, for assistants.
+pub(crate) fn timecode_value(
+    setup: &TimecodeSetup,
+    hits: &[HitPoint],
+    map: &TempoMap,
+    rate: u32,
+) -> (Value, Value) {
+    let c = clock(setup);
+    let secs = |f: i64| f as f64 / rate.max(1) as f64;
+    let setup = json!({
+        "shown": setup.shown,
+        "rate": setup.rate,
+        "start": setup.start,
+        "start_at_seconds": secs(setup.offset),
+    });
+    let hits = (hits.iter())
+        .map(|h| {
+            let bb = map.bar_beat(map.ticks_at(Frames(h.at)));
+            json!({
+                "id": h.id, "name": h.name, "seconds": secs(h.at),
+                "timecode": c.timecode(h.at, rate).to_string(),
+                "bar": bb.bar, "beat": bb.beat,
+            })
+        })
+        .collect();
+    (setup, hits)
+}
+
+impl App {
+    pub(crate) fn timecode_tool(
+        &mut self,
+        name: &str,
+        args: &Value,
+    ) -> Option<Result<(Value, Option<String>), String>> {
+        (name == "edit_timecode").then(|| self.edit_timecode(args))
+    }
+
+    fn edit_timecode(&mut self, args: &Value) -> Result<(Value, Option<String>), String> {
+        let playhead = self.ctl.status().position().0;
+        let map = self.tempo_map();
+        self.edit_model(|p| {
+            let rate = p.rate;
+            let was = p.timecode.clone();
+            let setup = &mut p.timecode;
+            if let Some(on) = args["shown"].as_bool() {
+                setup.shown = on;
+            }
+            if let Some(id) = args["rate"].as_str() {
+                let r = Rate::from_id(id).ok_or_else(|| format!("There is no frame rate {id}."))?;
+                set_rate(setup, r);
+            }
+            if let Some(t) = args["start"].as_str() {
+                let r = clock(setup).rate;
+                let tc = Timecode::parse(r, t)
+                    .ok_or_else(|| format!("{t} isn't a timecode at {} fps.", r.label()))?;
+                setup.start = tc.to_string();
+            }
+            if let Some(s) = args["start_at_seconds"].as_f64() {
+                setup.offset = (s * rate as f64).round() as i64;
+            }
+            if args["start_at_playhead"].as_bool() == Some(true) {
+                setup.offset = playhead;
+            }
+            follow_picture(&was, &p.timecode, &mut p.hit_points, rate);
+            let c = clock(&p.timecode);
+            let hits = &mut p.hit_points;
+            let mut added = Vec::new();
+            for a in args["add"].as_array().into_iter().flatten() {
+                let at = at_arg(a, &c, rate)?
+                    .ok_or("Each new hit point needs seconds or a timecode.")?;
+                let id = add_hit(hits, &c, rate, at).ok_or_else(|| {
+                    format!(
+                        "There is a hit point on the frame at {}.",
+                        c.timecode(at, rate)
+                    )
+                })?;
+                if let Some(n) = a["name"].as_str() {
+                    hits.iter_mut()
+                        .find(|h| h.id == id)
+                        .expect("just added")
+                        .name = n.into();
+                }
+                added.push(id);
+            }
+            for ch in args["change"].as_array().into_iter().flatten() {
+                let id = ch["id"]
+                    .as_str()
+                    .ok_or("Each change needs a hit point's id.")?;
+                let h = (hits.iter_mut())
+                    .find(|h| h.id == id)
+                    .ok_or_else(|| format!("There is no hit point {id}."))?;
+                if let Some(n) = ch["name"].as_str() {
+                    h.name = n.into();
+                }
+                let mut to = at_arg(ch, &c, rate)?;
+                if let Some(n) = ch["frames"].as_i64() {
+                    let from = to.unwrap_or(h.at);
+                    to = Some(c.frame_start(c.frame_at(from, rate) + n, rate));
+                }
+                if let Some(at) = to {
+                    move_hit(hits, &c, rate, id, at);
+                }
+            }
+            hits.sort_by_key(|h| h.at);
+            let remove: Vec<&str> = (args["remove"].as_array().into_iter().flatten())
+                .filter_map(Value::as_str)
+                .collect();
+            if let Some(id) = remove.iter().find(|id| !hits.iter().any(|h| h.id == **id)) {
+                return Err(format!("There is no hit point {id}."));
+            }
+            hits.retain(|h| !remove.contains(&h.id.as_str()));
+            let (setup, hits) = timecode_value(&p.timecode, &p.hit_points, &map, rate);
+            Ok(json!({"added": added, "timecode": setup, "hit_points": hits}))
+        })
+        .map(|v| (v, Some("Change timecode and hit points".into())))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1196,5 +1381,78 @@ mod tests {
         assert!(p.timecode.shown);
         // The hit points didn't move: they stay with the picture.
         assert_eq!(p.hit_points[0].at, at(8.0));
+    }
+
+    #[test]
+    fn an_assistant_sets_the_timecode_and_edits_hit_points() {
+        use crate::agent::driver::Driver;
+        use serde_json::json;
+        let mut d = Driver::new();
+        let r = d
+            .call(
+                "edit_timecode",
+                json!({"shown": true, "rate": "25", "start": "01:00:00:00",
+                       "start_at_seconds": 2.0,
+                       "add": [{"timecode": "01:00:04:00", "name": "Door slams"},
+                               {"seconds": 10.01}]}),
+            )
+            .unwrap();
+        let hits = r["hit_points"].as_array().unwrap().clone();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0]["name"], "Door slams");
+        assert_eq!(
+            hits[0]["seconds"], 6.0,
+            "4 s after a start that falls at 2 s"
+        );
+        assert_eq!(hits[1]["name"], "Hit 1");
+        assert_eq!(hits[1]["seconds"], 10.0, "on the start of its frame");
+        assert_eq!(hits[1]["timecode"], "01:00:08:00");
+        let (door, other) = (hits[0]["id"].clone(), hits[1]["id"].clone());
+
+        // A frame later, renamed; the other moved by timecode.
+        let r = d
+            .call(
+                "edit_timecode",
+                json!({"change": [{"id": door, "frames": 1, "name": "Door"},
+                                  {"id": other, "timecode": "01:00:09:00"}]}),
+            )
+            .unwrap();
+        assert_eq!(r["hit_points"][0]["timecode"], "01:00:04:01");
+        assert_eq!(r["hit_points"][0]["name"], "Door");
+        assert_eq!(r["hit_points"][1]["seconds"], 11.0);
+
+        // The picture's start moves, and the hit points go with it.
+        d.call("edit_timecode", json!({"start_at_seconds": 3.0}))
+            .unwrap();
+        let p = d.project();
+        assert_eq!(p["timecode"]["start_at_seconds"], 3.0);
+        assert_eq!(p["timecode"]["shown"], true);
+        assert_eq!(p["hit_points"][1]["seconds"], 12.0);
+        assert_eq!(p["hit_points"][1]["timecode"], "01:00:09:00");
+
+        // A new rate keeps the start's hours, minutes and seconds.
+        let r = d.call("edit_timecode", json!({"rate": "30"})).unwrap();
+        assert_eq!(r["timecode"]["start"], "01:00:00:00");
+
+        // Refused calls change nothing.
+        assert!(d.call("edit_timecode", json!({"rate": "17"})).is_err());
+        assert!(
+            d.call("edit_timecode", json!({"remove": ["nope"]}))
+                .is_err()
+        );
+        assert!(
+            d.call("edit_timecode", json!({"add": [{"timecode": "nonsense"}]}))
+                .is_err()
+        );
+        assert_eq!(d.project()["hit_points"].as_array().unwrap().len(), 2);
+
+        d.call("edit_timecode", json!({"remove": [door]})).unwrap();
+        let a = d.app();
+        assert_eq!(a.hit_points.len(), 1);
+        assert_eq!(
+            a.proj.doc.get().hit_points.len(),
+            1,
+            "saved in the document"
+        );
     }
 }

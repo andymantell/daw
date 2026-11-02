@@ -48,6 +48,34 @@ and drift.
 
 ![A built-in synth's window over the arrangement](docs/screenshots/synth.png)
 
+## Running it on Windows
+
+**Ready-made build:** every push to `main` builds `daw.exe` in CI. Open
+the latest green **ci** run on `main` under the repository's Actions tab
+and download the **daw-windows-x64** artifact (a zip holding `daw.exe`).
+
+**From source** (what the Windows CI job does):
+
+1. Install the Visual Studio Build Tools with the **Desktop development
+   with C++** workload (the MSVC linker Rust needs).
+2. Install Rust with [rustup](https://rustup.rs), stable toolchain
+   (1.88 or newer).
+3. Install LLVM and point `LIBCLANG_PATH` at it, for example
+   `C:\Program Files\LLVM\bin`. The ASIO bindings are generated with
+   bindgen, which needs libclang.
+4. From the repository folder, run:
+
+   ```
+   cargo run --release -p daw-app
+   ```
+
+   Use a release build for anything with audio. The first build
+   downloads Steinberg's ASIO SDK, so it needs internet access.
+
+For the lowest delay, install your audio interface maker's ASIO driver.
+The first time the app starts with no audio settings saved, the guided
+audio setup opens and offers the ASIO device first.
+
 ## Documents
 
 | Document | Purpose |

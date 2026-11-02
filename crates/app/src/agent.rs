@@ -2619,6 +2619,120 @@ mod tests {
         assert_eq!(p["tracks"][1]["instrument"]["builtin"], "oracle", "{p}");
     }
 
+    /// The Blue Wave through the assistant interface (classic synths,
+    /// S9): add the track, read its settings with the table names and
+    /// the two characters, the sounds made in code, voice a pad, play a
+    /// chord, then move the wave position by hand from the table's sine
+    /// to its last wave, which brightens the sound.
+    #[test]
+    fn the_blue_wave_is_played_through_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "blue-wave"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        for key in [
+            "instrument.table",
+            "instrument.wave",
+            "instrument.character",
+            "instrument.wave_env",
+            "instrument.wave_lfo",
+            "instrument.key_wave",
+            "instrument.b_wave",
+            "instrument.b_semi",
+            "instrument.mix",
+            "instrument.w_attack",
+            "instrument.cutoff",
+            "instrument.filter_env",
+            "instrument.f_decay",
+            "instrument.attack",
+            "instrument.lfo_shape",
+            "instrument.mode",
+            "instrument.voices",
+            "instrument.spread",
+        ] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        let choices = |key: &str| -> Vec<Value> {
+            let p = params.iter().find(|p| p["param"] == key).unwrap();
+            p["choices"].as_array().unwrap().clone()
+        };
+        assert_eq!(
+            choices("instrument.character"),
+            vec![json!("Smooth"), json!("Eight-bit")]
+        );
+        let tables = choices("instrument.table");
+        assert_eq!(tables.len(), 10);
+        assert!(tables.iter().any(|c| c == "Bells"));
+        // The sounds made in code come with the settings that make them.
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let sounds = info["instrument"]["sounds"].as_array().unwrap();
+        let pad = (sounds.iter()).find(|s| s["name"] == "Glass pad").unwrap();
+        d.call(
+            "set_instrument",
+            json!({"track": t, "settings": pad["settings"]}),
+        )
+        .unwrap();
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 1, "notes": [
+                {"beat": 0.0, "beats": 4.0, "pitch": 57, "velocity": 100},
+                {"beat": 0.0, "beats": 4.0, "pitch": 64, "velocity": 100},
+                {"beat": 0.0, "beats": 4.0, "pitch": 69, "velocity": 100}
+            ]}),
+        )
+        .unwrap();
+        let a = d
+            .call("analyse", json!({"track": t, "from_bar": 1, "to_bar": 2}))
+            .unwrap();
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() > -30.0, "{a}");
+        // Then voiced by hand: the first table, nothing moving the
+        // position, the filter open. Wave 0 is a sine; wave 59 a saw.
+        let highs = |a: &Value| -> f64 {
+            let power: f64 = (a["third_octave_bands"].as_array().unwrap().iter())
+                .filter(|b| b["hz"].as_f64().unwrap() >= 1000.0)
+                .map(|b| 10f64.powf(b["db"].as_f64().unwrap() / 10.0))
+                .sum();
+            10.0 * power.max(1e-12).log10()
+        };
+        let at_wave = |d: &mut Driver, wave: f64| -> Value {
+            d.call(
+                "set_parameters",
+                json!({"track": t, "changes": [
+                    {"param": "instrument.table", "value": 0},
+                    {"param": "instrument.wave", "value": wave},
+                    {"param": "instrument.wave_env", "value": 0.0},
+                    {"param": "instrument.wave_lfo", "value": 0.0},
+                    {"param": "instrument.mix", "value": 0.0},
+                    {"param": "instrument.cutoff", "value": 20000.0},
+                    {"param": "instrument.filter_env", "value": 0.0},
+                    {"param": "instrument.attack", "value": 0.01},
+                    {"param": "instrument.sustain", "value": 1.0}
+                ]}),
+            )
+            .unwrap();
+            d.call("analyse", json!({"track": t, "from_bar": 1, "to_bar": 2}))
+                .unwrap()
+        };
+        let sine = at_wave(&mut d, 0.0);
+        let saw = at_wave(&mut d, 59.0);
+        assert!(highs(&saw) > highs(&sine) + 10.0, "{sine} {saw}");
+        let now = instrument_params(&mut d, &t);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.wave")
+            .unwrap();
+        assert_eq!(f["value"], 59.0);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.table")
+            .unwrap();
+        assert_eq!(f["text"], "Harmonics");
+        // The command is in the table too, and names the synth.
+        d.call("run_command", json!({"id": "add-blue-wave-track"}))
+            .unwrap();
+        let p = d.call("get_project", json!({})).unwrap();
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
+        assert_eq!(p["tracks"][1]["instrument"]["builtin"], "blue-wave");
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

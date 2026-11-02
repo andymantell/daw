@@ -507,6 +507,7 @@ impl App {
                         Some(daw_instruments::Kind::June) => "June",
                         Some(daw_instruments::Kind::Eighty) => "Eighty",
                         Some(daw_instruments::Kind::Oracle) => "Oracle",
+                        Some(daw_instruments::Kind::BlueWave) => "Wave",
                     },
                 );
                 // ai: view

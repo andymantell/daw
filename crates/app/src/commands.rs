@@ -721,6 +721,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("A two-oscillator analogue polysynth with two filter boards, for brass, pads, leads and bass")
     .words("instrument poly synth pad brass lead analogue vintage sync"),
     info(
+        Cmd::AddInstrument(12),
+        "add-blue-wave-track",
+        "Edit",
+        "Add Blue Wave track",
+        &[],
+    )
+    .hint("An eight-bit wavetable synth with an analogue filter, for glassy pads, bells, digital keys and the 80s sound: two oscillators sweeping tables of 64 waves, smooth or eight-bit with the aliasing kept, the 24 dB filter")
+    .words("instrument poly synth wavetable wave table digital pad bell keys eighties eight-bit"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

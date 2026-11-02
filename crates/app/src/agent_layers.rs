@@ -21,7 +21,7 @@ type Done = Result<(Value, Option<String>), String>;
 
 const INSTRUMENT: &str = "The instrument: synth (the simple synth), one that comes with the \
                           app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer, patch-twenty, oh-one, \
-                          model-mono, june, eighty, oracle), or a plugin instrument by name (list_effect_kinds gives them).";
+                          model-mono, june, eighty, oracle, blue-wave), or a plugin instrument by name (list_effect_kinds gives them).";
 
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {

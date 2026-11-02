@@ -272,5 +272,6 @@ Asked one at a time in the project thread; answers are recorded here.
    **Answer (2026-11-02): yes, in the bottom dock.**
 2. The inspector and practice tabs on the right and the browser on the
    left: or the other way round?
+   **Answer (2026-11-02): inspector right, browser left.**
 3. Own drawn icons, or a bundled open-licence icon font?
 4. Is 1440 × 900 the right screen to design for?

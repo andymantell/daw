@@ -98,31 +98,15 @@ The top bar work added `set_record_options` and `keep-last`, which reach all of 
 
 `edit_comment` (and `add_comment` with an end or on the loop), `edit_version`, `save_template` (save and delete), `manage_preset` (delete and export), `save_project` with another name or a path (Save as), `open_project` with `recover`, and the `start-screen-at-launch` command. Checking for updates now stays with the person, as agreeing to the checks does.
 
-### 5. Instruments and effects (17)
+### 5. Instruments and effects (done)
 
-Restart a crashed plugin (and report the crash); the loop slicer's loop and how it cuts; remove a sampler zone and spread zones over the keys; note repeat's rate; remove or move one note effect; a `drum_kits` tool (kit per MIDI input, name and factory notes while learning, export by name); practice mute for any track.
+`edit_effect` and `remove_effect` move, bypass and remove one note effect; `edit_effect` and `edit_instrument` take `restart` for a plugin that stopped, and `get_effects` and `get_instrument` say why it stopped. `edit_instrument` sets note repeat, spreads and removes sampler zones, and gives the loop slicer its loop and cuts it. `set_practice` takes `practice_mute` for any audio or instrument track. A `drum_kits` tool chooses the kit for each MIDI input, picks one to export, and names a kit being learned.
 
-- `fx.rs:1715` Restart crashed effect plugin (gap)
-- `fx.rs:2226` Restart crashed plugin instrument (gap)
-- `instrument.rs:1227` Note repeat: rate (partial)
-- `instrument.rs:1558` Sampler: Spread over the keys (partial)
-- `instrument.rs:1604` Sampler: Remove zone (partial)
-- `instrument.rs:2153` Slicer: Cut at the hits (gap)
-- `instrument.rs:2160` Slicer: Sensitivity slider (gap)
-- `instrument.rs:2165` Slicer: Cut into equal parts (gap)
-- `instrument.rs:2170` Slicer: Parts count (gap)
-- `kits.rs:433` Drum kit for MIDI input (gap)
-- `kits.rs:457` Kit list entry (partial)
-- `kits.rs:507` Kit learning: name field (gap)
-- `kits.rs:510` Kit learning: factory notes radio (gap)
-- `mixer.rs:581` Mixer strip P (practice mute) (partial)
-- `notefx.rs:686` Note effect Remove (partial)
-- `notefx.rs:693` Note effect Move down (gap)
-- `notefx.rs:700` Note effect Move up (gap)
+### 6. Audio setup, latency, keys and settings
 
-### 6. Audio setup, latency, keys and settings (37)
+Done so far: `edit_keys`, `set_theme`, the `add-test-tracks` command, and the tuner's A in `set_practice`. Disconnecting and forgetting a phone are marked for a person, as pairing one is: which devices may control the app is the person's to decide.
 
-A `set_audio_device` tool for the device page (driver, device, rate, buffers, inputs, offset, direct monitoring, click and main outputs, apply, rescan); the guided setup's choices; a `measure_latency` tool; an `edit_keys` tool; theme mode, copy and reload; phone remote disconnect and forget; perf test tracks; the tuner's A reference.
+Still to do: a `set_audio_device` tool for the device page (driver, device, rate, buffers, inputs, offset, direct monitoring, click and main outputs, apply, rescan); the guided setup's choices; a `measure_latency` tool.
 
 - `main.rs:2258` Audio device: Driver choice (gap)
 - `main.rs:2273` Audio device: Device choice (gap)

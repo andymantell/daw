@@ -78,11 +78,15 @@ impl Core {
     }
 }
 
-/// The state-variable filter, oversampled.
+/// The state-variable filter, oversampled unless made [`plain`](Svf::plain).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Svf {
     core: Core,
     over: Over2,
+    /// Runs at the sample rate with no oversampling: a quarter of the
+    /// cost, for a synth with many two-pole filters a voice whose
+    /// saturation is mild.
+    plain: bool,
 }
 
 impl Svf {
@@ -90,12 +94,21 @@ impl Svf {
         Svf::default()
     }
 
+    /// A filter run at the sample rate, with no oversampling.
+    pub fn plain() -> Svf {
+        Svf {
+            plain: true,
+            ..Svf::default()
+        }
+    }
+
     /// Sets the output, the cutoff in Hz, the resonance (0 to 1; it
     /// sings at 1) and the drive into the filter.
     pub fn set(&mut self, out: SvfOut, cutoff: f32, resonance: f32, drive: f32, rate: f32) {
         let c = &mut self.core;
         c.out = out;
-        c.g = coefficient(cutoff.max(5.0), rate * 2.0).0;
+        let rate = if self.plain { rate } else { rate * 2.0 };
+        c.g = coefficient(cutoff.max(5.0), rate).0;
         // A little past lossless at the top, so it sings rather than
         // merely rings, with the saturated loop setting the level.
         c.damp = 2.0 - 2.1 * resonance.clamp(0.0, 1.0);
@@ -107,6 +120,9 @@ impl Svf {
     #[inline]
     pub fn run(&mut self, x: f32) -> f32 {
         let core = &mut self.core;
+        if self.plain {
+            return core.tick(x);
+        }
         self.over.run(x, |v| core.tick(v))
     }
 

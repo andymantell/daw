@@ -703,6 +703,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("A six-voice polysynth with a chorus, for pads, chords, house stabs and bass: saw and pulse, a sub, a stepped high-pass, the 24 dB filter, one envelope, a delayed LFO")
     .words("instrument poly synth pad chord stab chorus analogue vintage"),
     info(
+        Cmd::AddInstrument(10),
+        "add-eighty-track",
+        "Edit",
+        "Add Eighty track",
+        &[],
+    )
+    .hint("An eight-voice two-channel touch polysynth for pads, brass and expressive leads: velocity and polyphonic aftertouch to level and brightness, a ring modulator and chorus")
+    .words("instrument poly synth pad brass lead aftertouch touch analogue vintage"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

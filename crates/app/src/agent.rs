@@ -2408,6 +2408,130 @@ mod tests {
         assert_eq!(p["tracks"][1]["instrument"]["builtin"], "june", "{p}");
     }
 
+    /// The Eighty through the assistant interface (classic synths, S6):
+    /// add the track, read its two channels' settings and the sounds
+    /// made in code, voice a pad, play a chord, and press on one bar's
+    /// notes through their pressure lines, which lifts and brightens it.
+    #[test]
+    fn the_eighty_is_played_through_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "eighty"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        for key in [
+            "instrument.ch1_saw",
+            "instrument.ch1_pwm",
+            "instrument.ch1_hp",
+            "instrument.ch1_hp_res",
+            "instrument.ch1_lp",
+            "instrument.ch1_slope",
+            "instrument.ch1_f_initial",
+            "instrument.ch1_f_attack_level",
+            "instrument.ch2_sine",
+            "instrument.ch2_tune",
+            "instrument.mix",
+            "instrument.touch_cutoff",
+            "instrument.after_level",
+            "instrument.after_cutoff",
+            "instrument.lfo_shape",
+            "instrument.ring_depth",
+            "instrument.chorus",
+            "instrument.voices",
+        ] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        let choices = |key: &str| -> Vec<Value> {
+            let p = params.iter().find(|p| p["param"] == key).unwrap();
+            p["choices"].as_array().unwrap().clone()
+        };
+        assert_eq!(
+            choices("instrument.ch1_slope"),
+            vec![json!("12 dB"), json!("24 dB")]
+        );
+        assert!(choices("instrument.chorus").iter().any(|c| c == "I + II"));
+        // The sounds made in code come with the settings that make them.
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let sounds = info["instrument"]["sounds"].as_array().unwrap();
+        let pad = (sounds.iter()).find(|s| s["name"] == "Big pad").unwrap();
+        d.call(
+            "set_instrument",
+            json!({"track": t, "settings": pad["settings"]}),
+        )
+        .unwrap();
+        // Voiced further: quicker, with the aftertouch opening it wide.
+        d.call(
+            "set_parameters",
+            json!({"track": t, "changes": [
+                {"param": "instrument.ch1_attack", "value": 0.02},
+                {"param": "instrument.ch2_attack", "value": 0.02},
+                {"param": "instrument.after_cutoff", "value": 3.0},
+                {"param": "instrument.after_level", "value": 1.0},
+                {"param": "instrument.chorus", "value": 0}
+            ]}),
+        )
+        .unwrap();
+        // The same chord in two bars; the second bar's notes pressed.
+        let c = d
+            .call(
+                "add_note_clip",
+                json!({"track": t, "bar": 1, "bars": 2, "notes": [
+                    {"beat": 0.0, "beats": 3.5, "pitch": 48, "velocity": 100},
+                    {"beat": 0.0, "beats": 3.5, "pitch": 55, "velocity": 100},
+                    {"beat": 0.0, "beats": 3.5, "pitch": 60, "velocity": 100},
+                    {"beat": 4.0, "beats": 3.5, "pitch": 48, "velocity": 100},
+                    {"beat": 4.0, "beats": 3.5, "pitch": 55, "velocity": 100},
+                    {"beat": 4.0, "beats": 3.5, "pitch": 60, "velocity": 100}
+                ]}),
+            )
+            .unwrap();
+        let c = c["clip"].as_str().unwrap().to_string();
+        let notes = d.call("get_note_clip", json!({"clip": c})).unwrap();
+        let pressed: Vec<Value> = (notes["notes"].as_array().unwrap().iter())
+            .filter(|n| n["beat"].as_f64().unwrap() >= 4.0)
+            .map(|n| {
+                json!({"note": n["id"], "kind": "pressure",
+                       "points": [{"beat": 0.0, "value": 1.0}, {"beat": 3.0, "value": 1.0}]})
+            })
+            .collect();
+        assert_eq!(pressed.len(), 3);
+        d.call("edit_note_lanes", json!({"clip": c, "expression": pressed}))
+            .unwrap();
+        let bar = |d: &mut Driver, b: i64| -> Value {
+            d.call(
+                "analyse",
+                json!({"track": t, "from_bar": b, "to_bar": b + 1}),
+            )
+            .unwrap()
+        };
+        let highs = |a: &Value| -> f64 {
+            let power: f64 = (a["third_octave_bands"].as_array().unwrap().iter())
+                .filter(|b| b["hz"].as_f64().unwrap() >= 2000.0)
+                .map(|b| 10f64.powf(b["db"].as_f64().unwrap() / 10.0))
+                .sum();
+            10.0 * power.max(1e-12).log10()
+        };
+        let plain = bar(&mut d, 1);
+        let pressed = bar(&mut d, 2);
+        let loud = |a: &Value| a["rms_dbfs"].as_f64().unwrap();
+        assert!(
+            plain["sample_peak_dbfs"].as_f64().unwrap() > -30.0,
+            "{plain}"
+        );
+        assert!(loud(&pressed) > loud(&plain) + 1.5, "{plain} {pressed}");
+        assert!(highs(&pressed) > highs(&plain) + 3.0, "{plain} {pressed}");
+        let now = instrument_params(&mut d, &t);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.ch2_tune")
+            .unwrap();
+        assert_eq!(f["value"], -7.0);
+        // The command is in the table too, and names the synth.
+        d.call("run_command", json!({"id": "add-eighty-track"}))
+            .unwrap();
+        let p = d.call("get_project", json!({})).unwrap();
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
+        assert_eq!(p["tracks"][1]["instrument"]["builtin"], "eighty");
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

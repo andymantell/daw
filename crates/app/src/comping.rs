@@ -1226,7 +1226,7 @@ mod tests {
             h.state_mut().run(&ctx, Cmd::TakeLanes);
             h.run();
             // Room to see every lane.
-            h.get_by_label("Close mixer").click();
+            h.state_mut().workspace.close(crate::workspace::Pane::Mixer);
             h.run();
             h
         }

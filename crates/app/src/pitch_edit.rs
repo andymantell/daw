@@ -1588,6 +1588,47 @@ pub(crate) mod tests {
         }
 
         #[test]
+        fn double_clicking_an_audio_clip_opens_it_in_the_dock() {
+            use crate::workspace::{Pane, Region};
+            use egui_kittest::Harness;
+            use egui_kittest::kittest::Queryable as _;
+            let mut h = Harness::builder()
+                .with_size([1400.0, 900.0])
+                .allow_missing_glyphs()
+                .build_eframe(|_cc| crate::App::new(Vec::new()));
+            let c = sung(&[(60.0, 0.6), (64.0, 0.6)], 0.2);
+            let id = c.id;
+            let app = h.state_mut();
+            app.tracks.push(Track::new("Vocal".into()));
+            app.tracks[0].clips.push(c);
+            app.rebuild();
+            h.run();
+            let row = h.get_by_label("Mute the Vocal track").rect().center().y;
+            // The timeline starts at the window's left, with no browser.
+            let at = egui::pos2(crate::timeline::HEADER + 20.0, row);
+            h.input_mut().events.push(egui::Event::PointerMoved(at));
+            h.step();
+            // Two clicks close together.
+            for _ in 0..2 {
+                for pressed in [true, false] {
+                    h.input_mut().events.push(egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                h.step();
+            }
+            h.run();
+            let app = h.state();
+            assert!(app.timeline.selected.contains(&id));
+            let dock = app.workspace.layout.tabs(Region::Dock);
+            assert_eq!(dock.panes, [Pane::Mixer, Pane::PitchEditor]);
+            assert_eq!(app.workspace.value()["dock"]["shown"], "pitch-editor");
+        }
+
+        #[test]
         fn the_commands_act_on_the_chosen_notes_or_all() {
             let mut d = Driver::new();
             let mut c = sung(&[(60.3, 0.4), (62.0, 0.4)], 0.0);

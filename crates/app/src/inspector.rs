@@ -613,7 +613,7 @@ impl App {
                         self.edit_pattern_of(&key);
                     } else {
                         self.notes_editor.edit(&key);
-                        self.workspace.open(crate::workspace::Pane::NotesEditor);
+                        self.open_pane(crate::workspace::Pane::NotesEditor);
                     }
                 }
             }

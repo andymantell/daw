@@ -594,7 +594,7 @@ impl crate::App {
         self.tracks[lane].note_clips.push(c);
         self.tracks[lane].note_clips.sort_by_key(|c| c.start);
         self.timeline.note_sel = Some(key.clone());
-        self.workspace.open(crate::workspace::Pane::Patterns);
+        self.open_pane(crate::workspace::Pane::Patterns);
         self.rebuild();
         Some(key)
     }
@@ -676,7 +676,7 @@ impl crate::App {
             .and_then(|c| c.pattern.clone());
         if let Some(pat) = pat {
             self.pattern_editor.edit(&pat, Some(key));
-            self.workspace.open(crate::workspace::Pane::Patterns);
+            self.open_pane(crate::workspace::Pane::Patterns);
         }
     }
 

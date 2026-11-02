@@ -426,6 +426,29 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "set_pane",
+        description: "Opens, moves, collapses or closes a pane of the main window. Round \
+                      the timeline are three regions that hold panes as tabs: the left \
+                      panel (the browser), the right panel (the inspector, lesson notes, \
+                      comments, lessons, tuner) and the dock along the bottom (the mixer \
+                      and the editors). A pane opens in its own region and its tab is \
+                      shown; give `to` to move it into another. get_selection's `panels` \
+                      says what each region holds and shows. Pane ids: timeline, mixer, \
+                      comments, notes, lessons, tuner, takes, monitor, notes-editor, \
+                      automation, browser, patterns, video, fretboard, pitch-editor, \
+                      inspector.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "pane": {"type": "string"},
+                "open": {"type": "boolean", "description": "False closes it; true if left out."},
+                "to": {"type": "string", "enum": ["left", "right", "dock"]},
+                "collapsed": {"type": "boolean",
+                              "description": "Collapses its region to its header, or opens it out."}
+            }, "required": ["pane"]})
+        },
+    },
+    Tool {
         name: "select_track",
         description: "Shows a track, by id, in the inspector: its volume, pan, output, \
                       sends, instrument and sound, effects, and its selected clip. As \
@@ -1409,6 +1432,22 @@ impl App {
                 self.timeline.note_sel = note;
                 Ok((json!({"selected": keys.len()}), None))
             }
+            "set_pane" => {
+                use crate::workspace::{Pane, Region};
+                let id = args["pane"].as_str().ok_or("Give the pane's id.")?;
+                let p = Pane::from_id(id).ok_or_else(|| format!("There is no pane {id}."))?;
+                let to =
+                    match args["to"].as_str() {
+                        Some(r) => Some(Region::from_id(r).ok_or_else(|| {
+                            format!("There is no region {r}: left, right or dock.")
+                        })?),
+                        None => None,
+                    };
+                let open = args["open"].as_bool().unwrap_or(true);
+                let collapsed = args["collapsed"].as_bool();
+                self.workspace.set_pane(p, open, to, collapsed)?;
+                Ok((json!({"panels": self.workspace.value()}), None))
+            }
             "select_track" => {
                 let key = args["track"].as_str().ok_or("Give the track's id.")?;
                 if !self.inspect_track(key) {
@@ -1861,6 +1900,7 @@ impl App {
             "panes": self.track_panes_value(),
             "top_bar": self.top_bar_open(),
             "start_screen_at_launch": self.start.settings.show,
+            "panels": self.workspace.value(),
         })
     }
 

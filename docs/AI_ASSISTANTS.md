@@ -246,6 +246,12 @@ assistant finds them for itself. In outline:
 - **Top bar option panels:** `record-options`, `loop-options`,
   `metronome-options` and `speed-options` open a panel for the person
   to see; `get_selection` says which is open as `top_bar`.
+- **The main window's panels:** round the timeline are the left panel
+  (the browser), the right panel (the inspector and the lesson's panes)
+  and the dock along the bottom (the mixer and the editors), each
+  holding panes as tabs. `set_pane` opens, moves (`to`: left, right or
+  dock), collapses or closes a pane; `get_selection` says what each
+  region holds and shows as `panels`.
 - **Monitor section:** `get_monitor`, `edit_headphone_mixes` (add,
   change, remove, copy the main mix, and each track's level, pan and
   mute in a mix) and `set_monitor` (the speakers' controls, talkback,

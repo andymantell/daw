@@ -94,7 +94,7 @@ impl Pane {
         }
     }
 
-    fn from_id(id: &str) -> Option<Pane> {
+    pub(crate) fn from_id(id: &str) -> Option<Pane> {
         PANES.into_iter().find(|p| p.id() == id)
     }
 
@@ -134,27 +134,60 @@ impl Pane {
     }
 }
 
-/// The part of the main window's width left of the inspector.
-const INSPECTOR_SHARE: f32 = 0.83;
-
-/// Where a pane goes, beside another.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Side {
+/// A fixed part of the main window around the timeline, which holds
+/// panes as tabs (UI polish plan, section 1): the browser's panel on the
+/// left, the inspector's on the right, and the dock along the bottom for
+/// the editors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Region {
     Left,
     Right,
-    Above,
-    Below,
-    /// As another tab of the same group.
-    Tab,
+    Dock,
 }
 
-const SIDES: [(Side, &str); 5] = [
-    (Side::Left, "Left of"),
-    (Side::Right, "Right of"),
-    (Side::Above, "Above"),
-    (Side::Below, "Below"),
-    (Side::Tab, "A tab with"),
-];
+pub(crate) const REGIONS: [Region; 3] = [Region::Left, Region::Right, Region::Dock];
+
+impl Region {
+    /// Kept in `layout.txt` and given to assistants: never change one.
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Region::Left => "left",
+            Region::Right => "right",
+            Region::Dock => "dock",
+        }
+    }
+
+    pub(crate) fn from_id(id: &str) -> Option<Region> {
+        REGIONS.into_iter().find(|r| r.id() == id)
+    }
+
+    /// As said in a sentence: "the left panel".
+    pub(crate) fn the(self) -> &'static str {
+        match self {
+            Region::Left => "the left panel",
+            Region::Right => "the right panel",
+            Region::Dock => "the dock",
+        }
+    }
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+impl Pane {
+    /// Where the pane opens: the browser on the left, the inspector and
+    /// the lesson's panes on the right, the editors in the dock.
+    pub(crate) fn home(self) -> Region {
+        match self {
+            Pane::Browser => Region::Left,
+            Pane::Inspector | Pane::Notes | Pane::Comments | Pane::Lessons | Pane::Tuner => {
+                Region::Right
+            }
+            _ => Region::Dock,
+        }
+    }
+}
 
 /// Panes tabbed together, one of them shown.
 #[derive(Clone, Debug, PartialEq)]
@@ -166,130 +199,30 @@ pub(crate) struct Tabs {
 }
 
 impl Tabs {
-    fn of(panes: &[Pane]) -> Node {
-        Node::Tabs(Tabs {
+    fn of(panes: &[Pane]) -> Tabs {
+        Tabs {
             panes: panes.to_vec(),
             active: 0,
             collapsed: false,
-        })
+        }
     }
 
     fn shown(&self) -> Option<Pane> {
         self.panes.get(self.active).copied()
     }
-}
 
-/// The main window's arrangement: groups of tabs, split in two again
-/// and again.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Node {
-    Tabs(Tabs),
-    Split {
-        /// Side by side, or else one above the other.
-        across: bool,
-        /// The first one's part of the space, 0 to 1.
-        share: f32,
-        first: Box<Node>,
-        second: Box<Node>,
-    },
-}
-
-impl Node {
-    fn split(across: bool, share: f32, first: Node, second: Node) -> Node {
-        Node::Split {
-            across,
-            share,
-            first: Box::new(first),
-            second: Box::new(second),
-        }
-    }
-
-    fn tabs_with(&mut self, p: Pane) -> Option<&mut Tabs> {
-        match self {
-            Node::Tabs(t) => t.panes.contains(&p).then_some(t),
-            Node::Split { first, second, .. } => {
-                first.tabs_with(p).or_else(move || second.tabs_with(p))
-            }
-        }
-    }
-
-    fn panes(&self, out: &mut Vec<Pane>) {
-        match self {
-            Node::Tabs(t) => out.extend(&t.panes),
-            Node::Split { first, second, .. } => {
-                first.panes(out);
-                second.panes(out);
-            }
-        }
-    }
-
-    /// Takes `p` out. True if nothing is left in this node.
     fn remove(&mut self, p: Pane) -> bool {
-        match self {
-            Node::Tabs(t) => {
-                if let Some(i) = t.panes.iter().position(|&q| q == p) {
-                    t.panes.remove(i);
-                    if t.active > i || t.active >= t.panes.len() {
-                        t.active = t.active.saturating_sub(1);
-                    }
-                }
-                t.panes.is_empty()
-            }
-            Node::Split { first, second, .. } => {
-                let left = if first.remove(p) {
-                    Some(std::mem::replace(&mut **second, Tabs::of(&[])))
-                } else if second.remove(p) {
-                    Some(std::mem::replace(&mut **first, Tabs::of(&[])))
-                } else {
-                    None
-                };
-                if let Some(n) = left {
-                    *self = n;
-                }
-                false
-            }
-        }
-    }
-
-    /// The node holding `p`, to replace.
-    fn node_with(&mut self, p: Pane) -> Option<&mut Node> {
-        match self {
-            Node::Tabs(t) if t.panes.contains(&p) => Some(self),
-            Node::Tabs(_) => None,
-            Node::Split { first, second, .. } => {
-                first.node_with(p).or_else(move || second.node_with(p))
-            }
-        }
-    }
-
-    /// Grows (or shrinks, if `by` < 0) the pane's part of the split
-    /// nearest it. True if there was one.
-    fn grow(&mut self, p: Pane, by: f32) -> bool {
-        let Node::Split {
-            share,
-            first,
-            second,
-            ..
-        } = self
-        else {
+        let Some(i) = self.panes.iter().position(|&q| q == p) else {
             return false;
         };
-        let in_first = first.tabs_with(p).is_some();
-        let inner = if in_first { first } else { second };
-        if inner.grow(p, by) {
-            return true;
+        self.panes.remove(i);
+        if self.active > i || self.active >= self.panes.len() {
+            self.active = self.active.saturating_sub(1);
         }
-        if !in_first && inner.tabs_with(p).is_none() {
-            return false;
+        if self.panes.is_empty() {
+            self.collapsed = false;
         }
-        let by = if in_first { by } else { -by };
-        *share = (*share + by).clamp(0.1, 0.9);
         true
-    }
-
-    /// Only its header shows, so it needs no more space than that.
-    fn collapsed(&self) -> bool {
-        matches!(self, Node::Tabs(t) if t.collapsed)
     }
 }
 
@@ -302,73 +235,78 @@ pub(crate) struct Window {
     pub(crate) rect: Option<(Rect, f32)>,
 }
 
-/// The main window's panes, and the panes in windows of their own.
+/// The side panels' widths, as parts of the main window's width.
+const LEFT_SHARE: f32 = 0.2;
+const RIGHT_SHARE: f32 = 0.17;
+/// The dock's part of the height beside the side panels: enough for
+/// an instrument's panel at 1440 x 900.
+const DOCK_SHARE: f32 = 0.42;
+/// The most a side panel or the dock may take.
+const MAX_SHARE: f32 = 0.7;
+const MIN_SHARE: f32 = 0.08;
+
+/// The main window: the timeline in the middle, with the three regions
+/// round it; and the panes in windows of their own.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Layout {
-    pub(crate) dock: Node,
+    /// By `Region::index`.
+    pub(crate) regions: [Tabs; 3],
+    /// Each region's part of the window: of its width for the side
+    /// panels, of the height for the dock.
+    pub(crate) shares: [f32; 3],
     pub(crate) windows: Vec<Window>,
 }
 
 impl Layout {
-    /// The timeline above the mixer.
-    pub(crate) fn recording() -> Layout {
+    fn with(left: &[Pane], right: &[Pane], dock: &[Pane], dock_share: f32) -> Layout {
         Layout {
-            dock: Node::split(
-                true,
-                INSPECTOR_SHARE,
-                Node::split(
-                    false,
-                    0.62,
-                    Tabs::of(&[Pane::Timeline]),
-                    Tabs::of(&[Pane::Mixer]),
-                ),
-                Tabs::of(&[Pane::Inspector]),
-            ),
+            regions: [Tabs::of(left), Tabs::of(right), Tabs::of(dock)],
+            shares: [LEFT_SHARE, RIGHT_SHARE, dock_share],
             windows: Vec::new(),
         }
     }
 
+    /// The timeline above the mixer, the inspector on the right.
+    pub(crate) fn recording() -> Layout {
+        Layout::with(&[], &[Pane::Inspector], &[Pane::Mixer], DOCK_SHARE)
+    }
+
     /// The mixer large, the timeline small above it.
     pub(crate) fn mixing() -> Layout {
-        Layout {
-            dock: Node::split(
-                false,
-                0.32,
-                Tabs::of(&[Pane::Timeline]),
-                Tabs::of(&[Pane::Mixer]),
-            ),
-            windows: Vec::new(),
-        }
+        Layout::with(&[], &[], &[Pane::Mixer], 0.68)
     }
 
     /// The timeline and mixer, with the notes, comments and tuner at
     /// the side.
     fn lesson() -> Layout {
-        Layout {
-            dock: Node::split(
-                true,
-                0.66,
-                Node::split(
-                    false,
-                    0.7,
-                    Tabs::of(&[Pane::Timeline]),
-                    Tabs::of(&[Pane::Mixer]),
-                ),
-                Node::split(
-                    false,
-                    0.68,
-                    Tabs::of(&[Pane::Notes, Pane::Comments]),
-                    Tabs::of(&[Pane::Tuner]),
-                ),
-            ),
-            windows: Vec::new(),
-        }
+        let mut l = Layout::with(
+            &[],
+            &[Pane::Notes, Pane::Comments, Pane::Tuner],
+            &[Pane::Mixer],
+            0.3,
+        );
+        l.shares[Region::Right.index()] = 0.3;
+        l
     }
 
+    pub(crate) fn tabs(&self, r: Region) -> &Tabs {
+        &self.regions[r.index()]
+    }
+
+    fn tabs_mut(&mut self, r: Region) -> &mut Tabs {
+        &mut self.regions[r.index()]
+    }
+
+    /// The region the pane is in, if it is in one.
+    pub(crate) fn region_of(&self, p: Pane) -> Option<Region> {
+        REGIONS
+            .into_iter()
+            .find(|&r| self.tabs(r).panes.contains(&p))
+    }
+
+    /// In the main window.
     pub(crate) fn docked(&self, p: Pane) -> bool {
-        let mut all = Vec::new();
-        self.dock.panes(&mut all);
-        all.contains(&p)
+        p.fixed() || self.region_of(p).is_some()
     }
 
     pub(crate) fn in_window(&self, p: Pane) -> bool {
@@ -379,101 +317,72 @@ impl Layout {
         self.docked(p) || self.in_window(p)
     }
 
+    /// The panes in the main window, the timeline first.
+    #[cfg(test)]
+    fn panes(&self) -> Vec<Pane> {
+        let mut all = vec![Pane::Timeline];
+        for t in &self.regions {
+            all.extend(&t.panes);
+        }
+        all
+    }
+
     /// Takes the pane out of the main window or its own.
     pub(crate) fn remove(&mut self, p: Pane) {
         if p.fixed() {
             return;
         }
         self.windows.retain(|w| w.pane != p);
-        self.dock.remove(p);
+        for t in &mut self.regions {
+            t.remove(p);
+        }
     }
 
-    /// Puts `p` beside `target`, moving it from wherever it was.
-    pub(crate) fn put(&mut self, p: Pane, target: Pane, side: Side) {
-        if p == target {
+    /// Puts `p` in a region as its last tab, shown, moving it from
+    /// wherever it was.
+    pub(crate) fn put(&mut self, p: Pane, r: Region) {
+        if p.fixed() || self.region_of(p) == Some(r) {
             return;
         }
-        // The fixed pane only moves within the main window.
-        self.windows.retain(|w| w.pane != p);
-        self.dock.remove(p);
-        let target = if self.docked(target) {
-            target
-        } else {
-            Pane::Timeline
-        };
-        let Some(node) = self.dock.node_with(target) else {
-            return;
-        };
-        if side == Side::Tab {
-            if let Node::Tabs(t) = node {
-                t.panes.push(p);
-                t.active = t.panes.len() - 1;
-            }
-            return;
-        }
-        let old = std::mem::replace(node, Tabs::of(&[]));
-        let new = Tabs::of(&[p]);
-        let across = matches!(side, Side::Left | Side::Right);
-        // A pane put beside another takes a third of its space.
-        *node = match side {
-            Side::Left | Side::Above => Node::split(across, 0.34, new, old),
-            _ => Node::split(across, 0.66, old, new),
-        };
+        self.remove(p);
+        let t = self.tabs_mut(r);
+        t.panes.push(p);
+        t.active = t.panes.len() - 1;
     }
 
-    /// Opens the pane where it goes by default, unless it is open.
+    /// Opens the pane where it goes, unless it is open.
     pub(crate) fn open(&mut self, p: Pane) {
-        if self.is_open(p) {
-            return;
+        if !self.is_open(p) {
+            self.put(p, p.home());
         }
-        let side_panes = [Pane::Notes, Pane::Lessons, Pane::Comments, Pane::Tuner];
-        let (target, side) = match p {
-            Pane::Timeline => return,
-            // Left of the timeline, where sounds are dragged from.
-            Pane::Browser => (Pane::Timeline, Side::Left),
-            Pane::Mixer
-            | Pane::Takes
-            | Pane::Monitor
-            | Pane::NotesEditor
-            | Pane::Automation
-            | Pane::Patterns
-            | Pane::Fretboard
-            | Pane::PitchEditor
-            | Pane::Instrument
-            | Pane::Effects
-            | Pane::Notation => (Pane::Timeline, Side::Below),
-            Pane::Video => (Pane::Timeline, Side::Right),
-            // On the right of everything, across the whole height.
-            Pane::Inspector => {
-                let old = std::mem::replace(&mut self.dock, Tabs::of(&[]));
-                self.dock = Node::split(true, INSPECTOR_SHARE, old, Tabs::of(&[Pane::Inspector]));
-                return;
-            }
-            // Below the side panes open now, so all can be seen.
-            _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
-                Some(q) => (q, Side::Below),
-                None => (Pane::Timeline, Side::Right),
-            },
-        };
-        self.put(p, target, side);
     }
 
-    /// Shows the pane's tab, uncollapsed.
+    /// Shows the pane's tab, and its region if collapsed.
     pub(crate) fn show(&mut self, p: Pane) {
-        if let Some(t) = self.dock.tabs_with(p) {
+        if let Some(r) = self.region_of(p) {
+            let t = self.tabs_mut(r);
             t.active = t.panes.iter().position(|&q| q == p).unwrap_or(0);
             t.collapsed = false;
         }
     }
 
     pub(crate) fn toggle_collapsed(&mut self, p: Pane) {
-        if let Some(t) = self.dock.tabs_with(p) {
+        if let Some(r) = self.region_of(p) {
+            let t = self.tabs_mut(r);
             t.collapsed = !t.collapsed;
         }
     }
 
+    /// Gives the pane's region more room (or less); for the timeline,
+    /// the dock less (or more).
     pub(crate) fn grow(&mut self, p: Pane, by: f32) {
-        self.dock.grow(p, by);
+        let (r, by) = match self.region_of(p) {
+            Some(r) => (r, by),
+            None if p.fixed() => (Region::Dock, -by),
+            None => return,
+        };
+        let s = &mut self.shares[r.index()];
+        *s = (*s + by).clamp(MIN_SHARE, MAX_SHARE);
     }
 
     /// Moves the pane into a window of its own.
@@ -481,7 +390,7 @@ impl Layout {
         if p.fixed() || self.in_window(p) {
             return;
         }
-        self.dock.remove(p);
+        self.remove(p);
         self.windows.push(Window { pane: p, rect });
     }
 
@@ -493,18 +402,24 @@ impl Layout {
         }
     }
 
-    /// Mends a layout read from a file: each pane once, and the
-    /// timeline in the main window.
+    /// Mends a layout read from a file: each pane once, the timeline in
+    /// the middle, and the sizes in range.
     fn mend(mut self) -> Layout {
-        let mut seen = Vec::new();
-        mend_node(&mut self.dock, &mut seen);
-        if seen.is_empty() {
-            self.dock = Tabs::of(&[Pane::Timeline]);
-            seen.push(Pane::Timeline);
-        } else if !seen.contains(&Pane::Timeline) {
-            let old = std::mem::replace(&mut self.dock, Tabs::of(&[]));
-            self.dock = Node::split(true, 0.66, Tabs::of(&[Pane::Timeline]), old);
-            seen.push(Pane::Timeline);
+        let mut seen = vec![Pane::Timeline];
+        for t in &mut self.regions {
+            t.panes.retain(|p| {
+                let ok = !seen.contains(p);
+                seen.push(*p);
+                ok
+            });
+            t.active = t.active.min(t.panes.len().saturating_sub(1));
+        }
+        for s in &mut self.shares {
+            *s = if s.is_finite() {
+                s.clamp(MIN_SHARE, MAX_SHARE)
+            } else {
+                0.25
+            };
         }
         self.windows.retain(|w| {
             let ok = !seen.contains(&w.pane);
@@ -514,11 +429,27 @@ impl Layout {
         self
     }
 
-    /// One line: `dock <node>`, then `; window <pane> [x y w h scale]`
-    /// for each window.
+    /// `panels <left> <right> <dock>` (their shares), then
+    /// `; <region> <active> <collapsed: 0 or 1> <pane,pane or ->` for each
+    /// region and `; window <pane> [x y w h scale]` for each window.
     fn to_text(&self) -> String {
-        let mut t = String::from("dock ");
-        node_text(&self.dock, &mut t);
+        let [l, r, d] = self.shares;
+        let mut t = format!("panels {l:.3} {r:.3} {d:.3}");
+        for reg in REGIONS {
+            let tabs = self.tabs(reg);
+            let ids: Vec<&str> = tabs.panes.iter().map(|p| p.id()).collect();
+            t.push_str(&format!(
+                " ; {} {} {} {}",
+                reg.id(),
+                tabs.active,
+                u8::from(tabs.collapsed),
+                if ids.is_empty() {
+                    "-".to_string()
+                } else {
+                    ids.join(",")
+                }
+            ));
+        }
         for w in &self.windows {
             t.push_str(" ; window ");
             t.push_str(w.pane.id());
@@ -537,93 +468,66 @@ impl Layout {
 
     fn from_text(text: &str) -> Option<Layout> {
         let mut parts = text.split(" ; ");
-        let mut words = parts.next()?.split_whitespace();
-        if words.next()? != "dock" {
-            return None;
-        }
-        let dock = parse_node(&mut words)?;
-        let mut windows = Vec::new();
+        let first = parts.next()?;
+        let mut words = first.split_whitespace();
+        let mut l = match words.next()? {
+            "panels" => {
+                let shares: Vec<f32> = words.filter_map(|w| w.parse().ok()).collect();
+                let [a, b, c] = shares.as_slice() else {
+                    return None;
+                };
+                Layout {
+                    regions: [Tabs::of(&[]), Tabs::of(&[]), Tabs::of(&[])],
+                    shares: [*a, *b, *c],
+                    windows: Vec::new(),
+                }
+            }
+            // Written before the regions: panes split any way.
+            "dock" => from_tree(&parse_node(&mut words)?),
+            _ => return None,
+        };
         for part in parts {
             let w: Vec<&str> = part.split_whitespace().collect();
-            let (["window", id], rest) = w.split_at(2.min(w.len())) else {
-                return None;
-            };
-            let pane = Pane::from_id(id)?;
-            let n: Vec<f32> = rest.iter().filter_map(|x| x.parse().ok()).collect();
-            let rect = match n.as_slice() {
-                [x, y, w, h, s] if *w > 0.0 && *h > 0.0 && *s > 0.0 => {
-                    Some((Rect::from_min_size(pos2(*x, *y), vec2(*w, *h)), *s))
+            match w.as_slice() {
+                ["window", id, rest @ ..] => {
+                    let pane = Pane::from_id(id)?;
+                    let n: Vec<f32> = rest.iter().filter_map(|x| x.parse().ok()).collect();
+                    let rect = match n.as_slice() {
+                        [x, y, w, h, s] if *w > 0.0 && *h > 0.0 && *s > 0.0 => {
+                            Some((Rect::from_min_size(pos2(*x, *y), vec2(*w, *h)), *s))
+                        }
+                        _ => None,
+                    };
+                    l.windows.push(Window { pane, rect });
                 }
-                _ => None,
-            };
-            windows.push(Window { pane, rect });
-        }
-        Some(Layout { dock, windows }.mend())
-    }
-}
-
-fn mend_node(n: &mut Node, seen: &mut Vec<Pane>) {
-    match n {
-        Node::Tabs(t) => {
-            t.panes.retain(|p| {
-                let ok = !seen.contains(p);
-                seen.push(*p);
-                ok
-            });
-            t.active = t.active.min(t.panes.len().saturating_sub(1));
-        }
-        Node::Split {
-            share,
-            first,
-            second,
-            ..
-        } => {
-            *share = if share.is_finite() {
-                share.clamp(0.1, 0.9)
-            } else {
-                0.5
-            };
-            mend_node(first, seen);
-            mend_node(second, seen);
-            let empty = |n: &Node| matches!(n, Node::Tabs(t) if t.panes.is_empty());
-            if empty(first) {
-                *n = std::mem::replace(&mut **second, Tabs::of(&[]));
-            } else if empty(second) {
-                *n = std::mem::replace(&mut **first, Tabs::of(&[]));
+                [region, active, collapsed, ids] => {
+                    let r = Region::from_id(region)?;
+                    let t = l.tabs_mut(r);
+                    t.panes = ids.split(',').filter_map(Pane::from_id).collect();
+                    t.active = active.parse().ok()?;
+                    t.collapsed = *collapsed == "1" && !t.panes.is_empty();
+                }
+                _ => return None,
             }
         }
+        Some(l.mend())
     }
 }
 
-/// `tabs <active> <collapsed: 0 or 1> <pane,pane>` or
+/// A layout from before the regions, as it was kept: groups of tabs,
+/// split in two again and again.
+enum Node {
+    Tabs(Tabs),
+    Split {
+        across: bool,
+        share: f32,
+        first: Box<Node>,
+        second: Box<Node>,
+    },
+}
+
+/// `tabs <active> <collapsed> <pane,pane>` or
 /// `across|stacked <share> ( <node> ) ( <node> )`.
-fn node_text(n: &Node, t: &mut String) {
-    match n {
-        Node::Tabs(tabs) => {
-            let ids: Vec<&str> = tabs.panes.iter().map(|p| p.id()).collect();
-            t.push_str(&format!(
-                "tabs {} {} {}",
-                tabs.active,
-                u8::from(tabs.collapsed),
-                ids.join(",")
-            ));
-        }
-        Node::Split {
-            across,
-            share,
-            first,
-            second,
-        } => {
-            t.push_str(if *across { "across " } else { "stacked " });
-            t.push_str(&format!("{share:.3} ( "));
-            node_text(first, t);
-            t.push_str(" ) ( ");
-            node_text(second, t);
-            t.push_str(" )");
-        }
-    }
-}
-
 fn parse_node<'a>(w: &mut impl Iterator<Item = &'a str>) -> Option<Node> {
     match w.next()? {
         "tabs" => {
@@ -645,10 +549,61 @@ fn parse_node<'a>(w: &mut impl Iterator<Item = &'a str>) -> Option<Node> {
             };
             let first = inner()?;
             let second = inner()?;
-            Some(Node::split(kind == "across", share, first, second))
+            Some(Node::Split {
+                across: kind == "across",
+                share,
+                first: Box::new(first),
+                second: Box::new(second),
+            })
         }
         _ => None,
     }
+}
+
+/// Each pane of an old layout to where it goes now, the tab that was
+/// shown still shown; and the room the timeline had over the panes
+/// below it kept.
+fn from_tree(n: &Node) -> Layout {
+    fn walk(n: &Node, l: &mut Layout, shown: &mut Vec<Pane>) {
+        match n {
+            Node::Tabs(t) => {
+                for &p in &t.panes {
+                    if !p.fixed() {
+                        let r = p.home();
+                        if l.region_of(p).is_none() {
+                            l.tabs_mut(r).panes.push(p);
+                        }
+                    }
+                }
+                if let Some(p) = t.shown() {
+                    shown.push(p);
+                }
+            }
+            Node::Split {
+                across,
+                share,
+                first,
+                second,
+            } => {
+                let timeline_above =
+                    matches!(&**first, Node::Tabs(t) if t.panes.contains(&Pane::Timeline));
+                if !across && timeline_above && share.is_finite() {
+                    l.shares[Region::Dock.index()] = ((1.0 - share) * 1000.0).round() / 1000.0;
+                }
+                walk(first, l, shown);
+                walk(second, l, shown);
+            }
+        }
+    }
+    let mut l = Layout::with(&[], &[], &[], DOCK_SHARE);
+    let mut shown = Vec::new();
+    walk(n, &mut l, &mut shown);
+    for t in &mut l.regions {
+        t.active = (t.panes.iter())
+            .position(|p| shown.contains(p))
+            .unwrap_or(0);
+    }
+    l
 }
 
 /// What the app does for the workspace.
@@ -962,6 +917,58 @@ impl Workspace {
         true
     }
 
+    /// What an assistant sees of the main window: what each region
+    /// holds and shows, the panes in windows of their own, and the pane
+    /// shown full size.
+    pub(crate) fn value(&self) -> serde_json::Value {
+        let ids = |ps: &[Pane]| ps.iter().map(|p| p.id()).collect::<Vec<_>>();
+        let mut v = serde_json::json!({
+            "windows": self.layout.windows.iter().map(|w| w.pane.id()).collect::<Vec<_>>(),
+            "full_size": self.full.map(Pane::id),
+            "current": self.current.id(),
+        });
+        for r in REGIONS {
+            let t = self.layout.tabs(r);
+            v[r.id()] = serde_json::json!({
+                "panes": ids(&t.panes),
+                "shown": t.shown().map(Pane::id),
+                "collapsed": t.collapsed,
+            });
+        }
+        v
+    }
+
+    /// Opens, moves, collapses or closes a pane, as an assistant asks.
+    pub(crate) fn set_pane(
+        &mut self,
+        p: Pane,
+        open: bool,
+        to: Option<Region>,
+        collapsed: Option<bool>,
+    ) -> Result<(), String> {
+        if p.fixed() && (!open || to.is_some()) {
+            return Err("The timeline is always in the middle of the main window.".into());
+        }
+        if !open {
+            self.close(p);
+            return Ok(());
+        }
+        if let Some(r) = to {
+            self.forget_window(p);
+            self.layout.put(p, r);
+            self.changed = true;
+        }
+        self.open(p);
+        if let Some(c) = collapsed {
+            let Some(r) = self.layout.region_of(p) else {
+                return Err(format!("{} isn't in a panel to collapse.", p.title()));
+            };
+            self.layout.regions[r.index()].collapsed = c;
+            self.changed = true;
+        }
+        Ok(())
+    }
+
     /// Draws the main window's panes in `ui`, and the panes in windows
     /// of their own.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, host: &mut impl Host) {
@@ -974,11 +981,6 @@ impl Workspace {
             acts: Vec::new(),
             drag,
             windows: self.windows_allowed,
-            others: {
-                let mut all = Vec::new();
-                self.layout.dock.panes(&mut all);
-                all
-            },
             full,
         };
         if let Some(p) = full {
@@ -987,9 +989,9 @@ impl Workspace {
                 active: 0,
                 collapsed: false,
             };
-            cx.tabs(ui, &mut tabs, rect, Id::unique("full pane"));
+            cx.tabs(ui, &mut tabs, rect, Id::unique("full pane"), None);
         } else {
-            cx.node(ui, &mut self.layout.dock, rect, Id::unique("panes"));
+            cx.regions(ui, &mut self.layout, rect);
         }
         let Draw { host, mut acts, .. } = cx;
         let ppp = ui.ctx().pixels_per_point();
@@ -1021,9 +1023,10 @@ impl Workspace {
             }
             Act::Detach(p) => self.detach(p),
             Act::DockBack(p) => self.dock_back(p),
-            Act::Put(p, target, side) => {
+            Act::Put(p, r) => {
                 self.forget_window(p);
-                self.layout.put(p, target, side);
+                self.layout.put(p, r);
+                self.layout.show(p);
                 self.current = p;
                 self.changed = true;
             }
@@ -1115,7 +1118,7 @@ impl Workspace {
                         ui.strong(p.title());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                // ai: view
+                                // ai: set_pane
                                 .button("Put back")
                                 .accessible_name(format!("Put {} back in the main window", p.the()))
                                 .on_hover_text("Back in the main window")
@@ -1169,9 +1172,9 @@ enum Act {
     Full(Pane),
     Detach(Pane),
     DockBack(Pane),
-    Put(Pane, Pane, Side),
+    Put(Pane, Region),
     Grow(Pane, f32),
-    /// A split was dragged.
+    /// A region's edge was dragged.
     Moved,
     /// Where a pane's own window is now, and its screen's scale.
     At(Pane, Rect, f32),
@@ -1179,10 +1182,14 @@ enum Act {
 
 /// The height of a group's tabs.
 const HEADER: f32 = 26.0;
-/// The gap between panes, which is dragged to resize them.
+/// The gap between regions, which is dragged to resize them.
 const GAP: f32 = 6.0;
-/// The least a pane shrinks to, when there is room.
+/// The least a region shrinks to, when there is room.
 const MIN: f32 = 90.0;
+/// The least height the dock shrinks to, when there is room.
+const DOCK_MIN: f32 = 260.0;
+/// A collapsed side panel's width: room for the button to open it.
+const NARROW: f32 = 30.0;
 
 struct Draw<'a, H> {
     host: &'a mut H,
@@ -1190,69 +1197,183 @@ struct Draw<'a, H> {
     /// The pane being dragged by its tab.
     drag: Option<Pane>,
     windows: bool,
-    /// The panes in the main window, to move one beside.
-    others: Vec<Pane>,
     full: Option<Pane>,
 }
 
+/// Where the regions go in `rect`: left, right, dock, and the timeline.
+pub(crate) fn places(l: &Layout, rect: Rect) -> ([Option<Rect>; 3], Rect) {
+    let w = rect.width();
+    let h = rect.height();
+    let size = |r: Region, total: f32| {
+        let t = l.tabs(r);
+        if t.panes.is_empty() {
+            0.0
+        } else if t.collapsed {
+            if r == Region::Dock { HEADER } else { NARROW }
+        } else {
+            // The dock holds the editors and instrument panels, which
+            // need more height than a side panel needs width.
+            let least = if r == Region::Dock { DOCK_MIN } else { MIN };
+            (l.shares[r.index()] * total).clamp(least.min(total / 2.0), total * MAX_SHARE)
+        }
+    };
+    let (mut lw, mut rw) = (size(Region::Left, w), size(Region::Right, w));
+    // The timeline keeps some room between the side panels.
+    let room = (w - 2.0 * GAP - MIN).max(0.0);
+    if lw + rw > room && lw + rw > 0.0 {
+        let k = room / (lw + rw);
+        lw *= k;
+        rw *= k;
+    }
+    let gap = |s: f32| if s > 0.0 { s + GAP } else { 0.0 };
+    let left = (lw > 0.0).then(|| Rect::from_min_size(rect.min, vec2(lw, h)));
+    let right =
+        (rw > 0.0).then(|| Rect::from_min_max(pos2(rect.right() - rw, rect.top()), rect.max));
+    let middle = Rect::from_min_max(
+        pos2(rect.left() + gap(lw), rect.top()),
+        pos2(rect.right() - gap(rw), rect.bottom()),
+    );
+    let dh = size(Region::Dock, h).min((h - GAP - MIN).max(HEADER.min(h)));
+    let dock = (dh > 0.0)
+        .then(|| Rect::from_min_max(pos2(middle.left(), middle.bottom() - dh), middle.max));
+    let timeline = Rect::from_min_max(middle.min, pos2(middle.right(), middle.bottom() - gap(dh)));
+    ([left, right, dock], timeline)
+}
+
+/// Which region a pane dropped at `at` on the timeline goes to: its
+/// left or right edge puts it in that side panel, anywhere else in the
+/// dock.
+pub(crate) fn region_at(rect: Rect, at: Pos2) -> Region {
+    let x = (at.x - rect.left()) / rect.width().max(1.0);
+    if x < 0.25 {
+        Region::Left
+    } else if x > 0.75 {
+        Region::Right
+    } else {
+        Region::Dock
+    }
+}
+
 impl<H: Host> Draw<'_, H> {
-    fn node(&mut self, ui: &mut egui::Ui, n: &mut Node, rect: Rect, id: Id) {
-        match n {
-            Node::Tabs(t) => self.tabs(ui, t, rect, id),
-            Node::Split {
-                across,
-                share,
-                first,
-                second,
-            } => {
-                let total = if *across { rect.width() } else { rect.height() };
-                let room = (total - GAP).max(0.0);
-                let min = MIN.min(room / 2.0);
-                let a = match (first.collapsed(), second.collapsed()) {
-                    (true, _) => HEADER.min(room),
-                    (false, true) => (room - HEADER).max(0.0),
-                    _ => (room * *share).clamp(min, room - min),
+    fn regions(&mut self, ui: &mut egui::Ui, l: &mut Layout, rect: Rect) {
+        let (places, timeline) = places(l, rect);
+        for r in REGIONS {
+            let Some(at) = places[r.index()] else {
+                continue;
+            };
+            let t = l.tabs(r);
+            if !t.collapsed {
+                let edge = match r {
+                    Region::Left => Rect::from_min_max(
+                        pos2(at.right(), at.top()),
+                        pos2(at.right() + GAP, at.bottom()),
+                    ),
+                    Region::Right => Rect::from_min_max(
+                        pos2(at.left() - GAP, at.top()),
+                        pos2(at.left(), at.bottom()),
+                    ),
+                    Region::Dock => Rect::from_min_max(
+                        pos2(at.left(), at.top() - GAP),
+                        pos2(at.right(), at.top()),
+                    ),
                 };
-                let (ra, gap, rb) = if *across {
-                    let x = rect.left() + a;
-                    (
-                        Rect::from_min_max(rect.min, pos2(x, rect.bottom())),
-                        Rect::from_min_max(pos2(x, rect.top()), pos2(x + GAP, rect.bottom())),
-                        Rect::from_min_max(pos2(x + GAP, rect.top()), rect.max),
-                    )
-                } else {
-                    let y = rect.top() + a;
-                    (
-                        Rect::from_min_max(rect.min, pos2(rect.right(), y)),
-                        Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + GAP)),
-                        Rect::from_min_max(pos2(rect.left(), y + GAP), rect.max),
-                    )
-                };
-                if !first.collapsed() && !second.collapsed() && room > 0.0 {
-                    let r = ui.interact(gap, id.with("gap"), Sense::drag());
-                    if r.hovered() || r.dragged() {
-                        ui.ctx().set_cursor_icon(if *across {
-                            CursorIcon::ResizeHorizontal
-                        } else {
-                            CursorIcon::ResizeVertical
-                        });
-                        let line = ui.visuals().widgets.active.bg_stroke;
-                        ui.painter().rect_filled(gap.shrink(1.0), 1.0, line.color);
-                    }
-                    if r.dragged() {
-                        let d = r.drag_delta();
-                        let d = if *across { d.x } else { d.y };
-                        *share = ((a + d) / room).clamp(0.1, 0.9);
-                        self.acts.push(Act::Moved);
-                    }
+                let resp = ui.interact(edge, Id::unique(("region edge", r.id())), Sense::drag());
+                if resp.hovered() || resp.dragged() {
+                    ui.ctx().set_cursor_icon(if r == Region::Dock {
+                        CursorIcon::ResizeVertical
+                    } else {
+                        CursorIcon::ResizeHorizontal
+                    });
+                    let line = ui.visuals().widgets.active.bg_stroke;
+                    ui.painter().rect_filled(edge.shrink(1.0), 1.0, line.color);
                 }
-                self.node(ui, first, ra, id.with(1));
-                self.node(ui, second, rb, id.with(2));
+                if resp.dragged() {
+                    let d = resp.drag_delta();
+                    let (now, d, total) = match r {
+                        Region::Left => (at.width(), d.x, rect.width()),
+                        Region::Right => (at.width(), -d.x, rect.width()),
+                        Region::Dock => (at.height(), -d.y, rect.height()),
+                    };
+                    l.shares[r.index()] = ((now + d) / total.max(1.0)).clamp(MIN_SHARE, MAX_SHARE);
+                    self.acts.push(Act::Moved);
+                }
             }
+            let mut t = l.tabs(r).clone();
+            self.tabs(ui, &mut t, at, Id::unique(("region", r.id())), Some(r));
+        }
+        self.timeline(ui, timeline);
+    }
+
+    /// The timeline, in the middle, without tabs of its own.
+    fn timeline(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let p = Pane::Timeline;
+        let mut tui = ui.new_child(
+            UiBuilder::new()
+                .max_rect(rect.shrink(2.0))
+                .id_salt(("pane", p.id())),
+        );
+        tui.set_clip_rect(rect.intersect(ui.clip_rect()));
+        self.host.pane(&mut tui, p);
+        let clicked = ui.input(|i| {
+            i.pointer.primary_pressed()
+                && i.pointer.interact_pos().is_some_and(|at| rect.contains(at))
+        });
+        if clicked {
+            self.acts.push(Act::Current(p));
+        }
+        let Some(dragged) = self.drag else {
+            return;
+        };
+        let Some(at) = ui.input(|i| i.pointer.interact_pos()) else {
+            return;
+        };
+        if !rect.contains(at) {
+            return;
+        }
+        let r = region_at(rect, at);
+        let zone = match r {
+            Region::Left => Rect::from_min_max(
+                rect.min,
+                pos2(rect.left() + rect.width() / 3.0, rect.bottom()),
+            ),
+            Region::Right => Rect::from_min_max(
+                pos2(rect.right() - rect.width() / 3.0, rect.top()),
+                rect.max,
+            ),
+            Region::Dock => Rect::from_min_max(pos2(rect.left(), rect.center().y), rect.max),
+        };
+        self.drop_here(ui, dragged, r, zone);
+    }
+
+    /// Shows where a dragged pane would go, and puts it there when let go.
+    fn drop_here(&mut self, ui: &egui::Ui, p: Pane, r: Region, zone: Rect) {
+        let c = ui.visuals().selection.bg_fill;
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            Id::unique("pane drop"),
+        ));
+        painter.rect(
+            zone.shrink(2.0),
+            4.0,
+            c.gamma_multiply(0.35),
+            Stroke::new(2.0, c),
+            egui::StrokeKind::Inside,
+        );
+        let words = format!("Into {}", r.the());
+        painter.text(
+            zone.center(),
+            egui::Align2::CENTER_CENTER,
+            words,
+            egui::FontId::proportional(16.0),
+            crate::theme::look(ui.ctx()).c().text,
+        );
+        if ui.input(|i| i.pointer.any_released()) {
+            self.acts.push(Act::Put(p, r));
+            DragAndDrop::clear_payload(ui.ctx());
         }
     }
 
-    fn tabs(&mut self, ui: &mut egui::Ui, t: &mut Tabs, rect: Rect, id: Id) {
+    fn tabs(&mut self, ui: &mut egui::Ui, t: &mut Tabs, rect: Rect, id: Id, here: Option<Region>) {
         let Some(shown) = t.shown() else {
             return;
         };
@@ -1269,8 +1390,8 @@ impl<H: Host> Draw<'_, H> {
         );
         hui.set_clip_rect(header.intersect(ui.clip_rect()));
         if rect.width() < 70.0 {
-            // A narrow collapsed group: only the button to open it.
-            self.collapse_button(&mut hui, t, shown);
+            // A narrow collapsed panel: only the button to open it.
+            self.collapse_button(&mut hui, t, shown, here);
         } else {
             for (i, &p) in t.panes.iter().enumerate() {
                 let tab = hui
@@ -1279,7 +1400,7 @@ impl<H: Host> Draw<'_, H> {
                             .sense(Sense::click_and_drag()),
                     )
                     .accessible_name(format!("{} tab", p.title()))
-                    .on_hover_text("Drag to move it beside another pane");
+                    .on_hover_text("Drag to move it to another panel");
                 if tab.clicked() {
                     self.acts.push(Act::Show(p));
                 }
@@ -1291,7 +1412,7 @@ impl<H: Host> Draw<'_, H> {
                 }
             }
             hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.header_buttons(ui, t, shown);
+                self.header_buttons(ui, t, shown, here);
             });
         }
         if !t.collapsed && body.height() > 1.0 {
@@ -1310,19 +1431,28 @@ impl<H: Host> Draw<'_, H> {
                 self.acts.push(Act::Current(shown));
             }
         }
-        self.drop_zone(ui, t, rect, shown);
+        // A tab dragged here from another region joins this one.
+        if let (Some(r), Some(p)) = (here, self.drag)
+            && !t.panes.contains(&p)
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|at| rect.contains(at))
+        {
+            self.drop_here(ui, p, r, rect);
+        }
     }
 
-    fn collapse_button(&mut self, ui: &mut egui::Ui, t: &Tabs, shown: Pane) {
+    fn collapse_button(&mut self, ui: &mut egui::Ui, t: &Tabs, shown: Pane, here: Option<Region>) {
         let (icon, what) = if t.collapsed {
             (Icon::Expand, "Expand")
         } else {
             (Icon::Collapse, "Collapse")
         };
+        let whom = here.map_or_else(|| shown.the(), |r| r.the().to_string());
         if ui
             .add(
-                // ai: view
-                IconButton::new(icon, format!("{what} {}", shown.the()))
+                // ai: set_pane
+                IconButton::new(icon, format!("{what} {whom}"))
                     .tip(what)
                     .small(),
             )
@@ -1334,12 +1464,12 @@ impl<H: Host> Draw<'_, H> {
 
     /// From the right: close, own window, full size, collapse, and the
     /// menu with the rest.
-    fn header_buttons(&mut self, ui: &mut egui::Ui, t: &Tabs, shown: Pane) {
+    fn header_buttons(&mut self, ui: &mut egui::Ui, t: &Tabs, shown: Pane, here: Option<Region>) {
         let the = shown.the();
         if !shown.fixed()
             && ui
                 .add(
-                    // ai: view
+                    // ai: set_pane
                     IconButton::new(
                         Icon::Close,
                         format!("Close {}", shown.title().to_lowercase()),
@@ -1355,7 +1485,7 @@ impl<H: Host> Draw<'_, H> {
             && !shown.fixed()
             && ui
                 .add(
-                    // ai: view
+                    // ai: set_pane
                     IconButton::new(Icon::PopOut, format!("Open {the} in its own window"))
                         .tip("Its own window, to put on another screen")
                         .small(),
@@ -1384,112 +1514,44 @@ impl<H: Host> Draw<'_, H> {
         if full {
             return;
         }
-        self.collapse_button(ui, t, shown);
+        self.collapse_button(ui, t, shown, here);
         // ai: view
         IconButton::new(Icon::More, format!("More for {the}"))
             .tip("Move, resize and more")
             .small()
-            .menu(ui, |ui| self.menu(ui, shown));
+            .menu(ui, |ui| self.menu(ui, shown, here));
     }
 
     /// The pane's menu: moving it, without dragging.
-    fn menu(&mut self, ui: &mut egui::Ui, p: Pane) {
-        let others: Vec<Pane> = self.others.iter().copied().filter(|&q| q != p).collect();
-        ui.add_enabled_ui(!others.is_empty(), |ui| {
+    fn menu(&mut self, ui: &mut egui::Ui, p: Pane, here: Option<Region>) {
+        if !p.fixed() {
             ui.menu_button("Move it", |ui| {
-                for q in others {
-                    ui.menu_button(q.title(), |ui| {
-                        for (side, words) in SIDES {
-                            // ai: view
-                            if ui.button(format!("{words} {}", q.the())).clicked() {
-                                self.acts.push(Act::Put(p, q, side));
-                                ui.close();
-                            }
-                        }
-                    });
+                for r in REGIONS.into_iter().filter(|&r| Some(r) != here) {
+                    // ai: set_pane
+                    if ui.button(format!("Into {}", r.the())).clicked() {
+                        self.acts.push(Act::Put(p, r));
+                        ui.close();
+                    }
                 }
             });
-        });
+        }
         // ai: view
         if ui.button("Larger").clicked() {
-            self.acts.push(Act::Grow(p, 0.1));
+            self.acts.push(Act::Grow(p, 0.05));
         }
         // ai: view
         if ui.button("Smaller").clicked() {
-            self.acts.push(Act::Grow(p, -0.1));
+            self.acts.push(Act::Grow(p, -0.05));
         }
-        // ai: view
+        // ai: set_pane
         if self.windows && !p.fixed() && ui.button("Open in its own window").clicked() {
             self.acts.push(Act::Detach(p));
         }
-        // ai: view
+        // ai: set_pane
         if !p.fixed() && ui.button("Close").clicked() {
             self.acts.push(Act::Close(p));
         }
     }
-
-    /// While a tab is dragged over this group: where it would go.
-    fn drop_zone(&mut self, ui: &mut egui::Ui, t: &Tabs, rect: Rect, shown: Pane) {
-        let Some(p) = self.drag else {
-            return;
-        };
-        let Some(at) = ui.input(|i| i.pointer.interact_pos()) else {
-            return;
-        };
-        if !rect.contains(at) || (t.panes == [p]) {
-            return;
-        }
-        let side = side_at(rect, at);
-        let zone = match side {
-            Side::Left => Rect::from_min_max(rect.min, pos2(rect.center().x, rect.bottom())),
-            Side::Right => Rect::from_min_max(pos2(rect.center().x, rect.top()), rect.max),
-            Side::Above => Rect::from_min_max(rect.min, pos2(rect.right(), rect.center().y)),
-            Side::Below => Rect::from_min_max(pos2(rect.left(), rect.center().y), rect.max),
-            Side::Tab => rect,
-        };
-        let c = ui.visuals().selection.bg_fill;
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
-            Id::unique("pane drop"),
-        ));
-        painter.rect(
-            zone.shrink(2.0),
-            4.0,
-            c.gamma_multiply(0.35),
-            Stroke::new(2.0, c),
-            egui::StrokeKind::Inside,
-        );
-        let words = SIDES.iter().find(|s| s.0 == side).map_or("", |s| s.1);
-        painter.text(
-            zone.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("{words} {}", shown.the()),
-            egui::FontId::proportional(16.0),
-            crate::theme::look(ui.ctx()).c().text,
-        );
-        if ui.input(|i| i.pointer.any_released()) {
-            self.acts.push(Act::Put(p, shown, side));
-            DragAndDrop::clear_payload(ui.ctx());
-        }
-    }
-}
-
-/// Which side of a group the pointer is nearest: its middle makes a
-/// tab, its edges put the pane beside.
-pub(crate) fn side_at(rect: Rect, at: Pos2) -> Side {
-    let x = (at.x - rect.left()) / rect.width().max(1.0);
-    let y = (at.y - rect.top()) / rect.height().max(1.0);
-    let edges = [
-        (x, Side::Left),
-        (1.0 - x, Side::Right),
-        (y, Side::Above),
-        (1.0 - y, Side::Below),
-    ];
-    let (d, side) = edges
-        .into_iter()
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .expect("four edges");
-    if d > 0.3 { Side::Tab } else { side }
 }
 
 /// The screens there are, in pixels, the main one first; empty where
@@ -1622,6 +1684,19 @@ impl crate::App {
         let ctx = ui.ctx().clone();
         for c in std::mem::take(&mut self.workspace_cmds) {
             self.run(&ctx, c);
+        }
+        for p in std::mem::take(&mut self.panes_to_open) {
+            self.workspace.open(p);
+        }
+    }
+
+    /// Opens a pane and shows its tab. While the panes are drawn the
+    /// workspace is out being drawn, so it opens once they are.
+    pub(crate) fn open_pane(&mut self, p: Pane) {
+        if self.drawing_panes {
+            self.panes_to_open.push(p);
+        } else {
+            self.workspace.open(p);
         }
     }
 
@@ -1897,15 +1972,10 @@ mod tests {
 
     #[test]
     fn the_inspector_is_on_the_right_from_the_start() {
-        let Node::Split {
-            across: true,
-            second,
-            ..
-        } = &Layout::recording().dock
-        else {
-            panic!()
-        };
-        assert_eq!(**second, Tabs::of(&[Pane::Inspector]));
+        let l = Layout::recording();
+        assert_eq!(l.tabs(Region::Right).panes, [Pane::Inspector]);
+        assert_eq!(l.tabs(Region::Dock).panes, [Pane::Mixer]);
+        assert!(l.tabs(Region::Left).panes.is_empty());
         // Closed and opened again, it goes back there.
         let mut l = plain();
         l.open(Pane::Inspector);
@@ -1926,75 +1996,100 @@ mod tests {
         assert!(w.to_text().contains("inspector known"));
     }
 
-    fn panes(l: &Layout) -> Vec<Pane> {
-        let mut all = Vec::new();
-        l.dock.panes(&mut all);
-        all
-    }
-
     #[test]
-    fn opens_panes_where_they_go() {
+    fn opens_panes_in_their_regions() {
         let mut l = plain();
         l.open(Pane::Comments);
         l.open(Pane::Notes);
+        l.open(Pane::Browser);
+        l.open(Pane::NotesEditor);
+        l.open(Pane::PitchEditor);
+        assert_eq!(l.tabs(Region::Right).panes, [Pane::Comments, Pane::Notes]);
+        assert_eq!(l.tabs(Region::Left).panes, [Pane::Browser]);
+        let dock = l.tabs(Region::Dock);
         assert_eq!(
-            panes(&l),
-            [Pane::Timeline, Pane::Comments, Pane::Notes, Pane::Mixer]
+            dock.panes,
+            [Pane::Mixer, Pane::NotesEditor, Pane::PitchEditor]
         );
-        // The notes go below the comments, in the space beside the timeline.
-        let Node::Split { first, .. } = &l.dock else {
-            panic!()
-        };
-        let Node::Split {
-            across: true,
-            second,
-            ..
-        } = &**first
-        else {
-            panic!("{first:?}")
-        };
-        assert!(matches!(&**second, Node::Split { across: false, .. }));
+        // The one opened last is shown.
+        assert_eq!(dock.shown(), Some(Pane::PitchEditor));
+        assert_eq!(l.panes()[0], Pane::Timeline);
     }
 
     #[test]
-    fn closing_the_last_pane_of_a_split_gives_its_room_back() {
+    fn closing_a_tab_shows_its_neighbour_and_the_timeline_stays() {
         let mut l = plain();
+        l.open(Pane::Automation);
+        l.open(Pane::Video);
+        l.show(Pane::Automation);
+        // The tab after it is shown.
+        l.remove(Pane::Automation);
+        assert_eq!(l.tabs(Region::Dock).shown(), Some(Pane::Video));
         l.remove(Pane::Mixer);
-        assert_eq!(l.dock, Tabs::of(&[Pane::Timeline]));
-        // The timeline stays.
+        l.remove(Pane::Video);
+        assert!(l.tabs(Region::Dock).panes.is_empty());
         l.remove(Pane::Timeline);
-        assert_eq!(l.dock, Tabs::of(&[Pane::Timeline]));
+        assert!(l.docked(Pane::Timeline));
     }
 
     #[test]
-    fn moves_a_pane_beside_another() {
-        let mut l = plain();
-        l.put(Pane::Mixer, Pane::Timeline, Side::Left);
-        match &l.dock {
-            Node::Split {
-                across: true,
-                first,
-                second,
-                ..
-            } => {
-                assert_eq!(**first, Tabs::of(&[Pane::Mixer]));
-                assert_eq!(**second, Tabs::of(&[Pane::Timeline]));
-            }
-            n => panic!("{n:?}"),
-        }
-        l.put(Pane::Mixer, Pane::Timeline, Side::Tab);
-        let t = l.dock.tabs_with(Pane::Mixer).unwrap();
-        assert_eq!(t.panes, [Pane::Timeline, Pane::Mixer]);
+    fn moves_a_pane_into_another_region() {
+        let mut l = Layout::recording();
+        l.put(Pane::Mixer, Region::Right);
+        assert_eq!(l.tabs(Region::Right).panes, [Pane::Inspector, Pane::Mixer]);
+        assert!(l.tabs(Region::Dock).panes.is_empty());
+        // The timeline stays in the middle.
+        l.put(Pane::Timeline, Region::Left);
+        assert!(l.tabs(Region::Left).panes.is_empty());
     }
 
     #[test]
-    fn grows_a_pane() {
+    fn grows_a_region() {
         let mut l = plain();
         l.grow(Pane::Mixer, 0.1);
-        let Node::Split { share, .. } = l.dock else {
-            panic!()
-        };
-        assert!((share - 0.52).abs() < 1e-4, "{share}");
+        assert!((l.shares[Region::Dock.index()] - 0.52).abs() < 1e-4);
+        // Growing the timeline shrinks the dock.
+        l.grow(Pane::Timeline, 0.2);
+        assert!((l.shares[Region::Dock.index()] - 0.32).abs() < 1e-4);
+        l.grow(Pane::Timeline, 5.0);
+        assert_eq!(l.shares[Region::Dock.index()], MIN_SHARE);
+    }
+
+    #[test]
+    fn the_regions_fit_round_the_timeline() {
+        let mut l = Layout::recording();
+        l.open(Pane::Browser);
+        let rect = Rect::from_min_size(pos2(0.0, 40.0), vec2(1920.0, 1100.0));
+        let ([left, right, dock], timeline) = places(&l, rect);
+        let (left, right, dock) = (left.unwrap(), right.unwrap(), dock.unwrap());
+        // The side panels the whole height, the dock under the timeline.
+        assert_eq!(left.height(), rect.height());
+        assert_eq!(right.height(), rect.height());
+        assert!(left.right() < timeline.left() && timeline.right() < right.left());
+        assert!(timeline.bottom() < dock.top());
+        assert_eq!(dock.left(), timeline.left());
+        assert_eq!(dock.right(), timeline.right());
+        // A collapsed one keeps its header.
+        l.toggle_collapsed(Pane::Mixer);
+        let ([_, _, dock], timeline) = places(&l, rect);
+        assert_eq!(dock.unwrap().height(), HEADER);
+        assert!(timeline.height() > rect.height() - 40.0);
+        // An empty one takes no room.
+        let ([left, _, _], _) = places(&Layout::recording(), rect);
+        assert!(left.is_none());
+        // In a small window the timeline keeps some width.
+        l.shares = [0.7, 0.7, 0.42];
+        let small = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0));
+        let (_, timeline) = places(&l, small);
+        assert!(timeline.width() >= MIN - 0.5, "{timeline:?}");
+    }
+
+    #[test]
+    fn a_dropped_tab_goes_by_where_it_is_let_go() {
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0));
+        assert_eq!(region_at(r, pos2(10.0, 50.0)), Region::Left);
+        assert_eq!(region_at(r, pos2(90.0, 50.0)), Region::Right);
+        assert_eq!(region_at(r, pos2(50.0, 90.0)), Region::Dock);
     }
 
     #[test]
@@ -2021,23 +2116,80 @@ mod tests {
             )),
         );
         l.detach(Pane::Comments, None);
+        l.open(Pane::Browser);
         let text = l.to_text();
         assert_eq!(Layout::from_text(&text), Some(l), "{text}");
     }
 
     #[test]
+    fn layouts_from_before_the_regions_are_carried_over() {
+        // Recording as it was: the timeline over the mixer, the
+        // inspector at the side.
+        let old = "dock across 0.830 ( stacked 0.620 ( tabs 0 0 timeline ) \
+                   ( tabs 0 0 mixer ) ) ( tabs 0 0 inspector )";
+        let mut l = Layout::from_text(old).unwrap();
+        assert!((l.shares[Region::Dock.index()] - 0.38).abs() < 1e-4);
+        l.shares = Layout::recording().shares;
+        assert_eq!(l, Layout::recording());
+        // Mixing: the mixer's height is kept.
+        let old = "dock stacked 0.320 ( tabs 0 0 timeline ) ( tabs 0 0 mixer )";
+        assert_eq!(Layout::from_text(old), Some(Layout::mixing()));
+        // Panes anywhere go to their regions, the one shown still shown,
+        // and windows stay.
+        let old = "dock across 0.5 ( across 0.3 ( tabs 0 0 browser ) ( tabs 0 0 timeline ) ) \
+                   ( stacked 0.5 ( tabs 1 0 automation,comments ) ( tabs 0 0 pitch-editor ) ) \
+                   ; window tuner";
+        let l = Layout::from_text(old).unwrap();
+        assert_eq!(l.tabs(Region::Left).panes, [Pane::Browser]);
+        assert_eq!(l.tabs(Region::Right).panes, [Pane::Comments]);
+        let dock = l.tabs(Region::Dock);
+        assert_eq!(dock.panes, [Pane::Automation, Pane::PitchEditor]);
+        assert_eq!(dock.shown(), Some(Pane::PitchEditor));
+        assert!(l.in_window(Pane::Tuner));
+    }
+
+    #[test]
     fn mends_a_layout_with_panes_twice_or_none() {
-        let l = Layout::from_text("dock tabs 5 0 mixer,mixer,nonsense ; window mixer").unwrap();
-        // The timeline is put back, the mixer kept once, in the main window.
-        assert_eq!(panes(&l), [Pane::Timeline, Pane::Mixer]);
+        let l = Layout::from_text(
+            "panels 0.2 9 0.4 ; left 0 0 mixer,timeline ; dock 5 0 mixer,nonsense ; window mixer",
+        )
+        .unwrap();
+        // The timeline stays in the middle, the mixer kept once, in the
+        // main window, and the sizes in range.
+        assert_eq!(l.panes(), [Pane::Timeline, Pane::Mixer]);
+        assert_eq!(l.tabs(Region::Left).active, 0);
         assert!(l.windows.is_empty());
+        assert_eq!(l.shares[Region::Right.index()], MAX_SHARE);
         assert_eq!(Layout::from_text("nonsense"), None);
+        assert_eq!(Layout::from_text("panels 0.2 0.2"), None);
         assert_eq!(
             Layout::from_text("dock across 0.5 ( tabs 0 0 timeline )"),
             None
         );
     }
 
+    #[test]
+    fn an_assistant_opens_moves_and_collapses_panes() {
+        let mut w = Workspace::default();
+        w.set_pane(Pane::PitchEditor, true, None, None).unwrap();
+        assert_eq!(w.value()["dock"]["shown"], "pitch-editor");
+        w.set_pane(Pane::PitchEditor, true, Some(Region::Right), Some(true))
+            .unwrap();
+        let v = w.value();
+        assert_eq!(
+            v["right"]["panes"],
+            serde_json::json!(["inspector", "pitch-editor"])
+        );
+        assert_eq!(v["right"]["collapsed"], true);
+        assert_eq!(v["dock"]["shown"], "mixer");
+        w.set_pane(Pane::PitchEditor, false, None, None).unwrap();
+        assert!(!w.layout.is_open(Pane::PitchEditor));
+        assert!(w.set_pane(Pane::Timeline, false, None, None).is_err());
+        assert!(
+            w.set_pane(Pane::Timeline, true, Some(Region::Left), None)
+                .is_err()
+        );
+    }
     #[test]
     fn the_workspace_is_kept_as_text() {
         let mut w = Workspace::default();
@@ -2109,16 +2261,6 @@ mod tests {
         assert_eq!(w.saved.len(), SLOTS);
         assert!(!w.save_as("One more"));
         assert!(w.save_as("Mixing"));
-    }
-
-    #[test]
-    fn the_pointer_picks_a_side() {
-        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0));
-        assert_eq!(side_at(r, pos2(50.0, 50.0)), Side::Tab);
-        assert_eq!(side_at(r, pos2(5.0, 50.0)), Side::Left);
-        assert_eq!(side_at(r, pos2(95.0, 40.0)), Side::Right);
-        assert_eq!(side_at(r, pos2(50.0, 2.0)), Side::Above);
-        assert_eq!(side_at(r, pos2(50.0, 99.0)), Side::Below);
     }
 
     #[test]
@@ -2241,14 +2383,12 @@ mod tests {
         }
 
         #[test]
-        fn a_tab_dragged_to_an_edge_goes_beside() {
+        fn a_tab_dragged_to_the_timeline_edge_goes_to_that_side() {
             let mut h = harness();
-            h.state_mut().workspace.close(Pane::Inspector);
-            h.run();
             let from = h.get_by_label("Mixer tab").rect().center();
-            // The timeline's group: from the top to the gap above the mixer.
-            let timeline = h.get_by_label("Timeline tab").rect();
-            let to = pos2(1390.0, timeline.top() + 200.0);
+            // Near the timeline's left edge: into the left panel.
+            let mixer = h.get_by_label("Mixer tab").rect();
+            let to = pos2(mixer.left() + 40.0, 300.0);
             h.hover_at(from);
             h.run();
             h.drag_at(from);
@@ -2260,18 +2400,91 @@ mod tests {
             h.drop_at(to);
             h.run();
             h.run();
-            match &h.state().workspace.layout.dock {
-                Node::Split {
-                    across: true,
-                    first,
-                    second,
-                    ..
-                } => {
-                    assert_eq!(**first, Tabs::of(&[Pane::Timeline]));
-                    assert_eq!(**second, Tabs::of(&[Pane::Mixer]));
-                }
-                n => panic!("{n:?}"),
+            let l = &h.state().workspace.layout;
+            assert_eq!(l.tabs(Region::Left).panes, [Pane::Mixer]);
+            assert!(l.tabs(Region::Dock).panes.is_empty());
+            // And onto the right panel: a tab there.
+            let from = h.get_by_label("Mixer tab").rect().center();
+            let to = h.get_by_label("Inspector tab").rect().center() + vec2(0.0, 200.0);
+            h.hover_at(from);
+            h.run();
+            h.drag_at(from);
+            h.run();
+            for i in 1..=10 {
+                h.hover_at(from + (to - from) * (i as f32 / 10.0));
+                h.run();
             }
+            h.drop_at(to);
+            h.run();
+            h.run();
+            let l = &h.state().workspace.layout;
+            assert_eq!(l.tabs(Region::Right).panes, [Pane::Inspector, Pane::Mixer]);
+        }
+
+        #[test]
+        fn the_panels_work_with_an_assistant() {
+            use crate::agent::driver::Driver;
+            use serde_json::json;
+            let mut d = Driver::new();
+            let panels =
+                |d: &mut Driver| d.call("get_selection", json!({})).unwrap()["panels"].clone();
+            // From the start: the inspector on the right, the mixer in
+            // the dock.
+            let p = panels(&mut d);
+            assert_eq!(p["right"]["shown"], "inspector");
+            assert_eq!(p["dock"]["panes"], json!(["mixer"]));
+            assert_eq!(p["left"]["panes"], json!([]));
+            // An editor opens as a dock tab, shown, as from its command.
+            d.call("set_pane", json!({"pane": "automation"})).unwrap();
+            d.h.run();
+            assert_eq!(panels(&mut d)["dock"]["shown"], "automation");
+            d.h.get_by_label("Automation tab");
+            // The browser opens on the left by its command.
+            d.command("browser");
+            d.h.run();
+            assert_eq!(panels(&mut d)["left"]["panes"], json!(["browser"]));
+            // The person picks the mixer's tab: the assistant sees it.
+            d.h.get_by_label("Mixer tab").click();
+            d.h.run();
+            assert_eq!(panels(&mut d)["dock"]["shown"], "mixer");
+            // The assistant moves the mixer to the right and collapses
+            // the dock; the person sees both.
+            d.call("set_pane", json!({"pane": "mixer", "to": "right"}))
+                .unwrap();
+            d.call("set_pane", json!({"pane": "automation", "collapsed": true}))
+                .unwrap();
+            d.h.run();
+            let p = panels(&mut d);
+            assert_eq!(p["right"]["panes"], json!(["inspector", "mixer"]));
+            assert_eq!(p["dock"]["collapsed"], true);
+            d.h.get_by_label("Expand the dock").click();
+            d.h.run();
+            assert_eq!(panels(&mut d)["dock"]["collapsed"], false);
+            // The person moves the automation from its menu into the left
+            // panel.
+            d.h.get_by_label("More for the automation").click();
+            d.h.run();
+            d.h.get_by_label("Move it").click();
+            d.h.run();
+            d.h.get_by_label("Into the left panel").click();
+            d.h.run();
+            let p = panels(&mut d);
+            assert_eq!(p["left"]["panes"], json!(["browser", "automation"]));
+            assert_eq!(p["dock"]["panes"], json!([]));
+            // And the assistant closes it; the timeline stays.
+            d.call("set_pane", json!({"pane": "automation", "open": false}))
+                .unwrap();
+            assert!(
+                d.call("set_pane", json!({"pane": "timeline", "open": false}))
+                    .is_err()
+            );
+            assert!(d.call("set_pane", json!({"pane": "nonsense"})).is_err());
+            assert!(
+                d.call("set_pane", json!({"pane": "mixer", "to": "top"}))
+                    .is_err()
+            );
+            d.h.run();
+            assert_eq!(panels(&mut d)["left"]["panes"], json!(["browser"]));
         }
 
         #[test]
@@ -2280,11 +2493,11 @@ mod tests {
             h.get_by_label("Show the mixer full size").click();
             h.run();
             assert_eq!(h.state().workspace.full, Some(Pane::Mixer));
-            assert!(h.query_by_label("Timeline tab").is_none());
+            assert!(h.query_by_label("Inspector tab").is_none());
             h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::F);
             h.run();
             assert_eq!(h.state().workspace.full, None);
-            assert!(h.query_by_label("Timeline tab").is_some());
+            assert!(h.query_by_label("Inspector tab").is_some());
         }
 
         #[test]

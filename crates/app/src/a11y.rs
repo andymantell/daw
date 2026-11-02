@@ -147,6 +147,17 @@ fn every_control_has_a_spoken_name() {
     // milliseconds while open, so on a slow machine the window never
     // settles: a set number of frames instead.
     h.run_steps(8);
+    // The lesson notes and comments share the right panel as tabs: the
+    // comments to the left, to see both, with the effects shown in the
+    // dock.
+    let ws = &mut h.state_mut().workspace;
+    ws.layout.put(
+        crate::workspace::Pane::Comments,
+        crate::workspace::Region::Left,
+    );
+    ws.layout.show(crate::workspace::Pane::Notes);
+    ws.layout.show(crate::workspace::Pane::Effects);
+    h.run_steps(8);
     assert_eq!(unspoken(&h), Vec::<String>::new());
     for name in [
         "Add effect",

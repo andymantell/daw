@@ -560,6 +560,7 @@ impl App {
                         if playing == Some(i) {
                             text = text.strong().underline();
                         }
+                        // ai: edit_markers.play_order
                         if ui
                             .button(text)
                             .on_hover_text("Take it out of the play order")
@@ -764,7 +765,7 @@ mod tests {
     fn sections_loop_copy_move_and_play_in_order_through_the_commands() {
         use crate::agent::driver::Driver;
         use serde_json::json;
-        let mut d = Driver::new();
+        let mut d = crate::agent::driver::Driver::new();
         for bar in [1, 3, 5] {
             d.call("seek", json!({"bar": bar})).unwrap();
             d.command("marker");
@@ -802,5 +803,32 @@ mod tests {
         assert!(d.app().arrangement.is_empty());
         let names: Vec<String> = d.app().markers.iter().map(|m| m.name.clone()).collect();
         assert_eq!(names[0], names[1]);
+    }
+
+    #[test]
+    fn an_assistant_sets_the_play_order() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.call(
+            "edit_markers",
+            json!({"add": [{"bar": 1, "name": "Verse"}, {"bar": 5, "name": "Chorus"}]}),
+        )
+        .unwrap();
+        let ids: Vec<String> = (d.project()["markers"].as_array().unwrap().iter())
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect();
+        let order = json!([ids[0], ids[1], ids[1], ids[0]]);
+        d.call("edit_markers", json!({"play_order": order}))
+            .unwrap();
+        assert_eq!(d.project()["play_order"], order);
+        assert_eq!(d.app().arrangement.len(), 4);
+        assert!(
+            d.call("edit_markers", json!({"play_order": ["nothing"]}))
+                .is_err()
+        );
+        // Taking one out of the middle.
+        d.call("edit_markers", json!({"play_order": [ids[0], ids[0]]}))
+            .unwrap();
+        assert_eq!(d.project()["play_order"], json!([ids[0], ids[0]]));
     }
 }

@@ -1061,6 +1061,18 @@ mod tests {
             assert_eq!(open(&mut d), json!(panel), "{id}");
             assert!(d.h.query_by_label(inside).is_some(), "{inside} shown");
         }
+        // Shortcuts still work with a panel open: Space plays.
+        d.h.key_press(egui::Key::Space);
+        for _ in 0..50 {
+            d.h.step();
+            if d.app().ctl.status().playing() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(d.app().ctl.status().playing(), "Space played");
+        assert_eq!(open(&mut d), json!("speed"), "and the panel stayed open");
+        d.h.key_press(egui::Key::Space);
         // Escape closes it, as clicking elsewhere does.
         d.h.key_press(egui::Key::Escape);
         d.h.run();

@@ -3228,9 +3228,13 @@ impl App {
     /// Runs the commands whose keys were pressed. Called before
     /// anything is drawn, so they come before the controls see the keys.
     pub(crate) fn command_keys(&mut self, ctx: &egui::Context) {
-        // A top bar option panel is open: its fields have the keys, and
-        // Escape closes it, as with a menu.
-        if self.top.open.is_some() {
+        // A top bar option panel is open: Escape closes it, and the other
+        // keys still run their commands (unless typing in one of its
+        // fields, as anywhere).
+        if self.top.open.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.top.open = None;
             return;
         }
         // Typing tab takes numbers and arrows first, then typing on

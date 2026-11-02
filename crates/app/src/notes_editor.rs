@@ -8,7 +8,8 @@
 //! grid), drag its right edge to make it longer or shorter, drag in
 //! the velocity lane to set how hard it is played, and drag across
 //! empty space to select several. Delete removes the selection; a
-//! right click removes one note. Quantise moves the selected notes (or
+//! right-click opens a menu for the selected notes (or the one under the
+//! pointer): delete, quantise, transpose and the note tools. Quantise moves the selected notes (or
 //! all of them) towards the grid by the strength given, with swing
 //! delaying every second grid line; Transpose moves them in pitch.
 //!
@@ -253,6 +254,9 @@ pub struct Editor {
     /// the pane before each draw.
     pub scale: Option<Scale>,
     pub scale_mode: bool,
+    /// A command asked for from the right-click menu, for the app to run
+    /// after the editor is drawn.
+    pub asked: Option<crate::commands::Cmd>,
 }
 
 impl Default for Editor {
@@ -276,6 +280,7 @@ impl Default for Editor {
             lane: LaneView::Velocity,
             line_drag: None,
             pitch_range: 2.0,
+            asked: None,
             scale: None,
             scale_mode: false,
         }
@@ -497,6 +502,80 @@ impl Editor {
             }
         }
         true
+    }
+
+    /// The right-click menu: for the selected notes, or all of them.
+    fn note_menu(&mut self, ui: &mut egui::Ui, clip: &mut NoteClip, map: &TempoMap) -> bool {
+        use crate::commands::Cmd;
+        let mut changed = false;
+        let n = self.selected.len();
+        ui.label(
+            egui::RichText::new(match n {
+                0 => "All the notes".to_string(),
+                1 => "1 note".to_string(),
+                n => format!("{n} notes"),
+            })
+            .strong(),
+        );
+        ui.separator();
+        // ai: edit_notes
+        if ui.add_enabled(n > 0, egui::Button::new("Delete")).clicked() {
+            changed |= self.delete_selected(clip);
+            ui.close();
+        }
+        // ai: edit_notes
+        if ui.button("Select all").clicked() {
+            self.selected = clip.notes.iter().map(|n| n.id.clone()).collect();
+            ui.close();
+        }
+        ui.separator();
+        // ai: quantise-notes
+        if ui
+            .button("Quantise")
+            .on_hover_text("Towards the grid, by the strength set above")
+            .clicked()
+        {
+            changed |= self.quantise(clip, map);
+            ui.close();
+        }
+        for (cmd, name) in [
+            (Cmd::HumaniseNotes, "Humanise…"),
+            (Cmd::LegatoNotes, "Legato…"),
+            (Cmd::FitNotesToScale, "Fit to the scale…"),
+        ] {
+            // ai: note_tool
+            if ui.button(name).clicked() {
+                self.asked = Some(cmd);
+                ui.close();
+            }
+        }
+        ui.menu_button("Transpose", |ui| {
+            for (by, name) in [
+                (12, "Up an octave"),
+                (1, "Up a semitone"),
+                (-1, "Down a semitone"),
+                (-12, "Down an octave"),
+            ] {
+                // ai: edit_notes
+                if ui.button(name).clicked() {
+                    changed |= self.transpose(clip, by);
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
+        for (cmd, name) in [
+            (Cmd::SelectNotes, "Select notes…"),
+            (Cmd::GrooveFromNotes, "Make a groove from these notes"),
+            (Cmd::ApplyGroove, "Apply groove…"),
+        ] {
+            // ai: note_tool
+            if ui.button(name).clicked() {
+                self.asked = Some(cmd);
+                ui.close();
+            }
+        }
+        changed
     }
 
     pub fn delete_selected(&mut self, clip: &mut NoteClip) -> bool {
@@ -1115,13 +1194,15 @@ impl Editor {
                 None => {}
             }
         }
+        // A right-clicked note joins the selection the menu acts on.
         if resp.secondary_clicked()
             && let Some((id, _)) = pointer_hit
+            && !self.selected.contains(&id)
         {
-            clip.notes.retain(|n| n.id != id);
-            self.selected.remove(&id);
-            changed = true;
+            self.selected.clear();
+            self.selected.insert(id);
         }
+        resp.context_menu(|ui| changed |= self.note_menu(ui, clip, map));
         // Keys, while the pointer is over the editor.
         if resp.hovered() {
             let (del, all) = ui.input(|i| {
@@ -1557,6 +1638,9 @@ impl crate::App {
         }
         if editor.show(ui, clip, &map, playhead, playing) {
             self.rebuild();
+        }
+        if let Some(cmd) = self.notes_editor.asked.take() {
+            self.run(&ui.ctx().clone(), cmd);
         }
     }
 }

@@ -973,72 +973,66 @@ impl Themes {
     }
 
     /// Settings → Theme.
-    pub(crate) fn window(&mut self, ctx: &egui::Context) {
-        let mut open = self.open;
+    pub(crate) fn page(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         let dark = ctx.theme() == egui::Theme::Dark;
         let mut pick = None;
         let mut copy = None;
         let mut reload = false;
-        egui::Window::new("Theme")
-            .open(&mut open)
-            .default_width(460.0)
-            .show(ctx, |ui| {
-                ui.label("How the app looks on this computer. It is never saved in the project, so everyone working on a song can use their own.");
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Colours:");
-                    for m in Mode::ALL {
-                        if ui.selectable_label(self.mode == m, m.label()).clicked() {
-                            self.set_mode(m);
-                        }
+        {
+            ui.label("How the app looks on this computer. It is never saved in the project, so everyone working on a song can use their own.");
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Colours:");
+                for m in Mode::ALL {
+                    if ui.selectable_label(self.mode == m, m.label()).clicked() {
+                        self.set_mode(m);
                     }
-                });
-                ui.separator();
-                for t in &self.all {
-                    let chosen = t.id == self.chosen;
-                    ui.horizontal(|ui| {
-                        swatches(ui, t.colours(dark));
-                        let mut name = egui::RichText::new(&t.name).strong();
-                        if !t.built_in {
-                            name = egui::RichText::new(format!("{} (yours)", t.name)).strong();
-                        }
-                        let r = ui
-                            .selectable_label(chosen, name)
-                            .on_hover_text(&t.about);
-                        if r.clicked() {
-                            pick = Some(t.id.clone());
-                        }
-                        if self.dir.is_some()
-                            && ui
-                                .small_button("Copy to edit")
-                                .on_hover_text("Make your own theme from this one")
-                                .clicked()
-                        {
-                            copy = Some(t.clone());
-                        }
-                    });
-                    if !t.about.is_empty() {
-                        ui.label(egui::RichText::new(&t.about).weak().small());
-                    }
-                    ui.add_space(2.0);
-                }
-                for (file, why) in &self.problems {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("{file}: {why}"));
-                }
-                if let Some(dir) = &self.dir {
-                    ui.separator();
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new(format!("Your themes: {}", dir.display())).weak());
-                        if ui.button("Reload").clicked() {
-                            reload = true;
-                        }
-                    });
-                }
-                if let Some(n) = &self.note {
-                    ui.label(n);
                 }
             });
-        self.open = open;
+            ui.separator();
+            for t in &self.all {
+                let chosen = t.id == self.chosen;
+                ui.horizontal(|ui| {
+                    swatches(ui, t.colours(dark));
+                    let mut name = egui::RichText::new(&t.name).strong();
+                    if !t.built_in {
+                        name = egui::RichText::new(format!("{} (yours)", t.name)).strong();
+                    }
+                    let r = ui.selectable_label(chosen, name).on_hover_text(&t.about);
+                    if r.clicked() {
+                        pick = Some(t.id.clone());
+                    }
+                    if self.dir.is_some()
+                        && ui
+                            .small_button("Copy to edit")
+                            .on_hover_text("Make your own theme from this one")
+                            .clicked()
+                    {
+                        copy = Some(t.clone());
+                    }
+                });
+                if !t.about.is_empty() {
+                    ui.label(egui::RichText::new(&t.about).weak().small());
+                }
+                ui.add_space(2.0);
+            }
+            for (file, why) in &self.problems {
+                ui.colored_label(ui.visuals().error_fg_color, format!("{file}: {why}"));
+            }
+            if let Some(dir) = &self.dir {
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new(format!("Your themes: {}", dir.display())).weak());
+                    if ui.button("Reload").clicked() {
+                        reload = true;
+                    }
+                });
+            }
+            if let Some(n) = &self.note {
+                ui.label(n);
+            }
+        }
         if let Some(id) = pick {
             self.choose(&id);
         }

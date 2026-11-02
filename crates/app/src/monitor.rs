@@ -557,7 +557,7 @@ impl App {
         let outs = self.output_count();
         let ins = self.input_count();
         let Some(p) = &mut self.profile else {
-            ui.weak("Choose an audio device first (Settings → Audio device).");
+            ui.weak("Choose an audio device first (Settings → Audio).");
             return;
         };
         let main = p.main;

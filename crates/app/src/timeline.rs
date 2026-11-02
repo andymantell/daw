@@ -1105,6 +1105,10 @@ pub struct View<'a> {
 /// Something asked of a track from its menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrackAsk {
+    /// Open its instrument.
+    Instrument,
+    /// Open its effects.
+    Effects,
     /// Freeze it, or unfreeze it.
     Freeze,
     RenderInPlace,
@@ -1295,6 +1299,8 @@ enum Hit {
     /// The notation band under a lane's row.
     Band(usize),
     Lane,
+    /// A track's header, left of its lane: right-clicked only.
+    Header(usize),
 }
 
 /// A note clip being moved or trimmed.
@@ -3338,6 +3344,7 @@ impl Timeline {
             let h = hit(p, song);
             out.off_band = !matches!(h, Some(Hit::Band(_)));
             match h {
+                Some(Hit::Header(_)) => {}
                 Some(Hit::Clip { id, .. }) => {
                     if modifiers.shift || modifiers.command {
                         self.toggle_selected(song, id);
@@ -3429,6 +3436,12 @@ impl Timeline {
             self.menu_lane = (p.y >= rect.top() + tracks_top)
                 .then(|| lane_under(p.y))
                 .filter(|&l| l < song.lanes.len());
+            if self.menu.is_none()
+                && p.x < left
+                && let Some(l) = self.menu_lane
+            {
+                self.menu = Some((Hit::Header(l), 0));
+            }
             if let Some((Hit::Clip { id, .. }, _)) = self.menu
                 && !self.selected.contains(&id)
             {
@@ -4149,6 +4162,11 @@ impl Timeline {
                     out.command = Some(Cmd::ClearStretchMarkers);
                     ui.close();
                 }
+                // ai: fix-timing
+                if ui.button("Fix timing…").clicked() {
+                    out.command = Some(Cmd::FixTiming);
+                    ui.close();
+                }
                 if ui.button("Quantise audio…").clicked() {
                     out.command = Some(Cmd::QuantiseAudio);
                     ui.close();
@@ -4350,6 +4368,35 @@ impl Timeline {
                     }
                 }
             }
+            Some((Hit::Header(l), _)) if l < song.lanes.len() => {
+                let lane = &song.lanes[l];
+                ui.label(egui::RichText::new(lane.name).strong());
+                ui.separator();
+                if lane.kind.plays_notes() {
+                    // ai: instrument-window
+                    if ui.button("Instrument…").clicked() {
+                        out.track = Some((l, TrackAsk::Instrument));
+                        ui.close();
+                    }
+                }
+                // ai: view
+                if ui
+                    .button("Effects…")
+                    .on_hover_text("Its effect chain, with presets")
+                    .clicked()
+                {
+                    out.track = Some((l, TrackAsk::Effects));
+                    ui.close();
+                }
+                ui.separator();
+                track_entries(ui, l, lane.kind, view, &mut out);
+                let on = format!("Add comment on {}…", lane.name);
+                // ai: add_comment
+                if ui.button(on).clicked() {
+                    out.comment_at = Some((Some(l), snap_to(view.playhead)));
+                    ui.close();
+                }
+            }
             Some((Hit::Pin(i), _)) if i < view.pins.len() => {
                 if ui.button("Show comment").clicked() {
                     out.pin = Some(view.pins[i].id.clone());
@@ -4402,86 +4449,7 @@ impl Timeline {
                             ui.close();
                         }
                     }
-                    let (can, frozen) = view.freeze.get(l).copied().unwrap_or_default();
-                    let render = if audio {
-                        "Render in place"
-                    } else {
-                        "Render group in place"
-                    };
-                    if ui
-                        .button(render)
-                        .on_hover_text(
-                            "Its audio through its effects, before its fader, as a new track \
-                             beside it; this one is kept, muted",
-                        )
-                        .clicked()
-                    {
-                        out.track = Some((l, TrackAsk::RenderInPlace));
-                        ui.close();
-                    }
-                    if frozen {
-                        if ui.button("Unfreeze").clicked() {
-                            out.track = Some((l, TrackAsk::Freeze));
-                            ui.close();
-                        }
-                    } else if ui
-                        .add_enabled(can, egui::Button::new("Freeze"))
-                        .on_hover_text(
-                            "Play it from audio rendered through its effects, with them switched \
-                             off, to save computer power",
-                        )
-                        .on_disabled_hover_text("It has no effects switched on to freeze")
-                        .clicked()
-                    {
-                        out.track = Some((l, TrackAsk::Freeze));
-                        ui.close();
-                    }
-                    if ui
-                        .button("Save track as preset…")
-                        .on_hover_text("Keep its instrument, effects, sends and settings to use again")
-                        .clicked()
-                    {
-                        out.track = Some((l, TrackAsk::SavePreset));
-                        ui.close();
-                    }
-                    if !lane.kind.is_bus() {
-                        let ask = |a| Some((l, TrackAsk::Version(a)));
-                        ui.menu_button("Versions", |ui| {
-                            let (names, at) = view.versions.get(l).cloned().unwrap_or_default();
-                            for (i, n) in names.iter().enumerate() {
-                                if ui.radio(i == at, n).clicked() {
-                                    out.track = ask(VersionAsk::Switch(i));
-                                    ui.close();
-                                }
-                            }
-                            if !names.is_empty() {
-                                ui.separator();
-                            }
-                            if ui
-                                .button("Duplicate this version")
-                                .on_hover_text("A copy of what the track plays, to change and compare")
-                                .clicked()
-                            {
-                                out.track = ask(VersionAsk::Duplicate);
-                                ui.close();
-                            }
-                            if ui
-                                .button("New empty version")
-                                .on_hover_text(
-                                    "Same instrument, effects and fader, no clips, notes or \
-                                     automation",
-                                )
-                                .clicked()
-                            {
-                                out.track = ask(VersionAsk::New);
-                                ui.close();
-                            }
-                            if ui.button("Track versions…").clicked() {
-                                out.track = ask(VersionAsk::Window);
-                                ui.close();
-                            }
-                        });
-                    }
+                    track_entries(ui, l, lane.kind, view, &mut out);
                     ui.separator();
                 }
                 let bar = Self::bar_at(view.map, snap(view.map, at, Grid::Bar));
@@ -4519,6 +4487,14 @@ impl Timeline {
                     if ui.button("Add hit point here").clicked() {
                         out.hit = Some(crate::hitpoints::HitAsk::Add(at));
                         ui.close();
+                    }
+                    ui.separator();
+                    for c in [Cmd::Sections, Cmd::TimeWindow, Cmd::Loop, Cmd::Metronome] {
+                        // ai: sections
+                        if ui.button(c.info().name).clicked() {
+                            out.command = Some(c);
+                            ui.close();
+                        }
                     }
                 }
                 if let Some(l) = self.menu_lane.filter(|&l| song.lanes[l].kind.plays_notes())
@@ -4596,6 +4572,98 @@ impl Timeline {
             }
         }
         out
+    }
+}
+
+/// A track's own right-click entries: on its header, and on an empty
+/// place in its lane.
+fn track_entries(
+    ui: &mut egui::Ui,
+    l: usize,
+    kind: daw_project::TrackKind,
+    view: &View,
+    out: &mut Outcome,
+) {
+    let audio = kind == daw_project::TrackKind::Audio;
+    let (can, frozen) = view.freeze.get(l).copied().unwrap_or_default();
+    let render = if audio {
+        "Render in place"
+    } else {
+        "Render group in place"
+    };
+    if ui
+        .button(render)
+        .on_hover_text(
+            "Its audio through its effects, before its fader, as a new track \
+                 beside it; this one is kept, muted",
+        )
+        .clicked()
+    {
+        out.track = Some((l, TrackAsk::RenderInPlace));
+        ui.close();
+    }
+    if frozen {
+        if ui.button("Unfreeze").clicked() {
+            out.track = Some((l, TrackAsk::Freeze));
+            ui.close();
+        }
+    } else if ui
+        .add_enabled(can, egui::Button::new("Freeze"))
+        .on_hover_text(
+            "Play it from audio rendered through its effects, with them switched \
+                 off, to save computer power",
+        )
+        .on_disabled_hover_text("It has no effects switched on to freeze")
+        .clicked()
+    {
+        out.track = Some((l, TrackAsk::Freeze));
+        ui.close();
+    }
+    if ui
+        .button("Save track as preset…")
+        .on_hover_text("Keep its instrument, effects, sends and settings to use again")
+        .clicked()
+    {
+        out.track = Some((l, TrackAsk::SavePreset));
+        ui.close();
+    }
+    if !kind.is_bus() {
+        let ask = |a| Some((l, TrackAsk::Version(a)));
+        ui.menu_button("Versions", |ui| {
+            let (names, at) = view.versions.get(l).cloned().unwrap_or_default();
+            for (i, n) in names.iter().enumerate() {
+                if ui.radio(i == at, n).clicked() {
+                    out.track = ask(VersionAsk::Switch(i));
+                    ui.close();
+                }
+            }
+            if !names.is_empty() {
+                ui.separator();
+            }
+            if ui
+                .button("Duplicate this version")
+                .on_hover_text("A copy of what the track plays, to change and compare")
+                .clicked()
+            {
+                out.track = ask(VersionAsk::Duplicate);
+                ui.close();
+            }
+            if ui
+                .button("New empty version")
+                .on_hover_text(
+                    "Same instrument, effects and fader, no clips, notes or \
+                         automation",
+                )
+                .clicked()
+            {
+                out.track = ask(VersionAsk::New);
+                ui.close();
+            }
+            if ui.button("Track versions…").clicked() {
+                out.track = ask(VersionAsk::Window);
+                ui.close();
+            }
+        });
     }
 }
 

@@ -460,7 +460,7 @@ impl App {
                 if all.is_empty() {
                     ui.label(
                         "A section runs from one marker to the next. Mark one at the \
-                         playhead's bar with M (Edit → Mark a section).",
+                         playhead's bar with M (Song → Mark a section).",
                     );
                     return;
                 }

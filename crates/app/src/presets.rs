@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Track and effect chain presets (plan A3): File → Save track as
+//! Track and effect chain presets (plan A3): Track → Save track as
 //! preset… keeps a track's whole set-up (instrument, layers, effects,
 //! amp, sends and mixer settings), Save effect chain as preset… just its
 //! effects, and Presets… lists them to add to any project, as a new

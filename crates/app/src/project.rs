@@ -1014,22 +1014,54 @@ impl App {
         p
     }
 
-    /// Makes a project folder called `name` and saves into it.
-    pub(crate) fn save_as(&mut self, ctx: &egui::Context, name: &str) -> Result<(), String> {
+    /// Saves the project as a new folder `name` in the projects folder,
+    /// bringing the audio of the folder `from` it was saved in before, if
+    /// it was (taken out of `proj.folder`).
+    pub(crate) fn save_as_from(
+        &mut self,
+        ctx: &egui::Context,
+        name: &str,
+        from: Option<&ProjectFolder>,
+    ) -> Result<(), String> {
         let name = name.trim();
         if name.is_empty() || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
             return Err("Choose a name without / \\ : * ? \" < > |".into());
         }
-        self.save_in(ctx, &projects_dir().join(name))
+        self.save_in_from(ctx, &projects_dir().join(name), from)
     }
 
     /// Saves the project as a new folder at `dir`.
+    #[cfg(test)]
     pub(crate) fn save_in(&mut self, ctx: &egui::Context, dir: &Path) -> Result<(), String> {
+        self.save_in_from(ctx, dir, None)
+    }
+
+    /// Saves the project as a new folder at `dir`, bringing the audio of the folder the project
+    /// was saved in before, if it was.
+    pub(crate) fn save_in_from(
+        &mut self,
+        ctx: &egui::Context,
+        dir: &Path,
+        from: Option<&ProjectFolder>,
+    ) -> Result<(), String> {
         if dir.exists() {
             let name = dir.file_name().unwrap_or_default().to_string_lossy();
             return Err(format!("There is already a project called {name}."));
         }
-        self.proj.folder = Some(ProjectFolder::create(dir)?);
+        let folder = ProjectFolder::create(dir)?;
+        if let Some(from) = from {
+            // Clips, sounds and responses already in the old folder are
+            // named for it alone.
+            let names: Vec<String> = std::fs::read_dir(from.dir.join(daw_project::ASSETS))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| daw_project::is_asset_name(n))
+                .collect();
+            folder.bring_assets(from, &names)?;
+        }
+        self.proj.folder = Some(folder);
         self.save(ctx)?;
         self.remember_recent(dir);
         Ok(())
@@ -1351,6 +1383,7 @@ impl App {
                 ui.label(format!("Last kept {}: {}.", ago(found.age), found.summary));
                 ui.label(RichText::new("Restored, it is still unsaved until you save it.").weak());
                 ui.horizontal(|ui| {
+                    // ai: open_project.recover
                     restore = ui.button("Restore").clicked();
                     // ai: person
                     discard = ui.button("Discard").clicked();
@@ -1387,6 +1420,7 @@ impl App {
                     .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                     .show(ctx, |ui| {
                         ui.label("Name");
+                        // ai: save_project.name
                         let r = ui.text_edit_singleline(&mut name);
                         if !r.has_focus() && name.is_empty() {
                             r.request_focus();
@@ -1396,11 +1430,13 @@ impl App {
                             RichText::new(format!("Saved in {}", projects_dir().display())).weak(),
                         );
                         ui.horizontal(|ui| {
+                            // ai: save_project.name
                             go = ui.button("Save").clicked() || enter;
                             // ai: view
                             if ui.button("Cancel").clicked() {
                                 keep = false;
                             }
+                            // ai: save_project.path
                             if ui.button("Somewhere else…").clicked() {
                                 browse = true;
                             }
@@ -1420,8 +1456,8 @@ impl App {
                 if go || chosen.is_some() {
                     let old = self.proj.folder.take();
                     let saved = match &chosen {
-                        Some(dir) => self.save_in(ctx, dir),
-                        None => self.save_as(ctx, &name),
+                        Some(dir) => self.save_in_from(ctx, dir, old.as_ref()),
+                        None => self.save_as_from(ctx, &name, old.as_ref()),
                     };
                     match saved {
                         Ok(()) => {
@@ -1788,6 +1824,54 @@ mod tests {
         assert!(app.proj.dirty, "still unsaved");
         assert!(app.proj.folder.is_none());
         assert!(file.exists(), "kept until saved or let go");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_assistant_recovers_the_unsaved_project_and_saves_it_as_a_copy() {
+        use serde_json::json;
+        let dir = scratch("assistant-recover");
+        let file = dir.join("Recovery").join("Unsaved project.daw");
+        let mut h = app(&file);
+        with_work(&mut h, &dir);
+        h.state_mut().write_recovery().unwrap();
+        drop(h);
+
+        let mut d = crate::agent::driver::Driver {
+            h: app(&file),
+            access: crate::agent::Access::EditExport,
+        };
+        assert!(d.app().tracks.is_empty());
+        d.call("open_project", json!({"recover": true})).unwrap();
+        d.h.run();
+        assert_eq!(d.project()["tracks"].as_array().unwrap().len(), 1);
+        assert!(d.app().proj.dirty, "still unsaved");
+        let e = d
+            .call("open_project", json!({"recover": true}))
+            .unwrap_err();
+        assert!(e.contains("no unsaved project"), "{e}");
+
+        // Saved somewhere, then saved again there, then saved as a copy.
+        let first = dir.join("Song");
+        let r = d.call("save_project", json!({"path": first})).unwrap();
+        assert_eq!(r["saved"], "Song");
+        d.call("save_project", json!({})).unwrap();
+        let copy = dir.join("Song take two");
+        let r = d.call("save_project", json!({"path": copy})).unwrap();
+        assert_eq!(r["saved"], "Song take two");
+        assert!(crate::project::is_project(&first));
+        assert!(crate::project::is_project(&copy));
+        let audio =
+            |d: &Path| std::fs::read_dir(d.join(daw_project::ASSETS)).map_or(0, |r| r.count());
+        assert_eq!(audio(&copy), audio(&first), "the copy has its own audio");
+        assert!(audio(&copy) > 0);
+        let e = d.call("save_project", json!({"path": first})).unwrap_err();
+        assert!(e.contains("already"), "{e}");
+        assert_eq!(
+            d.app().proj.folder.as_ref().unwrap().name(),
+            "Song take two",
+            "a refused Save as leaves the project where it was"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

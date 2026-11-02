@@ -24,6 +24,7 @@ pub(crate) enum Cmd {
     NewFromTemplate,
     OpenProject,
     StartScreen,
+    StartScreenAtLaunch,
     Save,
     SaveAs,
     SaveAsTemplate,
@@ -441,6 +442,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Recent projects and templates")
     .words("recent welcome begin")
     .everyday(),
+    info(
+        Cmd::StartScreenAtLaunch,
+        "start-screen-at-launch",
+        "File",
+        "Show the start screen at launch",
+        &[],
+    )
+    .hint("Show recent projects and templates when the app starts, or not")
+    .words("startup welcome open begin"),
     info(Cmd::Save, "save", "File", "Save", &[key(CTRL, Key::S)])
         .hint("Save the project")
         .typing()
@@ -3421,6 +3431,7 @@ impl App {
                 });
             }
             Cmd::StartScreen => self.show_start(),
+            Cmd::StartScreenAtLaunch => self.toggle_start_at_launch(),
             Cmd::Save => self.save_or_ask(ctx),
             Cmd::SaveAs => {
                 self.proj.dialog = Some(Dialog::SaveAs {

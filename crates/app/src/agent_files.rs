@@ -71,24 +71,30 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "save_project",
         description: "Saves the project. One not saved before needs a name, and is saved \
-                      as a new folder of that name in the projects folder.",
+                      as a new folder of that name in the projects folder. A saved one given \
+                      another name, or a path, is saved as a new project there (Save as), \
+                      which is the one open from then on.",
         access: Access::EditExport,
         schema: || {
             json!({"type": "object", "properties": {
-                "name": {"type": "string"}
+                "name": {"type": "string", "description": "A folder's name in the projects folder."},
+                "path": {"type": "string", "description": "A new folder's full path, anywhere."}
             }})
         },
     },
     Tool {
         name: "open_project",
         description: "Opens a project, by its folder's name in the projects folder or a \
-                      full path. A saved project is saved first; an unsaved one with tracks \
-                      is refused, so nothing is lost. It opens in the background.",
+                      full path, or (recover: true) brings back the unsaved project the app \
+                      offers to recover after closing without saving it; it stays unsaved \
+                      until saved. A saved project is saved first; an unsaved one with \
+                      tracks is refused, so nothing is lost. It opens in the background.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
-                "project": {"type": "string"}
-            }, "required": ["project"]})
+                "project": {"type": "string"},
+                "recover": {"type": "boolean"}
+            }})
         },
     },
     Tool {
@@ -271,13 +277,25 @@ impl App {
 
     fn save_project_tool(&mut self, ctx: &eframe::egui::Context, args: &Value) -> Done {
         self.sync_doc(ctx, true);
-        if self.proj.folder.is_some() {
-            self.save(ctx)?;
-        } else {
-            let name = args["name"]
-                .as_str()
-                .ok_or("The project hasn't been saved yet: give it a name.")?;
-            self.save_as(ctx, name)?;
+        let name = args["name"].as_str().map(str::trim);
+        let path = args["path"].as_str().map(PathBuf::from);
+        let same = |f: &daw_project::ProjectFolder| name.is_none_or(|n| f.name() == n);
+        match &self.proj.folder {
+            Some(f) if path.is_none() && same(f) => self.save(ctx)?,
+            _ => {
+                if path.is_none() && name.is_none() {
+                    return Err("The project hasn't been saved yet: give it a name.".into());
+                }
+                let old = self.proj.folder.take();
+                let saved = match (&path, name) {
+                    (Some(p), _) => self.save_in_from(ctx, p, old.as_ref()),
+                    (None, n) => self.save_as_from(ctx, n.unwrap_or_default(), old.as_ref()),
+                };
+                if let Err(e) = saved {
+                    self.proj.folder = old;
+                    return Err(e);
+                }
+            }
         }
         let f = self.proj.folder.as_ref().expect("just saved");
         Ok((
@@ -288,7 +306,12 @@ impl App {
 
     /// Opens a project (`open`) or starts a new one, keeping any work.
     fn leave_for(&mut self, ctx: &eframe::egui::Context, args: &Value, open: bool) -> Done {
-        let then = if open {
+        let then = if open && args["recover"].as_bool() == Some(true) {
+            if self.proj.found.is_none() {
+                return Err("There is no unsaved project to recover.".into());
+            }
+            After::Recover
+        } else if open {
             let name = args["project"]
                 .as_str()
                 .ok_or("Give the project's name or folder.")?;
@@ -319,7 +342,13 @@ impl App {
             );
         }
         self.message = None;
+        let recovering = matches!(then, After::Recover);
         self.then(ctx, then);
+        if recovering {
+            // It says what it did, which is no error.
+            let said = self.message.take();
+            return Ok((json!({"recovered": true, "message": said}), None));
+        }
         if let Some(e) = self.message.take() {
             return Err(e);
         }

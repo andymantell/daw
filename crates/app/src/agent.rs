@@ -118,6 +118,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                       command shows or hides it), the track it shows and the clip: the \
                       track chosen with select_track or by clicking its header, or the \
                       track of the clip or mixer strip selected last. \
+                      start_screen_at_launch says whether the start screen shows when the \
+                      app starts (the start-screen-at-launch command switches it). \
                       top_bar is the top bar's option panel showing (record, loop, \
                       metronome, time-signature, key, speed or status; null when none); \
                       record-options, loop-options, metronome-options and speed-options \
@@ -1753,6 +1755,7 @@ impl App {
             "settings": self.settings_section().map(|s| s.id()),
             "inspector": self.inspector_value(),
             "top_bar": self.top_bar_open(),
+            "start_screen_at_launch": self.start.settings.show,
         })
     }
 

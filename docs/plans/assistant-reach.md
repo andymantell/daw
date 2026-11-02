@@ -94,34 +94,9 @@ After that, one small PR per area below. Each adds its tools with an end-to-end 
 
 The top bar work added `set_record_options` and `keep-last`, which reach all of these.
 
-### 4. Comments, versions, templates, presets, saving (24)
+### 4. Comments, versions, templates, presets, saving (done)
 
-Edit and delete a comment and let one span a range; rename a track version and delete one by id; a `save_template` tool with delete; delete a preset and export one to a file; Save as under a new name or path; restore the recovery file; a command for "show the start screen at launch" and one to check for updates now.
-
-- `presets.rs:904` Delete preset confirm: Delete (gap)
-- `presets.rs:949` Export… preset (gap)
-- `presets.rs:956` Delete… preset (gap)
-- `comments.rs:167` On the loop radio (partial)
-- `comments.rs:328` Edit comment text (gap)
-- `comments.rs:336` Save edited comment (gap)
-- `comments.rs:368` Delete for good (gap)
-- `comments.rs:380` Edit comment (gap)
-- `comments.rs:387` Delete comment (gap)
-- `project.rs:1354` Restore (recovery) (gap)
-- `project.rs:1389` Save project name (partial)
-- `project.rs:1398` Save (save as) (partial)
-- `project.rs:1402` Somewhere else… (partial)
-- `start.rs:245` Show this when the app starts (gap)
-- `templates.rs:191` Delete (template, confirm) (gap)
-- `templates.rs:208` Delete… (template) (gap)
-- `templates.rs:253` Template name (gap)
-- `templates.rs:269` Save / Replace (template) (gap)
-- `update.rs:436` Check now (gap)
-- `versions.rs:343` Version name field (gap)
-- `versions.rs:350` Rename (version, OK) (gap)
-- `versions.rs:367` Delete (version, confirm) (partial)
-- `versions.rs:386` Rename (version) (gap)
-- `versions.rs:389` Delete… (version) (partial)
+`edit_comment` (and `add_comment` with an end or on the loop), `edit_version`, `save_template` (save and delete), `manage_preset` (delete and export), `save_project` with another name or a path (Save as), `open_project` with `recover`, and the `start-screen-at-launch` command. Checking for updates now stays with the person, as agreeing to the checks does.
 
 ### 5. Instruments and effects (17)
 

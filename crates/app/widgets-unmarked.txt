@@ -11,10 +11,8 @@ main.rs 15
 mixer.rs 1
 notefx.rs 3
 perf.rs 1
-presets.rs 3
 remote.rs 2
 sections.rs 1
-templates.rs 4
 theme.rs 3
 timeline.rs 2
 tuner.rs 1

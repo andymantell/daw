@@ -506,6 +506,7 @@ impl App {
                         Some(daw_instruments::Kind::ModelMono) => "Mono",
                         Some(daw_instruments::Kind::June) => "June",
                         Some(daw_instruments::Kind::Eighty) => "Eighty",
+                        Some(daw_instruments::Kind::Oracle) => "Oracle",
                     },
                 );
                 // ai: view

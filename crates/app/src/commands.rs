@@ -712,6 +712,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("An eight-voice two-channel touch polysynth for pads, brass and expressive leads: velocity and polyphonic aftertouch to level and brightness, a ring modulator and chorus")
     .words("instrument poly synth pad brass lead aftertouch touch analogue vintage"),
     info(
+        Cmd::AddInstrument(11),
+        "add-oracle-track",
+        "Edit",
+        "Add Oracle track",
+        &[],
+    )
+    .hint("A two-oscillator analogue polysynth with two filter boards, for brass, pads, leads and bass")
+    .words("instrument poly synth pad brass lead analogue vintage sync"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

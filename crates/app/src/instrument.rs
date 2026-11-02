@@ -1164,6 +1164,7 @@ pub(crate) fn slot_controls(
         Some(Kind::DrumMachine) => drum_machine_controls(ui, slot, outputs, cx, shown),
         Some(Kind::Slicer) => slicer_controls(ui, slot, cx, shown),
         Some(Kind::PatchTwenty) => patch_twenty_controls(ui, slot),
+        Some(Kind::AcidThree) => acid_controls(ui, slot),
     };
     if renew {
         slot.renew(cx.rate, cx.pending);
@@ -1310,6 +1311,18 @@ fn grouped_controls(
             .show(ui, |ui| params_grid(ui, heading, slot.id, &p, from, to + 1));
     }
     false
+}
+
+/// The Acid Three bass line synth's controls: a word on how accent and
+/// slide come from the notes, then its settings in groups.
+fn acid_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
+    ui.label(
+        egui::RichText::new(
+            "Notes at or above the accent velocity are accented; a note that starts while the one before is still held slides into it.",
+        )
+        .weak(),
+    );
+    grouped_controls(ui, slot, "acid", daw_instruments::acid::GROUPS)
 }
 
 /// Reads `reference` into a sound, telling the user if it couldn't be.

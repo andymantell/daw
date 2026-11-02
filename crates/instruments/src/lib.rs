@@ -20,6 +20,7 @@ use std::sync::Arc;
 use daw_engine::graph::Insert;
 use daw_engine::midi::Instrument;
 
+pub mod acid;
 pub mod drum_machine;
 pub mod drum_sampler;
 pub mod drum_voice;
@@ -59,10 +60,12 @@ pub enum Kind {
     PatchTwenty,
     /// The one-oscillator monosynth (classic synths, S3).
     OhOne,
+    /// The acid bass line synth (classic synths, S2).
+    AcidThree,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
@@ -70,6 +73,7 @@ impl Kind {
         Kind::Slicer,
         Kind::PatchTwenty,
         Kind::OhOne,
+        Kind::AcidThree,
     ];
 
     /// How projects name it. Never change one.
@@ -82,6 +86,7 @@ impl Kind {
             Kind::Slicer => "slicer",
             Kind::PatchTwenty => "patch-twenty",
             Kind::OhOne => "oh-one",
+            Kind::AcidThree => "acid-three",
         }
     }
 
@@ -98,6 +103,7 @@ impl Kind {
             Kind::Slicer => "Loop slicer",
             Kind::PatchTwenty => "Patch Twenty",
             Kind::OhOne => "Oh-One",
+            Kind::AcidThree => "Acid Three",
         }
     }
 
@@ -117,6 +123,9 @@ impl Kind {
             }
             Kind::OhOne => {
                 "A one-oscillator bass and lead monosynth: saw and pulse with width modulation, a sub, noise, a 24 dB filter that sings, one envelope, an LFO and portamento"
+            }
+            Kind::AcidThree => {
+                "A bass line synth: one oscillator into a diode ladder, accents from velocity, slides from overlapping notes"
             }
         }
     }
@@ -201,6 +210,7 @@ impl Builtin {
                 b
             }
             Kind::PatchTwenty => Builtin::of(kind, patch_twenty::params(), Vec::new()),
+            Kind::AcidThree => Builtin::of(kind, acid::params(), Vec::new()),
         }
     }
 
@@ -268,6 +278,7 @@ impl Builtin {
             Kind::DrumMachine => drum_machine::params(),
             Kind::Slicer => slicer::params(count("slice", false)),
             Kind::PatchTwenty => patch_twenty::params(),
+            Kind::AcidThree => acid::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -625,6 +636,7 @@ impl Builtin {
                 Box::new(slicer::Slicer::new(rate, p, at("loop"), scale))
             }
             Kind::PatchTwenty => Box::new(patch_twenty::PatchTwenty::new(rate, p)),
+            Kind::AcidThree => Box::new(acid::Acid::new(rate, p)),
         }
     }
 

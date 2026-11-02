@@ -676,6 +676,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("An instrument track with the Oh-One: a one-oscillator bass and lead monosynth with a sub, a 24 dB filter that sings and portamento")
     .words("instrument mono synth bass lead house acid classic analogue"),
     info(
+        Cmd::AddInstrument(7),
+        "add-acid-three-track",
+        "Edit",
+        "Add Acid Three track",
+        &[],
+    )
+    .hint("A bass line synth: one oscillator into a diode ladder, accents from velocity, slides from overlapping notes")
+    .words("instrument acid bass line squelch 303 techno"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

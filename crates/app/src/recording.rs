@@ -306,12 +306,8 @@ mod tests {
         app.recording = true;
         app.send(Command::SetRecording(true));
         h.run();
-        // The status pill says so; clicked, it lists everything.
-        h.get_by_label_contains("Status:").click();
-        h.run();
+        // Said beside Record.
         assert!(h.query_by_label_contains("Recording at 70%").is_some());
-        h.key_press(egui::Key::Escape);
-        h.run();
         h.state_mut().toggle_play();
         assert!(until(&mut h, 2, |a| a.ctl.status().playing()));
         // Three bars at 70% take about 4.3 seconds.

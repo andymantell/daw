@@ -48,6 +48,10 @@ From the left:
 The panels use switches instead of drop-downs, as the plan's panel kit
 suggests. Clicking elsewhere or pressing Escape closes them.
 
+**Recording slowed down**: while recording at a changed speed or pitch,
+a warning such as "Recording at 75%" sits beside Record, whatever the
+status pill shows.
+
 **Simpler mode**: bigger buttons, Loop and Click are labelled, and the
 time signature and key are hidden.
 

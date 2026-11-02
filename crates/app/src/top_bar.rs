@@ -221,6 +221,22 @@ impl App {
             self.run(ctx, Cmd::Record);
         }
         self.options_arrow(ui, Options::Record, Cmd::RecordOptions, tall);
+        // Recording at a practice speed or pitch: said beside Record,
+        // whatever the status pill says, so a take isn't made slowed down
+        // by mistake.
+        if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
+            let mut short = format!("Recording at {:.0}%", self.speed_pct);
+            if (self.semitones, self.cents) != (0, 0) {
+                short += &format!(
+                    ", {:+} st",
+                    self.semitones as f64 + self.cents as f64 / 100.0
+                );
+            }
+            let note = self.slowed_note();
+            ui.label(RichText::new(short).color(ui.visuals().warn_fg_color))
+                .on_hover_text(&note)
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &note));
+        }
 
         let loop_button = if simple {
             // ai: loop
@@ -891,9 +907,6 @@ impl App {
                 Level::Problem,
                 format!("Disk too slow: {under} frames missed"),
             ));
-        }
-        if self.recording && (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0) {
-            out.push((Level::Problem, self.slowed_note()));
         }
         if let Some(s) = self.effects.scanning() {
             out.push((Level::Busy, s.to_string()));

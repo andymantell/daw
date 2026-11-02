@@ -269,6 +269,7 @@ Asked one at a time in the project thread; answers are recorded here.
 
 1. Synths and effects in the bottom dock (wide, short panels) rather than
    floating windows, with pop-out kept?
+   **Answer (2026-11-02): yes, in the bottom dock.**
 2. The inspector and practice tabs on the right and the browser on the
    left: or the other way round?
 3. Own drawn icons, or a bundled open-licence icon font?

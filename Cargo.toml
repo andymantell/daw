@@ -14,6 +14,23 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/andymantell/daw"
 publish = false
 
+# A debug build runs the audio code several times slower than a release
+# one: the room reverb alone takes more than all of the audio thread's
+# time. Optimise the audio crates and every dependency even in debug
+# builds, so `cargo run` plays a real project; the app's own crate stays
+# unoptimised for debugging. Use `--release` for anything with audio.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.daw-engine]
+opt-level = 3
+
+[profile.dev.package.daw-effects]
+opt-level = 3
+
+[profile.dev.package.daw-instruments]
+opt-level = 3
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

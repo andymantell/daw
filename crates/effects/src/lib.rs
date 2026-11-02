@@ -230,7 +230,7 @@ impl Kind {
                 "Makes the start of each note punchier or softer, and its ring longer or shorter"
             }
             Kind::Saturation => "Warmth and grit, from gentle to heavy, in up to four stages",
-            Kind::Delay => "Echoes",
+            Kind::Delay => "Echoes, timed in ms or in note lengths that follow the tempo",
             Kind::Chorus => "Thickens the sound, as if several players played it together",
             Kind::Flanger => "A sweeping, jet-like whoosh",
             Kind::Phaser => "A swirling sweep of moving notches",
@@ -613,9 +613,30 @@ impl Effect {
     }
 
     /// Whether the setting `key` means anything with the settings now
-    /// (a container's crossovers and levels past its last chain don't).
+    /// (a container's crossovers and levels past its last chain don't,
+    /// nor a delay's time while it follows the tempo).
     pub fn shown(&self, key: &str) -> bool {
+        if self.kind == Kind::Delay {
+            return key != "time" || self.synced().is_none();
+        }
         !self.kind.is_container() || container::shown(self.kind, key, self.chains())
+    }
+
+    /// For a delay following the tempo, the note length it follows, as
+    /// its sync setting names it ("1/8."); `None` otherwise.
+    pub fn synced(&self) -> Option<&'static str> {
+        if self.kind != Kind::Delay {
+            return None;
+        }
+        let v = self.get(delay::SYNC);
+        delay::synced_ms(v, 120.0)?;
+        delay::PARAMS[delay::SYNC].choices.get(v as usize).copied()
+    }
+
+    /// For a delay following the tempo, its time in ms at `bpm`.
+    pub fn synced_ms(&self, bpm: f64) -> Option<f64> {
+        self.synced()?;
+        delay::synced_ms(self.get(delay::SYNC), bpm)
     }
 
     /// Makes the audio side, at `rate`. Allocates; not for the audio
@@ -694,6 +715,11 @@ trait Dsp: Send {
     /// Frames of delay it adds.
     fn latency(&self) -> u32 {
         0
+    }
+    /// The tempo heard now, in quarter notes a minute, for an effect
+    /// that follows it.
+    fn tempo(&mut self, bpm: f64) {
+        let _ = bpm;
     }
     /// How far it is turning the level down now, in dB.
     fn reduction_db(&self) -> f32 {
@@ -797,6 +823,10 @@ impl Insert for Processor {
         if let Some(slot) = self.auto.get_mut(param as usize) {
             *slot = Some(value);
         }
+    }
+
+    fn set_tempo(&mut self, bpm: f64) {
+        self.dsp.tempo(bpm);
     }
 
     fn process_keyed(&mut self, left: &mut [f32], right: &mut [f32], key: (&[f32], &[f32])) {

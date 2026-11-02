@@ -217,6 +217,35 @@ fn fx_index(s: &FxSlot, key: &str) -> Option<usize> {
         .position(|p| p.key == key)
 }
 
+/// What to know about a built-in effect's setting with the settings now,
+/// at `bpm`: a delay's note length in ms, or that a setting does nothing
+/// (a delay's time while it follows the tempo).
+pub(crate) fn note_of(t: &Track, param: &str, bpm: f64) -> Option<String> {
+    match Lane::new(param).target() {
+        LaneTarget::Fx { effect, key } => {
+            let b = slot(t, effect)?.builtin()?;
+            if key == "sync" {
+                let ms = b.synced_ms(bpm)?;
+                return Some(format!(
+                    "{ms:.1} ms at {bpm:.1} bpm; it follows the tempo as it changes"
+                ));
+            }
+            if b.shown(key) {
+                return None;
+            }
+            Some(match (b.synced(), b.synced_ms(bpm)) {
+                (Some(n), Some(ms)) => {
+                    format!(
+                        "Not used: the delay follows the tempo ({n}, {ms:.1} ms at {bpm:.1} bpm)"
+                    )
+                }
+                _ => "Not used with the settings now".into(),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The value a track's control holds now, if the setting is there.
 pub(crate) fn control(t: &Track, param: &str) -> Option<f64> {
     match Lane::new(param).target() {

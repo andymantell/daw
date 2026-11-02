@@ -229,6 +229,14 @@ pub trait Insert: Send {
         let _ = (param, value);
     }
 
+    /// Tells it the tempo heard in the next block, in quarter notes a
+    /// minute (after any slower playback), for an effect that follows
+    /// it, such as a delay timed in note lengths. Called just before
+    /// [`process`](Self::process), once a block; others ignore it.
+    fn set_tempo(&mut self, bpm: f64) {
+        let _ = bpm;
+    }
+
     /// For an effect container: how it splits the audio among its
     /// chains and joins them again. `None` for an ordinary effect.
     fn as_split(&mut self) -> Option<&mut dyn Split> {
@@ -2358,6 +2366,38 @@ impl Graph {
         }
     }
 
+    /// The tempo heard at the block from `pos`, in quarter notes a
+    /// minute: at the play position, slowed with the playback.
+    fn heard_tempo(
+        &self,
+        pos: i64,
+        looping: Option<(i64, i64)>,
+        play: bool,
+        rate: Option<&Rate>,
+    ) -> f64 {
+        let at = match rate {
+            Some(r) if play => {
+                // Play time runs on past the loop's end; the music there
+                // is back at its start.
+                let mut u = r.u;
+                if let Some((a, b)) = looping
+                    && b > a
+                    && u >= b as f64
+                {
+                    u = a as f64 + (u - a as f64) % (b - a) as f64;
+                }
+                u
+            }
+            _ => pos as f64,
+        };
+        let map = &self.tempo;
+        let bpm = map
+            .tempo_at(map.ticks_at(Frames(at.floor() as i64)))
+            .as_f64();
+        let speed = rate.map_or(1.0, |r| r.speed);
+        bpm * if speed > 0.0 { speed } else { 1.0 }
+    }
+
     /// Plays frames `[pos, pos + n)` of every track into its scratch
     /// buffers, adds monitored input, applies the mixer, and adds the
     /// tracks into `out`. With `play` false (stopped, or counting in) only
@@ -2383,6 +2423,7 @@ impl Graph {
         let n = out[0].len();
         let mut missing = 0;
         let [out_l, out_r] = out;
+        let bpm = self.heard_tempo(pos, looping, play, rate.as_ref());
         let any_solo = self.any_solo;
         let groups = &self.groups;
         let mut part = self.part.as_deref_mut();
@@ -2593,6 +2634,7 @@ impl Graph {
                     edges: &mut self.edges,
                     post: &self.post,
                     key: &mut self.key,
+                    bpm,
                 };
                 layers::run(
                     &mut t.layers,
@@ -2638,6 +2680,7 @@ impl Graph {
                 edges: &mut self.edges,
                 post: &self.post,
                 key: &mut self.key,
+                bpm,
             };
             chain::run(&mut t.chain, &mut t.inserts, &mut keys, sl, sr);
 
@@ -2699,9 +2742,9 @@ impl Graph {
                     out_l[i] += p.master[0][i];
                     out_r[i] += p.master[1][i];
                 }
-                self.run_master(pos, out_l, out_r);
+                self.run_master(pos, out_l, out_r, bpm);
             }
-            None => self.run_master(pos, out_l, out_r),
+            None => self.run_master(pos, out_l, out_r, bpm),
         }
         // Counted down here, so a note on a track the other side of a
         // split plays still ends.
@@ -2716,7 +2759,7 @@ impl Graph {
     /// then its fader.
     /// Its lanes are read at the block's end, as a track's are, and the
     /// fader ramps there over the block.
-    fn run_master(&mut self, pos: i64, out_l: &mut [f32], out_r: &mut [f32]) {
+    fn run_master(&mut self, pos: i64, out_l: &mut [f32], out_r: &mut [f32], bpm: f64) {
         let n = out_l.len();
         let target = self.read_master_lanes(pos + n as i64);
         if !self.master_chain.is_empty() {
@@ -2724,6 +2767,7 @@ impl Graph {
                 edges: &mut self.edges,
                 post: &self.post,
                 key: &mut self.key,
+                bpm,
             };
             chain::run(
                 &mut self.master_chain,

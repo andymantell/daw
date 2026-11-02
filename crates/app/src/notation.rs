@@ -1664,7 +1664,9 @@ impl App {
                         });
                     // ai: fretboard-capo-up
                     ui.add(egui::Slider::new(&mut n.capo, 0..=12).text("Capo"));
+                    // ai: set_notation.staff
                     ui.checkbox(&mut n.staff, "Standard staff above the tab");
+                    // ai: set_notation.rhythm
                     ui.checkbox(&mut n.rhythm, "Rhythm under the tab");
                     assign = ui
                         // ai: assign-frets
@@ -1700,6 +1702,97 @@ impl App {
             let mix = t.heard();
             self.send(daw_engine::engine::Command::SetMix { track, mix });
         }
+    }
+}
+
+/// A track's notation, for assistants.
+pub(crate) fn notation_value(n: &Notation) -> serde_json::Value {
+    serde_json::json!({
+        "view": n.view.name(), "tuning": tuning_of(n).name, "capo": n.capo,
+        "staff": n.staff, "rhythm": n.rhythm,
+    })
+}
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "set_notation",
+    description: "A track's notation lane (get_project shows each track's as notation): \
+                  shown or not, and as tab, staff or drums; for tab, the tuning (by name, \
+                  such as Drop D), the capo's fret, and a standard staff above it and the \
+                  rhythm under it. Only what is given changes.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        let views: Vec<&str> = NotationView::ALL.iter().map(|v| v.name()).collect();
+        let tunings: Vec<String> = Tuning::presets().into_iter().map(|t| t.name).collect();
+        serde_json::json!({"type": "object", "properties": {
+            "track": {"type": "string"},
+            "shown": {"type": "boolean"},
+            "view": {"type": "string", "enum": views},
+            "tuning": {"type": "string", "enum": tunings},
+            "capo": {"type": "integer", "description": "0 to 12; 0 is no capo."},
+            "staff": {"type": "boolean"},
+            "rhythm": {"type": "boolean"}
+        }, "required": ["track"]})
+    },
+}];
+
+impl App {
+    pub(crate) fn notation_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "set_notation").then(|| self.set_notation_tool(args))
+    }
+
+    fn set_notation_tool(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>), String> {
+        let key = args["track"].as_str().ok_or("Give the track's id.")?;
+        let i = (self.tracks.iter().position(|t| t.key == key))
+            .ok_or_else(|| format!("There is no track {key}."))?;
+        let mut n = self.tracks[i].notation.clone();
+        if let Some(on) = args["shown"].as_bool()
+            && on != n.is_some()
+        {
+            n = on.then(|| guess(&self.tracks[i].name, &placed(&self.tracks[i].note_clips)));
+        }
+        let given = ["view", "tuning", "capo", "staff", "rhythm"];
+        if let Some(x) = n.as_mut() {
+            if let Some(v) = args["view"].as_str() {
+                x.view = (NotationView::ALL.into_iter().find(|w| w.name() == v))
+                    .ok_or_else(|| format!("view is tab, staff or drums, not {v}."))?;
+                if x.view == NotationView::Tab && x.tuning.is_empty() {
+                    *x = Notation::guitar();
+                }
+            }
+            if let Some(t) = args["tuning"].as_str() {
+                let t = (Tuning::presets().into_iter())
+                    .find(|p| p.name.eq_ignore_ascii_case(t))
+                    .ok_or_else(|| format!("There is no tuning {t}."))?;
+                x.tuning = t.strings.clone();
+                x.tuning_name = t.name.clone();
+            }
+            if let Some(c) = args["capo"].as_u64() {
+                if c > 12 {
+                    return Err("The capo goes on frets 0 to 12.".into());
+                }
+                x.capo = c as u8;
+            }
+            if let Some(b) = args["staff"].as_bool() {
+                x.staff = b;
+            }
+            if let Some(b) = args["rhythm"].as_bool() {
+                x.rhythm = b;
+            }
+        } else if given.iter().any(|k| args.get(*k).is_some()) {
+            return Err("The track shows no notation: give shown: true too.".into());
+        }
+        if n != self.tracks[i].notation {
+            self.set_notation(i, n.clone());
+        }
+        let v = serde_json::json!({"notation": n.as_ref().map(notation_value)});
+        Ok((v, Some("Change the notation".into())))
     }
 }
 
@@ -2146,5 +2239,47 @@ mod tests {
         h.run();
         // The score out again has both parts.
         assert_eq!(h.state().notation_score().parts.len(), 2);
+    }
+
+    #[test]
+    fn an_assistant_sets_a_tracks_notation() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "instrument", "name": "Guitar"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            d.call("set_notation", json!({"track": t, "staff": true}))
+                .is_err(),
+            "nothing shown yet"
+        );
+        let r = d
+            .call(
+                "set_notation",
+                json!({"track": t, "shown": true, "view": "tab", "tuning": "drop d",
+                       "capo": 2, "staff": true, "rhythm": true}),
+            )
+            .unwrap();
+        assert_eq!(
+            r["notation"],
+            json!({"view": "tab", "tuning": "Drop D", "capo": 2, "staff": true, "rhythm": true}),
+            "{r}"
+        );
+        let p = d.project();
+        assert_eq!(p["tracks"][0]["notation"]["staff"], true);
+        assert!(
+            d.call("set_notation", json!({"track": t, "capo": 13}))
+                .is_err()
+        );
+        assert!(
+            d.call("set_notation", json!({"track": t, "tuning": "Banjo-ish"}))
+                .is_err()
+        );
+        d.call("set_notation", json!({"track": t, "shown": false}))
+            .unwrap();
+        assert_eq!(d.project()["tracks"][0]["notation"], json!(null));
     }
 }

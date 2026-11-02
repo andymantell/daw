@@ -33,7 +33,7 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: || {
             json!({"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["audio", "instrument", "poly-synth",
-                         "sampler", "drum-sampler", "drum-machine", "slicer", "patch-twenty", "oh-one", "acid-three", "model-mono", "june", "eighty", "oracle", "blue-wave", "bus", "folder"],
+                         "sampler", "drum-sampler", "drum-machine", "slicer", "patch-twenty", "oh-one", "acid-three", "model-mono", "june", "eighty", "oracle", "blue-wave", "lucky-seven", "bus", "folder"],
                          "description": "instrument has the simple synth; poly-synth the bigger one; \
                                          patch-twenty the semi-modular monosynth; oh-one the one-oscillator \
                                          bass and lead monosynth; acid-three the acid bass line synth \
@@ -44,7 +44,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                                          (velocity and a note's pressure line set level and brightness); oracle the \
                                          two-oscillator polysynth with two filter boards (brass, pads, leads, bass); \
                                          blue-wave the eight-bit wavetable synth with an analogue filter for glassy \
-                                         pads, bells, digital keys and the 80s sound."},
+                                         pads, bells, digital keys and the 80s sound; lucky-seven the six-operator \
+                                         FM synth for electric pianos, bells, FM bass, brass and plucks \
+                                         (load-synth-bank reads its sound banks)."},
                 "name": {"type": "string"},
                 "index": {"type": "integer", "description": "Where in the track list, from 0; the end if left out."}
             }, "required": ["kind"]})
@@ -428,7 +430,8 @@ impl App {
                 | daw_instruments::Kind::June
                 | daw_instruments::Kind::Eighty
                 | daw_instruments::Kind::Oracle
-                | daw_instruments::Kind::BlueWave => false,
+                | daw_instruments::Kind::BlueWave
+                | daw_instruments::Kind::LuckySeven => false,
             };
             if !fits {
                 return Err(format!("A {} has no sound slot {slot}.", kind.name()));

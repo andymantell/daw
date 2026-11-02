@@ -120,6 +120,9 @@ pub struct Slot {
     /// how many equal parts.
     sensitivity: f32,
     parts: usize,
+    /// The Lucky Seven's loaded sound bank, for choosing from; the
+    /// settings chosen are the project's, the bank isn't.
+    pub bank: Option<Arc<daw_instruments::lucky_seven::bank::Bank>>,
 }
 
 impl Slot {
@@ -135,6 +138,7 @@ impl Slot {
             tab: 0,
             sensitivity: 0.5,
             parts: 8,
+            bank: None,
         }
     }
 
@@ -1188,6 +1192,7 @@ pub(crate) fn slot_controls(
             );
             sound_controls(ui, slot, "blue-wave", daw_instruments::blue_wave::GROUPS)
         }
+        Some(Kind::LuckySeven) => lucky_seven_controls(ui, slot, shown),
     };
     if renew {
         slot.renew(cx.rate, cx.pending);
@@ -1376,6 +1381,75 @@ fn sound_controls(
         });
     }
     grouped_controls(ui, slot, salt, groups)
+}
+
+/// The Lucky Seven's controls: its sounds made in code, a sound bank
+/// to load and choose from, then its settings in groups, the operators'
+/// closed to start with so the window isn't a wall of numbers.
+fn lucky_seven_controls(ui: &mut egui::Ui, slot: &mut Slot, shown: &mut Shown) -> bool {
+    let id = slot.id;
+    let bank = slot.bank.clone();
+    if let Some(b) = slot.builtin_ref() {
+        ui.horizontal(|ui| {
+            ui.label("Sound");
+            // ai: set_instrument
+            egui::ComboBox::from_id_salt(("lucky-seven", "sound", id))
+                .selected_text("Choose a sound…")
+                .show_ui(ui, |ui| {
+                    for s in b.kind().sounds() {
+                        // ai: set_instrument
+                        if ui.selectable_label(false, s.name).clicked() {
+                            b.set_sound(s.name);
+                        }
+                    }
+                })
+                .response
+                .accessible_name("Sound")
+                .on_hover_text("Sounds made from the settings: choosing one sets them all");
+            // ai: load-synth-bank
+            if ui
+                .button("Load a bank…")
+                .on_hover_text("Reads your own sounds from a file in the public six-operator FM bank format (.syx)")
+                .clicked()
+            {
+                shown.cmd = Some(Cmd::LoadBank);
+            }
+        });
+        if let Some(bank) = bank {
+            ui.horizontal(|ui| {
+                ui.label("From the bank");
+                // ai: set_instrument
+                egui::ComboBox::from_id_salt(("lucky-seven", "bank", id))
+                    .selected_text("Choose a sound…")
+                    .show_ui(ui, |ui| {
+                        for v in &bank.voices {
+                            // ai: set_instrument
+                            if ui.selectable_label(false, &v.name).clicked() {
+                                b.set_bank_voice(v);
+                            }
+                        }
+                    })
+                    .response
+                    .accessible_name("Sound from the bank")
+                    .on_hover_text(format!(
+                        "{} sounds read from {}",
+                        bank.voices.len(),
+                        bank.file
+                    ));
+            });
+        }
+    }
+    let Some(b) = slot.builtin_ref() else {
+        return false;
+    };
+    let p = b.params().clone();
+    for &(heading, from, to) in daw_instruments::lucky_seven::GROUPS {
+        egui::CollapsingHeader::new(heading)
+            .id_salt(("lucky-seven", "group", heading))
+            .default_open(!heading.starts_with("Operator"))
+            .show(ui, |ui| params_grid(ui, heading, id, &p, from, to + 1));
+    }
+    false
 }
 
 /// The June's controls: its sounds made in code, then its settings in
@@ -2215,6 +2289,50 @@ impl crate::App {
         self.instrument_open = Some(i);
         self.rebuild();
         Ok(library_summary(&lib))
+    }
+
+    /// Reads a bank of sounds in the public FM bank format onto the
+    /// Lucky Seven on track `track` (else the first Lucky Seven track,
+    /// else a new one), sets its first sound, and keeps the bank with
+    /// the track's instrument for choosing from. What it read, or why
+    /// it couldn't.
+    pub(crate) fn load_bank(
+        &mut self,
+        path: &Path,
+        track: Option<usize>,
+    ) -> Result<String, String> {
+        let bank = daw_instruments::lucky_seven::bank::open(path)?;
+        let i = match track.or_else(|| self.instrument_track(Some(Kind::LuckySeven))) {
+            Some(i) => i,
+            None => {
+                self.add_instrument_track(Kind::LuckySeven);
+                self.tracks.len() - 1
+            }
+        };
+        let t = self.tracks.get_mut(i).ok_or("There is no such track.")?;
+        let slot = t
+            .instrument
+            .as_mut()
+            .ok_or("The track has no instrument.")?;
+        let b = (slot.builtin_ref())
+            .filter(|b| b.kind() == Kind::LuckySeven)
+            .ok_or("The track's instrument isn't the Lucky Seven.")?;
+        let first = &bank.voices[0];
+        b.set_bank_voice(first);
+        let summary = format!(
+            "Read {} sound{} from {}; playing {}.",
+            bank.voices.len(),
+            if bank.voices.len() == 1 { "" } else { "s" },
+            path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into_owned()
+            ),
+            first.name
+        );
+        slot.bank = Some(Arc::new(bank));
+        self.instrument_open = Some(i);
+        self.rebuild();
+        Ok(summary)
     }
 
     /// The sampler's track stops playing its library.

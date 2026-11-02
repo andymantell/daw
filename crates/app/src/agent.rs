@@ -555,6 +555,7 @@ const NEEDS_A_PERSON: &[Cmd] = &[
     Cmd::ExportKit,
     Cmd::ImportPreset,
     Cmd::LoadSfz,
+    Cmd::LoadBank,
 ];
 
 /// What a command needs of an assistant.
@@ -2731,6 +2732,168 @@ mod tests {
         let p = d.call("get_project", json!({})).unwrap();
         assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
         assert_eq!(p["tracks"][1]["instrument"]["builtin"], "blue-wave");
+    }
+
+    /// The Lucky Seven through the assistant interface (classic synths,
+    /// S8): add the track, read an operator's settings and the sounds
+    /// made in code, voice the tine piano, check a harder-struck note
+    /// is brighter (the tine's velocity sensitivity), then load a bank
+    /// in the public format with file_command, read its sounds back
+    /// from get_instrument and set one.
+    #[test]
+    fn the_lucky_seven_is_played_through_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "lucky-seven"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        for key in [
+            "instrument.algorithm",
+            "instrument.feedback",
+            "instrument.op1_mode",
+            "instrument.op1_coarse",
+            "instrument.op1_level",
+            "instrument.op1_rate1",
+            "instrument.op1_level4",
+            "instrument.op1_break",
+            "instrument.op1_left_curve",
+            "instrument.op1_velocity",
+            "instrument.op6_amp_mod",
+            "instrument.lfo_wave",
+            "instrument.pitch_level1",
+            "instrument.transpose",
+            "instrument.voices",
+        ] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        let choices = |key: &str| -> Vec<Value> {
+            let p = params.iter().find(|p| p["param"] == key).unwrap();
+            p["choices"].as_array().unwrap().clone()
+        };
+        assert_eq!(choices("instrument.op1_mode").len(), 2);
+        assert!(
+            choices("instrument.lfo_wave")
+                .iter()
+                .any(|c| c == "Sample and hold")
+        );
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let sounds = info["instrument"]["sounds"].as_array().unwrap();
+        let tine = (sounds.iter()).find(|s| s["name"] == "Tine piano").unwrap();
+        assert!(info["bank"].is_null());
+        d.call(
+            "set_instrument",
+            json!({"track": t, "settings": tine["settings"]}),
+        )
+        .unwrap();
+        // The same note soft then hard: the tine comes in with
+        // velocity, so the hard one has more up top.
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 2, "notes": [
+                {"beat": 0.0, "beats": 3.0, "pitch": 60, "velocity": 40},
+                {"beat": 4.0, "beats": 3.0, "pitch": 60, "velocity": 127}
+            ]}),
+        )
+        .unwrap();
+        let bar = |d: &mut Driver, b: i64| -> Value {
+            d.call(
+                "analyse",
+                json!({"track": t, "from_bar": b, "to_bar": b + 1}),
+            )
+            .unwrap()
+        };
+        let highs = |a: &Value| -> f64 {
+            let power: f64 = (a["third_octave_bands"].as_array().unwrap().iter())
+                .filter(|b| b["hz"].as_f64().unwrap() >= 2000.0)
+                .map(|b| 10f64.powf(b["db"].as_f64().unwrap() / 10.0))
+                .sum();
+            10.0 * power.max(1e-12).log10()
+        };
+        let soft = bar(&mut d, 1);
+        let hard = bar(&mut d, 2);
+        assert!(soft["sample_peak_dbfs"].as_f64().unwrap() > -40.0, "{soft}");
+        assert!(
+            hard["rms_dbfs"].as_f64().unwrap() > soft["rms_dbfs"].as_f64().unwrap() + 3.0,
+            "{soft} {hard}"
+        );
+        assert!(highs(&hard) > highs(&soft) + 6.0, "{soft} {hard}");
+        let now = instrument_params(&mut d, &t);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.op2_coarse")
+            .unwrap();
+        assert_eq!(f["value"], 14.0);
+        // A bank in the public format: a file of two sounds, read with
+        // file_command onto this track; its first sound is set and
+        // the rest are listed for set_instrument.
+        let dir = std::env::temp_dir().join(format!("daw-fm-bank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mine.syx");
+        std::fs::write(&path, test_bank()).unwrap();
+        let r = d
+            .call(
+                "file_command",
+                json!({"id": "load-synth-bank", "path": path, "track": t}),
+            )
+            .unwrap();
+        assert!(r["message"].as_str().unwrap().contains("2 sounds"), "{r}");
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let bank = &info["bank"];
+        assert_eq!(bank["sounds"].as_array().unwrap().len(), 2, "{info}");
+        assert_eq!(bank["sounds"][0]["name"], "FIRST");
+        assert_eq!(bank["sounds"][1]["name"], "SECOND");
+        let now = instrument_params(&mut d, &t);
+        let at = |now: &[Value], key: &str| {
+            (now.iter().find(|p| p["param"] == key).unwrap())["value"]
+                .as_f64()
+                .unwrap()
+        };
+        assert_eq!(at(&now, "instrument.algorithm"), 5.0);
+        assert_eq!(
+            at(&now, "instrument.op2_coarse"),
+            1.0,
+            "the bank's sound, not the tine"
+        );
+        d.call(
+            "set_instrument",
+            json!({"track": t, "settings": bank["sounds"][1]["settings"]}),
+        )
+        .unwrap();
+        let now = instrument_params(&mut d, &t);
+        assert_eq!(at(&now, "instrument.algorithm"), 32.0);
+        // The commands are in the table too.
+        d.call("run_command", json!({"id": "add-lucky-seven-track"}))
+            .unwrap();
+        let p = d.call("get_project", json!({})).unwrap();
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
+        assert_eq!(p["tracks"][1]["instrument"]["builtin"], "lucky-seven");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two packed sounds in the public FM bank format, bare: "FIRST" on
+    /// algorithm 5 and "SECOND" on algorithm 32, each a carrier at
+    /// full level.
+    fn test_bank() -> Vec<u8> {
+        let mut out = Vec::new();
+        for (name, algorithm) in [("FIRST", 4u8), ("SECOND", 31u8)] {
+            let mut v = vec![0u8; 128];
+            for o in 0..6 {
+                let b = &mut v[(5 - o) * 17..(5 - o) * 17 + 17];
+                b[..8].copy_from_slice(&[99, 99, 99, 99, 99, 99, 99, 0]);
+                b[8] = 39;
+                b[12] = 7 << 3;
+                b[15] = 1 << 1;
+            }
+            v[85 + 14] = 99;
+            v[102..106].copy_from_slice(&[99; 4]);
+            v[106..110].copy_from_slice(&[50; 4]);
+            v[110] = algorithm;
+            v[117] = 24;
+            for b in &mut v[118..128] {
+                *b = b' ';
+            }
+            v[118..118 + name.len()].copy_from_slice(name.as_bytes());
+            out.extend(v);
+        }
+        out
     }
 
     #[test]

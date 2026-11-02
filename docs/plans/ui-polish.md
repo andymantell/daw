@@ -13,10 +13,10 @@ keeps its command, and stays reachable through the AI assistant
 interface.
 
 Who it is for: the owner and their guitar teacher, recording, practising
-and making songs; and the simpler mode for beginners. The layout is
-designed for laptop screens (about 1440 × 900) and full HD monitors
-(1920 × 1080) equally: every thread checks both, and a bigger screen gets
-more room, not more clutter.
+and making songs; and the simpler mode for beginners. The baseline
+screen is the owner's laptop, 1920 × 1200. Every thread also checks that
+its area still works at 1440 × 900, and a bigger screen gets more room,
+not more clutter.
 
 ## What is wrong today
 
@@ -224,7 +224,7 @@ Every thread checks its area against these:
   in simpler mode.
 - Each control appears in one place; shortcuts and right-click menus run
   the same command.
-- Renders at 1440 × 900 and at 1920 × 1080, in all four themes, light
+- Renders at 1920 × 1200 and at 1440 × 900, in all four themes, light
   and dark, go in the thread's review file.
 
 ## The AI assistant interface
@@ -277,4 +277,5 @@ Asked one at a time in the project thread; answers are recorded here.
 3. Own drawn icons, or a bundled open-licence icon font?
    **Answer (2026-11-02): draw our own.**
 4. Is 1440 × 900 the right screen to design for?
-   **Answer (2026-11-02): design for 1440 × 900 and 1920 × 1080 equally.**
+   **Answer (2026-11-02): the baseline is the owner's laptop, 1920 × 1200;
+   threads also check 1440 × 900.**

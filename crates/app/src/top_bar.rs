@@ -4,14 +4,16 @@
 //!
 //! From the left: the menus; the transport (back to the start, play,
 //! record, loop and the metronome, each of the last three with an arrow
-//! for its options); the position; the song's tempo, time signature and
-//! key; and the practice speed. On the right: Find a command, one status
+//! for its options); the position; and the song's tempo, time signature
+//! and key. On the right: Find a command, one status
 //! pill for the audio device and background work, and the assistants.
 //!
 //! What was always on screen before and is used once a session or never
 //! (punch bars, pre-roll and post-roll, what to keep, the click's sound
 //! and level, the loop's bars, transpose and the speed trainer) is in
-//! small option panels that open from the button they belong to. Each
+//! small option panels that open from the button they belong to. The
+//! practice speed and pitch have no button: Practice → Speed and pitch…
+//! opens them under the tempo until the Practice panel is built. Each
 //! panel can be opened by a command too, and `get_selection` says which
 //! is open (`top_bar`), so an assistant can show one to the person.
 
@@ -285,6 +287,11 @@ impl App {
         if anchor.clicked() {
             self.top.toggle(which);
         }
+        self.show_panel(anchor, which);
+    }
+
+    /// Shows `which` below `anchor` while it is open.
+    fn show_panel(&mut self, anchor: &egui::Response, which: Options) {
         if self.top.open != Some(which) {
             return;
         }
@@ -401,22 +408,12 @@ impl App {
                 .accessible_name(format!("Key, {key}"));
             self.options_panel(&r, Options::Key);
         }
-        // The practice speed and pitch: lit while either is changed, so
-        // nobody forgets they are playing slowed down.
-        let changed = (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0);
-        let mut text = format!("Speed {:.0}%", self.speed_pct);
-        if (self.semitones, self.cents) != (0, 0) {
-            text += &format!(" {:+}", self.semitones as f64 + self.cents as f64 / 100.0);
+        // Speed and pitch have no button of their own (Practice → Speed
+        // and pitch… opens them, until the Practice panel is built); they
+        // show under the tempo.
+        if self.top.open == Some(Options::Speed) {
+            self.show_panel(&t, Options::Speed);
         }
-        let r = ui
-            // ai: view
-            .add(
-                egui::Button::selectable(changed || self.top.open == Some(Options::Speed), &text)
-                    .min_size(tall),
-            )
-            .on_hover_text(self.commands.hover(Cmd::SpeedOptions))
-            .accessible_name(format!("Practice speed and pitch, {text}"));
-        self.options_panel(&r, Options::Speed);
     }
 
     /// Punch bars, pre-roll and post-roll, what is kept, and how notes
@@ -1127,7 +1124,6 @@ mod tests {
         .unwrap();
         d.h.run();
         assert!(d.h.query_by_label("Key, D Dorian").is_some());
-        assert!(d.h.query_by_label_contains("Speed 75%").is_some());
         assert!(!d.app().metronome.accent);
     }
 

@@ -22,9 +22,6 @@ From the left:
   you chose to show it).
 - **Tempo** (drag it, or double-click to type), then **time signature**
   and **key** as buttons that open small editors.
-- **Speed**, which shows the practice speed. It lights up while the
-  speed or pitch is changed, so you can't forget you're playing slowed
-  down.
 - On the right: **Find a command** (Ctrl+K), **one status pill**, and
   **AI assistants**.
 
@@ -37,7 +34,7 @@ From the left:
 | Loop bars from and to | Loop options (arrow by Loop), or **drag the loop's ends along the foot of the ruler** |
 | Time signature, Changes… | The time signature button: beats per bar, the beat, and "Tempo and signature changes…" |
 | Key (only in the note editor before) | The key button: root, scale, or no key |
-| Speed and presets, transpose and cents, tuning presets, detect tuning, the speed trainer | The Speed button |
+| Speed and presets, transpose and cents, tuning presets, detect tuning, the speed trainer | Practice → Speed and pitch… (opens under the tempo), until the Practice panel is built |
 | Device, rate, DSP load, "No audio device", busy work, recording or disk problems | The status pill shows the most important line; click it for all of them, with Audio settings… and Performance… |
 
 ![Record options](ui-polish-2-top-bar/1920-record.png)
@@ -51,12 +48,8 @@ From the left:
 The panels use switches instead of drop-downs, as the plan's panel kit
 suggests. Clicking elsewhere or pressing Escape closes them.
 
-**Slowed down**, the Speed button lights up:
-
-![Speed 75%](ui-polish-2-top-bar/1440-slowed-bar.png)
-
 **Simpler mode**: bigger buttons, Loop and Click are labelled, and the
-time signature and key are hidden. Speed stays.
+time signature and key are hidden.
 
 ![Simpler mode, 1440](ui-polish-2-top-bar/1440-simple-bar.png)
 ![Simpler mode, 1920](ui-polish-2-top-bar/1920-simple-bar.png)

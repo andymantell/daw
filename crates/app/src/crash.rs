@@ -343,13 +343,16 @@ impl Crashes {
                 "{APP_NAME} closed because of an internal error last time. A report \
                  was saved on this computer; nothing has been sent."
             ));
+            // ai: view
             if ui.button("Show the report").clicked() {
                 self.show_newest();
             }
+            // ai: view
             if ui.button("Open the folder").clicked() {
                 crate::export::open_folder(&self.dir);
                 self.seen();
             }
+            // ai: view
             if ui.button("OK").clicked() {
                 self.seen();
             }
@@ -372,6 +375,7 @@ impl Crashes {
                      the text below is exactly what the file holds.",
                 );
                 ui.horizontal(|ui| {
+                    // ai: view
                     if ui.button("Open the folder").clicked() {
                         crate::export::open_folder(&self.dir);
                     }
@@ -387,6 +391,7 @@ impl Crashes {
                     for p in all.iter().rev() {
                         let label = utc(report_secs(p).0);
                         let on = self.showing.as_ref().is_some_and(|(s, _)| s == p);
+                        // ai: view
                         if ui.selectable_label(on, label).clicked() {
                             let text = std::fs::read_to_string(p).unwrap_or_default();
                             self.showing = Some((p.clone(), text));
@@ -394,12 +399,14 @@ impl Crashes {
                     }
                 });
                 if let Some((_, text)) = &mut self.showing {
+                    // ai: person
                     if ui.button("Copy the text").clicked() {
                         ui.ctx().copy_text(text.clone());
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // Read-only: shown in a text box so it can be selected.
                         ui.add(
+                            // ai: view
                             egui::TextEdit::multiline(&mut text.as_str())
                                 .code_editor()
                                 .desired_width(f32::INFINITY),

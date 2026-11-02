@@ -624,6 +624,7 @@ pub(crate) fn controls(
         ui.strong("Note effects");
         ui.menu_button("Add…", |ui| {
             for (k, kind) in KINDS.iter().enumerate() {
+                // ai: run_command.id
                 if ui.button(kind.name).on_hover_text(kind.hint).clicked() {
                     out.cmd = Some(Cmd::AddNoteFx(k as u8));
                     ui.close();
@@ -634,6 +635,7 @@ pub(crate) fn controls(
         .on_hover_text("Effects on the notes before they reach the instrument");
         if !list.is_empty()
             && ui
+                // ai: render-note-effects
                 .button("Render into notes")
                 .on_hover_text(
                     "Make the track's note clips the notes the effects play, and switch the \
@@ -674,6 +676,7 @@ pub(crate) fn controls(
             ui.horizontal(|ui| {
                 let mut on = !fx.bypass;
                 if ui
+                    // ai: set_parameter
                     .checkbox(&mut on, kind.name)
                     .on_hover_text(kind.hint)
                     .changed()
@@ -721,6 +724,7 @@ pub(crate) fn controls(
                                         .selected_text(value_text(p, now))
                                         .show_ui(ui, |ui| {
                                             for &(cv, name) in c {
+                                                // ai: set_parameter
                                                 ui.selectable_value(&mut v, cv, name);
                                             }
                                         })
@@ -729,11 +733,13 @@ pub(crate) fn controls(
                                 }
                                 Shape::Toggle => {
                                     let mut b = now >= 0.5;
+                                    // ai: set_parameter
                                     ui.checkbox(&mut b, "").accessible_name(p.label);
                                     v = b as u8 as f64;
                                 }
                                 Shape::Number(unit) => {
                                     ui.add(
+                                        // ai: set_parameter
                                         egui::Slider::new(&mut v, p.min..=p.max)
                                             .step_by(1.0)
                                             .fixed_decimals(0)

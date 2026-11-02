@@ -316,6 +316,7 @@ pub fn controls(
             ui.label(egui::RichText::new(&title).strong());
             let mut on = !c.mute();
             if ui
+                // ai: edit_layer.on
                 .toggle_value(&mut on, "On")
                 .on_hover_text("Switch off to silence this layer")
                 .changed()
@@ -325,6 +326,7 @@ pub fn controls(
             if ui
                 .add_enabled(
                     n > 0,
+                    // ai: edit_layer.index
                     IconButton::new(Icon::MoveUp, "Move earlier in the list"),
                 )
                 .clicked()
@@ -334,6 +336,7 @@ pub fn controls(
             if ui
                 .add_enabled(
                     n + 1 < count,
+                    // ai: edit_layer.index
                     IconButton::new(Icon::MoveDown, "Move later in the list"),
                 )
                 .clicked()
@@ -341,6 +344,7 @@ pub fn controls(
                 edit = Some(Edit::Up(n + 1));
             }
             if ui
+                // ai: edit_layer.remove
                 .add(IconButton::new(
                     Icon::Close,
                     "Remove this layer and its effects",
@@ -359,6 +363,7 @@ pub fn controls(
                     .selected_text(l.slot.name.clone())
                     .show_ui(ui, |ui| {
                         for (kind, name) in crate::instrument::choices() {
+                            // ai: edit_layer.instrument
                             if ui.selectable_label(now == Some(kind), name).clicked()
                                 && now != Some(kind)
                             {
@@ -381,6 +386,7 @@ pub fn controls(
                 let mut db = c.gain_db();
                 let first = spoken::start(ui);
                 if ui
+                    // ai: edit_layer.gain_db
                     .add(egui::Slider::new(&mut db, -60.0..=12.0).suffix(" dB"))
                     .accessible_name(format!("{title} level"))
                     .changed()
@@ -393,6 +399,7 @@ pub fn controls(
                 let mut pan = c.pan();
                 let first = spoken::start(ui);
                 if ui
+                    // ai: edit_layer.pan
                     .add(egui::Slider::new(&mut pan, -1.0..=1.0))
                     .accessible_name(format!("{title} pan"))
                     .changed()
@@ -406,6 +413,7 @@ pub fn controls(
                 ui.horizontal(|ui| {
                     let a = ui
                         .add(
+                            // ai: edit_layer.keys
                             egui::DragValue::new(&mut lo)
                                 .range(0..=127)
                                 .custom_formatter(|v, _| key_name(v)),
@@ -414,6 +422,7 @@ pub fn controls(
                     ui.label("to");
                     let b = ui
                         .add(
+                            // ai: edit_layer.keys
                             egui::DragValue::new(&mut hi)
                                 .range(0..=127)
                                 .custom_formatter(|v, _| key_name(v)),
@@ -430,10 +439,12 @@ pub fn controls(
                 let (mut soft, mut loud) = c.velocities();
                 ui.horizontal(|ui| {
                     let a = ui
+                        // ai: edit_layer.velocities
                         .add(egui::DragValue::new(&mut soft).range(1..=127))
                         .accessible_name(format!("{title} softest"));
                     ui.label("to");
                     let b = ui
+                        // ai: edit_layer.velocities
                         .add(egui::DragValue::new(&mut loud).range(1..=127))
                         .accessible_name(format!("{title} loudest"));
                     if a.changed() || b.changed() {
@@ -447,6 +458,7 @@ pub fn controls(
                 let mut t = c.transpose();
                 if ui
                     .add(
+                        // ai: edit_layer.transpose
                         egui::DragValue::new(&mut t)
                             .range(-MAX_TRANSPOSE..=MAX_TRANSPOSE)
                             .suffix(" st"),
@@ -470,6 +482,7 @@ pub fn controls(
     }
     ui.horizontal(|ui| {
         if ui
+            // ai: edit_layer.add
             .button("+ Add layer")
             .on_hover_text("Another instrument playing the same notes")
             .clicked()
@@ -477,6 +490,7 @@ pub fn controls(
             edit = Some(Edit::Add);
         }
         if ui
+            // ai: view
             .button("Effects…")
             .on_hover_text("Each layer's own effects, before the track's")
             .clicked()

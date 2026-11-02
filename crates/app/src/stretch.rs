@@ -611,15 +611,18 @@ impl App {
                 }
                 ui.horizontal(|ui| {
                     ui.label("Tempo");
+                    // ai: stretch_clips.tempo
                     ui.add(egui::TextEdit::singleline(&mut s.tempo_text).desired_width(70.0))
                         .labelled_by(ui.label("BPM").id);
                 });
                 ui.horizontal(|ui| {
+                    // ai: stretch_clips.tempo
                     if ui.button("Use the song's tempo").clicked() {
                         s.tempo_text = format!("{song_bpm:.2}");
                     }
                     if let Some(g) = guess
                         && ui
+                            // ai: stretch_clips.tempo
                             .button(format!("Guess from length: {g:.1}"))
                             .on_hover_text("Taking the clip as a loop of whole bars")
                             .clicked()
@@ -630,6 +633,7 @@ impl App {
                 if let Some(m) = &s.message {
                     ui.colored_label(ui.visuals().warn_fg_color, m);
                 }
+                // ai: stretch_clips.tempo
                 if ui.button("Set tempo").clicked() {
                     set = Some(s.tempo_text.trim().parse::<f64>());
                 }
@@ -669,6 +673,7 @@ impl App {
                         .selected_text(q.grid.label())
                         .show_ui(ui, |ui| {
                             for g in Grid::ALL.into_iter().filter(|g| *g != Grid::Auto) {
+                                // ai: stretch_clips.quantise.grid
                                 ui.selectable_value(&mut q.grid, g, g.label());
                             }
                         })
@@ -677,6 +682,7 @@ impl App {
                     ui.end_row();
                     ui.label("Strength");
                     ui.add(
+                        // ai: stretch_clips.quantise.strength
                         egui::Slider::new(&mut q.strength, 0.0..=1.0)
                             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
                     )
@@ -684,12 +690,14 @@ impl App {
                     .accessible_name("Quantise strength");
                     ui.end_row();
                     ui.label("Window");
+                    // ai: stretch_clips.quantise.window_ms
                     ui.add(egui::Slider::new(&mut q.window_ms, 5.0..=250.0).suffix(" ms"))
                         .on_hover_text("Attacks further from the grid than this stay put")
                         .accessible_name("Quantise window");
                     ui.end_row();
                     ui.label("Sensitivity");
                     ui.add(
+                        // ai: stretch_clips.sensitivity
                         egui::Slider::new(&mut s.sensitivity, 0.0..=1.0)
                             .step_by(0.05)
                             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
@@ -701,6 +709,7 @@ impl App {
                 if let Some(m) = &s.message {
                     ui.colored_label(ui.visuals().warn_fg_color, m);
                 }
+                // ai: stretch_clips.quantise
                 apply = ui.button("Quantise").clicked();
             });
         if apply {
@@ -744,6 +753,7 @@ impl App {
                             .selected_text(t.unit.label())
                             .show_ui(ui, |ui| {
                                 for u in Unit::ALL {
+                                    // ai: tempo_from_clip.unit
                                     ui.selectable_value(&mut t.unit, u, u.label());
                                 }
                             })
@@ -752,12 +762,14 @@ impl App {
                         ui.end_row();
                         if has_markers {
                             ui.label("Beats from");
+                            // ai: tempo_from_clip.use_markers
                             ui.checkbox(&mut t.use_markers, "The clip's stretch markers")
                                 .on_hover_text("Off: the attacks found in the audio");
                             ui.end_row();
                         }
                         ui.label("Sensitivity");
                         ui.add(
+                            // ai: tempo_from_clip.sensitivity
                             egui::Slider::new(&mut t.sensitivity, 0.0..=1.0)
                                 .step_by(0.05)
                                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
@@ -769,6 +781,7 @@ impl App {
                 if let Some(m) = &s.message {
                     ui.colored_label(ui.visuals().warn_fg_color, m);
                 }
+                // ai: tempo_from_clip
                 apply = ui.button("Set the song's tempo").clicked();
             });
         if apply {

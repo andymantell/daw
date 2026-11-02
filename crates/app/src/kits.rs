@@ -460,6 +460,7 @@ impl Kits {
         }
         ui.horizontal(|ui| {
             for c in [Cmd::LearnKit, Cmd::ImportKit, Cmd::ExportKit] {
+                // ai: file_command.id
                 if ui.button(c.info().name).clicked() {
                     cmd = Some(c);
                 }
@@ -544,12 +545,15 @@ impl Kits {
             } else {
                 "Skip: not on my kit"
             };
+            // ai: kit-back
             if ui.button("Back").clicked() {
                 cmd = Some(Cmd::KitBack);
             }
+            // ai: kit-next
             if ui.button(next).clicked() {
                 cmd = Some(if waits { Cmd::KitNext } else { Cmd::KitSkip });
             }
+            // ai: kit-cancel
             if ui.button("Cancel").clicked() {
                 cmd = Some(Cmd::KitCancel);
             }

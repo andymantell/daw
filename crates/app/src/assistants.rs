@@ -277,6 +277,7 @@ impl App {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
             let mut on = a.on;
+            // ai: person
             if ui.checkbox(&mut on, "Let assistants connect").changed() {
                 turn = Some(on);
             }
@@ -289,6 +290,7 @@ impl App {
                         ui.label("Address");
                         ui.horizontal(|ui| {
                             ui.monospace(&url);
+                            // ai: person
                             if ui.small_button("Copy").clicked() {
                                 ui.ctx().copy_text(url.clone());
                             }
@@ -301,11 +303,14 @@ impl App {
                             } else {
                                 ui.monospace("•".repeat(12));
                             }
+                            // ai: person
                             ui.checkbox(&mut a.show_token, "Show");
+                            // ai: person
                             if ui.small_button("Copy").clicked() {
                                 ui.ctx().copy_text(a.token.clone());
                             }
                             if ui
+                                // ai: person
                                 .small_button("New token")
                                 .on_hover_text("The old token stops working")
                                 .clicked()
@@ -321,6 +326,7 @@ impl App {
                         "Many assistants take a server in this shape. It holds the token, \
                              so keep it private.",
                     );
+                    // ai: person
                     if ui.button("Copy").clicked() {
                         ui.ctx().copy_text(text.clone());
                     }
@@ -330,19 +336,23 @@ impl App {
                     ui.label(RichText::new(format!("{} wants to use the app.", c.name)).strong());
                     ui.horizontal(|ui| {
                         let mut pick = None;
+                        // ai: person
                         if ui.button("Look only").clicked() {
                             pick = Some(Choice::Allowed(Access::Read));
                         }
+                        // ai: person
                         if ui.button("Edit").clicked() {
                             pick = Some(Choice::Allowed(Access::Edit));
                         }
                         if ui
+                            // ai: person
                             .button("Edit and export")
                             .on_hover_text("Also save, and write files")
                             .clicked()
                         {
                             pick = Some(Choice::Allowed(Access::EditExport));
                         }
+                        // ai: person
                         if ui.button("Refuse").clicked() {
                             pick = Some(Choice::Refused);
                         }
@@ -364,6 +374,7 @@ impl App {
                             Choice::Refused => "refused",
                         };
                         ui.label(format!("{}: {what}", c.name));
+                        // ai: person
                         if ui.small_button("Forget").clicked() {
                             a.chosen.remove(&c.id);
                         }
@@ -371,6 +382,7 @@ impl App {
                 }
                 ui.separator();
                 if ui
+                    // ai: stop-assistants
                     .button(format!("Stop assistants ({stop_keys})"))
                     .on_hover_text("Turns the server off and forgets every permission")
                     .clicked()

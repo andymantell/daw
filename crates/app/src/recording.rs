@@ -43,6 +43,7 @@ pub struct RecordOptions {
 
 /// A count of bars, 0 to 8, said as "1 bar" or "2 bars".
 pub(crate) fn bars(n: &mut u32) -> egui::DragValue<'_> {
+    // ai: set_record_options.pre_roll_bars set_record_options.post_roll_bars
     egui::DragValue::new(n)
         .range(0..=8)
         .custom_formatter(|n, _| match n as u32 {
@@ -130,6 +131,7 @@ impl App {
         let b = ui
             .add_enabled(
                 !free.is_empty(),
+                // ai: set_track_input.input
                 egui::Button::new(RichText::new(format!(
                     "+ A track for each input ({})",
                     free.len()

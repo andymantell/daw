@@ -298,8 +298,16 @@ A feature is not done until an assistant can use it. In practice:
   ```rust
   // ai: add-bus          (a command's id)
   // ai: set_parameter    (an assistant tool)
+  // ai: set_practice.metronome.level_db
+  //                      (a tool and the argument that does it)
   // ai: view             (it only changes what is shown)
+  // ai: person           (only a person may do it, such as letting an
+  //                      assistant in or giving someone a role)
   ```
+
+  Name the argument when the tool has one for the control: the test
+  checks it is in the tool's schema, so a mark can't promise a setting
+  its tool can't change.
 
   Controls drawn before this rule are counted per file in
   `crates/app/widgets-unmarked.txt`; a file's count may only go down

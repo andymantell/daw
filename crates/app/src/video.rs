@@ -870,6 +870,7 @@ impl App {
                 (Cmd::NextHitPoint, Icon::NextHit, "Next hit point"),
             ] {
                 if ui
+                    // ai: run_command.id
                     .add(IconButton::new(label, name).tip(self.commands.hover(cmd)))
                     .clicked()
                 {
@@ -879,6 +880,7 @@ impl App {
             ui.separator();
             let mut on = !self.video.hide_timecode;
             if ui
+                // ai: video-timecode
                 .checkbox(&mut on, "Timecode")
                 .on_hover_text(self.commands.hover(Cmd::VideoTimecode))
                 .changed()
@@ -898,6 +900,7 @@ impl App {
                     });
             if !lined_up
                 && ui
+                    // ai: timecode-from-film
                     .button(self.commands.name(Cmd::TimecodeFromFilm).to_string())
                     .on_hover_text(self.commands.hover(Cmd::TimecodeFromFilm))
                     .clicked()

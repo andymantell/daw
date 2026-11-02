@@ -192,6 +192,7 @@ impl TempoWindow {
                     ui.heading("Tempo changes");
                     changed |= tempo_rows(ui, c, m);
                     if ui
+                        // ai: set_tempo.changes
                         .button(format!("Add tempo change at bar {}", playhead_bar.max(2)))
                         .clicked()
                     {
@@ -201,6 +202,7 @@ impl TempoWindow {
                     ui.heading("Time signature changes");
                     changed |= meter_rows(ui, c);
                     if ui
+                        // ai: set_tempo.meters
                         .button(format!(
                             "Add time signature change at bar {}",
                             playhead_bar.max(2)
@@ -239,16 +241,19 @@ fn tempo_rows(ui: &mut egui::Ui, c: &mut Changes, m: &TempoMap) -> bool {
             let n = i + 1;
             ui.label("Bar");
             changed |= ui
+                // ai: set_tempo.changes.bar
                 .add(egui::DragValue::new(&mut t.bar).range(1..=9999))
                 .accessible_name(format!("Tempo change {n} bar"))
                 .changed();
             ui.label("beat");
             changed |= ui
+                // ai: set_tempo.changes.beat
                 .add(egui::DragValue::new(&mut t.beat).range(1..=64))
                 .accessible_name(format!("Tempo change {n} beat"))
                 .changed();
             changed |= ui
                 .add(
+                    // ai: set_tempo.changes.bpm
                     egui::DragValue::new(&mut t.bpm)
                         .range(20.0..=300.0)
                         .speed(0.2)
@@ -257,10 +262,12 @@ fn tempo_rows(ui: &mut egui::Ui, c: &mut Changes, m: &TempoMap) -> bool {
                 .accessible_name(format!("Tempo change {n} tempo"))
                 .changed();
             changed |= ui
+                // ai: set_tempo.changes.glide
                 .checkbox(&mut t.glide, "Glide")
                 .on_hover_text("Change smoothly from the tempo before, reaching this one here")
                 .changed();
             if ui
+                // ai: set_tempo.changes
                 .button("Delete")
                 .accessible_name(format!("Delete tempo change {n}"))
                 .clicked()
@@ -292,10 +299,12 @@ fn meter_rows(ui: &mut egui::Ui, c: &mut Changes) -> bool {
             let n = i + 1;
             ui.label("Bar");
             changed |= ui
+                // ai: set_tempo.meters.bar
                 .add(egui::DragValue::new(&mut s.bar).range(2..=9999))
                 .accessible_name(format!("Time signature change {n} bar"))
                 .changed();
             changed |= ui
+                // ai: set_tempo.meters.beats_per_bar
                 .add(egui::DragValue::new(&mut s.beats).range(1..=32))
                 .accessible_name(format!("Time signature change {n} beats"))
                 .changed();
@@ -305,12 +314,14 @@ fn meter_rows(ui: &mut egui::Ui, c: &mut Changes) -> bool {
                 .selected_text(s.unit.to_string())
                 .show_ui(ui, |ui| {
                     for u in UNITS {
+                        // ai: set_tempo.meters.beat_unit
                         changed |= ui.selectable_value(&mut s.unit, u, u.to_string()).changed();
                     }
                 })
                 .response
                 .accessible_name(format!("Time signature change {n} beat unit"));
             if ui
+                // ai: set_tempo.meters
                 .button("Delete")
                 .accessible_name(format!("Delete time signature change {n}"))
                 .clicked()

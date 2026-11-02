@@ -479,12 +479,15 @@ impl Browser {
     ) -> Vec<Action> {
         let mut out = Vec::new();
         ui.horizontal(|ui| {
+            // ai: view
             ui.selectable_value(&mut self.source, Source::Folders, "Sound folders")
                 .on_hover_text("Sounds in folders you choose on this computer");
+            // ai: view
             ui.selectable_value(&mut self.source, Source::Project, "This project")
                 .on_hover_text("Audio the project already uses");
             ui.separator();
             ui.add(
+                // ai: view
                 egui::TextEdit::singleline(&mut self.query)
                     .hint_text("Search names and tags")
                     .desired_width(ui.available_width().clamp(80.0, 220.0)),
@@ -493,6 +496,7 @@ impl Browser {
             if !self.query.is_empty()
                 && ui
                     .add(
+                        // ai: view
                         IconButton::new(Icon::Close, "Clear the search")
                             .tip("Clear")
                             .small(),
@@ -512,6 +516,7 @@ impl Browser {
                 for t in tags {
                     let on = self.tag.as_ref() == Some(&t);
                     if ui
+                        // ai: view
                         .selectable_label(on, format!("#{t}"))
                         .on_hover_text(if on { "Show all" } else { "Show only these" })
                         .clicked()
@@ -641,6 +646,7 @@ impl Browser {
             }
             let chosen = self.selected.as_ref() == Some(&e.path);
             let r = ui
+                // ai: view
                 .selectable_label(chosen, &e.name)
                 .on_hover_text(e.path.display().to_string());
             if r.clicked() {
@@ -788,6 +794,7 @@ impl Browser {
                 }
             }
             if ui
+                // ai: import_audio.path
                 .button("Add to project")
                 .on_hover_text("As a new track, at the playhead (or double-click it)")
                 .clicked()

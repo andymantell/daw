@@ -824,6 +824,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let l = ui.label("Find");
                     ui.add(
+                        // ai: view
                         egui::TextEdit::singleline(&mut lib.find)
                             .hint_text("name, tag or word")
                             .desired_width(180.0),
@@ -832,8 +833,10 @@ impl App {
                     egui::ComboBox::from_id_salt("preset-tag")
                         .selected_text(lib.tag.as_deref().unwrap_or("Any tag"))
                         .show_ui(ui, |ui| {
+                            // ai: view
                             ui.selectable_value(&mut lib.tag, None, "Any tag");
                             for t in &tags {
+                                // ai: view
                                 ui.selectable_value(&mut lib.tag, Some(t.clone()), t);
                             }
                         })
@@ -869,6 +872,7 @@ impl App {
                                 ui.label(RichText::new(group).strong());
                                 heading = Some(group);
                             }
+                            // ai: add_preset.name
                             let r = ui.selectable_label(lib.picked == Some(i), &e.preset.name);
                             if r.clicked() {
                                 lib.picked = Some(i);
@@ -904,6 +908,7 @@ impl App {
                         if ui.button("Delete").clicked() {
                             delete = Some(i);
                         }
+                        // ai: view
                         if ui.button("Cancel").clicked() {
                             lib.deleting = None;
                         }
@@ -912,6 +917,7 @@ impl App {
                 }
                 ui.horizontal(|ui| {
                     if ui
+                        // ai: add_preset.name
                         .add_enabled(picked.is_some(), egui::Button::new("Add as a new track"))
                         .clicked()
                     {
@@ -923,6 +929,7 @@ impl App {
                     if ui
                         .add_enabled(
                             picked.is_some() && lib.onto.is_some(),
+                            // ai: add_preset.name
                             egui::Button::new("Put on"),
                         )
                         .on_hover_text(
@@ -938,6 +945,7 @@ impl App {
                         .selected_text(onto_name)
                         .show_ui(ui, |ui| {
                             for (k, n) in &tracks {
+                                // ai: view
                                 ui.selectable_value(&mut lib.onto, Some(k.clone()), n);
                             }
                         })
@@ -956,6 +964,7 @@ impl App {
                     if ui.add_enabled(mine, egui::Button::new("Delete…")).clicked() {
                         lib.deleting = picked;
                     }
+                    // ai: file_command.id
                     if ui.button("Import…").clicked() {
                         import = true;
                     }
@@ -963,6 +972,7 @@ impl App {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui
+                        // ai: save_preset.kind
                         .add_enabled(lib.onto.is_some(), egui::Button::new("Save track…"))
                         .on_hover_text("Keep the chosen track's whole set-up as a preset")
                         .clicked()
@@ -970,12 +980,14 @@ impl App {
                         save = Some(PresetKind::Track);
                     }
                     if ui
+                        // ai: save_preset.kind
                         .add_enabled(lib.onto.is_some(), egui::Button::new("Save its effects…"))
                         .on_hover_text("Keep only the chosen track's effect chain as a preset")
                         .clicked()
                     {
                         save = Some(PresetKind::Chain);
                     }
+                    // ai: view
                     if ui.button("Close").clicked() {
                         keep = false;
                     }
@@ -1065,14 +1077,17 @@ impl App {
                         .selected_text(&tracks[s.track])
                         .show_ui(ui, |ui| {
                             for (i, n) in tracks.iter().enumerate() {
+                                // ai: save_preset.track
                                 ui.selectable_value(&mut s.track, i, n);
                             }
                         })
                         .response
                         .accessible_name("Track to save");
                 });
+                // ai: save_preset.kind
                 ui.radio_value(&mut s.kind, PresetKind::Track, "The whole track")
                     .on_hover_text("Its instrument, effects, amp, sends and mixer settings");
+                // ai: save_preset.kind
                 ui.radio_value(&mut s.kind, PresetKind::Chain, "Only its effect chain");
                 ui.label(
                     RichText::new(
@@ -1087,6 +1102,7 @@ impl App {
                         let l = ui.label("Name");
                         let r = ui
                             .add(
+                                // ai: save_preset.name
                                 egui::TextEdit::singleline(&mut s.name)
                                     .hint_text("e.g. Crunch guitar"),
                             )
@@ -1095,6 +1111,7 @@ impl App {
                         ui.end_row();
                         let l = ui.label("Tags");
                         ui.add(
+                            // ai: save_preset.tags
                             egui::TextEdit::singleline(&mut s.tags)
                                 .hint_text("e.g. guitar, lesson 3"),
                         )
@@ -1102,6 +1119,7 @@ impl App {
                         ui.end_row();
                         let l = ui.label("About");
                         ui.add(
+                            // ai: save_preset.about
                             egui::TextEdit::multiline(&mut s.about)
                                 .desired_rows(2)
                                 .hint_text("What it's for (optional)"),
@@ -1118,7 +1136,9 @@ impl App {
                     );
                 }
                 ui.horizontal(|ui| {
+                    // ai: save_preset
                     go |= ui.button(if exists { "Replace" } else { "Save" }).clicked();
+                    // ai: view
                     if ui.button("Cancel").clicked() {
                         keep = false;
                     }

@@ -188,6 +188,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.label("What should people you share projects with see you as?");
                 let r = ui.add(
+                    // ai: person
                     egui::TextEdit::singleline(&mut name)
                         .char_limit(MAX_NAME)
                         .hint_text("A first name or nickname is enough"),
@@ -197,9 +198,11 @@ impl App {
                 ui.horizontal(|ui| {
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let ok = !name.trim().is_empty();
+                    // ai: person
                     if ui.add_enabled(ok, egui::Button::new("OK")).clicked() || (enter && ok) {
                         done = Some(true);
                     }
+                    // ai: person
                     if ui.button("Not now").clicked() {
                         done = Some(false);
                     }
@@ -241,6 +244,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui
+                        // ai: person
                         .button(format!("Let {who} edit"))
                         .on_hover_text("They can change anything but who is in the project")
                         .clicked()
@@ -248,6 +252,7 @@ impl App {
                         chose = Some(Some(Role::Editor));
                     }
                     if ui
+                        // ai: person
                         .button(format!("Let {who} comment only"))
                         .on_hover_text("They can add comments, and change only their own")
                         .clicked()
@@ -255,6 +260,7 @@ impl App {
                         chose = Some(Some(Role::Commenter));
                     }
                     if ui
+                        // ai: person
                         .button("Not now")
                         .on_hover_text("Their changes stay out of your copy")
                         .clicked()
@@ -293,6 +299,7 @@ impl App {
                         &self.me.name
                     };
                     ui.label(format!("You are {shown}"));
+                    // ai: person
                     if ui.button("Change your name…").clicked() {
                         rename = true;
                     }
@@ -315,6 +322,7 @@ impl App {
                                     .selected_text(role_name(role))
                                     .show_ui(ui, |ui| {
                                         for r in [Some(Role::Editor), Some(Role::Commenter), None] {
+                                            // ai: person
                                             ui.selectable_value(&mut role, r, role_name(r));
                                         }
                                     })

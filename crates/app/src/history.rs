@@ -69,7 +69,9 @@ impl History {
             .default_size([440.0, 520.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    // ai: view
                     ui.selectable_value(&mut self.view, View::Undo, "Undo list");
+                    // ai: view
                     ui.selectable_value(&mut self.view, View::Activity, "Activity");
                 });
                 ui.separator();
@@ -128,6 +130,7 @@ impl History {
         }
         if runs.len() >= self.shown {
             ui.separator();
+            // ai: view
             if ui.button("Show more").clicked() {
                 self.shown += PAGE;
             }
@@ -182,6 +185,7 @@ fn undo_list(
         }
     }
     let start = ui
+        // ai: undo_steps.undo
         .selectable_label(false, RichText::new("Before these changes").italics())
         .on_hover_text("Undo every step on the list");
     if start.clicked() {
@@ -199,6 +203,7 @@ fn step_row(
 ) -> egui::Response {
     let r = ui
         .horizontal(|ui| {
+            // ai: undo_steps.undo
             let r = ui.selectable_label(false, text);
             if s.at > 0 {
                 ui.label(RichText::new(crate::project::ago(age(now_ms, s.at))).weak());

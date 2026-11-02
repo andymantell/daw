@@ -7,9 +7,17 @@
 //!
 //! ```text
 //! // ai: view            it changes only what is shown (a window, a tab)
+//! // ai: person          only a person may do it (let an assistant in,
+//!                        give someone a role), so no tool does
 //! // ai: add-bus         a command's id, which it runs
 //! // ai: set_parameter   an assistant tool that does the same
+//! // ai: set_practice.metronome.level_db
+//!                        a tool and the argument in it that does it
 //! ```
+//!
+//! A tool's argument, after a dot (and a dot again for one inside it),
+//! must be in the tool's schema, so a mark can't promise what its tool
+//! can't do.
 //!
 //! The test here reads the app's source and checks each name is a
 //! command or a tool. Controls from before the rule are counted per file
@@ -85,6 +93,31 @@ fn scan(src: &str) -> (usize, Vec<(usize, String)>) {
     (unmarked, names)
 }
 
+/// Whether a mark's name is `view`, a command's id, a tool, or a tool
+/// and an argument of it (`tool.arg.inner`).
+fn known(name: &str) -> bool {
+    if ["view", "person"].contains(&name) || crate::commands::Cmd::from_id(name).is_some() {
+        return true;
+    }
+    let mut parts = name.split('.');
+    let Some(tool) = parts.next().and_then(crate::agent::tool) else {
+        return false;
+    };
+    let schema = (tool.schema)();
+    let mut at = &schema;
+    for part in parts {
+        // An argument may hold a list of things with arguments of their own.
+        while at["type"] == "array" {
+            at = &at["items"];
+        }
+        match at["properties"].get(part) {
+            Some(inner) => at = inner,
+            None => return false,
+        }
+    }
+    true
+}
+
 fn baseline(path: &Path) -> BTreeMap<String, usize> {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     (text.lines())
@@ -100,11 +133,6 @@ fn baseline(path: &Path) -> BTreeMap<String, usize> {
 fn every_control_says_how_an_assistant_reaches_it() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let allowed = baseline(&root.join("widgets-unmarked.txt"));
-    let known = |name: &str| {
-        name == "view"
-            || crate::agent::tool(name).is_some()
-            || crate::commands::Cmd::from_id(name).is_some()
-    };
     let mut problems = Vec::new();
     let mut counts = BTreeMap::new();
     let mut files: Vec<_> = std::fs::read_dir(root.join("src"))
@@ -124,7 +152,8 @@ fn every_control_says_how_an_assistant_reaches_it() {
         for (line, n) in names {
             if !known(&n) {
                 problems.push(format!(
-                    "{name}:{line}: \"// ai: {n}\" names no command or assistant tool"
+                    "{name}:{line}: \"// ai: {n}\" names no command, assistant tool or \
+                     argument of one"
                 ));
             }
         }
@@ -174,5 +203,21 @@ mod tests {
         let tests =
             "ui.button(\"a\"); // ai: add-bus\n#[cfg(test)]\nmod tests {\n ui.button(\"b\");\n}";
         assert_eq!(scan(tests), (0, vec![(1, "add-bus".to_string())]));
+    }
+
+    #[test]
+    fn a_mark_can_name_a_tools_argument() {
+        assert!(known("view"));
+        assert!(known("person"));
+        assert!(known("add-bus"));
+        assert!(known("set_practice"));
+        assert!(known("set_practice.metronome.level_db"));
+        assert!(!known("set_practice.metronome.no_such_thing"));
+        assert!(!known("set_practice.no_such_thing"));
+        assert!(!known("no_such_tool"));
+        assert!(
+            !known("add-bus.track"),
+            "commands have no arguments to name"
+        );
     }
 }

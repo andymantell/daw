@@ -204,6 +204,7 @@ impl App {
                             ui.label(RichText::new("Projects you open or save show here.").weak());
                         }
                         for r in &s.recent {
+                            // ai: open_project.project
                             let b = ui.selectable_label(false, RichText::new(&r.name).strong());
                             let when = r
                                 .saved
@@ -215,6 +216,7 @@ impl App {
                             }
                         }
                         ui.add_space(4.0);
+                        // ai: open_project.project
                         if ui.button("Open another…").clicked()
                             && let Some(dir) = rfd::FileDialog::new()
                                 .set_title("Open project folder")
@@ -229,6 +231,7 @@ impl App {
                         ui.set_width(260.0);
                         ui.label(RichText::new("Start something new").strong());
                         for t in &s.templates {
+                            // ai: new_project.template
                             if ui.selectable_label(false, &t.name).clicked() {
                                 let p = t.project.from_template(self.rate);
                                 then = Some(After::NewFrom(Box::new(p)));
@@ -243,6 +246,7 @@ impl App {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut show, "Show this when the app starts");
+                    // ai: view
                     if ui.button("Close").clicked() {
                         close = true;
                     }

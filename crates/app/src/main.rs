@@ -1999,6 +1999,7 @@ impl App {
                     egui::ComboBox::from_id_salt("mix-buffer")
                         .selected_text(mix_buffer_text(draft.mix_buffer, draft.rate))
                         .show_ui(ui, |ui| {
+                            // ai: mix-buffer
                             ui.selectable_value(&mut draft.mix_buffer, None, mix_buffer_text(None, draft.rate));
                             for b in daw_engine::ahead::MIX_BLOCKS {
                                 ui.selectable_value(
@@ -2055,6 +2056,7 @@ impl App {
                                 ui.label("from the driver's reported latency");
                             }
                             if ui
+                                // ai: measure-latency
                                 .button("Measure…")
                                 .on_hover_text("Measure the round trip with a loopback cable")
                                 .clicked()
@@ -2160,6 +2162,7 @@ impl App {
                     apply = true;
                 }
                 if ui
+                    // ai: audio-setup
                     .button("Guided setup…")
                     .on_hover_text("Step by step, with checks")
                     .clicked()
@@ -2379,13 +2382,16 @@ fn input_picker(
         .width(70.0)
         .selected_text(name(input))
         .show_ui(ui, |ui| {
+            // ai: set_track_input.input
             ui.selectable_value(input, None, "None");
             for c in 0..inputs {
                 let i = Some(Input::mono(c));
+                // ai: set_track_input.input
                 ui.selectable_value(input, i, name(&i));
             }
             for c in (0..inputs.saturating_sub(1)).step_by(2) {
                 let i = Some(Input::stereo(c));
+                // ai: set_track_input.stereo
                 ui.selectable_value(input, i, name(&i));
             }
         })
@@ -2413,6 +2419,7 @@ fn take_picker(ui: &mut egui::Ui, track: usize, t: &Track) -> Option<Option<usiz
         .selected_text(shown)
         .show_ui(ui, |ui| {
             for i in (0..n).rev() {
+                // ai: edit_comp.action
                 ui.selectable_value(&mut pick, Some(i), format!("Take {}", i + 1));
             }
             ui.selectable_value(&mut pick, None, "Off");
@@ -2558,6 +2565,7 @@ impl eframe::App for App {
             egui::Panel::bottom("message").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.colored_label(ui.visuals().error_fg_color, m);
+                    // ai: view
                     if ui.button("OK").clicked() {
                         self.message = None;
                     }

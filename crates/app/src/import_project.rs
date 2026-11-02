@@ -445,6 +445,7 @@ impl App {
                             for f in &w.found {
                                 let name = f.file_name().unwrap_or_default().to_string_lossy();
                                 let on = w.source.as_ref().is_some_and(|s| s.path == *f);
+                                // ai: import_from_project.project
                                 if ui.selectable_label(on, name).clicked() {
                                     chosen = Some(f.clone());
                                 }
@@ -455,6 +456,7 @@ impl App {
                         })
                         .response
                         .labelled_by(l.id);
+                    // ai: import_from_project.project
                     if ui.button("Other folder…").clicked()
                         && let Some(d) = rfd::FileDialog::new()
                             .set_title("Import from project")
@@ -474,12 +476,14 @@ impl App {
                 pick_tracks(ui, &s.project, &mut w.pick.tracks);
                 ui.separator();
                 let p = &s.project;
+                // ai: import_from_project.routing
                 ui.checkbox(
                     &mut w.pick.routing,
                     "The buses and folders they play through",
                 )
                 .on_hover_text("Without them, the tracks play straight to the master");
                 ui.add_enabled_ui(!p.markers.is_empty(), |ui| {
+                    // ai: import_from_project.markers
                     ui.checkbox(
                         &mut w.pick.markers,
                         format!(
@@ -490,6 +494,7 @@ impl App {
                     )
                     .on_hover_text("Those already here at the same bar are kept once");
                 });
+                // ai: import_from_project.tempo
                 ui.checkbox(
                     &mut w.pick.tempo,
                     format!(
@@ -505,8 +510,10 @@ impl App {
                     ),
                 )
                 .on_hover_text("In place of this project's");
+                // ai: import_from_project.settings
                 ui.checkbox(&mut w.pick.settings, "Key, tuning and loop")
                     .on_hover_text("In place of this project's");
+                // ai: import_from_project.notes
                 ui.checkbox(&mut w.pick.notes, "Lesson notes and tab blocks")
                     .on_hover_text("Added after this project's notes");
                 ui.add_space(4.0);
@@ -515,6 +522,7 @@ impl App {
                     || w.pick.tempo
                     || w.pick.settings
                     || w.pick.notes;
+                // ai: import_from_project
                 if ui.add_enabled(any, egui::Button::new("Bring in")).clicked() {
                     go = true;
                 }
@@ -570,7 +578,9 @@ impl App {
             .default_width(400.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    // ai: export_as_project
                     ui.radio_value(&mut w.out, Out::Project, "As a new project");
+                    // ai: export_stem_package
                     ui.radio_value(&mut w.out, Out::Stems, "As a stem package");
                 });
                 ui.label(
@@ -589,7 +599,9 @@ impl App {
                 ui.separator();
                 pick_tracks(ui, &here, &mut w.tracks);
                 ui.separator();
+                // ai: export_as_project.from_bar
                 ui.radio_value(&mut w.span, Span::Song, "The whole song");
+                // ai: export_as_project.from_bar
                 ui.radio_value(
                     &mut w.span,
                     Span::Loop,
@@ -601,11 +613,14 @@ impl App {
                         _ => (loop_bars.0, loop_bars.1 - 1),
                     };
                     let on = matches!(w.span, Span::Bars(..));
+                    // ai: export_as_project.from_bar
                     if ui.radio(on, "Bars").clicked() {
                         w.span = Span::Bars(bars.0, bars.1 + 1);
                     }
+                    // ai: export_as_project.from_bar
                     let a = ui.add(egui::DragValue::new(&mut bars.0).range(1..=9999));
                     ui.label("to");
+                    // ai: export_as_project.to_bar
                     let b = ui.add(egui::DragValue::new(&mut bars.1).range(bars.0..=9999));
                     if a.changed() || b.changed() {
                         w.span = Span::Bars(bars.0, bars.1.max(bars.0) + 1);
@@ -616,25 +631,35 @@ impl App {
                     Out::Project => {
                         ui.horizontal(|ui| {
                             let l = ui.label("Name");
+                            // ai: export_as_project.name
                             ui.add(egui::TextEdit::singleline(&mut w.name).desired_width(240.0))
                                 .labelled_by(l.id);
                         });
+                        // ai: export_as_project.routing
                         ui.checkbox(
                             &mut w.pick.routing,
                             "The buses and folders they play through",
                         );
+                        // ai: export_as_project.markers
                         ui.checkbox(&mut w.pick.markers, "Sections");
+                        // ai: export_as_project.settings
                         ui.checkbox(&mut w.pick.settings, "Key, tuning and loop");
+                        // ai: export_as_project.notes
                         ui.checkbox(&mut w.pick.notes, "Lesson notes and tab blocks");
                         ui.label(RichText::new("The tempo and time signature always go.").weak());
                     }
                     Out::Stems => {
                         let s = &mut w.stems;
+                        // ai: export_stem_package.audio
                         ui.checkbox(&mut s.audio, "Each track as audio");
+                        // ai: export_stem_package.notes
                         ui.checkbox(&mut s.notes, "Each instrument track's notes as MIDI");
+                        // ai: export_stem_package.mix
                         ui.checkbox(&mut s.mix, "The mix of these tracks too");
+                        // ai: export_stem_package.flac
                         ui.checkbox(&mut s.flac, "FLAC in place of WAV")
                             .on_hover_text("The same sound in about half the space");
+                        // ai: export_stem_package.archive
                         ui.checkbox(&mut s.archive, "Packed into one file (.tar)")
                             .on_hover_text("Easier to send; any archive tool opens it");
                     }
@@ -649,6 +674,7 @@ impl App {
                     Out::Project => "Export project",
                     Out::Stems => "Export stems",
                 };
+                // ai: export_as_project
                 if ui.add_enabled(ok, egui::Button::new(label)).clicked() {
                     go = true;
                 }
@@ -688,9 +714,11 @@ fn plural(n: usize) -> &'static str {
 fn pick_tracks(ui: &mut egui::Ui, p: &Project, picked: &mut Vec<String>) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Tracks").strong());
+        // ai: import_from_project.tracks
         if ui.small_button("All").clicked() {
             *picked = p.tracks.iter().map(|t| t.id.clone()).collect();
         }
+        // ai: import_from_project.tracks
         if ui.small_button("None").clicked() {
             picked.clear();
         }
@@ -711,6 +739,7 @@ fn pick_tracks(ui: &mut egui::Ui, p: &Project, picked: &mut Vec<String>) {
                     (0, n) => format!("{n} note clip{}", plural(n)),
                     (a, n) => format!("{a} clip{}, {n} note clip{}", plural(a), plural(n)),
                 };
+                // ai: import_from_project.tracks
                 let r = ui.checkbox(&mut on, format!("{}  ·  {what}", t.name));
                 if r.changed() {
                     if on {

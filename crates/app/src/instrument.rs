@@ -1179,6 +1179,15 @@ pub(crate) fn slot_controls(
             sound_controls(ui, slot, "eighty", daw_instruments::eighty::GROUPS)
         }
         Some(Kind::Oracle) => sound_controls(ui, slot, "oracle", daw_instruments::oracle::GROUPS),
+        Some(Kind::BlueWave) => {
+            ui.label(
+                egui::RichText::new(
+                    "Wave is the place in the table the oscillators read; the wave envelope, LFO, keyboard and mod wheel move it. Eight-bit keeps the rounding, the steps and the aliasing.",
+                )
+                .weak(),
+            );
+            sound_controls(ui, slot, "blue-wave", daw_instruments::blue_wave::GROUPS)
+        }
     };
     if renew {
         slot.renew(cx.rate, cx.pending);

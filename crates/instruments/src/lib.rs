@@ -22,6 +22,7 @@ use daw_engine::graph::Insert;
 use daw_engine::midi::Instrument;
 
 pub mod acid;
+pub mod blue_wave;
 pub mod drum_machine;
 pub mod drum_sampler;
 pub mod drum_voice;
@@ -43,6 +44,7 @@ pub mod slicer;
 pub mod stream;
 pub mod synth;
 pub mod vintage;
+pub mod wavetable;
 
 pub use library::Library;
 pub use params::{Live, Param, Params, Unit};
@@ -75,6 +77,9 @@ pub enum Kind {
     Eighty,
     /// The two-oscillator polysynth with two filter boards (classic synths, S5).
     Oracle,
+    /// The eight-bit wavetable synth with an analogue filter (classic
+    /// synths, S9).
+    BlueWave,
 }
 
 /// A sound an instrument makes from its settings alone: a name and the
@@ -86,7 +91,7 @@ pub struct Sound {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 13] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
@@ -99,6 +104,7 @@ impl Kind {
         Kind::June,
         Kind::Eighty,
         Kind::Oracle,
+        Kind::BlueWave,
     ];
 
     /// How projects name it. Never change one.
@@ -116,6 +122,7 @@ impl Kind {
             Kind::June => "june",
             Kind::Eighty => "eighty",
             Kind::Oracle => "oracle",
+            Kind::BlueWave => "blue-wave",
         }
     }
 
@@ -137,6 +144,7 @@ impl Kind {
             Kind::June => "June",
             Kind::Eighty => "Eighty",
             Kind::Oracle => "Oracle",
+            Kind::BlueWave => "Blue Wave",
         }
     }
 
@@ -172,6 +180,9 @@ impl Kind {
             Kind::Oracle => {
                 "A two-oscillator analogue polysynth for brass, pads, leads and bass: sync, poly-mod, a 4-pole cascade or 2-pole state-variable filter board, two envelopes, an LFO, unison"
             }
+            Kind::BlueWave => {
+                "An eight-bit wavetable synth with an analogue filter, for glassy pads, bells, digital keys and the 80s sound: two oscillators a voice reading tables of 64 waves made in code, the position swept by its own envelope, the LFO, the keyboard and the wheel, smooth or eight-bit with the aliasing kept, the 24 dB filter with its own envelope"
+            }
         }
     }
 
@@ -183,6 +194,7 @@ impl Kind {
             Kind::June => june::sounds(),
             Kind::Eighty => eighty::sounds(),
             Kind::Oracle => oracle::sounds(),
+            Kind::BlueWave => blue_wave::sounds(),
             _ => Vec::new(),
         }
     }
@@ -272,6 +284,7 @@ impl Builtin {
             Kind::June => Builtin::of(kind, june::params(), Vec::new()),
             Kind::Eighty => Builtin::of(kind, eighty::params(), Vec::new()),
             Kind::Oracle => Builtin::of(kind, oracle::params(), Vec::new()),
+            Kind::BlueWave => Builtin::of(kind, blue_wave::params(), Vec::new()),
         }
     }
 
@@ -344,6 +357,7 @@ impl Builtin {
             Kind::June => june::params(),
             Kind::Eighty => eighty::params(),
             Kind::Oracle => oracle::params(),
+            Kind::BlueWave => blue_wave::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -720,6 +734,7 @@ impl Builtin {
             Kind::June => Box::new(june::June::new(rate, p)),
             Kind::Eighty => Box::new(eighty::Eighty::new(rate, p)),
             Kind::Oracle => Box::new(oracle::Oracle::new(rate, p)),
+            Kind::BlueWave => Box::new(blue_wave::BlueWave::new(rate, p)),
         }
     }
 

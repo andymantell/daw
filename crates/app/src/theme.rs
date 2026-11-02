@@ -1193,6 +1193,26 @@ mod tests {
         assert!(ctx.fonts(|f| f.families().contains(&family("barlow-condensed"))));
     }
 
+    /// The symbols the app draws as text must be in some loaded font, or
+    /// they show as empty boxes (egui 0.37 needs `monochrome_emoji_fonts`).
+    /// The few no bundled font holds (small triangles, the cross, sharp and
+    /// flat...) are left to the drawn icon set.
+    #[test]
+    fn the_symbol_icons_have_glyphs() {
+        let ctx = egui::Context::default();
+        let mut t = Themes::new(None);
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(Default::default(), |ui| t.apply(ui.ctx()));
+            out.textures_delta.clear();
+        }
+        let font = egui::FontId::new(14.0, family(&look(&ctx).font));
+        let missing: String = "▶⏹⏺⏮⏭◀⏶⏷✂🗑⚑✖✔■🗁🗗⛶♩"
+            .chars()
+            .filter(|c| !ctx.fonts_mut(|f| f.has_glyph(&font, *c)))
+            .collect();
+        assert!(missing.is_empty(), "no glyph for {missing}");
+    }
+
     #[test]
     fn comments_go_but_colours_stay() {
         let map =

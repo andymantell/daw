@@ -1532,6 +1532,8 @@ impl App {
     /// The performance check's figures, and the test tracks once
     /// written.
     fn perf_window(&mut self, ctx: &egui::Context) {
+        let action = self.perf.poll();
+        self.perf_action(action);
         let status = match &self.audio {
             Audio::Running(r) | Audio::Silent(r, _) => r.status.clone(),
             Audio::Stopped => return,
@@ -1545,8 +1547,6 @@ impl App {
             // Helper processes for new effects run one such block behind.
             self.effects.block = frames as usize;
         }
-        let action = self.perf.poll();
-        self.perf_action(action);
     }
 
     /// Settings → Performance.

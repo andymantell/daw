@@ -80,6 +80,14 @@ impl Perf {
         self.underruns_from = underruns;
     }
 
+    /// Starts writing the test tracks; they are added once written.
+    pub fn add_test_tracks(&mut self, rate: u32) {
+        if self.generating.is_none() {
+            self.generating = Some(generate(rate));
+            self.error = None;
+        }
+    }
+
     /// The test tracks, once they have been written.
     pub fn poll(&mut self) -> Option<Action> {
         let r = self.generating.as_ref()?.try_recv().ok()?;
@@ -154,16 +162,14 @@ impl Perf {
             ));
             ui.horizontal(|ui| {
                 let busy = self.generating.is_some();
+                // ai: add-test-tracks
+                let add = egui::Button::new(format!("Add {TRACKS} test tracks"));
                 if ui
-                    .add_enabled(
-                        !busy,
-                        egui::Button::new(format!("Add {TRACKS} test tracks")),
-                    )
+                    .add_enabled(!busy, add)
                     .on_hover_text(format!("{SECONDS} s of generated audio each"))
                     .clicked()
                 {
-                    self.generating = Some(generate(rate));
-                    self.error = None;
+                    self.add_test_tracks(rate);
                 }
                 if busy {
                     ui.spinner();
@@ -209,7 +215,11 @@ impl Perf {
 /// Writes the test tracks in the background, at `rate`.
 fn generate(rate: u32) -> mpsc::Receiver<Result<Vec<PathBuf>, String>> {
     let (tx, rx) = mpsc::channel();
-    let dir = crate::cache_dir().with_file_name("test-audio");
+    let dir = if cfg!(test) {
+        std::env::temp_dir().join("daw-perf-test-audio")
+    } else {
+        crate::cache_dir().with_file_name("test-audio")
+    };
     std::thread::spawn(move || {
         let r = std::fs::create_dir_all(&dir)
             .map_err(|e| format!("{}: {e}", dir.display()))
@@ -268,4 +278,23 @@ fn write_test_track(path: &Path, n: usize, rate: u32) -> Result<(), String> {
     }
     w.finalize().map_err(err)?;
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_assistant_adds_the_test_tracks() {
+        let mut d = crate::agent::driver::Driver::new();
+        let before = d.app().tracks.len();
+        d.command("add-test-tracks");
+        // Written, then imported, in the background.
+        for _ in 0..6000 {
+            d.h.step();
+            if d.app().tracks.len() == before + super::TRACKS {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(d.app().tracks.len(), before + super::TRACKS);
+    }
 }

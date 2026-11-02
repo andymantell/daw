@@ -913,8 +913,8 @@ pub(crate) struct Entry {
 pub(crate) struct Lanes {
     built: HashMap<String, (u64, Built)>,
     pub entry: Option<Entry>,
-    /// The notation window, on a track by key.
-    pub window: Option<String>,
+    /// The track the notation pane shows, by key; none while it is closed.
+    pub shown: Option<String>,
 }
 
 /// Seconds within which a second digit makes a two-digit fret.
@@ -930,7 +930,7 @@ impl App {
         let by_clip =
             |c: &str| (self.tracks.iter()).position(|t| t.note_clips.iter().any(|n| n.id == c));
         (self.notation.entry.as_ref().and_then(|e| by_key(&e.track)))
-            .or_else(|| self.notation.window.as_deref().and_then(by_key))
+            .or_else(|| self.notation.shown.as_deref().and_then(by_key))
             .or_else(|| self.notes_editor.clip.as_deref().and_then(by_clip))
             .or_else(|| self.timeline.note_sel.as_deref().and_then(by_clip))
             .or_else(|| self.tracks.iter().position(|t| t.notation.is_some()))
@@ -1593,11 +1593,11 @@ impl App {
         });
     }
 
-    // -- The window.
+    // -- The pane.
 
     pub(crate) fn open_notation_window(&mut self) {
         match self.notation_track() {
-            Some(i) => self.notation.window = Some(self.tracks[i].key.clone()),
+            Some(i) => self.notation.shown = Some(self.tracks[i].key.clone()),
             None => {
                 self.message =
                     Some("Add an instrument track first: notation shows its notes.".into());
@@ -1605,23 +1605,17 @@ impl App {
         }
     }
 
-    /// The notation window: how the chosen track's lane shows its notes.
-    pub(crate) fn notation_window(&mut self, ctx: &egui::Context) {
-        let Some(key) = self.notation.window.clone() else {
-            return;
-        };
-        let Some(i) = self.tracks.iter().position(|t| t.key == key) else {
-            self.notation.window = None;
-            return;
-        };
-        let mut open = true;
+    /// The notation pane's insides: how track `i`'s lane shows its
+    /// notes.
+    pub(crate) fn notation_panel(&mut self, ui: &mut egui::Ui, i: usize) {
         let mut n = self.tracks[i].notation.clone();
         let mut assign = false;
         let mut mute = self.tracks[i].practice_mute;
-        egui::Window::new(format!("Notation: {}", self.tracks[i].name))
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("notation-pane")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(&self.tracks[i].name).strong());
                 let mut shown = n.is_some();
                 // ai: notation-lane
                 ui.checkbox(&mut shown, "Show a notation lane under the track");
@@ -1679,9 +1673,6 @@ impl App {
                 // ai: practice-mute-part
                 ui.checkbox(&mut mute, "Practice-mute this part, to play it yourself");
             });
-        if !open {
-            self.notation.window = None;
-        }
         if n != self.tracks[i].notation {
             self.set_notation(i, n);
         }

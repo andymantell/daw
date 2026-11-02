@@ -977,7 +977,6 @@ pub struct Ctx<'a> {
 /// What came of showing the window this frame.
 #[derive(Default)]
 pub struct Shown {
-    pub open: bool,
     /// The engine needs a new graph.
     pub changed: bool,
     /// A command to run, as if chosen from a menu.
@@ -1038,21 +1037,19 @@ pub(crate) fn plugin_choices(
     }
 }
 
-/// The instrument window for a track: which instrument (or layered
-/// instruments, roadmap 3.5), its controls, and the MIDI output its
-/// notes also go to.
-pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
+/// The instrument pane's insides for a track: which instrument (or
+/// layered instruments, roadmap 3.5), its controls, and the MIDI output
+/// its notes also go to.
+pub fn panel(ui: &mut egui::Ui, t: &mut crate::Track, mut cx: Ctx) -> Shown {
     use crate::layers::Edit;
-    let mut open = true;
     let mut shown = Shown::default();
     let layered = !t.layers.is_empty();
-    egui::Window::new(format!("Instrument: {}", t.name))
-        .id(egui::Id::unique("track-instrument"))
-        .open(&mut open)
-        .default_pos(egui::pos2(320.0, 160.0))
-        .default_width(460.0)
-        .show(ctx, |ui| {
+    egui::ScrollArea::vertical()
+        .id_salt("instrument-pane")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
             ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&t.name).strong());
                 ui.label("Instrument");
                 let current = match &t.instrument {
                     _ if layered => "Layered instruments",
@@ -1151,7 +1148,6 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
             note_repeat_picker(ui, t, &mut shown.changed);
             midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
         });
-    shown.open = open;
     shown
 }
 
@@ -2542,14 +2538,13 @@ impl crate::App {
         Ok(())
     }
 
-    /// The instrument window for track `i`.
-    pub(crate) fn instrument_window(&mut self, ctx: &egui::Context, i: usize) {
+    /// The instrument pane, showing track `i`.
+    pub(crate) fn instrument_panel(&mut self, ui: &mut egui::Ui, i: usize) {
         let outputs = self.midi.ports.outputs.clone();
         let Some(key) = (self.tracks.get(i))
             .filter(|t| t.kind.plays_notes())
             .map(|t| t.key.clone())
         else {
-            self.instrument_open = None;
             return;
         };
         // Buses its outputs can go to: those that don't lead back to it.
@@ -2560,8 +2555,8 @@ impl crate::App {
         let read = self.sound_reader();
         let rate = self.rate;
         let mut pending = std::mem::take(&mut self.pending_instruments);
-        let shown = window(
-            ctx,
+        let shown = panel(
+            ui,
             &mut self.tracks[i],
             Ctx {
                 outputs: &outputs,
@@ -2581,13 +2576,11 @@ impl crate::App {
             self.rebuild();
         }
         if let Some(cmd) = shown.cmd {
-            self.run(ctx, cmd);
+            let ctx = ui.ctx().clone();
+            self.run(&ctx, cmd);
         }
         if let Some(edit) = shown.layer {
             self.layer_edit(i, edit);
-        }
-        if !shown.open {
-            self.instrument_open = None;
         }
     }
 }
@@ -2940,6 +2933,8 @@ mod tests {
         let ctx = h.ctx.clone();
         h.state_mut().instrument_open = Some(0);
         h.run();
+        h.state_mut().workspace.full = Some(crate::workspace::Pane::Instrument);
+        h.run();
         h.get_by_label("Outputs and sends").click();
         h.run();
         h.get_by_label("Put each pad on a bus").click();
@@ -2976,6 +2971,8 @@ mod tests {
         let ctx = h.ctx.clone();
         let rate = h.state().rate;
         h.state_mut().run(&ctx, Cmd::AddInstrument(4));
+        h.run();
+        h.state_mut().workspace.full = Some(crate::workspace::Pane::Instrument);
         h.run();
         assert!(h.query_by_label("Make notes that play the loop").is_some());
         // Each slice has its own settings.

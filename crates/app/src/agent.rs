@@ -121,6 +121,11 @@ pub(crate) const TOOLS: &[Tool] = &[
                       track of the clip or mixer strip selected last. \
                       start_screen_at_launch says whether the start screen shows when the \
                       app starts (the start-screen-at-launch command switches it). \
+                      panes has the instrument, effects and notation panes: whether \
+                      each is open and the track it shows (\"master\" for the master's \
+                      effects), which follows the selected track. The instrument-window, \
+                      effects and notation-settings commands open or close them; given a \
+                      track, they show that track. \
                       top_bar is the top bar's option panel showing (record, loop, \
                       metronome, time-signature, key, speed or status; null when none); \
                       record-options, loop-options, metronome-options and speed-options \
@@ -209,7 +214,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "get_picture",
         description: "A picture (PNG) of the app's window as it is drawn next, or of one \
                       pane: timeline, mixer, comments, notes, lessons, tuner, takes, \
-                      monitor, notes-editor, automation, browser, patterns or video.",
+                      monitor, notes-editor, automation, browser, patterns, video, \
+                      fretboard, pitch-editor, inspector, instrument, effects or notation.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -1130,11 +1136,21 @@ impl App {
                     self.instrument_open = before;
                     return Err(format!("{id} can't run now."));
                 }
-                self.run(ctx, cmd);
-                // Lend the focus for this command only, unless the command
-                // opened the window itself.
-                if focus.is_some() && cmd != Cmd::InstrumentWindow && self.instrument_open == focus
-                {
+                // A track pane given a track shows it there (and opens);
+                // other commands act on it.
+                let shows = matches!(
+                    cmd,
+                    Cmd::InstrumentWindow | Cmd::EffectsPane | Cmd::NotationSettings
+                );
+                match focus {
+                    Some(ti) if shows => {
+                        self.instrument_open = before;
+                        self.show_in_track_pane(cmd, ti);
+                    }
+                    _ => self.run(ctx, cmd),
+                }
+                // Lend the focus for this command only.
+                if focus.is_some() && !shows && self.instrument_open == focus {
                     self.instrument_open = before;
                 }
                 let name = self.commands.name(cmd).to_string();
@@ -1842,6 +1858,7 @@ impl App {
             "mixer_narrow": self.desk.narrow,
             "settings": self.settings_section().map(|s| s.id()),
             "inspector": self.inspector_value(),
+            "panes": self.track_panes_value(),
             "top_bar": self.top_bar_open(),
             "start_screen_at_launch": self.start.settings.show,
         })

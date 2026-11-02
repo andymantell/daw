@@ -70,7 +70,7 @@ fn play(settings: &[(usize, f64)], notes: &[Note], beats: f32) -> Vec<f32> {
         let n = 512.min(total - at);
         let mut block = Vec::new();
         while next < events.len() && (events[next].0 as usize) < at + n {
-            let (f, mut e) = events[next].clone();
+            let (f, mut e) = events[next];
             e.frame = f - at as u32;
             block.push(e);
             next += 1;

@@ -24,6 +24,9 @@ use daw_engine::import;
 use daw_engine::preview::{self, PreviewSound};
 use daw_engine::stretch::SPEED_RANGE;
 use eframe::egui::{self, RichText};
+use serde_json::{Value, json};
+
+use crate::agent::{Access, Tool};
 
 /// File name endings the browser lists.
 const AUDIO: &[&str] = &[
@@ -580,6 +583,7 @@ impl Browser {
                 crate::icons::show(ui, Icon::Folder, "Folder");
                 ui.label(RichText::new(name.as_str()))
                     .on_hover_text(f.display().to_string());
+                // ai: sound_browser.remove_folder
                 if ui
                     .add(
                         IconButton::new(Icon::Close, format!("Stop browsing {name}"))
@@ -591,6 +595,7 @@ impl Browser {
                     remove = Some(n);
                 }
             }
+            // ai: sound_browser.add_folder
             if ui.button("Add folder…").clicked()
                 && let Some(dir) = rfd::FileDialog::new()
                     .set_title("Add a folder of sounds")
@@ -598,6 +603,7 @@ impl Browser {
             {
                 self.add_folder(dir);
             }
+            // ai: sound_browser.look_again
             if !self.folders.is_empty()
                 && ui
                     .add_enabled(!self.scanning(), egui::Button::new("Look again"))
@@ -630,6 +636,7 @@ impl Browser {
             } else {
                 (Icon::Play, "Play", "Hear it")
             };
+            // ai: sound_browser.play sound_browser.stop
             let r = ui.add(
                 IconButton::new(icon, format!("{verb} {}", e.name))
                     .tip(tip)
@@ -690,11 +697,15 @@ impl Browser {
     ) {
         let before = (self.sync, self.looped, self.auto_play, self.level_db);
         ui.horizontal_wrapped(|ui| {
+            // ai: sound_browser.at_project_tempo
             ui.checkbox(&mut self.sync, "At project tempo")
                 .on_hover_text("Stretch loops to the project's tempo, keeping their pitch");
+            // ai: sound_browser.loop
             ui.checkbox(&mut self.looped, "Loop");
+            // ai: sound_browser.play_on_click
             ui.checkbox(&mut self.auto_play, "Play on click");
             let first = spoken::start(ui);
+            // ai: sound_browser.level_db
             ui.add(
                 egui::Slider::new(&mut self.level_db, -40.0..=6.0)
                     .suffix(" dB")
@@ -715,6 +726,7 @@ impl Browser {
                 if (speed - 1.0).abs() > 1e-6 {
                     s.push_str(&format!(", at {:.0}% speed", speed * 100.0));
                 }
+                // ai: sound_browser.stop
                 if ui
                     .add(IconButton::labelled(Icon::Stop, "Stop").small())
                     .clicked()
@@ -749,6 +761,7 @@ impl Browser {
             let mut bpm = set
                 .or(self.tempo(e, project_bpm).map(|t| t.bpm()))
                 .unwrap_or(project_bpm);
+            // ai: sound_browser.set.bpm
             let r = ui
                 .add(
                     egui::DragValue::new(&mut bpm)
@@ -762,6 +775,7 @@ impl Browser {
             if r.changed() {
                 self.set_bpm(&e.path, Some(bpm));
             }
+            // ai: sound_browser.set.bpm
             if set.is_some()
                 && ui
                     .small_button("Forget")
@@ -779,6 +793,7 @@ impl Browser {
         });
         ui.horizontal(|ui| {
             ui.label("Tags");
+            // ai: sound_browser.set.tags
             let r = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.tags_text)
@@ -1030,6 +1045,198 @@ impl crate::App {
     }
 }
 
+// ---- For assistants ----
+
+pub(crate) const TOOLS: &[Tool] = &[Tool {
+    name: "sound_browser",
+    description: "The sound browser: the folders of sounds it looks through, a search of \
+                  them (or of the project's own audio), each file's tags and tempo, and \
+                  previews. Adding a folder or looking again searches it in the background; \
+                  call again (or wait_for_change) for what was found. A preview plays a file \
+                  as the browser does, at the project's tempo if at_project_tempo is on. \
+                  Answers with the folders, the preview settings, what is playing, and the \
+                  sounds the search finds (each with path, name, seconds, tempo and where \
+                  the tempo came from, and tags). import_audio adds one to the project.",
+    access: Access::Edit,
+    schema: || {
+        json!({"type": "object", "properties": {
+            "add_folder": {"type": "string", "description": "A folder's path to look through."},
+            "remove_folder": {"type": "string", "description": "Stop looking through this folder; its files stay where they are."},
+            "look_again": {"type": "boolean", "description": "Find files added to the folders since."},
+            "search": {"type": "string", "description": "Words that must all be in a sound's name, place or tags. Empty lists every sound."},
+            "tag": {"type": "string", "description": "Only sounds with this tag."},
+            "project": {"type": "boolean", "description": "Search the project's own audio, not the folders."},
+            "limit": {"type": "integer", "description": "At most this many sounds (50 if not given)."},
+            "set": {"type": "object", "description": "Describe one file.", "properties": {
+                "path": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "bpm": {"type": ["number", "null"], "description": "Its tempo, 20 to 400; null forgets it, so it is found again."}
+            }, "required": ["path"]},
+            "play": {"type": "string", "description": "A file's path to preview."},
+            "stop": {"type": "boolean", "description": "Stop the preview."},
+            "at_project_tempo": {"type": "boolean"},
+            "loop": {"type": "boolean"},
+            "play_on_click": {"type": "boolean", "description": "Clicking a sound in the pane plays it."},
+            "level_db": {"type": "number", "description": "The preview's level, -40 to 6."}
+        }})
+    },
+}];
+
+impl crate::App {
+    pub(crate) fn browser_tool(
+        &mut self,
+        name: &str,
+        args: &Value,
+    ) -> Option<Result<(Value, Option<String>), String>> {
+        (name == "sound_browser").then(|| self.sound_browser(args).map(|v| (v, None)))
+    }
+
+    fn sound_browser(&mut self, args: &Value) -> Result<Value, String> {
+        // Check everything before changing anything.
+        let level = match args["level_db"].as_f64() {
+            Some(db) if !(-40.0..=6.0).contains(&db) => {
+                return Err("The preview's level goes from -40 to 6 dB.".into());
+            }
+            l => l,
+        };
+        let set = &args["set"];
+        let bpm = match &set["bpm"] {
+            Value::Null => None,
+            v => match v.as_f64() {
+                Some(b) if valid_bpm(b) => Some(b),
+                _ => return Err("A tempo is from 20 to 400 bpm.".into()),
+            },
+        };
+        let add = match args["add_folder"].as_str() {
+            Some(d) if !Path::new(d).is_dir() => return Err(format!("There is no folder {d}.")),
+            d => d.map(PathBuf::from),
+        };
+        let b = &mut self.browser;
+        let remove = match args["remove_folder"].as_str() {
+            None => None,
+            Some(d) => {
+                let d = std::path::absolute(d).unwrap_or_else(|_| d.into());
+                let n = b.folders.iter().position(|f| *f == d);
+                Some(
+                    n.ok_or_else(|| format!("The browser isn't looking through {}.", d.display()))?,
+                )
+            }
+        };
+        let play = match args["play"].as_str() {
+            Some(p) if !Path::new(p).is_file() => return Err(format!("There is no file {p}.")),
+            p => p.map(PathBuf::from),
+        };
+
+        let before = (b.sync, b.looped, b.auto_play, b.level_db);
+        if let Some(on) = args["at_project_tempo"].as_bool() {
+            b.sync = on;
+        }
+        if let Some(on) = args["loop"].as_bool() {
+            b.looped = on;
+        }
+        if let Some(on) = args["play_on_click"].as_bool() {
+            b.auto_play = on;
+        }
+        if let Some(db) = level {
+            b.level_db = db as f32;
+        }
+        if (b.sync, b.looped, b.auto_play, b.level_db) != before {
+            b.save();
+        }
+        if let Some(n) = remove {
+            b.remove_folder(n);
+        }
+        if let Some(d) = add {
+            b.add_folder(d);
+        } else if args["look_again"].as_bool() == Some(true) {
+            b.rescan();
+        }
+        if let Some(p) = set["path"].as_str() {
+            let p = PathBuf::from(p);
+            if let Some(tags) = set["tags"].as_array() {
+                let text: Vec<&str> = tags.iter().filter_map(Value::as_str).collect();
+                b.set_tags(&p, parse_tags(&text.join(",")));
+            }
+            if set.get("bpm").is_some() {
+                b.set_bpm(&p, bpm);
+            }
+            if b.selected.as_ref() == Some(&p) {
+                b.tags_text = b.tags_of(&p).join(", ");
+            }
+        }
+        if args["stop"].as_bool() == Some(true) {
+            let c = self.browser.stop();
+            self.send(c);
+        }
+        let project_bpm = self.project_bpm();
+        if let Some(p) = play {
+            let e = (self.browser.found.iter())
+                .chain(self.project_sounds().iter())
+                .find(|e| e.path == p)
+                .cloned()
+                .unwrap_or_else(|| Entry::new(p.clone(), String::new()));
+            self.browser.play(&e, self.rate, project_bpm);
+        }
+
+        let b = &self.browser;
+        let list = if args["project"].as_bool() == Some(true) {
+            self.project_sounds()
+        } else {
+            b.found.clone()
+        };
+        let words: Vec<String> = (args["search"].as_str().unwrap_or(""))
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        let tag = args["tag"].as_str();
+        let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+        let matches: Vec<&Entry> = (list.iter())
+            .filter(|e| {
+                let tags = b.tags_of(&e.path);
+                if tag.is_some_and(|t| !tags.iter().any(|x| x == t)) {
+                    return false;
+                }
+                let (name, place) = (e.name.to_lowercase(), e.place.to_lowercase());
+                words.iter().all(|w| {
+                    name.contains(w.as_str())
+                        || place.contains(w.as_str())
+                        || tags.iter().any(|t| t.to_lowercase().contains(w.as_str()))
+                })
+            })
+            .collect();
+        let sounds: Vec<Value> = (matches.iter().take(limit))
+            .map(|e| {
+                let tempo = b.tempo(e, project_bpm);
+                json!({
+                    "path": e.path, "name": e.name, "place": e.place,
+                    "seconds": b.seconds(e),
+                    "bpm": tempo.map(Tempo::bpm),
+                    "tempo_from": tempo.map(|t| match t {
+                        Tempo::Set(_) => "set",
+                        Tempo::Named(_) => "name",
+                        Tempo::Guessed(_) => "length",
+                    }),
+                    "tags": b.tags_of(&e.path),
+                })
+            })
+            .collect();
+        Ok(json!({
+            "folders": b.folders,
+            "looking": b.scanning(),
+            "at_project_tempo": b.sync,
+            "loop": b.looped,
+            "play_on_click": b.auto_play,
+            "level_db": b.level_db,
+            "playing": b.playing.as_ref().map(|(p, _)| p),
+            "getting_ready": b.preparing.as_ref().map(|(p, _)| p),
+            "note": b.note,
+            "tags": b.all_tags(),
+            "found": matches.len(),
+            "sounds": sounds,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1167,6 +1374,93 @@ mod tests {
         assert_eq!(names, ["beat 120bpm", "kick"]);
         assert_eq!(all[0].seconds, Some(2.0));
         assert!(all[0].place.ends_with("Loops"), "{}", all[0].place);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_assistant_finds_describes_and_hears_sounds() {
+        use crate::agent::driver::Driver;
+        let dir = std::env::temp_dir().join(format!("daw-browser-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Drums")).unwrap();
+        write_wav(&dir.join("Drums/beat 120bpm.wav"), 8000, 16_000);
+        write_wav(&dir.join("pad.wav"), 8000, 800);
+        let beat = dir.join("Drums/beat 120bpm.wav");
+        let mut d = Driver::new();
+        let r = d
+            .call(
+                "sound_browser",
+                json!({"add_folder": dir, "level_db": -12, "loop": false}),
+            )
+            .unwrap();
+        assert_eq!(r["folders"][0], json!(dir));
+        assert_eq!(r["level_db"], -12.0);
+        assert_eq!(r["loop"], false);
+        let mut found = Value::Null;
+        for _ in 0..500 {
+            found = d.call("sound_browser", json!({"search": "beat"})).unwrap();
+            if found["looking"] == false {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(found["found"], 1, "{found}");
+        assert_eq!(found["sounds"][0]["bpm"], 120.0);
+        assert_eq!(found["sounds"][0]["tempo_from"], "name");
+
+        let r = d
+            .call(
+                "sound_browser",
+                json!({"set": {"path": beat, "tags": ["Drums", "funk"], "bpm": 96},
+                       "tag": "funk"}),
+            )
+            .unwrap();
+        assert_eq!(r["sounds"][0]["tags"], json!(["drums", "funk"]));
+        assert_eq!(r["sounds"][0]["bpm"], 96.0);
+        assert_eq!(r["sounds"][0]["tempo_from"], "set");
+        let r = d
+            .call(
+                "sound_browser",
+                json!({"set": {"path": beat, "bpm": null}, "search": "beat"}),
+            )
+            .unwrap();
+        assert_eq!(
+            r["sounds"][0]["tempo_from"], "name",
+            "forgotten, found again"
+        );
+
+        // Heard, then stopped.
+        d.call("sound_browser", json!({"play": beat})).unwrap();
+        let mut r = Value::Null;
+        for _ in 0..500 {
+            r = d.call("sound_browser", json!({})).unwrap();
+            if r["getting_ready"].is_null() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(r["playing"], json!(beat), "{r}");
+        let r = d.call("sound_browser", json!({"stop": true})).unwrap();
+        assert!(r["playing"].is_null());
+
+        // Refused, and nothing changed.
+        assert!(
+            d.call("sound_browser", json!({"level_db": 20, "loop": true}))
+                .is_err()
+        );
+        assert!(
+            d.call("sound_browser", json!({"remove_folder": "/no/such"}))
+                .is_err()
+        );
+        assert!(
+            d.call("sound_browser", json!({"play": "/no/such.wav"}))
+                .is_err()
+        );
+        let r = d
+            .call("sound_browser", json!({"remove_folder": dir}))
+            .unwrap();
+        assert_eq!(r["folders"], json!([]));
+        assert_eq!(r["loop"], false);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

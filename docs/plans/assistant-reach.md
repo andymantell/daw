@@ -86,22 +86,9 @@ After that, one small PR per area below. Each adds its tools with an end-to-end 
 
 `edit_timecode` sets whether timecode shows, the frame rate, the start timecode and where it falls, and adds, renames, moves (to seconds, a timecode, or by frames) and removes hit points. `get_project` lists the timecode setup and hit points.
 
-### 2. Sound browser (12)
+### 2. Sound browser (done)
 
-New `sound_browser` tool: list folders, add or remove one, look again; set a file's tags and tempo; preview play and stop with at-project-tempo, loop, play-on-click and level.
-
-- `browser.rs:580` Stop browsing folder (gap)
-- `browser.rs:589` Add folder… (gap)
-- `browser.rs:598` Look again (gap)
-- `browser.rs:629` Play/Stop sound preview (gap)
-- `browser.rs:687` At project tempo checkbox (gap)
-- `browser.rs:689` Loop preview checkbox (gap)
-- `browser.rs:690` Play on click checkbox (gap)
-- `browser.rs:693` Preview level slider (gap)
-- `browser.rs:713` Stop preview (gap)
-- `browser.rs:748` Its tempo (bpm) (gap)
-- `browser.rs:761` Forget tempo (gap)
-- `browser.rs:778` Its tags field (gap)
+`sound_browser` adds and removes folders and looks again, searches the folders or the project's audio (by words and tag), sets a file's tags and tempo (or forgets it), previews and stops, and sets at-project-tempo, loop, play-on-click and level.
 
 ### 3. Recording options (done)
 

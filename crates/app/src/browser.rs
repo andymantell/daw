@@ -1385,7 +1385,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("Drums")).unwrap();
         write_wav(&dir.join("Drums/beat 120bpm.wav"), 8000, 16_000);
         write_wav(&dir.join("pad.wav"), 8000, 800);
-        let beat = dir.join("Drums/beat 120bpm.wav");
+        let beat = dir.join("Drums").join("beat 120bpm.wav");
         let mut d = Driver::new();
         let r = d
             .call(

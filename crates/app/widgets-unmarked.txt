@@ -9,7 +9,6 @@ kits.rs 4
 latency.rs 3
 main.rs 15
 mixer.rs 1
-notefx.rs 3
 perf.rs 1
 remote.rs 2
 sections.rs 1

@@ -169,6 +169,7 @@ impl Comments {
                 // ai: add_comment
                 ui.radio_value(&mut self.on_loop, false, "At the playhead");
                 ui.add_enabled_ui(cx.loop_frames.is_some(), |ui| {
+                    // ai: add_comment.on_loop
                     ui.radio_value(&mut self.on_loop, true, "On the loop")
                         .on_disabled_hover_text("Turn the loop on to pin a comment to it");
                 });
@@ -337,6 +338,7 @@ impl Comments {
         if let Some((id, text)) = &mut self.editing
             && *id == c.id
         {
+            // ai: edit_comment.text
             let field = ui.add(
                 egui::TextEdit::multiline(text)
                     .desired_rows(2)
@@ -345,6 +347,7 @@ impl Comments {
             field.accessible_name("Comment text");
             let mut done = None;
             ui.horizontal(|ui| {
+                // ai: edit_comment.text
                 if ui
                     .add_enabled(!text.trim().is_empty(), egui::Button::new("Save"))
                     .clicked()
@@ -378,6 +381,7 @@ impl Comments {
                 } else {
                     "Delete for good"
                 };
+                // ai: edit_comment.delete
                 if ui
                     .button(RichText::new(what).color(ui.visuals().error_fg_color))
                     .on_hover_text("Also removes it from the saved file and anything shared later")
@@ -391,6 +395,7 @@ impl Comments {
                     self.deleting = None;
                 }
             } else {
+                // ai: edit_comment.text
                 if ui
                     .small_button("Edit")
                     .accessible_name(format!("Edit comment: {}", short(&c.text)))
@@ -398,6 +403,7 @@ impl Comments {
                 {
                     self.editing = Some((c.id.clone(), c.text.clone()));
                 }
+                // ai: edit_comment.delete
                 if ui
                     .small_button("Delete")
                     .accessible_name(format!("Delete comment: {}", short(&c.text)))

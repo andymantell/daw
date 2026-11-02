@@ -352,6 +352,20 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "edit_version",
+        description: "Renames a version of a track, or deletes it (its clips and settings \
+                      go with it; if it was playing, the one before it plays instead).",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string", "description": "The track's id."},
+                "version": {"type": "string", "description": "The version's id."},
+                "name": {"type": "string"},
+                "delete": {"type": "boolean"}
+            }, "required": ["track", "version"]})
+        },
+    },
+    Tool {
         name: "seek",
         description: "Moves the playhead to a bar (counted from 1) or to a time in seconds.",
         access: Access::Edit,
@@ -1173,6 +1187,38 @@ impl App {
                 Ok((
                     json!({"playing": version}),
                     Some("Switch track version".into()),
+                ))
+            }
+            "edit_version" => {
+                let track = args["track"].as_str().ok_or("Give the track's id.")?;
+                let version = args["version"].as_str().ok_or("Give the version's id.")?;
+                let ti = (self.tracks.iter())
+                    .position(|t| t.key == track)
+                    .ok_or_else(|| format!("There is no track {track}."))?;
+                if !self.tracks[ti].versions.iter().any(|v| v.id == version) {
+                    return Err(format!("The track has no version {version}."));
+                }
+                let delete = args["delete"].as_bool() == Some(true);
+                let name: Option<String> = (args["name"].as_str())
+                    .map(|n| n.trim().chars().take(crate::versions::MAX_NAME).collect());
+                let (done, what) = match (delete, name) {
+                    (true, _) => (
+                        self.edit_versions(ctx, ti, |t| t.delete_version(version)),
+                        "Delete track version",
+                    ),
+                    (false, Some(n)) if !n.is_empty() => (
+                        self.edit_versions(ctx, ti, |t| t.rename_version(version, &n)),
+                        "Rename track version",
+                    ),
+                    (false, Some(_)) => return Err("A version's name can't be empty.".into()),
+                    (false, None) => return Err("Give a name, or delete: true.".into()),
+                };
+                if !done {
+                    return Err(self.message.take().unwrap_or("Nothing changed.".into()));
+                }
+                Ok((
+                    json!({"version": version, "deleted": delete}),
+                    Some(what.into()),
                 ))
             }
             "seek" => {

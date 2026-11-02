@@ -1645,6 +1645,15 @@ impl App {
         }
     }
 
+    /// Whether this user may edit or delete anyone's comment.
+    /// Commenters, and people not let in yet, change only their own.
+    pub(crate) fn may_change_any_comment(&self) -> bool {
+        match self.proj.doc.my_role() {
+            Some(r) => r != daw_project::Role::Commenter,
+            None => self.proj.doc.members().is_empty(),
+        }
+    }
+
     /// The comments panel, at the side.
     fn comments_panel(&mut self, ui: &mut egui::Ui) {
         let map = self.tempo_map();
@@ -1654,11 +1663,7 @@ impl App {
         let at = |bar: i64| map.frames_at(map.bar_start(bar)).0;
         let me = self.my_author_id();
         let members = self.proj.doc.members();
-        // Commenters, and people not let in yet, change only their own.
-        let any = match self.proj.doc.my_role() {
-            Some(r) => r != daw_project::Role::Commenter,
-            None => members.is_empty(),
-        };
+        let any = self.may_change_any_comment();
         let cx = comments::Ctx {
             map: &map,
             playhead: self.ctl.status().position().0,

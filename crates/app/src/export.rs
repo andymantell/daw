@@ -450,6 +450,23 @@ impl Export {
         self.queue.iter()
     }
 
+    /// Stops the export running, if one is: what it has written so far
+    /// is kept.
+    pub fn cancel(&mut self) -> bool {
+        match &self.job {
+            Some(job) => {
+                job.cancel.store(true, Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Takes the export `i` (from 0) out of the queue.
+    pub fn unqueue(&mut self, i: usize) -> bool {
+        self.queue.remove(i).is_some()
+    }
+
     pub fn clear_queue(&mut self) {
         self.queue.clear();
     }
@@ -660,6 +677,7 @@ impl Export {
                             .selected_text(format!("{kbps} kbit/s"))
                             .show_ui(ui, |ui| {
                                 for &r in rates {
+                                    // ai: export_mix.kbps
                                     ui.selectable_value(&mut kbps, r, format!("{r} kbit/s"));
                                 }
                             })
@@ -752,6 +770,7 @@ impl Export {
                                 .show_percentage()
                                 .desired_width(220.0),
                         );
+                        // ai: manage_exports.cancel
                         if ui.button("Cancel").clicked() {
                             job.cancel.store(true, Ordering::Relaxed);
                         }
@@ -764,6 +783,7 @@ impl Export {
                     for (i, q) in self.queue.iter().enumerate() {
                         ui.horizontal(|ui| {
                             ui.label(format!("{}. {}", i + 1, q.label));
+                            // ai: manage_exports.remove
                             if ui
                                 .add(
                                     IconButton::new(Icon::Close, "Take it out of the queue")

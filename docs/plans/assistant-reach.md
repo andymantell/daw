@@ -102,66 +102,16 @@ The top bar work added `set_record_options` and `keep-last`, which reach all of 
 
 `edit_effect` and `remove_effect` move, bypass and remove one note effect; `edit_effect` and `edit_instrument` take `restart` for a plugin that stopped, and `get_effects` and `get_instrument` say why it stopped. `edit_instrument` sets note repeat, spreads and removes sampler zones, and gives the loop slicer its loop and cuts it. `set_practice` takes `practice_mute` for any audio or instrument track. A `drum_kits` tool chooses the kit for each MIDI input, picks one to export, and names a kit being learned.
 
-### 6. Audio setup, latency, keys and settings
+### 6. Audio setup, latency, keys and settings (done)
 
-Done so far: `edit_keys`, `set_theme`, the `add-test-tracks` command, and the tuner's A in `set_practice`. Disconnecting and forgetting a phone are marked for a person, as pairing one is: which devices may control the app is the person's to decide.
+`edit_keys`, `set_theme`, the `add-test-tracks` command, and the tuner's A in `set_practice`. `set_audio_device` lists and sets everything on the device page; `audio_setup` shows and chooses in the guided setup; `measure_latency` measures the round trip with a loopback cable. Disconnecting and forgetting a phone are marked for a person, as pairing one is: which devices may control the app is the person's to decide.
 
-Still to do: a `set_audio_device` tool for the device page (driver, device, rate, buffers, inputs, offset, direct monitoring, click and main outputs, apply, rescan); the guided setup's choices; a `measure_latency` tool.
+### 7. Timeline, sections, export, video, notation, layouts (done)
 
-- `main.rs:2258` Audio device: Driver choice (gap)
-- `main.rs:2273` Audio device: Device choice (gap)
-- `main.rs:2293` Audio device: Sample rate (gap)
-- `main.rs:2306` Audio device: Buffer 'Driver default' (gap)
-- `main.rs:2312` Audio device: Buffer size choice (gap)
-- `main.rs:2326` Audio device: Mix buffer size choice (partial)
-- `main.rs:2351` Audio device: Input device 'None' (gap)
-- `main.rs:2353` Audio device: Input device choice (gap)
-- `main.rs:2364` Recording offset: 'Measured' checkbox (gap)
-- `main.rs:2370` Recording offset frames (gap)
-- `main.rs:2403` Monitoring: Direct checkbox (gap)
-- `main.rs:2411` Metronome output: Main mix (gap)
-- `main.rs:2413` Metronome output: Output n (gap)
-- `main.rs:2481` Audio device: Apply (gap)
-- `main.rs:2491` Audio device: Rescan devices (gap)
-- `main.rs:2740` Mixer take picker: Off (partial)
-- `main.rs:2753` Audio device: Main output L/R channel (gap)
-- `main.rs:2938` Status bar: Cancel render (gap)
-- `audio_setup.rs:520` Audio setup: interface choice (radio per device) (partial)
-- `audio_setup.rs:534` Audio setup: monitor through the app (radio) (partial)
-- `audio_setup.rs:545` Audio setup: monitor through the interface (radio) (partial)
-- `audio_setup.rs:580` Audio setup: buffer size (radio per size) (partial)
-- `audio_setup.rs:613` Audio setup: input channel combo (partial)
-- `commands.rs:3042` Key commands: Reset all (gap)
-- `commands.rs:3068` Key commands: Move it (key clash) (gap)
-- `commands.rs:3132` Key commands: remove a key (x) (gap)
-- `commands.rs:3158` Key commands: Reset (per command) (gap)
-- `latency.rs:95` Measure latency: loopback input combo (gap)
-- `latency.rs:119` Measure latency: Cancel (gap)
-- `latency.rs:126` Measure latency: Start measuring (gap)
-- `perf.rs:159` Performance check: Add test tracks (gap)
-- `remote.rs:188` Phone remote: Disconnect (connected phone) (gap)
-- `remote.rs:205` Phone remote: Forget (paired phone) (gap)
-- `theme.rs:988` Theme: Colours mode (Designed/System/Dark/Light) (partial)
-- `theme.rs:1008` Theme: Copy to edit (gap)
-- `theme.rs:1027` Theme: Reload (gap)
-- `tuner.rs:99` Tuner: A = reference Hz (partial)
+`paste_clips` (onto a track, or as rendered audio); `edit_markers` with `play_order`; `export_mix` with `kbps` and `manage_exports` (cancel, take one out of the queue); `edit_video` (move, remove; `get_project` lists videos); `set_notation` (view, tuning, capo, staff above and rhythm under the tab; these two had been let through by the capo slider's mark above them); `layouts` (save, remove).
 
-### 7. Timeline, sections, export, video, notation, layouts (13)
+## Where it ended
 
-Paste onto a chosen lane and paste as rendered audio; cancel a render; a take picker's Off; set the play order as a list; MP3/Opus bit rate, cancel an export and remove one from the queue; see and move or remove video clips; staff and rhythm under the tab; save and remove a named layout.
+On 2026-11-03 `widgets-unmarked.txt` holds no controls: every control in the app says how an assistant reaches it, or that it only changes what is shown, or that only a person may use it.
 
-- `sections.rs:554` Play order entry 'Name ×' (partial)
-- `timeline.rs:4654` Lane menu: Paste here (partial)
-- `timeline.rs:4663` Lane menu: Paste here as rendered audio (gap)
-- `workspace.rs:1671` Save layout: name field (gap)
-- `workspace.rs:1690` Save layout: Save (gap)
-- `workspace.rs:1711` Save layout: Remove layout (gap)
-- `export.rs:654` Bit rate choice (partial)
-- `export.rs:742` Cancel export (gap)
-- `export.rs:756` Take it out of the queue (partial)
-- `notation.rs:1663` Notation window: Standard staff above the tab (gap)
-- `notation.rs:1664` Notation window: Rhythm under the tab (gap)
-- `video.rs:478` Video: Move to the start of the song (context menu) (gap)
-- `video.rs:494` Video: Remove the picture (context menu) (gap)
-
-Line numbers are from main at affde6a and move as files change.
+A mark covers the three lines above a control, so a new control right under a marked one can pass the check on its neighbour's mark. Review new controls with that in mind.

@@ -185,17 +185,35 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "add_comment",
         description: "Pins a comment to the timeline, or to a track, at a time (the \
-                      playhead if left out), or replies to a comment.",
+                      playhead if left out) or over a stretch (to an end, or on the loop), \
+                      or replies to a comment.",
         access: Access::Edit,
         schema: || {
             with_time(
                 json!({
                     "text": {"type": "string"},
                     "track": {"type": "string"},
-                    "reply_to": {"type": "string", "description": "A comment's id."}
+                    "reply_to": {"type": "string", "description": "A comment's id."},
+                    "to_bar": {"type": "number", "description": "Where a comment on a stretch ends, as a bar (from 1, fractions within it)."},
+                    "to_seconds": {"type": "number", "description": "Where it ends, in seconds."},
+                    "on_loop": {"type": "boolean", "description": "Pin it on the loop, from its start to its end."}
                 }),
                 &["text"],
             )
+        },
+    },
+    Tool {
+        name: "edit_comment",
+        description: "Changes a comment's or reply's text, or deletes it for good (a \
+                      comment that starts a thread goes with its replies). A commenter \
+                      may change only their own.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "comment": {"type": "string", "description": "A comment's or reply's id."},
+                "text": {"type": "string"},
+                "delete": {"type": "boolean"}
+            }, "required": ["comment"]})
         },
     },
     Tool {
@@ -284,6 +302,7 @@ impl App {
             "set_loop" => self.set_loop_tool(args),
             "add_comment" => self.add_comment_tool(args),
             "resolve_comment" => self.resolve_comment_tool(args),
+            "edit_comment" => self.edit_comment_tool(args),
             _ => return None,
         })
     }
@@ -658,7 +677,24 @@ impl App {
         if text.is_empty() {
             return Err("The comment is empty.".into());
         }
-        let start = (self.time_arg(args)).unwrap_or_else(|| self.ctl.status().position().0);
+        let mut start = (self.time_arg(args)).unwrap_or_else(|| self.ctl.status().position().0);
+        let to = |bar: Option<f64>, secs: Option<f64>| {
+            self.time_arg(&json!({"bar": bar, "seconds": secs}))
+        };
+        let mut end = to(args["to_bar"].as_f64(), args["to_seconds"].as_f64());
+        if args["on_loop"].as_bool() == Some(true) {
+            if !self.looping {
+                return Err(
+                    "The loop is off: turn it on (set_loop) to pin a comment on it.".into(),
+                );
+            }
+            let map = self.tempo_map();
+            start = map.frames_at(map.bar_start(self.loop_bars.0)).0;
+            end = Some(map.frames_at(map.bar_start(self.loop_bars.1)).0);
+        }
+        if end.is_some_and(|e| e <= start) {
+            return Err("A comment's end comes after its start.".into());
+        }
         let track = args["track"].as_str().map(String::from);
         let parent = args["reply_to"].as_str().map(String::from);
         let author = self.my_author_id();
@@ -680,7 +716,7 @@ impl App {
                 parent,
                 track,
                 start: start.max(0),
-                end: None,
+                end,
                 text,
                 resolved: false,
                 created: now_ms(),
@@ -688,6 +724,42 @@ impl App {
             Ok(json!({"comment": id}))
         })
         .map(|v| (v, Some("Add a comment".into())))
+    }
+
+    fn edit_comment_tool(&mut self, args: &Value) -> Done {
+        let id = text(args, "comment", "the comment's id")?.to_string();
+        let new = match args["text"].as_str().map(str::trim) {
+            Some("") => return Err("The comment is empty.".into()),
+            t => t.map(String::from),
+        };
+        let delete = args["delete"].as_bool() == Some(true);
+        if new.is_none() && !delete {
+            return Err("Give the new text, or delete: true.".into());
+        }
+        let me = self.my_author_id();
+        let any = self.may_change_any_comment();
+        self.edit_model(|p| {
+            let c = (p.comments.iter_mut())
+                .find(|c| c.id == id)
+                .ok_or_else(|| format!("There is no comment {id}."))?;
+            if !crate::comments::may_change(c, &me, any) {
+                return Err("You may change only your own comments.".into());
+            }
+            if delete {
+                crate::comments::delete(&mut p.comments, &id);
+                return Ok(json!({"comment": id, "deleted": true}));
+            }
+            c.text = new.clone().unwrap_or_default();
+            Ok(json!({"comment": id, "text": c.text}))
+        })
+        .map(|v| {
+            let what = if delete {
+                "Delete a comment"
+            } else {
+                "Edit a comment"
+            };
+            (v, Some(what.into()))
+        })
     }
 
     fn resolve_comment_tool(&mut self, args: &Value) -> Done {
@@ -940,5 +1012,67 @@ mod tests {
         assert_eq!(first["resolved"], true);
         assert_eq!(first["replies"][0]["text"], "Turned it down");
         assert!(d.call("add_comment", json!({"text": " "})).is_err());
+    }
+
+    #[test]
+    fn comments_span_a_stretch_and_are_edited_and_deleted() {
+        let mut d = Driver::new();
+        let c = id(
+            d.call(
+                "add_comment",
+                json!({"text": "Drums drag", "bar": 2, "to_bar": 4}),
+            )
+            .unwrap(),
+            "comment",
+        );
+        let r = id(
+            d.call("add_comment", json!({"text": "Agreed", "reply_to": c}))
+                .unwrap(),
+            "comment",
+        );
+        let list = d.call("get_comments", json!({})).unwrap();
+        assert!(list["comments"][0]["end_seconds"].as_f64().unwrap() > 0.0);
+        assert!(
+            d.call("add_comment", json!({"text": "x", "bar": 4, "to_bar": 2}))
+                .is_err(),
+            "the end comes after the start"
+        );
+        assert!(
+            d.call("add_comment", json!({"text": "x", "on_loop": true}))
+                .is_err(),
+            "the loop is off"
+        );
+        d.call("set_loop", json!({"from_bar": 5, "to_bar": 7, "on": true}))
+            .unwrap();
+        let l = id(
+            d.call("add_comment", json!({"text": "Loop this", "on_loop": true}))
+                .unwrap(),
+            "comment",
+        );
+
+        d.call(
+            "edit_comment",
+            json!({"comment": c, "text": "Drums drag a bit"}),
+        )
+        .unwrap();
+        let list = d.call("get_comments", json!({})).unwrap();
+        assert_eq!(list["comments"][0]["text"], "Drums drag a bit");
+        assert_eq!(list["comments"][1]["text"], "Loop this");
+        assert_eq!(list["comments"][1]["bar"], 5);
+        assert!(
+            d.call("edit_comment", json!({"comment": c, "text": " "}))
+                .is_err()
+        );
+        assert!(
+            d.call("edit_comment", json!({"comment": "nope", "delete": true}))
+                .is_err()
+        );
+
+        // Deleting a thread takes its replies with it.
+        d.call("edit_comment", json!({"comment": c, "delete": true}))
+            .unwrap();
+        let p = d.app().proj.doc.get();
+        assert!(p.comments.iter().all(|k| k.id != c && k.id != r));
+        assert!(p.comments.iter().any(|k| k.id == l));
     }
 }

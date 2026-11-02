@@ -15,7 +15,7 @@ use eframe::egui::{self, RichText};
 use crate::App;
 
 /// The longest version name kept.
-const MAX_NAME: usize = 60;
+pub(crate) const MAX_NAME: usize = 60;
 
 /// The versions window.
 #[derive(Default)]
@@ -341,6 +341,7 @@ impl Versions {
             && rid == id
         {
             ui.horizontal(|ui| {
+                // ai: edit_version.name
                 let r = ui
                     .add(
                         egui::TextEdit::singleline(text)
@@ -350,6 +351,7 @@ impl Versions {
                     .accessible_name("Version name");
                 r.request_focus();
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // ai: edit_version.name
                 if ui.button("Rename").clicked() || enter {
                     action = Some(Action::Rename(id.to_string(), text.clone()));
                 }
@@ -368,6 +370,7 @@ impl Versions {
                 "Delete “{name}”? Its clips and settings go with it; Undo brings them back."
             ));
             ui.horizontal(|ui| {
+                // ai: edit_version.delete
                 if ui.button("Delete").clicked() {
                     action = Some(Action::Delete(id.to_string()));
                     self.asked = None;
@@ -389,9 +392,11 @@ impl Versions {
             {
                 action = Some(Action::Switch(id.to_string()));
             }
+            // ai: edit_version.name
             if ui.small_button("Rename").clicked() {
                 self.renaming = Some((id.to_string(), name.to_string()));
             }
+            // ai: edit_version.delete
             if ui.small_button("Delete…").clicked() {
                 self.asked = Some(id.to_string());
             }
@@ -562,6 +567,65 @@ mod tests {
         assert!(
             d.call("switch_version", json!({"track": key, "version": "nope"}))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn an_assistant_renames_and_deletes_versions() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.command("add-instrument-track");
+        let key = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        d.command("duplicate-track-version");
+        d.command("duplicate-track-version");
+        let ids: Vec<String> = (d.project()["tracks"][0]["versions"].as_array().unwrap())
+            .iter()
+            .map(|v| v["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids.len(), 3);
+        d.call(
+            "edit_version",
+            json!({"track": key, "version": ids[0], "name": "  Quiet verse  "}),
+        )
+        .unwrap();
+        assert_eq!(
+            d.project()["tracks"][0]["versions"][0]["name"],
+            "Quiet verse"
+        );
+        assert!(
+            d.call(
+                "edit_version",
+                json!({"track": key, "version": ids[0], "name": " "})
+            )
+            .is_err()
+        );
+        // One that isn't playing goes; the one playing stays.
+        d.call(
+            "edit_version",
+            json!({"track": key, "version": ids[1], "delete": true}),
+        )
+        .unwrap();
+        let t = d.project()["tracks"][0].clone();
+        let left: Vec<&str> = (t["versions"].as_array().unwrap())
+            .iter()
+            .map(|v| v["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(left, [ids[0].as_str(), ids[2].as_str()]);
+        assert_eq!(t["versions"][1]["playing"], true);
+        d.command("undo");
+        assert_eq!(
+            d.project()["tracks"][0]["versions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(
+            d.call(
+                "edit_version",
+                json!({"track": key, "version": "nope", "delete": true})
+            )
+            .is_err()
         );
     }
 }

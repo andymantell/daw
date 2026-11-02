@@ -1216,6 +1216,7 @@ dependencies = [
  "daw-test-plugin",
  "daw-video",
  "eframe",
+ "egui",
  "egui_kittest",
  "hound",
  "minisign-verify",

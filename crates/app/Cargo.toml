@@ -29,6 +29,9 @@ daw-remote = { path = "../remote" }
 daw-speech = { path = "../speech" }
 daw-video = { path = "../video" }
 eframe = "0.37.0"
+# The symbol fallback fonts (play, stop, record, scissors...). egui 0.37 put
+# them behind this feature; without it every symbol icon draws as a box.
+egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
 hound = "3.5.1"
 minisign-verify = "0.3.0"
 png = "0.18.1"

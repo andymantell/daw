@@ -794,7 +794,10 @@ mod tests {
         let mut found = Vec::new();
         for entry in std::fs::read_dir(src).unwrap() {
             let path = entry.unwrap().path();
-            let text = std::fs::read_to_string(&path).unwrap();
+            // Windows checkouts may have CRLF line ends.
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
             let code = text.split("\n#[cfg(test)]\nmod ").next().unwrap_or("");
             for (i, line) in code.lines().enumerate() {
                 if line.trim_start().starts_with("//") {

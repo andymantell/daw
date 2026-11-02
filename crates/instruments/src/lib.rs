@@ -32,6 +32,7 @@ pub mod library;
 pub mod made;
 pub mod model_mono;
 pub mod oh_one;
+pub mod oracle;
 pub mod params;
 pub mod patch_twenty;
 pub mod sample;
@@ -72,6 +73,8 @@ pub enum Kind {
     June,
     /// The eight-voice two-channel touch polysynth (classic synths, S6).
     Eighty,
+    /// The two-oscillator polysynth with two filter boards (classic synths, S5).
+    Oracle,
 }
 
 /// A sound an instrument makes from its settings alone: a name and the
@@ -83,7 +86,7 @@ pub struct Sound {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
@@ -95,6 +98,7 @@ impl Kind {
         Kind::ModelMono,
         Kind::June,
         Kind::Eighty,
+        Kind::Oracle,
     ];
 
     /// How projects name it. Never change one.
@@ -111,6 +115,7 @@ impl Kind {
             Kind::ModelMono => "model-mono",
             Kind::June => "june",
             Kind::Eighty => "eighty",
+            Kind::Oracle => "oracle",
         }
     }
 
@@ -131,6 +136,7 @@ impl Kind {
             Kind::ModelMono => "Model Mono",
             Kind::June => "June",
             Kind::Eighty => "Eighty",
+            Kind::Oracle => "Oracle",
         }
     }
 
@@ -163,6 +169,9 @@ impl Kind {
             Kind::Eighty => {
                 "An eight-voice two-channel touch polysynth for pads, brass and expressive leads: each channel a saw, square and noise through resonant high-pass and low-pass filters with a sine after, velocity and polyphonic aftertouch to level and brightness, a ring modulator and chorus"
             }
+            Kind::Oracle => {
+                "A two-oscillator analogue polysynth for brass, pads, leads and bass: sync, poly-mod, a 4-pole cascade or 2-pole state-variable filter board, two envelopes, an LFO, unison"
+            }
         }
     }
 
@@ -173,6 +182,7 @@ impl Kind {
             Kind::ModelMono => model_mono::sounds(),
             Kind::June => june::sounds(),
             Kind::Eighty => eighty::sounds(),
+            Kind::Oracle => oracle::sounds(),
             _ => Vec::new(),
         }
     }
@@ -261,6 +271,7 @@ impl Builtin {
             Kind::ModelMono => Builtin::of(kind, model_mono::params(), Vec::new()),
             Kind::June => Builtin::of(kind, june::params(), Vec::new()),
             Kind::Eighty => Builtin::of(kind, eighty::params(), Vec::new()),
+            Kind::Oracle => Builtin::of(kind, oracle::params(), Vec::new()),
         }
     }
 
@@ -332,6 +343,7 @@ impl Builtin {
             Kind::ModelMono => model_mono::params(),
             Kind::June => june::params(),
             Kind::Eighty => eighty::params(),
+            Kind::Oracle => oracle::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -707,6 +719,7 @@ impl Builtin {
             Kind::ModelMono => Box::new(model_mono::ModelMono::new(rate, p)),
             Kind::June => Box::new(june::June::new(rate, p)),
             Kind::Eighty => Box::new(eighty::Eighty::new(rate, p)),
+            Kind::Oracle => Box::new(oracle::Oracle::new(rate, p)),
         }
     }
 

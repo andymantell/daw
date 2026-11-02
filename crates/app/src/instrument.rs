@@ -1178,6 +1178,7 @@ pub(crate) fn slot_controls(
             );
             sound_controls(ui, slot, "eighty", daw_instruments::eighty::GROUPS)
         }
+        Some(Kind::Oracle) => sound_controls(ui, slot, "oracle", daw_instruments::oracle::GROUPS),
     };
     if renew {
         slot.renew(cx.rate, cx.pending);

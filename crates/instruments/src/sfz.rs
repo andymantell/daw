@@ -462,6 +462,8 @@ pub struct Sfz {
     pub unsupported: BTreeMap<String, usize>,
     /// Files that couldn't be read, and other problems.
     pub problems: Vec<String>,
+    /// The files it included, as read by [`read`].
+    pub includes: Vec<PathBuf>,
 }
 
 impl Sfz {
@@ -515,8 +517,14 @@ impl Sfz {
 pub fn read(path: &Path) -> Result<Sfz, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let read_include = |p: &Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
-    Ok(parse(&text, &dir, &read_include))
+    let included = std::cell::RefCell::new(Vec::new());
+    let read_include = |p: &Path| {
+        included.borrow_mut().push(p.to_path_buf());
+        std::fs::read_to_string(p).map_err(|e| e.to_string())
+    };
+    let mut sfz = parse(&text, &dir, &read_include);
+    sfz.includes = included.into_inner();
+    Ok(sfz)
 }
 
 /// Reads SFZ text whose sounds and includes are found from `dir`, the

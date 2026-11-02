@@ -11,7 +11,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::SystemTime;
 
 use daw_engine::import::Decoder;
 
@@ -398,25 +397,57 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R>
     out.into_iter().map(|(_, r)| r).collect()
 }
 
-type Kept = Vec<(PathBuf, Option<SystemTime>, Weak<Library>)>;
+type Kept = Vec<(PathBuf, u64, Weak<Library>)>;
 
 static KEPT: Mutex<Kept> = Mutex::new(Vec::new());
 
-/// The library at `path`: the one already in use if it hasn't changed
+/// The files a library was read from: its SFZ file, what that
+/// includes, and its sound files, with those that weren't there.
+fn files(lib: &Library) -> impl Iterator<Item = &Path> {
+    let sounds: std::collections::BTreeSet<&str> = (lib.sfz.regions.iter())
+        .map(|r| r.sample.as_str())
+        .filter(|s| !s.is_empty() && !s.starts_with('*'))
+        .collect();
+    std::iter::once(lib.path.as_path())
+        .chain(lib.sfz.includes.iter().map(PathBuf::as_path))
+        .chain(sounds.into_iter().map(Path::new))
+}
+
+/// What `paths` are on disk now: a hash of each one's modification
+/// time and size, so a file written again (or gone) gives another.
+fn stamp<'a>(paths: impl Iterator<Item = &'a Path>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in paths {
+        p.hash(&mut h);
+        let m = std::fs::metadata(p).ok();
+        m.as_ref().and_then(|m| m.modified().ok()).hash(&mut h);
+        m.map(|m| m.len()).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// The library at `path`: the one already in use if neither the SFZ
+/// file, what it includes, nor any of its sound files has changed
 /// since, or read now (which can take a few seconds for a big one).
+/// Checking costs one look at each file's details, not reading it.
 pub fn open(path: &Path) -> Result<Arc<Library>, String> {
-    let changed = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    if let Ok(kept) = KEPT.lock()
-        && let Some(l) = (kept.iter())
-            .find(|(p, t, _)| p == path && *t == changed)
-            .and_then(|(_, _, w)| w.upgrade())
+    let kept = (KEPT.lock().ok()).and_then(|k| {
+        k.iter()
+            .find(|(p, _, _)| p == path)
+            .map(|(_, t, w)| (*t, w.clone()))
+    });
+    if let Some((was, w)) = kept
+        && let Some(l) = w.upgrade()
+        && stamp(files(&l)) == was
     {
         return Ok(l);
     }
     let lib = Arc::new(Library::read(path, MEMORY)?);
+    let now = stamp(files(&lib));
     if let Ok(mut kept) = KEPT.lock() {
         kept.retain(|(p, _, w)| p != path && w.strong_count() > 0);
-        kept.push((path.to_path_buf(), changed, Arc::downgrade(&lib)));
+        kept.push((path.to_path_buf(), now, Arc::downgrade(&lib)));
     }
     Ok(lib)
 }
@@ -561,5 +592,47 @@ pub(crate) mod tests {
         let a = open(&dir.join("kit.sfz")).unwrap();
         let b = open(&dir.join("kit.sfz")).unwrap();
         assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    /// Writing a sound file again makes the next open read the library
+    /// again, though its SFZ file hasn't changed; and so does writing
+    /// a file it includes, or one it named that wasn't there.
+    #[test]
+    fn a_changed_sound_file_is_read_again() {
+        let dir = scratch("changed");
+        wav(&dir, "a.wav", 1000, 0.5);
+        std::fs::write(dir.join("keys.sfz"), "<region> sample=a.wav key=60\n").unwrap();
+        std::fs::write(
+            dir.join("kit.sfz"),
+            "#include \"keys.sfz\"\n<region> sample=later.wav key=61\n",
+        )
+        .unwrap();
+        let sfz = dir.join("kit.sfz");
+        let a = open(&sfz).unwrap();
+        assert_eq!(a.sources.len(), 1);
+        assert!((a.peak - 0.5).abs() < 0.01);
+        assert!(Arc::ptr_eq(&a, &open(&sfz).unwrap()));
+        // A sound rendered again: other audio, another length.
+        wav(&dir, "a.wav", 2000, 0.25);
+        let b = open(&sfz).unwrap();
+        assert!(!Arc::ptr_eq(&a, &b), "the old sounds were kept");
+        assert!((b.peak - 0.25).abs() < 0.01);
+        assert_eq!(b.sources[0].pcm.frames(), 2000);
+        assert_eq!(b.bytes, 2000 * 4, "its size in memory is the new one's");
+        assert!(Arc::ptr_eq(&b, &open(&sfz).unwrap()));
+        // A sound it named that wasn't there.
+        wav(&dir, "later.wav", 500, 0.5);
+        let c = open(&sfz).unwrap();
+        assert!(!Arc::ptr_eq(&b, &c));
+        assert_eq!(c.sources.len(), 2);
+        // A file it includes.
+        std::fs::write(
+            dir.join("keys.sfz"),
+            "<region> sample=a.wav key=60\n<region> sample=a.wav key=62\n",
+        )
+        .unwrap();
+        let d = open(&sfz).unwrap();
+        assert!(!Arc::ptr_eq(&c, &d));
+        assert_eq!(d.by_key[62], [1]);
     }
 }

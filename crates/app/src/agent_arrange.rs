@@ -220,6 +220,24 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "paste_clips",
+        description: "Pastes the clips copied (select_clips, then the copy command), \
+                      keeping their spacing, as linked copies: at the bar or seconds given \
+                      (the playhead if neither), each on its own track or all on the audio \
+                      track given. rendered: true (with a track) pastes them instead as one \
+                      new clip of their sound through their own tracks' effects, rendered in \
+                      the background.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string"},
+                "bar": {"type": "number"},
+                "seconds": {"type": "number"},
+                "rendered": {"type": "boolean"}
+            }})
+        },
+    },
+    Tool {
         name: "resolve_comment",
         description: "Marks a comment as resolved, or not.",
         access: Access::Edit,
@@ -306,8 +324,45 @@ impl App {
             "add_comment" => self.add_comment_tool(args),
             "resolve_comment" => self.resolve_comment_tool(args),
             "edit_comment" => self.edit_comment_tool(args),
+            "paste_clips" => self.paste_clips_tool(args),
             _ => return None,
         })
+    }
+
+    fn paste_clips_tool(&mut self, args: &Value) -> Done {
+        if self.renders.copied.is_empty() {
+            return Err("Copy some clips first: select_clips, then the copy command.".into());
+        }
+        let lane = match args["track"].as_str() {
+            None => None,
+            Some(k) => {
+                let i = (self.track_index(k)).ok_or_else(|| format!("There is no track {k}."))?;
+                if self.tracks[i].kind != daw_project::TrackKind::Audio {
+                    return Err(format!("{} isn't an audio track.", self.tracks[i].name));
+                }
+                Some(i)
+            }
+        };
+        let at = (self.time_arg(args)).unwrap_or_else(|| self.ctl.status().position().0);
+        if args["rendered"].as_bool() == Some(true) {
+            let lane = lane.ok_or("Give the audio track to paste the rendered audio on.")?;
+            self.message = None;
+            self.paste_rendered(lane, at);
+            if let Some(e) = self.message.take() {
+                return Err(e);
+            }
+            return Ok((json!({"rendering": self.renders.busy()}), None));
+        }
+        if !self.paste_clips(lane, at) {
+            return Err("Their tracks are gone, or aren't audio tracks.".into());
+        }
+        self.rebuild();
+        let pasted: Vec<&str> = (self.tracks.iter())
+            .flat_map(|t| &t.clips)
+            .filter(|c| self.timeline.selected.contains(&c.id))
+            .map(|c| c.key.as_str())
+            .collect();
+        Ok((json!({"pasted": pasted}), Some("Paste clips".into())))
     }
 
     /// The frame `args` gives as a bar or seconds, if it gives one.
@@ -876,6 +931,76 @@ mod tests {
         );
         d.call("delete_clip", json!({"clip": clip})).unwrap();
         assert_eq!(d.project()["tracks"][0]["note_clips"], json!([]));
+    }
+
+    #[test]
+    fn copied_clips_are_pasted_on_a_track_or_as_rendered_audio() {
+        let dir = std::env::temp_dir().join(format!("daw-paste-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("one-second.wav");
+        let mut d = Driver::new();
+        let rate = d.app().rate;
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..rate {
+            w.write_sample(((i % 100) as i16 - 50) * 10).unwrap();
+        }
+        w.finalize().unwrap();
+        assert!(d.call("paste_clips", json!({})).is_err(), "nothing copied");
+        d.call("import_audio", json!({"path": path})).unwrap();
+        let mut p = d.project();
+        for _ in 0..500 {
+            if !p["tracks"].as_array().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            p = d.project();
+        }
+        let c = p["tracks"][0]["clips"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let other = id(
+            d.call("add_track", json!({"kind": "audio"})).unwrap(),
+            "track",
+        );
+        let notes = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        d.call("select_clips", json!({"clips": [c]})).unwrap();
+        d.command("copy");
+        assert!(
+            d.call("paste_clips", json!({"track": notes})).is_err(),
+            "not on an instrument track"
+        );
+        let r = d
+            .call("paste_clips", json!({"track": other, "seconds": 3.0}))
+            .unwrap();
+        let pasted = r["pasted"][0].as_str().unwrap().to_string();
+        let p = d.project();
+        let t = (p["tracks"].as_array().unwrap().iter())
+            .find(|t| t["id"] == other.as_str())
+            .unwrap();
+        assert_eq!(t["clips"][0]["id"], pasted.as_str());
+        assert_eq!(t["clips"][0]["start_seconds"], 3.0);
+        assert!(
+            d.call("paste_clips", json!({"rendered": true})).is_err(),
+            "rendered needs a track"
+        );
+        let r = d
+            .call(
+                "paste_clips",
+                json!({"track": other, "bar": 5, "rendered": true}),
+            )
+            .unwrap();
+        assert_eq!(r["rendering"], 1, "{r}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

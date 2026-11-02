@@ -2850,6 +2850,64 @@ impl Commands {
         }
     }
 
+    /// The assistant's edit_keys: give, take or reset a command's keys.
+    fn edit_keys(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let key = |field: &str| -> Result<Option<Shortcut>, String> {
+            let Some(t) = args[field].as_str() else {
+                return Ok(None);
+            };
+            let s = Shortcut::parse(t)
+                .ok_or_else(|| format!("{t} isn't a key, such as Ctrl+Shift+K or F5."))?;
+            match s.fixed() {
+                Some(why) => Err(format!("{} can't be changed: {why}.", s.text())),
+                None => Ok(Some(s)),
+            }
+        };
+        if args["reset_all"].as_bool() == Some(true) {
+            self.keymap = Keymap::default();
+            self.save();
+            return Ok(json!({"reset_all": true}));
+        }
+        let id = args["command"].as_str().ok_or("Give the command's id.")?;
+        let cmd = Cmd::from_id(id).ok_or_else(|| format!("There is no command {id}."))?;
+        let (add, remove) = (key("add")?, key("remove")?);
+        if let Some(s) = remove
+            && !self.keymap.of(cmd).contains(&s)
+        {
+            return Err(format!("{} isn't a key of {}.", s.text(), cmd.info().name));
+        }
+        let mut moved = None;
+        if let Some(s) = add
+            && let Some(other) = self.keymap.find(s)
+            && other != cmd
+        {
+            if args["take"].as_bool() != Some(true) {
+                return Err(format!(
+                    "{} is already {} ({}); give take: true to move it.",
+                    s.text(),
+                    other.info().name,
+                    other.info().id()
+                ));
+            }
+            moved = Some(other.info().id());
+        }
+        if args["reset"].as_bool() == Some(true) {
+            self.keymap.reset(cmd);
+        }
+        if let Some(s) = remove {
+            self.keymap.remove(cmd, s);
+        }
+        if let Some(s) = add
+            && !self.keymap.of(cmd).contains(&s)
+        {
+            self.keymap.assign(cmd, s);
+        }
+        self.save();
+        let keys: Vec<String> = self.keymap.of(cmd).iter().map(|s| s.text()).collect();
+        Ok(json!({"command": id, "keys": keys, "taken_from": moved}))
+    }
+
     #[cfg(test)]
     pub(crate) fn palette_open(&self) -> bool {
         self.palette.open
@@ -3102,6 +3160,7 @@ impl Commands {
                         .desired_width(240.0),
                 )
                 .accessible_name("Find a command to change");
+                // ai: edit_keys.reset_all
                 if ui
                     .button("Reset all")
                     .on_hover_text("Every command back to its keys out of the box")
@@ -3129,6 +3188,7 @@ impl Commands {
                         other.info().name,
                         cmd.info().name
                     ));
+                    // ai: edit_keys.take
                     if ui.button("Move it").clicked() {
                         self.keymap.assign(cmd, s);
                         self.editor.clash = None;
@@ -3193,6 +3253,7 @@ impl Commands {
                 ui.weak("no key");
             }
             for s in keys {
+                // ai: edit_keys.remove
                 if ui
                     .add(IconButton::labelled(Icon::Close, s.text()).trailing())
                     .accessible_name(format!("Remove {} from {}", s.text(), i.name))
@@ -3219,6 +3280,7 @@ impl Commands {
                 self.editor.note = None;
             }
             let default = self.keymap.of(i.cmd) == i.keys;
+            // ai: edit_keys.reset
             if ui
                 .add_enabled(!default, egui::Button::new("Reset"))
                 .accessible_name(format!("Reset the keys for {}", i.name))
@@ -3235,6 +3297,36 @@ impl Commands {
                 self.save();
             }
         });
+    }
+}
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "edit_keys",
+    description: "Changes a command's keys (Settings → Key commands; list_commands shows \
+                  each command's keys): add one, written as shown such as Ctrl+Shift+K (Ctrl \
+                  is Cmd on a Mac), remove one, or reset it to its keys out of the box. A key \
+                  another command has is refused unless take is true, which moves it. \
+                  reset_all puts every command back. Answers with the command's keys now.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        serde_json::json!({"type": "object", "properties": {
+            "command": {"type": "string", "description": "The command's id."},
+            "add": {"type": "string"},
+            "remove": {"type": "string"},
+            "take": {"type": "boolean", "description": "Move the added key from the command that has it."},
+            "reset": {"type": "boolean"},
+            "reset_all": {"type": "boolean"}
+        }})
+    },
+}];
+
+impl App {
+    pub(crate) fn keys_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "edit_keys").then(|| self.commands.edit_keys(args).map(|v| (v, None)))
     }
 }
 
@@ -3973,5 +4065,73 @@ mod tests {
         assert!(search("zzz").is_empty());
         assert_eq!(search("").len(), COMMANDS.len());
         assert_eq!(search(" ")[0], Cmd::NewProject);
+    }
+
+    #[test]
+    fn an_assistant_gives_takes_and_resets_keys() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        let ctrl = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+        let undo = Cmd::from_id("undo").unwrap();
+        let z = d.app().commands.keymap.of(undo)[0].text();
+        let keys = |d: &mut crate::agent::driver::Driver, c: &str| {
+            d.app().commands.keymap.text(Cmd::from_id(c).unwrap())
+        };
+        let r = d
+            .call(
+                "edit_keys",
+                json!({"command": "add-bus", "add": "Ctrl+Alt+Shift+F9"}),
+            )
+            .unwrap();
+        assert_eq!(r["keys"], json!([format!("{ctrl}+Alt+Shift+F9")]));
+        // Another command's key is moved only when asked.
+        let e = d
+            .call("edit_keys", json!({"command": "add-bus", "add": z}))
+            .unwrap_err();
+        assert!(e.contains("undo"), "{e}");
+        assert_eq!(keys(&mut d, "undo"), z);
+        let r = d
+            .call(
+                "edit_keys",
+                json!({"command": "add-bus", "add": z, "take": true}),
+            )
+            .unwrap();
+        assert_eq!(r["taken_from"], "undo");
+        assert_eq!(keys(&mut d, "undo"), "");
+        // Fixed keys and nonsense are refused.
+        assert!(
+            d.call("edit_keys", json!({"command": "add-bus", "add": "Tab"}))
+                .is_err()
+        );
+        assert!(
+            d.call(
+                "edit_keys",
+                json!({"command": "add-bus", "add": "Ctrl+Wibble"})
+            )
+            .is_err()
+        );
+        assert!(
+            d.call("edit_keys", json!({"command": "nothing", "add": "F9"}))
+                .is_err()
+        );
+        let r = d
+            .call(
+                "edit_keys",
+                json!({"command": "add-bus", "remove": "Ctrl+Alt+Shift+F9"}),
+            )
+            .unwrap();
+        assert_eq!(r["keys"], json!([z]));
+        d.call("edit_keys", json!({"command": "undo", "reset": true}))
+            .unwrap();
+        assert_eq!(keys(&mut d, "undo"), z, "back, and taken from add-bus");
+        assert_eq!(keys(&mut d, "add-bus"), "");
+        d.call("edit_keys", json!({"command": "add-bus", "add": "F9"}))
+            .unwrap();
+        d.call("edit_keys", json!({"reset_all": true})).unwrap();
+        assert_eq!(d.app().commands.keymap, Keymap::default());
     }
 }

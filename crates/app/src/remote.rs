@@ -186,6 +186,7 @@ impl Remote {
             for (id, name) in &self.connected {
                 ui.horizontal(|ui| {
                     ui.label(name);
+                    // ai: person
                     if ui
                         .button("Disconnect")
                         .accessible_name(format!("Disconnect {name}"))
@@ -203,6 +204,7 @@ impl Remote {
             for p in &self.devices.phones {
                 ui.horizontal(|ui| {
                     ui.label(&p.name);
+                    // ai: person
                     if ui
                         .button("Forget")
                         .accessible_name(format!("Forget {}", p.name))

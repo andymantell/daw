@@ -259,6 +259,7 @@ pub(crate) enum Cmd {
     MeasureLatency,
     Plugins,
     PerformanceCheck,
+    AddTestTracks,
     DrumKits,
     LearnKit,
     KitNext,
@@ -2203,6 +2204,15 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .words("dsp cpu load"),
+    info(
+        Cmd::AddTestTracks,
+        "add-test-tracks",
+        "Settings",
+        "Add performance test tracks",
+        &[],
+    )
+    .hint("Tracks of generated audio, to see how many the computer plays without dropouts")
+    .words("dsp cpu load benchmark stress"),
     info(Cmd::DrumKits, "drum-kits", "Settings", "Drum kits…", &[])
         .hint("Which note each pad of an electronic drum kit sends")
         .words("electronic e-kit pads map midi notes profile"),
@@ -3832,6 +3842,7 @@ impl App {
             Cmd::MixAhead => self.toggle_mix_ahead(),
             Cmd::Plugins => self.effects.show_manager = true,
             Cmd::PerformanceCheck => self.perf.open = true,
+            Cmd::AddTestTracks => self.perf.add_test_tracks(self.rate),
             Cmd::DrumKits
             | Cmd::LearnKit
             | Cmd::KitNext

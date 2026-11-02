@@ -1767,6 +1767,7 @@ impl App {
             "markers": p.markers.iter().map(|m| json!({
                 "id": m.id, "bar": m.bar, "name": m.name,
             })).collect::<Vec<_>>(),
+            "play_order": p.arrangement,
             "tracks": tracks,
             // Clips that are instances of one clip: linked copies, and
             // note clips playing the same pattern.

@@ -120,7 +120,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "edit_markers",
         description: "Adds section markers on bars, renames or moves them by id, or \
-                      removes them.",
+                      removes them. play_order sets the sections' play order (get_project \
+                      shows it), by their markers' ids in the order to play, repeats allowed; \
+                      commands play-order and write-play-order play it or lay the song out so.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -130,7 +132,8 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "change": {"type": "array", "items": {"type": "object", "properties": {
                     "id": {"type": "string"}, "bar": {"type": "integer"}, "name": {"type": "string"}
                 }, "required": ["id"]}},
-                "remove": {"type": "array", "items": {"type": "string"}}
+                "remove": {"type": "array", "items": {"type": "string"}},
+                "play_order": {"type": "array", "items": {"type": "string"}}
             }})
         },
     },
@@ -562,6 +565,17 @@ impl App {
                 return Err(format!("There is no marker {id}."));
             }
             p.markers.retain(|m| !remove.contains(&m.id.as_str()));
+            if let Some(order) = args["play_order"].as_array() {
+                let mut ids = Vec::new();
+                for id in order {
+                    let id = id.as_str().ok_or("The play order is markers' ids.")?;
+                    if !p.markers.iter().any(|m| m.id == id) {
+                        return Err(format!("There is no marker {id}."));
+                    }
+                    ids.push(id.to_string());
+                }
+                p.arrangement = ids;
+            }
             p.arrangement
                 .retain(|id| p.markers.iter().any(|m| &m.id == id));
             p.markers.sort_by_key(|m| m.bar);

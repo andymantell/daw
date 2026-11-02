@@ -1561,93 +1561,43 @@ impl crate::App {
         }
     }
 
-    /// The View menu.
-    pub(crate) fn view_menu(&mut self, ui: &mut egui::Ui) {
-        for c in [
-            Cmd::Mixer,
-            Cmd::MonitorSection,
-            Cmd::TakeLanes,
-            Cmd::NotesEditor,
-            Cmd::PatternEditor,
-            Cmd::AutomationLanes,
-            Cmd::Browser,
-            Cmd::Video,
-            Cmd::Fretboard,
-            Cmd::PitchEditor,
-            Cmd::Comments,
-            Cmd::LessonNotes,
-            Cmd::Lessons,
-            Cmd::Tuner,
-        ] {
-            if self.menu_hold(c) {
-                continue;
-            }
-            self.menu_mark(ui);
-            let open = match c {
-                Cmd::Mixer => self.workspace.layout.is_open(Pane::Mixer),
-                Cmd::MonitorSection => self.workspace.layout.is_open(Pane::Monitor),
-                Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
-                Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
-                Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
-                Cmd::Video => self.workspace.layout.is_open(Pane::Video),
-                Cmd::Fretboard => self.workspace.layout.is_open(Pane::Fretboard),
-                Cmd::PitchEditor => self.workspace.layout.is_open(Pane::PitchEditor),
-                Cmd::Comments => self.comment_ui.open,
-                Cmd::LessonNotes => self.notes_ui.open,
-                Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
-                Cmd::NotesEditor => self.workspace.layout.is_open(Pane::NotesEditor),
-                Cmd::PatternEditor => self.workspace.layout.is_open(Pane::Patterns),
-                _ => self.tuner.open,
-            };
-            ui.add_enabled_ui(true, |ui| {
-                let name = c.info().name.trim_end_matches('…');
-                let keys = self.commands.keymap.text(c);
-                let r = ui
-                    .add(egui::Button::selectable(open, name).shortcut_text(keys))
-                    .on_hover_text(if open { "Close it" } else { "Open it" });
-                if r.clicked() {
-                    ui.close();
-                    let ctx = ui.ctx().clone();
-                    match (c, open) {
-                        (
-                            Cmd::Mixer
-                            | Cmd::MonitorSection
-                            | Cmd::TakeLanes
-                            | Cmd::Lessons
-                            | Cmd::NotesEditor
-                            | Cmd::Browser
-                            | Cmd::PatternEditor
-                            | Cmd::Video
-                            | Cmd::Fretboard
-                            | Cmd::PitchEditor,
-                            _,
-                        ) => self.run(&ctx, c),
-                        (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
-                        (Cmd::LessonNotes, true) => self.workspace.close(Pane::Notes),
-                        (Cmd::Tuner, true) => self.workspace.close(Pane::Tuner),
-                        _ => self.run(&ctx, c),
-                    }
-                }
-            });
-        }
-        self.menu_item(ui, Cmd::FullSize);
-        self.menu_gap();
-        for n in 0..self.workspace.saved.len() {
-            self.menu_item(ui, Cmd::Layout(n as u8));
-        }
-        self.menu_item(ui, Cmd::SaveLayout);
-        self.menu_gap();
-        if self.menu_hold(Cmd::PaneWindows) {
+    /// A pane in a menu: ticked while it is open, and clicking it then
+    /// closes it.
+    pub(crate) fn pane_entry(&mut self, ui: &mut egui::Ui, c: Cmd) {
+        if self.menu_hold(c) {
             return;
         }
         self.menu_mark(ui);
-        let mut on = self.workspace.windows_allowed;
-        if ui
-            .checkbox(&mut on, Cmd::PaneWindows.info().name)
-            .on_hover_text("Off: every pane stays in this window")
-            .changed()
-        {
-            self.workspace.allow_windows(on);
+        let open = match c {
+            Cmd::Mixer => self.workspace.layout.is_open(Pane::Mixer),
+            Cmd::MonitorSection => self.workspace.layout.is_open(Pane::Monitor),
+            Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
+            Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
+            Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
+            Cmd::Video => self.workspace.layout.is_open(Pane::Video),
+            Cmd::Fretboard => self.workspace.layout.is_open(Pane::Fretboard),
+            Cmd::PitchEditor => self.workspace.layout.is_open(Pane::PitchEditor),
+            Cmd::Comments => self.comment_ui.open,
+            Cmd::LessonNotes => self.notes_ui.open,
+            Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
+            Cmd::NotesEditor => self.workspace.layout.is_open(Pane::NotesEditor),
+            Cmd::PatternEditor => self.workspace.layout.is_open(Pane::Patterns),
+            _ => self.tuner.open,
+        };
+        let name = c.info().name.trim_end_matches('…');
+        let keys = self.commands.keymap.text(c);
+        let r = ui
+            .add(egui::Button::selectable(open, name).shortcut_text(keys))
+            .on_hover_text(if open { "Close it" } else { "Open it" });
+        if r.clicked() {
+            ui.close();
+            let ctx = ui.ctx().clone();
+            match (c, open) {
+                (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
+                (Cmd::LessonNotes, true) => self.workspace.close(Pane::Notes),
+                (Cmd::Tuner, true) => self.workspace.close(Pane::Tuner),
+                _ => self.run(&ctx, c),
+            }
         }
     }
 

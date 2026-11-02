@@ -570,7 +570,7 @@ impl App {
                     } else {
                         "Monitor: hear the input through this track"
                     })
-                    .on_disabled_hover_text("Direct monitoring is on (Settings → Audio device)");
+                    .on_disabled_hover_text("Direct monitoring is on (Settings → Audio)");
                 });
                 if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
                     ui.toggle_value(&mut t.practice_mute, "P")

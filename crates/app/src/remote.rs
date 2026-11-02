@@ -139,100 +139,94 @@ impl Remote {
         }
     }
 
-    /// The window. Returns phones to forget or drop.
-    fn window(&mut self, ctx: &egui::Context) {
-        let mut open = self.open;
+    /// Settings → Phone remote.
+    pub(crate) fn page(&mut self, ui: &mut egui::Ui) {
         let mut show = false;
         let mut hide = false;
         let mut forget = None;
         let mut drop_phone = None;
-        egui::Window::new("Phone remote")
-            .open(&mut open)
-            .default_pos([260.0, 120.0])
-            .default_size([440.0, 420.0])
-            .show(ctx, |ui| {
-                ui.label(
-                    "Record and run the transport from your phone, on the same Wi-Fi. \
+        {
+            ui.label(
+                "Record and run the transport from your phone, on the same Wi-Fi. \
                      Install the app, then scan the code it asks for here.",
-                );
-                ui.add_space(6.0);
-                if let Some(e) = &self.error {
-                    ui.colored_label(ui.visuals().error_fg_color, e);
-                }
-                if let Some(n) = &self.note {
-                    ui.label(RichText::new(n).strong());
-                }
-                match &self.showing {
-                    Some((text, img)) => {
-                        qr(ui, img);
-                        ui.label("Or type this into the app:");
-                        ui.add(egui::Label::new(RichText::new(text).monospace()).selectable(true));
-                        ui.label(
-                            RichText::new("The code works once, for the next phone that scans it.")
-                                .weak(),
-                        );
-                        if ui.button("Hide code").clicked() {
-                            hide = true;
-                        }
-                    }
-                    None => {
-                        if ui.button("Show a code to pair a phone").clicked() {
-                            show = true;
-                        }
-                    }
-                }
-                ui.separator();
-                ui.strong("Connected now");
-                if self.connected.is_empty() {
-                    ui.label(RichText::new("No phone is connected.").weak());
-                }
-                for (id, name) in &self.connected {
-                    ui.horizontal(|ui| {
-                        ui.label(name);
-                        if ui
-                            .button("Disconnect")
-                            .accessible_name(format!("Disconnect {name}"))
-                            .clicked()
-                        {
-                            drop_phone = Some(*id);
-                        }
-                    });
-                }
-                ui.add_space(6.0);
-                ui.strong("Paired phones");
-                if self.devices.phones.is_empty() {
-                    ui.label(RichText::new("None yet.").weak());
-                }
-                for p in &self.devices.phones {
-                    ui.horizontal(|ui| {
-                        ui.label(&p.name);
-                        if ui
-                            .button("Forget")
-                            .accessible_name(format!("Forget {}", p.name))
-                            .on_hover_text("It will need to scan a code again")
-                            .clicked()
-                        {
-                            forget = Some(p.token.clone());
-                        }
-                    });
-                }
-                ui.add_space(6.0);
-                match &self.server {
-                    Some(s) => {
-                        ui.label(
-                            RichText::new(format!(
-                                "Listening on port {} of this computer's local network address.",
-                                s.port()
-                            ))
+            );
+            ui.add_space(6.0);
+            if let Some(e) = &self.error {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+            if let Some(n) = &self.note {
+                ui.label(RichText::new(n).strong());
+            }
+            match &self.showing {
+                Some((text, img)) => {
+                    qr(ui, img);
+                    ui.label("Or type this into the app:");
+                    ui.add(egui::Label::new(RichText::new(text).monospace()).selectable(true));
+                    ui.label(
+                        RichText::new("The code works once, for the next phone that scans it.")
                             .weak(),
-                        );
-                    }
-                    None => {
-                        ui.label(RichText::new("Not listening until a phone is paired.").weak());
+                    );
+                    if ui.button("Hide code").clicked() {
+                        hide = true;
                     }
                 }
-            });
-        self.open = open;
+                None => {
+                    if ui.button("Show a code to pair a phone").clicked() {
+                        show = true;
+                    }
+                }
+            }
+            ui.separator();
+            ui.strong("Connected now");
+            if self.connected.is_empty() {
+                ui.label(RichText::new("No phone is connected.").weak());
+            }
+            for (id, name) in &self.connected {
+                ui.horizontal(|ui| {
+                    ui.label(name);
+                    if ui
+                        .button("Disconnect")
+                        .accessible_name(format!("Disconnect {name}"))
+                        .clicked()
+                    {
+                        drop_phone = Some(*id);
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            ui.strong("Paired phones");
+            if self.devices.phones.is_empty() {
+                ui.label(RichText::new("None yet.").weak());
+            }
+            for p in &self.devices.phones {
+                ui.horizontal(|ui| {
+                    ui.label(&p.name);
+                    if ui
+                        .button("Forget")
+                        .accessible_name(format!("Forget {}", p.name))
+                        .on_hover_text("It will need to scan a code again")
+                        .clicked()
+                    {
+                        forget = Some(p.token.clone());
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            match &self.server {
+                Some(s) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "Listening on port {} of this computer's local network address.",
+                            s.port()
+                        ))
+                        .weak(),
+                    );
+                }
+                None => {
+                    ui.label(RichText::new("Not listening until a phone is paired.").weak());
+                }
+            }
+        }
         if show {
             self.show_code();
         }
@@ -280,9 +274,6 @@ impl App {
     /// frame: their requests applied, and the latest layout and status
     /// sent.
     pub(crate) fn remote_tick(&mut self, ctx: &egui::Context) {
-        if self.remote.open {
-            self.remote.window(ctx);
-        }
         let Some(server) = &self.remote.server else {
             return;
         };

@@ -80,13 +80,21 @@ impl Perf {
         self.underruns_from = underruns;
     }
 
-    /// Draws the window.
-    pub fn window(
-        &mut self,
-        ctx: &egui::Context,
-        now: Now,
-        effects: &[Available],
-    ) -> Option<Action> {
+    /// The test tracks, once they have been written.
+    pub fn poll(&mut self) -> Option<Action> {
+        let r = self.generating.as_ref()?.try_recv().ok()?;
+        self.generating = None;
+        match r {
+            Ok(files) => Some(Action::AddTracks(files)),
+            Err(e) => {
+                self.error = Some(e);
+                None
+            }
+        }
+    }
+
+    /// Settings → Performance.
+    pub fn page(&mut self, ui: &mut egui::Ui, now: Now, effects: &[Available]) -> Option<Action> {
         let Now {
             overloads,
             underruns,
@@ -95,118 +103,103 @@ impl Perf {
             rate,
         } = now;
         let mut action = None;
-        if let Some(rx) = &self.generating
-            && let Ok(r) = rx.try_recv()
         {
-            self.generating = None;
-            match r {
-                Ok(files) => action = Some(Action::AddTracks(files)),
-                Err(e) => self.error = Some(e),
-            }
-        }
-        let mut open = self.open;
-        egui::Window::new("Performance check")
-            .open(&mut open)
-            .resizable(false)
-            .default_width(380.0)
-            .show(ctx, |ui| {
-                egui::Grid::new("perf").num_columns(2).show(ui, |ui| {
-                    ui.label("Buffer");
-                    ui.label(match buffer {
-                        Some((frames, rate)) => format!(
-                            "{frames} frames ({:.1} ms)",
-                            frames as f64 * 1000.0 / rate as f64
-                        ),
-                        None => "–".into(),
-                    });
-                    ui.end_row();
-                    ui.label("DSP load");
-                    ui.label(format!(
-                        "{:.0}% now, {:.0}% peak",
-                        self.load * 100.0,
-                        self.peak * 100.0
-                    ))
-                    .on_hover_text(
-                        "Time spent making each buffer of audio, as a share of how long \
-                             the buffer lasts. Over 100% is a dropout.",
-                    );
-                    ui.end_row();
-                    let over = overloads - self.overloads_from.min(overloads);
-                    ui.label("Dropouts");
-                    ui.label(if over == 0 {
-                        RichText::new("none").color(crate::theme::look(ui.ctx()).c().good)
-                    } else {
-                        RichText::new(format!("{over} buffers late"))
-                            .color(ui.visuals().error_fg_color)
-                    });
-                    ui.end_row();
-                    let under = underruns - self.underruns_from.min(underruns);
-                    ui.label("Disk");
-                    ui.label(if under == 0 {
-                        RichText::new("kept up").color(crate::theme::look(ui.ctx()).c().good)
-                    } else {
-                        RichText::new(format!("{under} frames missed"))
-                            .color(ui.visuals().error_fg_color)
-                    });
-                    ui.end_row();
+            egui::Grid::new("perf").num_columns(2).show(ui, |ui| {
+                ui.label("Buffer");
+                ui.label(match buffer {
+                    Some((frames, rate)) => format!(
+                        "{frames} frames ({:.1} ms)",
+                        frames as f64 * 1000.0 / rate as f64
+                    ),
+                    None => "–".into(),
                 });
-                if ui.button("Reset").clicked() {
-                    action = Some(Action::Reset);
-                }
-                ui.separator();
+                ui.end_row();
+                ui.label("DSP load");
                 ui.label(format!(
-                    "Phase 1's bar: {TRACKS} stereo tracks and {PLUGINS} plugins play with no \
-                     dropouts at 128 frames. Set the buffer in Settings → Audio device, then:"
-                ));
-                ui.horizontal(|ui| {
-                    let busy = self.generating.is_some();
-                    if ui
-                        .add_enabled(
-                            !busy,
-                            egui::Button::new(format!("Add {TRACKS} test tracks")),
-                        )
-                        .on_hover_text(format!("{SECONDS} s of generated audio each"))
-                        .clicked()
-                    {
-                        self.generating = Some(generate(rate));
-                        self.error = None;
-                    }
-                    if busy {
-                        ui.spinner();
-                        ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(tracks >= PLUGINS, |ui| {
-                        egui::ComboBox::from_id_salt("perf-plugin")
-                            .selected_text(format!("Add an effect to {PLUGINS} tracks…"))
-                            .width(260.0)
-                            .show_ui(ui, |ui| {
-                                for p in effects {
-                                    if ui.selectable_label(false, &p.class.name).clicked() {
-                                        action = Some(Action::AddPlugin(p.clone()));
-                                    }
-                                }
-                                if effects.is_empty() {
-                                    ui.label("No effects found. See Settings → Plugins.");
-                                }
-                            })
-                            .response
-                            .accessible_name("Effect for the test tracks");
-                    });
-                });
-                ui.label(
-                    RichText::new(
-                        "Then loop and play for a few minutes while using the app. \
-                         A typical EQ or compressor is a fair test.",
-                    )
-                    .weak(),
+                    "{:.0}% now, {:.0}% peak",
+                    self.load * 100.0,
+                    self.peak * 100.0
+                ))
+                .on_hover_text(
+                    "Time spent making each buffer of audio, as a share of how long \
+                             the buffer lasts. Over 100% is a dropout.",
                 );
-                if let Some(e) = &self.error {
-                    ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.end_row();
+                let over = overloads - self.overloads_from.min(overloads);
+                ui.label("Dropouts");
+                ui.label(if over == 0 {
+                    RichText::new("none").color(crate::theme::look(ui.ctx()).c().good)
+                } else {
+                    RichText::new(format!("{over} buffers late")).color(ui.visuals().error_fg_color)
+                });
+                ui.end_row();
+                let under = underruns - self.underruns_from.min(underruns);
+                ui.label("Disk");
+                ui.label(if under == 0 {
+                    RichText::new("kept up").color(crate::theme::look(ui.ctx()).c().good)
+                } else {
+                    RichText::new(format!("{under} frames missed"))
+                        .color(ui.visuals().error_fg_color)
+                });
+                ui.end_row();
+            });
+            if ui.button("Reset").clicked() {
+                action = Some(Action::Reset);
+            }
+            ui.separator();
+            ui.label(format!(
+                "Phase 1's bar: {TRACKS} stereo tracks and {PLUGINS} plugins play with no \
+                     dropouts at 128 frames. Set the buffer in Settings → Audio, then:"
+            ));
+            ui.horizontal(|ui| {
+                let busy = self.generating.is_some();
+                if ui
+                    .add_enabled(
+                        !busy,
+                        egui::Button::new(format!("Add {TRACKS} test tracks")),
+                    )
+                    .on_hover_text(format!("{SECONDS} s of generated audio each"))
+                    .clicked()
+                {
+                    self.generating = Some(generate(rate));
+                    self.error = None;
+                }
+                if busy {
+                    ui.spinner();
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(100));
                 }
             });
-        self.open = open;
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(tracks >= PLUGINS, |ui| {
+                    egui::ComboBox::from_id_salt("perf-plugin")
+                        .selected_text(format!("Add an effect to {PLUGINS} tracks…"))
+                        .width(260.0)
+                        .show_ui(ui, |ui| {
+                            for p in effects {
+                                if ui.selectable_label(false, &p.class.name).clicked() {
+                                    action = Some(Action::AddPlugin(p.clone()));
+                                }
+                            }
+                            if effects.is_empty() {
+                                ui.label("No effects found. See Settings → Plugins.");
+                            }
+                        })
+                        .response
+                        .accessible_name("Effect for the test tracks");
+                });
+            });
+            ui.label(
+                RichText::new(
+                    "Then loop and play for a few minutes while using the app. \
+                         A typical EQ or compressor is a fair test.",
+                )
+                .weak(),
+            );
+            if let Some(e) = &self.error {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+        }
         action
     }
 }

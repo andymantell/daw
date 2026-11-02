@@ -1212,151 +1212,142 @@ impl Effects {
         self.show_credits = open;
     }
 
-    /// The window listing installed plugins.
-    pub fn manager_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_manager;
-        egui::Window::new("Plugins")
-            .open(&mut open)
-            .default_width(700.0)
-            .max_width(820.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let busy = self.scan.is_some();
-                    if ui
+    /// Settings → Plugins: the installed plugins.
+    pub fn manager_page(&mut self, ui: &mut egui::Ui) {
+        {
+            ui.horizontal(|ui| {
+                let busy = self.scan.is_some();
+                if ui
+                    // ai: manage_plugins
+                    .add_enabled(!busy, egui::Button::new("Rescan"))
+                    .on_hover_text("Looks for new or updated plugins")
+                    .clicked()
+                {
+                    self.start_scan();
+                }
+                if let Some(s) = self.scanning() {
+                    ui.spinner();
+                    ui.label(s);
+                }
+            });
+            ui.horizontal(|ui| {
+                let checking = self.poll_check();
+                if ui
+                    .add_enabled(
+                        !checking && self.scan.is_none() && self.helper.is_some(),
                         // ai: manage_plugins
-                        .add_enabled(!busy, egui::Button::new("Rescan"))
-                        .on_hover_text("Looks for new or updated plugins")
-                        .clicked()
-                    {
-                        self.start_scan();
-                    }
-                    if let Some(s) = self.scanning() {
-                        ui.spinner();
-                        ui.label(s);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    let checking = self.poll_check();
-                    if ui
-                        .add_enabled(
-                            !checking && self.scan.is_none() && self.helper.is_some(),
-                            // ai: manage_plugins
-                            egui::Button::new("Check plugins"),
-                        )
-                        .on_hover_text(
-                            "Tries each plugin switched on, in a process of its own: loading, \
+                        egui::Button::new("Check plugins"),
+                    )
+                    .on_hover_text(
+                        "Tries each plugin switched on, in a process of its own: loading, \
                              playing, keeping its settings, and its sidechain and extra \
                              outputs. Writes a report to share for the compatibility list.",
-                        )
-                        .clicked()
-                    {
-                        self.start_check();
-                    }
-                    if checking {
-                        ui.spinner();
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_millis(200));
-                    }
-                    match &self.check_status {
-                        Some(Ok(s)) => {
-                            ui.label(s);
-                            // ai: view
-                            if !checking && ui.small_button("Copy report").clicked() {
-                                let path = self.check_report_path();
-                                if let Ok(text) = std::fs::read_to_string(path) {
-                                    ui.ctx().copy_text(text);
-                                }
+                    )
+                    .clicked()
+                {
+                    self.start_check();
+                }
+                if checking {
+                    ui.spinner();
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                match &self.check_status {
+                    Some(Ok(s)) => {
+                        ui.label(s);
+                        // ai: view
+                        if !checking && ui.small_button("Copy report").clicked() {
+                            let path = self.check_report_path();
+                            if let Ok(text) = std::fs::read_to_string(path) {
+                                ui.ctx().copy_text(text);
                             }
                         }
-                        Some(Err(e)) => {
-                            ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
-                        }
-                        None => {}
                     }
-                });
-                ui.horizontal(|ui| {
-                    let mut cap = self.list.editors;
-                    ui.label("Plugin windows open at once:");
-                    let r = ui
-                        .add(
-                            // ai: manage_plugins
-                            egui::DragValue::new(&mut cap)
-                                .range(0..=32)
-                                .custom_formatter(|v, _| {
-                                    if v == 0.0 {
-                                        "no limit".into()
-                                    } else {
-                                        format!("{v:.0}")
-                                    }
-                                }),
-                        )
-                        .on_hover_text(
-                            "Opening one more closes the one opened longest ago. Plugin \
-                             windows can use a lot of the computer while open.",
-                        );
-                    r.accessible_name("Most plugin windows open at once");
-                    if cap != self.list.editors {
-                        self.list.editors = cap;
-                        let _ = self.save();
+                    Some(Err(e)) => {
+                        ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
                     }
-                });
-                ui.label(
-                    RichText::new(format!(
-                        "Plugin folders (VST 3 and CLAP): {}",
-                        scan::default_dirs()
-                            .iter()
-                            .map(|d| d.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))
-                    .small()
-                    .weak(),
-                );
-                ui.separator();
-                let plugins = self.list.plugins();
-                if plugins.is_empty() && self.scan.is_none() {
-                    ui.label("No VST 3 or CLAP plugins found.");
+                    None => {}
                 }
-                let mut toggles = Vec::new();
-                let mut sandboxes = Vec::new();
-                egui::ScrollArea::vertical()
-                    .max_height(320.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("plugin-list")
-                            .num_columns(5)
-                            .striped(true)
-                            .show(ui, |ui| {
-                                for p in &plugins {
-                                    let mut on = p.enabled;
-                                    if ui
-                                        // ai: manage_plugins
-                                        .checkbox(&mut on, "")
-                                        .on_hover_text("Offer this plugin when adding effects")
-                                        .changed()
-                                    {
-                                        toggles.push((p.class.cid, on));
-                                    }
-                                    ui.label(&p.class.name)
-                                        .on_hover_text(p.bundle.display().to_string());
-                                    ui.label(RichText::new(&p.class.vendor).weak());
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{} · {}",
-                                            if p.class.is_instrument() {
-                                                "Instrument"
-                                            } else {
-                                                "Effect"
-                                            },
-                                            p.format()
-                                        ))
-                                        .weak(),
-                                    );
-                                    let mut sb = p.sandbox;
-                                    egui::ComboBox::from_id_salt((
-                                        "sandbox",
-                                        &p.bundle,
-                                        p.class.cid,
+            });
+            ui.horizontal(|ui| {
+                let mut cap = self.list.editors;
+                ui.label("Plugin windows open at once:");
+                let r = ui
+                    .add(
+                        // ai: manage_plugins
+                        egui::DragValue::new(&mut cap)
+                            .range(0..=32)
+                            .custom_formatter(|v, _| {
+                                if v == 0.0 {
+                                    "no limit".into()
+                                } else {
+                                    format!("{v:.0}")
+                                }
+                            }),
+                    )
+                    .on_hover_text(
+                        "Opening one more closes the one opened longest ago. Plugin \
+                             windows can use a lot of the computer while open.",
+                    );
+                r.accessible_name("Most plugin windows open at once");
+                if cap != self.list.editors {
+                    self.list.editors = cap;
+                    let _ = self.save();
+                }
+            });
+            ui.label(
+                RichText::new(format!(
+                    "Plugin folders (VST 3 and CLAP): {}",
+                    scan::default_dirs()
+                        .iter()
+                        .map(|d| d.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .small()
+                .weak(),
+            );
+            ui.separator();
+            let plugins = self.list.plugins();
+            if plugins.is_empty() && self.scan.is_none() {
+                ui.label("No VST 3 or CLAP plugins found.");
+            }
+            let mut toggles = Vec::new();
+            let mut sandboxes = Vec::new();
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("plugin-list")
+                        .num_columns(5)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for p in &plugins {
+                                let mut on = p.enabled;
+                                if ui
+                                    // ai: manage_plugins
+                                    .checkbox(&mut on, "")
+                                    .on_hover_text("Offer this plugin when adding effects")
+                                    .changed()
+                                {
+                                    toggles.push((p.class.cid, on));
+                                }
+                                ui.label(&p.class.name)
+                                    .on_hover_text(p.bundle.display().to_string());
+                                ui.label(RichText::new(&p.class.vendor).weak());
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} · {}",
+                                        if p.class.is_instrument() {
+                                            "Instrument"
+                                        } else {
+                                            "Effect"
+                                        },
+                                        p.format()
                                     ))
+                                    .weak(),
+                                );
+                                let mut sb = p.sandbox;
+                                egui::ComboBox::from_id_salt(("sandbox", &p.bundle, p.class.cid))
                                     .selected_text(sb.label())
                                     .width(170.0)
                                     .show_ui(ui, |ui| {
@@ -1373,71 +1364,68 @@ impl Effects {
                                              Applies to effects added from now on, or when \
                                              an effect is restarted.",
                                     );
-                                    if sb != p.sandbox {
-                                        sandboxes.push((p.class.cid, sb));
-                                    }
-                                    ui.end_row();
+                                if sb != p.sandbox {
+                                    sandboxes.push((p.class.cid, sb));
                                 }
-                            });
-                        let failures: Vec<(PathBuf, String)> = self
-                            .list
-                            .failures()
-                            .map(|(p, e)| (p.to_owned(), e.to_owned()))
-                            .collect();
-                        if !failures.is_empty() {
-                            ui.add_space(8.0);
-                            ui.strong("Could not be loaded");
-                            for (p, e) in failures {
-                                ui.horizontal(|ui| {
-                                    ui.label(p.file_name().unwrap_or_default().to_string_lossy())
-                                        .on_hover_text(p.display().to_string());
-                                    if ui
-                                        .add_enabled(
-                                            self.scan.is_none(),
-                                            // ai: manage_plugins
-                                            egui::Button::new("Try again"),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.list.forget(&p);
-                                        self.start_scan();
-                                    }
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&e).color(ui.visuals().error_fg_color),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(&e);
-                                });
+                                ui.end_row();
                             }
+                        });
+                    let failures: Vec<(PathBuf, String)> = self
+                        .list
+                        .failures()
+                        .map(|(p, e)| (p.to_owned(), e.to_owned()))
+                        .collect();
+                    if !failures.is_empty() {
+                        ui.add_space(8.0);
+                        ui.strong("Could not be loaded");
+                        for (p, e) in failures {
+                            ui.horizontal(|ui| {
+                                ui.label(p.file_name().unwrap_or_default().to_string_lossy())
+                                    .on_hover_text(p.display().to_string());
+                                if ui
+                                    .add_enabled(
+                                        self.scan.is_none(),
+                                        // ai: manage_plugins
+                                        egui::Button::new("Try again"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.list.forget(&p);
+                                    self.start_scan();
+                                }
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&e).color(ui.visuals().error_fg_color),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(&e);
+                            });
                         }
-                    });
-                for (cid, on) in toggles {
-                    self.list.set_enabled(&cid, on);
-                    let _ = self.save();
-                }
-                for (cid, sb) in sandboxes {
-                    self.list.set_sandbox(&cid, sb);
-                    let _ = self.save();
-                }
-                if self.helper.is_none() {
-                    ui.label(
-                        RichText::new("No helper process here: every plugin runs in the app.")
-                            .small()
-                            .weak(),
-                    );
-                }
-                ui.add_space(4.0);
+                    }
+                });
+            for (cid, on) in toggles {
+                self.list.set_enabled(&cid, on);
+                let _ = self.save();
+            }
+            for (cid, sb) in sandboxes {
+                self.list.set_sandbox(&cid, sb);
+                let _ = self.save();
+            }
+            if self.helper.is_none() {
                 ui.label(
-                    RichText::new(
-                        "Instruments are listed but can't be used until MIDI tracks arrive.",
-                    )
+                    RichText::new("No helper process here: every plugin runs in the app.")
+                        .small()
+                        .weak(),
+                );
+            }
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Instruments are listed but can't be used until MIDI tracks arrive.")
                     .small()
                     .weak(),
-                );
-            });
-        self.show_manager = open;
+            );
+        }
     }
 
     /// The effects window for one track, with the names of its effects

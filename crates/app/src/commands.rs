@@ -239,7 +239,10 @@ pub(crate) enum Cmd {
     ExportMusicXml,
     ExportTextTab,
     PrintNotation,
+    Settings,
     AudioDevice,
+    MidiDevices,
+    PhoneRemote,
     AudioSetup,
     AudioSetupNext,
     AudioSetupSkip,
@@ -447,13 +450,13 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Keep this project's tracks, effects, sections and notes to start from")
     .words("layout set-up"),
-    info(Cmd::Presets, "presets", "File", "Presets…", &[])
+    info(Cmd::Presets, "presets", "Track", "Presets…", &[])
         .hint("Track and effect chain presets, to add as new tracks and put on tracks")
         .words("tone sound library chain load"),
     info(
         Cmd::SaveTrackPreset,
         "save-track-preset",
-        "File",
+        "Track",
         "Save track as preset…",
         &[],
     )
@@ -462,7 +465,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::SaveChainPreset,
         "save-chain-preset",
-        "File",
+        "Track",
         "Save effect chain as preset…",
         &[],
     )
@@ -471,7 +474,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ImportPreset,
         "import-preset",
-        "File",
+        "Track",
         "Import preset…",
         &[],
     )
@@ -606,46 +609,46 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("The instrument tracks' notes as a standard MIDI file")
     .words("notes smf mid"),
-    info(Cmd::AddAudioTrack, "add-audio-track", "Edit", "Add audio track", &[])
+    info(Cmd::AddAudioTrack, "add-audio-track", "Track", "Add audio track", &[])
         .hint("An empty track to record onto, or to drag sound files to")
         .words("new track record"),
-    info(Cmd::AddBus, "add-bus", "Edit", "Add bus", &[])
+    info(Cmd::AddBus, "add-bus", "Track", "Add bus", &[])
         .hint("A bus: tracks can go to it (a group), or send a copy of their audio to it for an effect they share (a return)")
         .words("group return aux"),
-    info(Cmd::AddFolder, "add-folder", "Edit", "Add folder", &[])
+    info(Cmd::AddFolder, "add-folder", "Track", "Add folder", &[])
         .hint("A folder: tracks put in it sit under it and go through its fader and effects")
         .words("group submix"),
-    info(Cmd::AddControlGroup, "add-control-group", "Edit", "Add control group", &[])
+    info(Cmd::AddControlGroup, "add-control-group", "Track", "Add control group", &[])
         .hint("One fader and mute over several tracks, without summing their audio")
         .words("vca link faders"),
     info(
         Cmd::AddInstrumentTrack,
         "add-instrument-track",
-        "Edit",
+        "Track",
         "Add instrument track",
         &[],
     )
     .hint("A track that plays notes through an instrument, from a MIDI keyboard or the note editor")
     .words("midi synth notes"),
-    info(Cmd::AddInstrument(0), "add-synth-track", "Edit", "Add synth track", &[])
+    info(Cmd::AddInstrument(0), "add-synth-track", "Track", "Add synth track", &[])
         .hint("An instrument track with the synth: two oscillators, a filter with its own envelope, an LFO")
         .words("instrument poly unison pad lead bass"),
     info(
         Cmd::AddInstrument(5),
         "add-patch-twenty-track",
-        "Edit",
+        "Track",
         "Add Patch Twenty track",
         &[],
     )
     .hint("An instrument track with the semi-modular monosynth: two oscillators through a screaming high-pass and low-pass, two envelopes, patch cords, a guitar input")
     .words("instrument mono semi-modular lead bass drone acid guitar filter"),
-    info(Cmd::AddInstrument(1), "add-sampler-track", "Edit", "Add sampler track", &[])
+    info(Cmd::AddInstrument(1), "add-sampler-track", "Track", "Add sampler track", &[])
         .hint("An instrument track that plays your sound files over the keys")
         .words("instrument multisample zones keys"),
     info(
         Cmd::AddInstrument(2),
         "add-drum-sampler-track",
-        "Edit",
+        "Track",
         "Add drum sampler track",
         &[],
     )
@@ -654,7 +657,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(3),
         "add-drum-machine-track",
-        "Edit",
+        "Track",
         "Add drum machine track",
         &[],
     )
@@ -663,7 +666,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(4),
         "add-slicer-track",
-        "Edit",
+        "Track",
         "Add loop slicer track",
         &[],
     )
@@ -672,7 +675,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(6),
         "add-oh-one-track",
-        "Edit",
+        "Track",
         "Add Oh-One track",
         &[],
     )
@@ -681,7 +684,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(7),
         "add-acid-three-track",
-        "Edit",
+        "Track",
         "Add Acid Three track",
         &[],
     )
@@ -690,7 +693,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(8),
         "add-model-mono-track",
-        "Edit",
+        "Track",
         "Add Model Mono track",
         &[],
     )
@@ -699,7 +702,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(9),
         "add-june-track",
-        "Edit",
+        "Track",
         "Add June track",
         &[],
     )
@@ -708,7 +711,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(10),
         "add-eighty-track",
-        "Edit",
+        "Track",
         "Add Eighty track",
         &[],
     )
@@ -717,7 +720,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(11),
         "add-oracle-track",
-        "Edit",
+        "Track",
         "Add Oracle track",
         &[],
     )
@@ -726,7 +729,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(12),
         "add-blue-wave-track",
-        "Edit",
+        "Track",
         "Add Blue Wave track",
         &[],
     )
@@ -735,7 +738,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddInstrument(13),
         "add-lucky-seven-track",
-        "Edit",
+        "Track",
         "Add Lucky Seven track",
         &[],
     )
@@ -744,7 +747,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::LoadBank,
         "load-synth-bank",
-        "Edit",
+        "Track",
         "Load an FM sound bank…",
         &[],
     )
@@ -762,7 +765,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::SliceNotes,
         "slice-notes",
-        "Edit",
+        "Track",
         "Make notes that play the loop",
         &[],
     )
@@ -771,7 +774,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::LoadSfz,
         "load-sfz",
-        "Edit",
+        "Track",
         "Load an SFZ sample library…",
         &[],
     )
@@ -780,7 +783,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::UnloadSfz,
         "unload-sfz",
-        "Edit",
+        "Track",
         "Back to the sampler's own zones",
         &[],
     )
@@ -789,7 +792,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NormaliseZones,
         "normalise-zones",
-        "Edit",
+        "Track",
         "Normalise the sampler's zones",
         &[],
     )
@@ -798,7 +801,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PadBuses,
         "pad-buses",
-        "Edit",
+        "Track",
         "Put each drum pad on a bus",
         &[],
     )
@@ -807,7 +810,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::InstrumentOutputBuses,
         "instrument-output-buses",
-        "Edit",
+        "Track",
         "Put each plugin instrument output on a bus",
         &[],
     )
@@ -885,16 +888,16 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::MidiLearn, "midi-learn", "Notes", "MIDI learn…", &[])
         .hint("Tie a knob, fader or pedal on a MIDI device to a setting")
         .words("controller map knob fader assign"),
-    info(Cmd::Instrument, "instrument", "Notes", "Instrument…", &[])
+    info(Cmd::Instrument, "instrument", "Track", "Instrument…", &[])
         .hint("The instrument track's instrument, or its layers, and their settings")
         .words("synth sound layers"),
-    info(Cmd::AddLayer, "add-layer", "Notes", "Add an instrument layer", &[])
+    info(Cmd::AddLayer, "add-layer", "Track", "Add an instrument layer", &[])
         .hint("Another instrument playing the instrument track's notes: for a keyboard split or a doubled sound")
         .words("layered instruments stack split zone double rack"),
     info(
         Cmd::SingleInstrument,
         "single-instrument",
-        "Notes",
+        "Track",
         "Back to one instrument",
         &[],
     )
@@ -909,13 +912,13 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Program the steps of a drum pattern: swing, chance, repeats and fills")
     .words("step sequencer drums beat euclidean ratchet probability swing"),
-    info(Cmd::AddPattern, "add-pattern", "Edit", "Add drum pattern", &[])
+    info(Cmd::AddPattern, "add-pattern", "Clip", "Add drum pattern", &[])
         .hint("A clip playing a new drum pattern at the playhead, on the selected clip's instrument track")
         .words("step sequencer beat drums pattern clip"),
     info(
         Cmd::MakePatternUnique,
         "make-pattern-unique",
-        "Edit",
+        "Clip",
         "Make pattern unique",
         &[],
     )
@@ -924,7 +927,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PatternToNotes,
         "pattern-to-notes",
-        "Edit",
+        "Clip",
         "Convert pattern to plain notes",
         &[],
     )
@@ -972,7 +975,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::KeepNotes,
         "keep-notes",
-        "Transport",
+        "Notes",
         "Keep the notes I just played",
         &[],
     )
@@ -1008,7 +1011,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Split,
         "split",
-        "Edit",
+        "Clip",
         "Split at playhead",
         &[key(NONE, Key::S)],
     )
@@ -1028,7 +1031,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Marker,
         "marker",
-        "Edit",
+        "Song",
         "Mark a section",
         &[key(NONE, Key::M)],
     )
@@ -1038,7 +1041,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::InsertBars,
         "insert-bars",
-        "Edit",
+        "Song",
         "Insert bars at the loop",
         &[],
     )
@@ -1047,7 +1050,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::DeleteBars,
         "delete-bars",
-        "Edit",
+        "Song",
         "Delete the loop's bars",
         &[],
     )
@@ -1056,19 +1059,19 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::TimeWindow,
         "insert-delete-bars",
-        "Edit",
+        "Song",
         "Insert or delete bars…",
         &[],
     )
     .hint("Put in empty bars, or take bars out, anywhere in the song")
     .words("insert delete time add remove bars gap shift"),
-    info(Cmd::Sections, "sections", "Edit", "Sections…", &[])
+    info(Cmd::Sections, "sections", "Song", "Sections…", &[])
         .hint("Loop, copy, move or delete a section, and try the sections in another order")
         .words("arrange arranger arrangement verse chorus solo bridge song parts form"),
     info(
         Cmd::LoopSection,
         "loop-section",
-        "Edit",
+        "Song",
         "Practise this section",
         &[],
     )
@@ -1077,7 +1080,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::DuplicateSection,
         "duplicate-section",
-        "Edit",
+        "Song",
         "Copy this section after itself",
         &[],
     )
@@ -1086,7 +1089,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::DeleteSection,
         "delete-section",
-        "Edit",
+        "Song",
         "Delete this section",
         &[],
     )
@@ -1095,7 +1098,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::SectionEarlier,
         "section-earlier",
-        "Edit",
+        "Song",
         "Move this section earlier",
         &[],
     )
@@ -1104,7 +1107,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::SectionLater,
         "section-later",
-        "Edit",
+        "Song",
         "Move this section later",
         &[],
     )
@@ -1113,7 +1116,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddToPlayOrder,
         "add-to-play-order",
-        "Edit",
+        "Song",
         "Add this section to the play order",
         &[],
     )
@@ -1122,7 +1125,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PlayOrder,
         "play-order",
-        "Transport",
+        "Song",
         "Play the sections in the play order",
         &[],
     )
@@ -1131,7 +1134,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::WriteOrder,
         "write-play-order",
-        "Edit",
+        "Song",
         "Write the play order into the song",
         &[],
     )
@@ -1140,7 +1143,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ClearPlayOrder,
         "clear-play-order",
-        "Edit",
+        "Song",
         "Clear the play order",
         &[],
     )
@@ -1148,7 +1151,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::HitPoint,
         "hit-point",
-        "Edit",
+        "Song",
         "Add a hit point",
         &[key(NONE, Key::H)],
     )
@@ -1157,7 +1160,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::HitPoints,
         "hit-points",
-        "Edit",
+        "Song",
         "Timecode and hit points…",
         &[],
     )
@@ -1169,7 +1172,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::TimecodeFromFilm,
         "timecode-from-film",
-        "Edit",
+        "Song",
         "Timecode from the film",
         &[],
     )
@@ -1178,7 +1181,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FrameForward,
         "frame-forward",
-        "Transport",
+        "Song",
         "On a frame",
         &[key(NONE, Key::Period)],
     )
@@ -1187,7 +1190,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FrameBack,
         "frame-back",
-        "Transport",
+        "Song",
         "Back a frame",
         &[key(NONE, Key::Comma)],
     )
@@ -1196,7 +1199,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NextHitPoint,
         "next-hit-point",
-        "Transport",
+        "Song",
         "Next hit point",
         &[key(NONE, Key::CloseBracket)],
     )
@@ -1205,7 +1208,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PrevHitPoint,
         "previous-hit-point",
-        "Transport",
+        "Song",
         "Previous hit point",
         &[key(NONE, Key::OpenBracket)],
     )
@@ -1232,7 +1235,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Crossfade,
         "crossfade",
-        "Edit",
+        "Clip",
         "Crossfade where clips meet",
         &[key(NONE, Key::X)],
     )
@@ -1241,7 +1244,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ClipFades,
         "clip-fades",
-        "Edit",
+        "Clip",
         "Fades and volume…",
         &[key(NONE, Key::F)],
     )
@@ -1267,13 +1270,13 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Paste the copied clips at the playhead, each on the track it came from")
     .words("duplicate clipboard")
     .everyday(),
-    info(Cmd::UnlinkClips, "unlink-clips", "Edit", "Unlink clips", &[])
+    info(Cmd::UnlinkClips, "unlink-clips", "Clip", "Unlink clips", &[])
         .hint(
             "Break the selected clips off from their linked copies, so each can be changed on \
              its own",
         )
         .words("make unique instance copy linked alias ghost independent"),
-    info(Cmd::Bounce, "bounce", "Edit", "Bounce to a new track", &[])
+    info(Cmd::Bounce, "bounce", "Clip", "Bounce to a new track", &[])
         .hint(
             "The selected clips through their track's effects, as new audio on a track beside \
              it; they are muted where they are",
@@ -1282,7 +1285,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::TrackVersions,
         "track-versions",
-        "Edit",
+        "Track",
         "Track versions…",
         &[],
     )
@@ -1291,7 +1294,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NewVersion,
         "new-track-version",
-        "Edit",
+        "Track",
         "New empty track version",
         &[],
     )
@@ -1300,7 +1303,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::DuplicateVersion,
         "duplicate-track-version",
-        "Edit",
+        "Track",
         "Duplicate track version",
         &[],
     )
@@ -1309,7 +1312,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NextVersion,
         "next-track-version",
-        "Edit",
+        "Track",
         "Next track version",
         &[],
     )
@@ -1318,7 +1321,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PrevVersion,
         "previous-track-version",
-        "Edit",
+        "Track",
         "Previous track version",
         &[],
     )
@@ -1327,42 +1330,42 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::DeleteVersion,
         "delete-track-version",
-        "Edit",
+        "Track",
         "Delete track version",
         &[],
     )
     .hint("Delete the version the track plays; the one before it plays instead")
     .words("alternative alternate playlist remove"),
-    info(Cmd::NextChain, "next-chain", "Edit", "Switch to the next chain", &[])
+    info(Cmd::NextChain, "next-chain", "Track", "Switch to the next chain", &[])
         .hint(
             "Hear the next chain of the track's switching container, such as the driven \
              amp after the clean one",
         )
         .words("amp channel clean driven drive footswitch toggle switch container"),
-    info(Cmd::HearChain(0), "hear-chain-1", "Edit", "Hear chain 1", &[])
+    info(Cmd::HearChain(0), "hear-chain-1", "Track", "Hear chain 1", &[])
         .hint("Hear the first chain of the track's switching container")
         .words("amp channel clean switch container"),
-    info(Cmd::HearChain(1), "hear-chain-2", "Edit", "Hear chain 2", &[])
+    info(Cmd::HearChain(1), "hear-chain-2", "Track", "Hear chain 2", &[])
         .hint("Hear the second chain of the track's switching container")
         .words("amp channel driven drive switch container"),
-    info(Cmd::HearChain(2), "hear-chain-3", "Edit", "Hear chain 3", &[])
+    info(Cmd::HearChain(2), "hear-chain-3", "Track", "Hear chain 3", &[])
         .hint("Hear the third chain of the track's switching container")
         .words("amp channel switch container"),
-    info(Cmd::HearChain(3), "hear-chain-4", "Edit", "Hear chain 4", &[])
+    info(Cmd::HearChain(3), "hear-chain-4", "Track", "Hear chain 4", &[])
         .hint("Hear the fourth chain of the track's switching container")
         .words("amp channel switch container"),
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
-    info(Cmd::FixTiming, "fix-timing", "Edit", "Fix timing…", &[])
+    info(Cmd::FixTiming, "fix-timing", "Clip", "Fix timing…", &[])
         .hint("Cut the selected clips at each note and move the notes toward the grid")
         .words("quantise quantize tighten align beat slice transient attack groove"),
-    info(Cmd::FollowTempo, "follow-tempo", "Edit", "Follow tempo", &[])
+    info(Cmd::FollowTempo, "follow-tempo", "Clip", "Follow tempo", &[])
         .hint(
             "The selected clips keep to the song's beats: they stretch with the tempo map              and the project tempo, live and when exporting",
         )
         .words("musical time warp stretch elastic tempo sync"),
-    info(Cmd::ClipTempo, "clip-tempo", "Edit", "Clip tempo…", &[])
+    info(Cmd::ClipTempo, "clip-tempo", "Clip", "Clip tempo…", &[])
         .hint("The tempo the selected clips were played at, which they follow the song from")
         .words("original bpm warp stretch loop"),
     info(Cmd::PitchEditor, "pitch-editor", "View", "Pitch editor", &[])
@@ -1371,7 +1374,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FindPitchNotes,
         "find-pitch-notes",
-        "Edit",
+        "Clip",
         "Find notes to edit",
         &[],
     )
@@ -1380,7 +1383,7 @@ pub(crate) const COMMANDS: &[Info] = &[
          pitch editor; notes found again keep the pitch edits of those they replace",
     )
     .words("pitch detect analyse vocal melody notes tune"),
-    info(Cmd::FindLyrics, "find-lyrics", "Edit", "Find the words", &[])
+    info(Cmd::FindLyrics, "find-lyrics", "Clip", "Find the words", &[])
         .hint(
             "Read the words sung in the selected audio clip, with when each is sung, using a \
              speech model on this computer (downloaded the first time, after asking)",
@@ -1389,7 +1392,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PitchNotesUp,
         "pitch-notes-up",
-        "Edit",
+        "Clip",
         "Notes up a semitone",
         &[],
     )
@@ -1398,7 +1401,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PitchNotesDown,
         "pitch-notes-down",
-        "Edit",
+        "Clip",
         "Notes down a semitone",
         &[],
     )
@@ -1407,7 +1410,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::SnapPitchNotes,
         "snap-pitch-notes",
-        "Edit",
+        "Clip",
         "Snap notes to pitch",
         &[],
     )
@@ -1416,7 +1419,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::SnapPitchNotesToKey,
         "snap-pitch-notes-to-key",
-        "Edit",
+        "Clip",
         "Snap notes to the key",
         &[],
     )
@@ -1428,7 +1431,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FlattenPitchDrift,
         "flatten-pitch-drift",
-        "Edit",
+        "Clip",
         "Flatten pitch drift",
         &[],
     )
@@ -1437,19 +1440,19 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ResetPitchNotes,
         "reset-pitch-notes",
-        "Edit",
+        "Clip",
         "Notes as sung",
         &[],
     )
     .hint("Take every pitch edit off the chosen notes (or all of the clip's)")
     .words("pitch reset original undo correction"),
-    info(Cmd::TransposeClips, "transpose-clips", "Edit", "Transpose clips…", &[])
+    info(Cmd::TransposeClips, "transpose-clips", "Clip", "Transpose clips…", &[])
         .hint("Move the selected audio clips' pitch by semitones and cents, keeping their timing")
         .words("pitch shift key change semitone cents formant tune"),
     info(
         Cmd::TransposeUp,
         "transpose-up",
-        "Edit",
+        "Clip",
         "Transpose clips up a semitone",
         &[],
     )
@@ -1458,7 +1461,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::TransposeDown,
         "transpose-down",
-        "Edit",
+        "Clip",
         "Transpose clips down a semitone",
         &[],
     )
@@ -1467,7 +1470,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ResetTranspose,
         "reset-transpose",
-        "Edit",
+        "Clip",
         "Clips back to their own pitch",
         &[],
     )
@@ -1476,7 +1479,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::MoveFormants,
         "move-formants",
-        "Edit",
+        "Clip",
         "Move formants with the pitch",
         &[],
     )
@@ -1488,7 +1491,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::StretchMarkersFromAttacks,
         "stretch-markers-from-attacks",
-        "Edit",
+        "Clip",
         "Stretch markers from attacks",
         &[],
     )
@@ -1497,7 +1500,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AddStretchMarker,
         "add-stretch-marker",
-        "Edit",
+        "Clip",
         "Add stretch marker at playhead",
         &[],
     )
@@ -1506,19 +1509,19 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ClearStretchMarkers,
         "clear-stretch-markers",
-        "Edit",
+        "Clip",
         "Clear stretch markers",
         &[],
     )
     .hint("Take every stretch marker off the selected clips")
     .words("warp marker remove"),
-    info(Cmd::QuantiseAudio, "quantise-audio", "Edit", "Quantise audio…", &[])
+    info(Cmd::QuantiseAudio, "quantise-audio", "Clip", "Quantise audio…", &[])
         .hint("Move the selected clips' attacks toward the grid by stretching, with no cuts")
         .words("quantize warp tighten align beat transient"),
     info(
         Cmd::QuantiseAudioApply,
         "quantise-audio-apply",
-        "Edit",
+        "Clip",
         "Quantise audio now",
         &[],
     )
@@ -1527,7 +1530,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::TempoFromClip,
         "tempo-from-clip",
-        "Edit",
+        "Clip",
         "Tempo from performance…",
         &[],
     )
@@ -1536,19 +1539,19 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::TempoFromClipApply,
         "tempo-from-clip-apply",
-        "Edit",
+        "Clip",
         "Tempo from performance now",
         &[],
     )
     .hint("Set the song's tempo from the selected clip with the window's current settings")
     .words("tempo map detect"),
-    info(Cmd::BeatGrid, "beat-grid", "Edit", "Find beat grid…", &[])
+    info(Cmd::BeatGrid, "beat-grid", "Clip", "Find beat grid…", &[])
         .hint("The tempos the selected clip's notes fit, and where its downbeat falls: for a voice alone")
         .words("tempo detect bpm a cappella vocal downbeat beat grid"),
     info(
         Cmd::AnchorToBeat,
         "anchor-to-beat",
-        "Edit",
+        "Clip",
         "Line up playhead point with nearest beat",
         &[],
     )
@@ -1557,7 +1560,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AnchorToBar,
         "anchor-to-bar",
-        "Edit",
+        "Clip",
         "Line up playhead point with nearest bar",
         &[],
     )
@@ -1595,7 +1598,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Snap,
         "snap",
-        "View",
+        "Edit",
         "Snap on or off",
         &[key(NONE, Key::N)],
     )
@@ -1605,7 +1608,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Ripple,
         "ripple",
-        "View",
+        "Edit",
         "Ripple editing on or off",
         &[],
     )
@@ -1614,7 +1617,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::VolumeLines,
         "volume-lines",
-        "View",
+        "Edit",
         "Volume lines on or off",
         &[],
     )
@@ -1623,7 +1626,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::GroupEdit,
         "group-edit",
-        "View",
+        "Edit",
         "Group editing on or off",
         &[key(NONE, Key::G)],
     )
@@ -1632,7 +1635,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PlayStop,
         "play",
-        "Transport",
+        "Song",
         "Play or stop",
         &[key(NONE, Key::Space)],
     )
@@ -1641,7 +1644,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ToStart,
         "to-start",
-        "Transport",
+        "Song",
         "Back to the start",
         &[key(NONE, Key::Home)],
     )
@@ -1650,7 +1653,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Record,
         "record",
-        "Transport",
+        "Song",
         "Record on or off",
         &[key(NONE, Key::R)],
     )
@@ -1659,7 +1662,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Loop,
         "loop",
-        "Transport",
+        "Song",
         "Loop on or off",
         &[key(NONE, Key::L)],
     )
@@ -1668,7 +1671,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Metronome,
         "metronome",
-        "Transport",
+        "Song",
         "Metronome on or off",
         &[key(NONE, Key::K)],
     )
@@ -1677,7 +1680,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::CountIn,
         "count-in",
-        "Transport",
+        "Song",
         "Count-in on or off",
         &[key(NONE, Key::C)],
     )
@@ -1700,16 +1703,16 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::Talkback,
         "talkback",
-        "Transport",
+        "Song",
         "Talkback on or off",
         &[],
     )
     .hint("Talk to the headphones through the talkback microphone")
     .words("talk microphone headphones cue"),
-    info(Cmd::Dim, "dim", "Transport", "Dim the speakers", &[])
+    info(Cmd::Dim, "dim", "Song", "Dim the speakers", &[])
         .hint("Turn the speakers down, or back up")
         .words("quiet control room monitor"),
-    info(Cmd::Mono, "mono", "Transport", "Mono on or off", &[])
+    info(Cmd::Mono, "mono", "Song", "Mono on or off", &[])
         .hint("Hear the speakers in mono, to check the mix")
         .words("sum mono check control room"),
     info(Cmd::TakeLanes, "take-lanes", "View", "Take lanes", &[])
@@ -1718,14 +1721,14 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Video, "video", "View", "Video", &[])
         .hint("Show or hide the video at the playhead")
         .words("picture film movie score scoring clip frames watch"),
-    info(Cmd::Fretboard, "fretboard", "View", "Fretboard", &[])
+    info(Cmd::Fretboard, "fretboard", "Practice", "Fretboard", &[])
         .hint("Show or hide a guitar or bass neck with the notes playing, a scale or a chord")
         .words("guitar bass neck frets strings scale mode chord arpeggio capo tuning")
         .everyday(),
     info(
         Cmd::FretboardView,
         "fretboard-view",
-        "Fretboard",
+        "Practice",
         "Next fretboard view",
         &[],
     )
@@ -1734,7 +1737,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardRootUp,
         "fretboard-root-up",
-        "Fretboard",
+        "Practice",
         "Fretboard root up a semitone",
         &[],
     )
@@ -1743,7 +1746,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardRootDown,
         "fretboard-root-down",
-        "Fretboard",
+        "Practice",
         "Fretboard root down a semitone",
         &[],
     )
@@ -1752,7 +1755,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardScale,
         "fretboard-scale",
-        "Fretboard",
+        "Practice",
         "Next scale or mode on the fretboard",
         &[],
     )
@@ -1761,7 +1764,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardChord,
         "fretboard-chord",
-        "Fretboard",
+        "Practice",
         "Next chord on the fretboard",
         &[],
     )
@@ -1770,7 +1773,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardSongKey,
         "fretboard-song-key",
-        "Fretboard",
+        "Practice",
         "Fretboard follows the song's key",
         &[],
     )
@@ -1779,7 +1782,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardTuning,
         "fretboard-tuning",
-        "Fretboard",
+        "Practice",
         "Next tuning on the fretboard",
         &[],
     )
@@ -1788,7 +1791,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardCapoUp,
         "fretboard-capo-up",
-        "Fretboard",
+        "Practice",
         "Capo up a fret",
         &[],
     )
@@ -1797,7 +1800,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardCapoDown,
         "fretboard-capo-down",
-        "Fretboard",
+        "Practice",
         "Capo down a fret",
         &[],
     )
@@ -1806,7 +1809,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardLabels,
         "fretboard-labels",
-        "Fretboard",
+        "Practice",
         "Next fretboard labels",
         &[],
     )
@@ -1815,7 +1818,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardPositionUp,
         "fretboard-position-up",
-        "Fretboard",
+        "Practice",
         "Hand position up a fret",
         &[],
     )
@@ -1824,7 +1827,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardPositionDown,
         "fretboard-position-down",
-        "Fretboard",
+        "Practice",
         "Hand position down a fret",
         &[],
     )
@@ -1833,7 +1836,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardType,
         "fretboard-type",
-        "Fretboard",
+        "Practice",
         "Type on the fretboard",
         &[],
     )
@@ -1842,25 +1845,25 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::FretboardHear,
         "fretboard-hear",
-        "Fretboard",
+        "Practice",
         "Hear notes entered on the fretboard",
         &[],
     )
     .hint("Play each note entered on the fretboard on the track's instrument, or stop")
     .words("guitar neck sound audition listen"),
-    info(Cmd::FretLeft, "fret-left", "Fretboard", "Fretboard box down a fret", &[])
+    info(Cmd::FretLeft, "fret-left", "Practice", "Fretboard box down a fret", &[])
         .hint("Move the fretboard's typing box towards the nut")
         .words("guitar neck cursor"),
-    info(Cmd::FretRight, "fret-right", "Fretboard", "Fretboard box up a fret", &[])
+    info(Cmd::FretRight, "fret-right", "Practice", "Fretboard box up a fret", &[])
         .hint("Move the fretboard's typing box towards the body")
         .words("guitar neck cursor"),
-    info(Cmd::FretUp, "fret-up", "Fretboard", "Fretboard box to the string above", &[])
+    info(Cmd::FretUp, "fret-up", "Practice", "Fretboard box to the string above", &[])
         .hint("Move the fretboard's typing box to the next higher string")
         .words("guitar neck cursor"),
-    info(Cmd::FretDown, "fret-down", "Fretboard", "Fretboard box to the string below", &[])
+    info(Cmd::FretDown, "fret-down", "Practice", "Fretboard box to the string below", &[])
         .hint("Move the fretboard's typing box to the next lower string")
         .words("guitar neck cursor"),
-    info(Cmd::FretEnter, "fret-enter", "Fretboard", "Enter the fretboard box's note", &[])
+    info(Cmd::FretEnter, "fret-enter", "Practice", "Enter the fretboard box's note", &[])
         .hint("Enter the note under the fretboard's box at the playhead")
         .words("guitar neck write"),
     info(
@@ -1990,7 +1993,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[])
         .words("tune pitch")
         .everyday(),
-    info(Cmd::Meters, "meters", "Practice", "Meters…", &[])
+    info(Cmd::Meters, "meters", "View", "Meters…", &[])
         .words("loudness lufs level peak rms spectrum phase"),
     info(
         Cmd::LessonNotes,
@@ -2025,6 +2028,10 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .words("reset speed transpose 100%")
     .everyday(),
+    info(Cmd::Settings, "settings", "File", "Settings…", &[key(CTRL, Key::Comma)])
+        .hint("The audio device, MIDI, plugins, keys, theme and more, in one window")
+        .words("preferences options setup configure")
+        .everyday(),
     info(
         Cmd::AudioDevice,
         "audio-device",
@@ -2034,6 +2041,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .words("interface sound card input output latency")
     .everyday(),
+    info(
+        Cmd::MidiDevices,
+        "midi-devices",
+        "Settings",
+        "MIDI devices…",
+        &[],
+    )
+    .hint("The keyboards and controllers that play and record notes")
+    .words("keyboard controller input midi in"),
+    info(
+        Cmd::PhoneRemote,
+        "phone-remote",
+        "Settings",
+        "Phone remote…",
+        &[],
+    )
+    .hint("Record and run the transport from your phone")
+    .words("mobile tablet wireless control"),
     info(
         Cmd::AudioSetup,
         "audio-setup",
@@ -2173,7 +2198,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::KeyCommands,
         "key-commands",
-        "Settings",
+        "Help",
         "Key commands…",
         &[],
     )
@@ -2198,16 +2223,16 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("Turn the assistants' server off and forget what each may do")
     .words("agent mcp ai halt off")
     .typing(),
-    info(Cmd::Theme, "theme", "Settings", "Theme…", &[])
+    info(Cmd::Theme, "theme", "View", "Theme…", &[])
         .hint("Choose how the app looks on this computer")
         .words("look colours colors appearance skin dark light")
         .everyday(),
-    info(Cmd::NextTheme, "next-theme", "Settings", "Next theme", &[])
+    info(Cmd::NextTheme, "next-theme", "View", "Next theme", &[])
         .words("look colours colors appearance skin switch"),
     info(
         Cmd::LightDark,
         "light-dark",
-        "Settings",
+        "View",
         "Switch light and dark",
         &[],
     )
@@ -2266,7 +2291,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NotationLane,
         "notation-lane",
-        "Notation",
+        "Notes",
         "Show notation lane",
         &[],
     )
@@ -2276,7 +2301,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NotationView,
         "notation-view",
-        "Notation",
+        "Notes",
         "Next notation view",
         &[],
     )
@@ -2286,19 +2311,19 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::NotationSettings,
         "notation-settings",
-        "Notation",
+        "Notes",
         "Notation lane…",
         &[],
     )
     .hint("Tuning, capo, staff and rhythm for the track's notation lane")
     .words("tab tuning capo drop strings bass guitar"),
-    info(Cmd::TabEntry, "tab-entry", "Notation", "Type tab", &[key(NONE, Key::T)])
+    info(Cmd::TabEntry, "tab-entry", "Notes", "Type tab", &[key(NONE, Key::T)])
         .hint("Type fret numbers onto the tab: arrows move, Delete clears, Escape stops")
         .words("tablature enter fret string write"),
     info(
         Cmd::StringUp,
         "string-up",
-        "Notation",
+        "Notes",
         "Move notes to the string above",
         &[],
     )
@@ -2307,7 +2332,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::StringDown,
         "string-down",
-        "Notation",
+        "Notes",
         "Move notes to the string below",
         &[],
     )
@@ -2316,7 +2341,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::AssignFrets,
         "assign-frets",
-        "Notation",
+        "Notes",
         "Choose strings and frets",
         &[],
     )
@@ -2325,7 +2350,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PracticeMutePart,
         "practice-mute-part",
-        "Notation",
+        "Practice",
         "Practice-mute this part",
         &[],
     )
@@ -2364,7 +2389,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ExportMusicXml,
         "export-musicxml",
-        "File",
+        "Notes",
         "Export notation as MusicXML…",
         &[],
     )
@@ -2373,7 +2398,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::ExportTextTab,
         "export-text-tab",
-        "File",
+        "Notes",
         "Export tab as text…",
         &[],
     )
@@ -2382,7 +2407,7 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(
         Cmd::PrintNotation,
         "print-notation",
-        "File",
+        "Notes",
         "Print notation to PDF…",
         &[],
     )
@@ -2713,12 +2738,12 @@ struct Palette {
 /// The key commands window.
 #[derive(Default)]
 pub(crate) struct Editor {
-    open: bool,
+    pub(crate) open: bool,
     filter: String,
     /// Waiting for a key to give this command.
     pub(crate) capturing: Option<Cmd>,
     /// A key pressed for the first command that the second has.
-    clash: Option<(Cmd, Shortcut, Cmd)>,
+    pub(crate) clash: Option<(Cmd, Shortcut, Cmd)>,
     note: Option<String>,
 }
 
@@ -2990,95 +3015,86 @@ impl Commands {
 
     /// Settings → Key commands: every command's keys, to change.
     /// In the simpler mode (`simple`), advanced commands say so.
-    fn editor_window(&mut self, ctx: &egui::Context, simple: bool) {
-        let mut open = self.editor.open;
-        egui::Window::new("Key commands")
-            .open(&mut open)
-            .default_width(560.0)
-            .default_height(520.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.editor.filter)
-                            .hint_text("Find a command")
-                            .desired_width(240.0),
-                    )
-                    .accessible_name("Find a command to change");
-                    if ui
-                        .button("Reset all")
-                        .on_hover_text("Every command back to its keys out of the box")
-                        .clicked()
-                    {
-                        self.keymap = Keymap::default();
-                        self.editor.note = Some("Every command has its first keys again.".into());
+    /// Settings → Key commands.
+    pub(crate) fn editor_page(&mut self, ui: &mut egui::Ui, simple: bool) {
+        {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.editor.filter)
+                        .hint_text("Find a command")
+                        .desired_width(240.0),
+                )
+                .accessible_name("Find a command to change");
+                if ui
+                    .button("Reset all")
+                    .on_hover_text("Every command back to its keys out of the box")
+                    .clicked()
+                {
+                    self.keymap = Keymap::default();
+                    self.editor.note = Some("Every command has its first keys again.".into());
+                    self.save();
+                }
+            });
+            if let Some(cmd) = self.editor.capturing {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!(
+                        "Press the key for {}, with Ctrl, Alt or Shift if you like. Esc to stop.",
+                        cmd.info().name
+                    ),
+                );
+            }
+            if let Some((cmd, s, other)) = self.editor.clash {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "{} is already {}. Move it to {}?",
+                        s.text(),
+                        other.info().name,
+                        cmd.info().name
+                    ));
+                    if ui.button("Move it").clicked() {
+                        self.keymap.assign(cmd, s);
+                        self.editor.clash = None;
+                        self.editor.note = Some(format!(
+                            "{} is now {}, and no longer {}.",
+                            s.text(),
+                            cmd.info().name,
+                            other.info().name
+                        ));
                         self.save();
                     }
+                    if ui.button("Leave it").clicked() {
+                        self.editor.clash = None;
+                    }
                 });
-                if let Some(cmd) = self.editor.capturing {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!(
-                            "Press the key for {}, with Ctrl, Alt or Shift if you like. Esc to stop.",
-                            cmd.info().name
-                        ),
-                    );
-                }
-                if let Some((cmd, s, other)) = self.editor.clash {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(format!(
-                            "{} is already {}. Move it to {}?",
-                            s.text(),
-                            other.info().name,
-                            cmd.info().name
-                        ));
-                        if ui.button("Move it").clicked() {
-                            self.keymap.assign(cmd, s);
-                            self.editor.clash = None;
-                            self.editor.note = Some(format!(
-                                "{} is now {}, and no longer {}.",
-                                s.text(),
-                                cmd.info().name,
-                                other.info().name
-                            ));
-                            self.save();
-                        }
-                        if ui.button("Leave it").clicked() {
-                            self.editor.clash = None;
-                        }
-                    });
-                }
-                if let Some(n) = &self.editor.note {
-                    ui.label(n);
-                }
-                ui.separator();
-                let shown = search_named(&self.editor.filter, &self.names);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    egui::Grid::new("key commands")
-                        .striped(true)
-                        .min_col_width(60.0)
-                        .num_columns(4)
-                        .show(ui, |ui| {
-                            for i in COMMANDS.iter().filter(|i| shown.contains(&i.cmd)) {
-                                self.editor_row(ui, i, simple);
-                                ui.end_row();
-                            }
-                        });
-                    ui.add_space(8.0);
-                    ui.strong("Keys that can't be changed");
-                    egui::Grid::new("fixed keys").striped(true).show(ui, |ui| {
-                        for (keys, what) in FIXED {
-                            ui.strong(*keys);
-                            ui.label(*what);
+            }
+            if let Some(n) = &self.editor.note {
+                ui.label(n);
+            }
+            ui.separator();
+            let shown = search_named(&self.editor.filter, &self.names);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("key commands")
+                    .striped(true)
+                    .min_col_width(60.0)
+                    .num_columns(4)
+                    .show(ui, |ui| {
+                        for i in COMMANDS.iter().filter(|i| shown.contains(&i.cmd)) {
+                            self.editor_row(ui, i, simple);
                             ui.end_row();
                         }
                     });
-                    ui.weak("Letters, Space and the like work when no text field has the keyboard.");
+                ui.add_space(8.0);
+                ui.strong("Keys that can't be changed");
+                egui::Grid::new("fixed keys").striped(true).show(ui, |ui| {
+                    for (keys, what) in FIXED {
+                        ui.strong(*keys);
+                        ui.label(*what);
+                        ui.end_row();
+                    }
                 });
+                ui.weak("Letters, Space and the like work when no text field has the keyboard.");
             });
-        self.editor.open = open;
-        if !open {
-            self.editor.capturing = None;
-            self.editor.clash = None;
         }
     }
 
@@ -3162,12 +3178,18 @@ impl App {
             self.run(ctx, cmd);
         }
         if let Some(cmd) = held.first() {
-            self.message = Some(format!(
-                "{} is left out of the simpler mode: it is under More in the {} menu, \
-                 or turn the simpler mode off in View.",
-                self.commands.name(*cmd).trim_end_matches('…'),
-                cmd.info().group
-            ));
+            let name = self.commands.name(*cmd).trim_end_matches('…');
+            self.message = Some(match crate::menus::menu_of(*cmd) {
+                Some(menu) => format!(
+                    "{name} is left out of the simpler mode: it is under More in the {menu} \
+                     menu, or turn the simpler mode off in View."
+                ),
+                None => format!(
+                    "{name} is left out of the simpler mode: it is in {}, or turn the \
+                     simpler mode off in View.",
+                    crate::menus::SETTINGS
+                ),
+            });
         }
     }
 
@@ -3191,7 +3213,6 @@ impl App {
         if let Some(cmd) = chosen {
             self.run(ctx, cmd);
         }
-        self.commands.editor_window(ctx, self.simple.on);
     }
 
     pub(crate) fn can_run(&self, cmd: Cmd) -> bool {
@@ -3599,7 +3620,10 @@ impl App {
             Cmd::SlowerSpeed => self.nudge_speed(-5.0),
             Cmd::FasterSpeed => self.nudge_speed(5.0),
             Cmd::NormalSpeed => self.normal_speed(),
+            Cmd::Settings => self.open_last_settings(),
             Cmd::AudioDevice => self.show_devices = true,
+            Cmd::MidiDevices => self.open_settings(crate::settings::Section::Midi),
+            Cmd::PhoneRemote => self.remote.open = true,
             Cmd::AudioSetup
             | Cmd::AudioSetupNext
             | Cmd::AudioSetupSkip

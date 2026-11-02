@@ -400,30 +400,14 @@ impl Kits {
         self.learn.is_some()
     }
 
-    /// The window: the profile for each input, the profiles, and the
-    /// wizard. Gives the command a button asked for.
-    pub(crate) fn window(&mut self, ctx: &egui::Context, inputs: &[String]) -> Option<Cmd> {
-        if !self.open {
-            return None;
+    /// Settings → Drum kits: the profile for each input, the profiles,
+    /// and the wizard. Gives the command a button asked for.
+    pub(crate) fn page(&mut self, ui: &mut egui::Ui, inputs: &[String]) -> Option<Cmd> {
+        if self.learn.is_some() {
+            self.learn_ui(ui)
+        } else {
+            self.list_ui(ui, inputs)
         }
-        let mut cmd = None;
-        let mut open = self.open;
-        egui::Window::new("Drum kits")
-            .open(&mut open)
-            .resizable(false)
-            .default_width(460.0)
-            .show(ctx, |ui| {
-                if self.learn.is_some() {
-                    cmd = self.learn_ui(ui);
-                } else {
-                    cmd = self.list_ui(ui, inputs);
-                }
-            });
-        if !open {
-            self.open = false;
-            self.learn = None;
-        }
-        cmd
     }
 
     fn list_ui(&mut self, ui: &mut egui::Ui, inputs: &[String]) -> Option<Cmd> {
@@ -688,14 +672,18 @@ impl App {
         }
     }
 
-    /// The window, and the note when a known kit is plugged in.
-    pub(crate) fn kits_update(&mut self, ctx: &egui::Context) {
+    /// The note when a known kit is plugged in.
+    pub(crate) fn kits_update(&mut self) {
         if let Some(said) = self.kits.notice(&self.midi.ports.inputs) {
             self.message = Some(said);
         }
+    }
+
+    /// Settings → Drum kits.
+    pub(crate) fn kits_page(&mut self, ui: &mut egui::Ui) {
         let inputs = self.midi.ports.inputs.clone();
-        if let Some(c) = self.kits.window(ctx, &inputs) {
-            self.run(ctx, c);
+        if let Some(c) = self.kits.page(ui, &inputs) {
+            self.run(&ui.ctx().clone(), c);
         }
     }
 }

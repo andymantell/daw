@@ -108,8 +108,12 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "get_selection",
         description: "The selected clips, by track and clip id, the selected note clip, \
                       the mixer strips selected (by track id; their faders move together \
-                      when one is dragged), and whether the mixer shows narrow strips \
-                      (the mixer-narrow command switches it).",
+                      when one is dragged), whether the mixer shows narrow strips \
+                      (the mixer-narrow command switches it), and the section of the \
+                      Settings window showing (audio, midi, latency, plugins, drum-kits, \
+                      key-commands, theme, assistants, phone-remote or performance; null \
+                      while it is closed). The settings command opens the window, and \
+                      audio-device, midi-devices, plugins and the like open a section.",
         access: Access::Read,
         schema: no_args,
     },
@@ -1469,6 +1473,7 @@ impl App {
             "note_clip": self.timeline.note_sel,
             "mixer_strips": self.desk.selected,
             "mixer_narrow": self.desk.narrow,
+            "settings": self.settings_section().map(|s| s.id()),
         })
     }
 

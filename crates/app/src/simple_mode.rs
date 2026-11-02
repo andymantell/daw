@@ -190,18 +190,11 @@ mod tests {
             COMMANDS.len()
         );
         for menu in [
-            "File",
-            "Edit",
-            "Notation",
-            "Transport",
-            "View",
-            "Settings",
-            "Practice",
-            "Help",
+            "File", "Edit", "Clip", "Notes", "Song", "View", "Practice", "Help",
         ] {
             assert!(has_everyday(menu), "{menu}");
         }
-        assert!(!has_everyday("Notes"));
+        assert!(!has_everyday("Track"));
     }
 }
 
@@ -243,20 +236,7 @@ mod ui_tests {
     fn menus(h: &Harness<'_, App>) -> Vec<String> {
         h.query_all_by_role(egui::accesskit::Role::Button)
             .filter_map(|n| n.accesskit_node().label())
-            .filter(|l| {
-                [
-                    "File",
-                    "Edit",
-                    "Notes",
-                    "Notation",
-                    "Transport",
-                    "View",
-                    "Settings",
-                    "Practice",
-                    "Help",
-                ]
-                .contains(&l.as_str())
-            })
+            .filter(|l| (crate::menus::MENUS.iter()).any(|(title, _)| title == l))
             .collect()
     }
 
@@ -264,7 +244,7 @@ mod ui_tests {
     fn off_every_menu_and_command_is_there() {
         let mut h = harness(false);
         assert_eq!(menus(&h).len(), 9);
-        h.get_by_label("Edit").click();
+        h.get_by_label("Clip").click();
         h.run();
         assert!(entry(&h, "Fix timing…"));
         assert!(!shown(&h, "More"));
@@ -274,7 +254,7 @@ mod ui_tests {
     fn on_advanced_commands_wait_under_more() {
         let mut h = harness(true);
         assert!(
-            !menus(&h).contains(&"Notes".to_string()),
+            !menus(&h).contains(&"Track".to_string()),
             "a menu with nothing everyday goes"
         );
         assert_eq!(menus(&h).len(), 8);

@@ -63,6 +63,7 @@ mod lessons;
 mod linked;
 mod listen;
 mod lyrics;
+mod menus;
 mod meters;
 mod midi;
 mod midifile;
@@ -87,6 +88,7 @@ mod remote;
 mod render;
 mod review;
 mod sections;
+mod settings;
 mod share;
 mod simple_mode;
 mod snapshots;
@@ -118,7 +120,7 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use commands::{Cmd, FRETBOARD_MENU};
+use commands::Cmd;
 use daw_audio_io::{self as audio, DeviceProfile, HostInfo, Running, SavedProfiles};
 use daw_engine::engine::{self, Command, Controller};
 use daw_engine::graph::{ClipSpec, Input, Mix, Output, Session, TrackSpec};
@@ -439,6 +441,7 @@ struct App {
     /// Devices on the draft's driver that can record.
     input_devices: Vec<String>,
     show_devices: bool,
+    settings: settings::Settings,
     metronome: Metronome,
     count_in: bool,
     looping: bool,
@@ -630,6 +633,7 @@ impl App {
             hosts: audio::list(),
             input_devices: input_names(&draft_host(&profile)),
             show_devices: false,
+            settings: Default::default(),
             metronome: Metronome::default(),
             count_in: false,
             looping: false,
@@ -1517,7 +1521,8 @@ impl App {
         Ok(keys)
     }
 
-    /// The performance check, and its actions.
+    /// The performance check's figures, and the test tracks once
+    /// written.
     fn perf_window(&mut self, ctx: &egui::Context) {
         let status = match &self.audio {
             Audio::Running(r) | Audio::Silent(r, _) => r.status.clone(),
@@ -1527,14 +1532,28 @@ impl App {
         if self.perf.open {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
-        let overloads = status.overloads.load(Ordering::Relaxed);
-        let underruns = self.ctl.status().underruns();
         let frames = status.last_frames.load(Ordering::Relaxed);
-        let buffer = (frames > 0).then_some((frames, self.rate));
         if frames > 0 {
             // Helper processes for new effects run one such block behind.
             self.effects.block = frames as usize;
         }
+        let action = self.perf.poll();
+        self.perf_action(action);
+    }
+
+    /// Settings → Performance.
+    pub(crate) fn perf_page(&mut self, ui: &mut egui::Ui) {
+        let status = match &self.audio {
+            Audio::Running(r) | Audio::Silent(r, _) => r.status.clone(),
+            Audio::Stopped => {
+                ui.label("The audio isn't running: choose a device in Settings → Audio.");
+                return;
+            }
+        };
+        let overloads = status.overloads.load(Ordering::Relaxed);
+        let underruns = self.ctl.status().underruns();
+        let frames = status.last_frames.load(Ordering::Relaxed);
+        let buffer = (frames > 0).then_some((frames, self.rate));
         let effects: Vec<_> = (self.effects.list.plugins().into_iter())
             .filter(|p| p.enabled && !p.class.is_instrument())
             .collect();
@@ -1545,7 +1564,15 @@ impl App {
             tracks: self.tracks.len(),
             rate: self.rate,
         };
-        let action = self.perf.window(ctx, now, &effects);
+        let action = self.perf.page(ui, now, &effects);
+        if let Some(perf::Action::Reset) = action {
+            self.perf.reset(overloads, underruns);
+        } else {
+            self.perf_action(action);
+        }
+    }
+
+    fn perf_action(&mut self, action: Option<perf::Action>) {
         match action {
             Some(perf::Action::AddTracks(files)) => {
                 for f in files {
@@ -1564,8 +1591,7 @@ impl App {
                 }
                 self.rebuild();
             }
-            Some(perf::Action::Reset) => self.perf.reset(overloads, underruns),
-            None => {}
+            Some(perf::Action::Reset) | None => {}
         }
     }
 
@@ -1798,6 +1824,8 @@ impl App {
             }
         }
         match out.track {
+            Some((i, timeline::TrackAsk::Instrument)) => self.instrument_open = Some(i),
+            Some((i, timeline::TrackAsk::Effects)) => self.effects.open_track = Some(i),
             Some((i, timeline::TrackAsk::Freeze)) => self.toggle_freeze(ui.ctx(), i),
             Some((i, timeline::TrackAsk::RenderInPlace)) => self.render_in_place(i),
             Some((i, timeline::TrackAsk::SavePreset)) => {
@@ -2170,32 +2198,29 @@ impl App {
         }
     }
 
-    fn device_window(&mut self, ctx: &egui::Context) {
-        let mut open = self.show_devices;
+    /// Settings → Audio.
+    pub(crate) fn device_page(&mut self, ui: &mut egui::Ui) {
         let mut apply = false;
         let mut guide = false;
-        egui::Window::new("Audio device")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                if self.hosts.iter().all(|h| h.devices.is_empty()) {
-                    ui.label("No audio devices were found.");
-                }
-                let draft = self.draft.get_or_insert_with(|| DeviceProfile {
-                    host: self.hosts.first().map_or(String::new(), |h| h.name.clone()),
-                    device: String::new(),
-                    rate: 48_000,
-                    buffer: None,
-                    main: (0, 1),
-                    click: None,
-                    input: None,
-                    record_offset: None,
-                    measured_at: None,
-                    direct_monitoring: false,
-                    monitor: daw_audio_io::MonitorOutputs::default(),
-                    mix_buffer: None,
-                });
-                egui::Grid::new("device").num_columns(2).show(ui, |ui| {
+        {
+            if self.hosts.iter().all(|h| h.devices.is_empty()) {
+                ui.label("No audio devices were found.");
+            }
+            let draft = self.draft.get_or_insert_with(|| DeviceProfile {
+                host: self.hosts.first().map_or(String::new(), |h| h.name.clone()),
+                device: String::new(),
+                rate: 48_000,
+                buffer: None,
+                main: (0, 1),
+                click: None,
+                input: None,
+                record_offset: None,
+                measured_at: None,
+                direct_monitoring: false,
+                monitor: daw_audio_io::MonitorOutputs::default(),
+                mix_buffer: None,
+            });
+            egui::Grid::new("device").num_columns(2).show(ui, |ui| {
                     ui.label("Driver");
                     egui::ComboBox::from_id_salt("host")
                         .selected_text(&draft.host)
@@ -2363,84 +2388,88 @@ impl App {
 .accessible_name("Metronome output");
                     ui.end_row();
                 });
-                ui.separator();
-                match &self.audio {
-                    Audio::Running(r) => {
-                        let s = &r.status;
-                        if s.failed.load(Ordering::Relaxed) {
-                            ui.colored_label(ui.visuals().error_fg_color, "The device stopped with an error.");
-                        } else {
-                            ui.label(format!(
-                                "Running: {} channels at {} Hz, {} samples per callback.",
-                                r.channels,
-                                r.rate,
-                                s.last_frames.load(Ordering::Relaxed)
-                            ));
-                        }
-                        let us = s.output_latency_us.load(Ordering::Relaxed);
-                        let ins = s.input_latency_us.load(Ordering::Relaxed);
-                        ui.label(format!(
-                            "Latency reported by the driver: output {:.1} ms, input {:.1} ms.",
-                            us as f64 / 1000.0,
-                            ins as f64 / 1000.0
-                        ));
-                        match (&r.input_error, r.input_channels) {
-                            (Some(e), _) => {
-                                ui.colored_label(ui.visuals().error_fg_color, format!("No input: {e}"));
-                            }
-                            (None, 0) => {
-                                ui.label("No input selected.");
-                            }
-                            (None, n) => {
-                                ui.label(format!("{n} input channels."));
-                            }
-                        }
-                        if let Some(p) = &self.profile {
-                            ui.label(format!(
-                                "Recordings are moved {} frames earlier to line up.",
-                                r.record_offset(p)
-                            ));
-                        }
-                        if let Some(line) = mix_ahead_line(self.ctl.status()) {
-                            ui.label(line);
-                        }
-                    }
-                    Audio::Stopped => {}
-                    Audio::Silent(_, why) => {
+            ui.separator();
+            match &self.audio {
+                Audio::Running(r) => {
+                    let s = &r.status;
+                    if s.failed.load(Ordering::Relaxed) {
                         ui.colored_label(
                             ui.visuals().error_fg_color,
-                            format!("{why}. Playing silently, so the app still works."),
+                            "The device stopped with an error.",
                         );
+                    } else {
+                        ui.label(format!(
+                            "Running: {} channels at {} Hz, {} samples per callback.",
+                            r.channels,
+                            r.rate,
+                            s.last_frames.load(Ordering::Relaxed)
+                        ));
+                    }
+                    let us = s.output_latency_us.load(Ordering::Relaxed);
+                    let ins = s.input_latency_us.load(Ordering::Relaxed);
+                    ui.label(format!(
+                        "Latency reported by the driver: output {:.1} ms, input {:.1} ms.",
+                        us as f64 / 1000.0,
+                        ins as f64 / 1000.0
+                    ));
+                    match (&r.input_error, r.input_channels) {
+                        (Some(e), _) => {
+                            ui.colored_label(ui.visuals().error_fg_color, format!("No input: {e}"));
+                        }
+                        (None, 0) => {
+                            ui.label("No input selected.");
+                        }
+                        (None, n) => {
+                            ui.label(format!("{n} input channels."));
+                        }
+                    }
+                    if let Some(p) = &self.profile {
+                        ui.label(format!(
+                            "Recordings are moved {} frames earlier to line up.",
+                            r.record_offset(p)
+                        ));
+                    }
+                    if let Some(line) = mix_ahead_line(self.ctl.status()) {
+                        ui.label(line);
                     }
                 }
-                ui.label(
+                Audio::Stopped => {}
+                Audio::Silent(_, why) => {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("{why}. Playing silently, so the app still works."),
+                    );
+                }
+            }
+            ui.label(
                     RichText::new(
                         "For exact alignment, measure the round trip with a loopback cable: Recording offset → Measure….",
                     )
                     .small()
                     .weak(),
                 );
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Guided setup…").on_hover_text("Step by step, with checks").clicked() {
-                        guide = true;
-                    }
-                    if ui.button("Rescan devices").clicked() {
-                        self.hosts = audio::list();
-                        self.input_devices = input_names(&draft_host(&self.draft));
-                    }
-                });
-                ui.separator();
-                self.midi_controls(ui);
+            ui.horizontal(|ui| {
+                if ui.button("Apply").clicked() {
+                    apply = true;
+                }
+                if ui
+                    .button("Guided setup…")
+                    .on_hover_text("Step by step, with checks")
+                    .clicked()
+                {
+                    guide = true;
+                }
+                if ui.button("Rescan devices").clicked() {
+                    self.hosts = audio::list();
+                    self.input_devices = input_names(&draft_host(&self.draft));
+                }
             });
-        self.show_devices = open;
+        }
         if apply {
             self.apply_draft();
         }
         if guide {
-            self.run(ctx, Cmd::AudioSetup);
+            self.run(&ui.ctx().clone(), Cmd::AudioSetup);
         }
     }
 
@@ -2505,13 +2534,15 @@ impl App {
         if self.latency.busy() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
-        if !self.latency.open {
-            return;
-        }
+    }
+
+    /// Settings → Latency.
+    pub(crate) fn latency_page(&mut self, ui: &mut egui::Ui) {
         let Some(draft) = self.draft.clone() else {
+            ui.label("Choose an audio device first, in Settings → Audio.");
             return;
         };
-        match self.latency.window(ctx, &draft, self.recording) {
+        match self.latency.page(ui, &draft, self.recording) {
             Some(latency::Action::Start) => {
                 let target = self.measure_target();
                 self.start_measuring(target);
@@ -2817,310 +2848,7 @@ impl eframe::App for App {
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                self.top_menu(ui, "File", |app, ui| {
-                    for c in [
-                        Cmd::NewProject,
-                        Cmd::NewFromTemplate,
-                        Cmd::OpenProject,
-                        Cmd::StartScreen,
-                        Cmd::Save,
-                        Cmd::SaveAs,
-                        Cmd::SaveAsTemplate,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::Presets,
-                        Cmd::SaveTrackPreset,
-                        Cmd::SaveChainPreset,
-                        Cmd::ImportPreset,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::ExportBundle,
-                        Cmd::ImportBundle,
-                        Cmd::Snapshots,
-                        Cmd::People,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::ImportFromProject,
-                        Cmd::ExportParts,
-                        Cmd::ExportStemPackage,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    app.menu_item(ui, Cmd::Export);
-                    app.menu_item(ui, Cmd::ExportSections);
-                    app.menu_item(ui, Cmd::ExportVideo);
-                    app.menu_item(ui, Cmd::ExportDawProject);
-                    app.menu_item(ui, Cmd::ImportDawProject);
-                    app.menu_item(ui, Cmd::ImportMidi);
-                    app.menu_item(ui, Cmd::ExportMidi);
-                    app.menu_item(ui, Cmd::ImportMusicXml);
-                });
-                self.top_menu(ui, "Edit", |app, ui| {
-                    app.menu_item(ui, Cmd::Undo);
-                    app.menu_item(ui, Cmd::Redo);
-                    app.menu_item(ui, Cmd::History);
-                    app.menu_item(ui, Cmd::Activity);
-                    app.menu_gap();
-                    match app.suggesting() {
-                        None => app.menu_item(ui, Cmd::SuggestEdits),
-                        Some(_) => app.menu_item(ui, Cmd::StopSuggesting),
-                    }
-                    app.menu_item(ui, Cmd::SuggestedEdits);
-                    app.menu_gap();
-                    app.menu_item(ui, Cmd::AddAudioTrack);
-                    app.menu_item(ui, Cmd::AddInstrumentTrack);
-                    app.menu_item(ui, Cmd::AddBus);
-                    app.menu_item(ui, Cmd::AddFolder);
-                    app.menu_item(ui, Cmd::AddControlGroup);
-                    app.menu_gap();
-                    for c in [Cmd::Split, Cmd::Delete, Cmd::Marker, Cmd::ClearSelection] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::InsertBars, Cmd::DeleteBars, Cmd::TimeWindow] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::Sections,
-                        Cmd::LoopSection,
-                        Cmd::DuplicateSection,
-                        Cmd::DeleteSection,
-                        Cmd::SectionEarlier,
-                        Cmd::SectionLater,
-                        Cmd::AddToPlayOrder,
-                        Cmd::WriteOrder,
-                        Cmd::ClearPlayOrder,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::HitPoint, Cmd::HitPoints, Cmd::TimecodeFromFilm] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::Copy, Cmd::Paste, Cmd::UnlinkClips, Cmd::Bounce] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::Crossfade, Cmd::ClipFades] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::EditGroups, Cmd::FixTiming] {
-                        app.menu_item(ui, c);
-                    }
-                    ui.separator();
-                    for c in [
-                        Cmd::FollowTempo,
-                        Cmd::ClipTempo,
-                        Cmd::TransposeClips,
-                        Cmd::PitchEditor,
-                        Cmd::StretchMarkersFromAttacks,
-                        Cmd::AddStretchMarker,
-                        Cmd::ClearStretchMarkers,
-                        Cmd::QuantiseAudio,
-                        Cmd::TempoFromClip,
-                        Cmd::BeatGrid,
-                        Cmd::AnchorToBeat,
-                        Cmd::AnchorToBar,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    ui.separator();
-                    for c in [
-                        Cmd::TrackVersions,
-                        Cmd::DuplicateVersion,
-                        Cmd::NewVersion,
-                        Cmd::NextVersion,
-                        Cmd::PrevVersion,
-                        Cmd::DeleteVersion,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    ui.separator();
-                    for c in [Cmd::NextChain, Cmd::HearChain(0), Cmd::HearChain(1)] {
-                        app.menu_item(ui, c);
-                    }
-                });
-                self.top_menu(ui, "Notes", |app, ui| {
-                    for c in [
-                        Cmd::QuantiseNotes,
-                        Cmd::HumaniseNotes,
-                        Cmd::LegatoNotes,
-                        Cmd::FitNotesToScale,
-                        Cmd::ScaleMode,
-                        Cmd::SelectNotes,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::GrooveFromNotes, Cmd::GrooveFromAudio, Cmd::ApplyGroove] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    app.menu_item(ui, Cmd::MidiLearn);
-                    app.menu_gap();
-                    for c in [Cmd::Instrument, Cmd::AddLayer, Cmd::SingleInstrument] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for k in 0..notefx::KINDS.len() {
-                        app.menu_item(ui, Cmd::AddNoteFx(k as u8));
-                    }
-                    for c in [Cmd::NoteFxOnOff, Cmd::RenderNoteFx, Cmd::ClearNoteFx] {
-                        app.menu_item(ui, c);
-                    }
-                });
-                self.top_menu(ui, "Notation", |app, ui| {
-                    for c in [Cmd::NotationLane, Cmd::NotationView, Cmd::NotationSettings] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::TabEntry,
-                        Cmd::StringUp,
-                        Cmd::StringDown,
-                        Cmd::AssignFrets,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    ui.menu_button("Fretboard", |ui| {
-                        for c in FRETBOARD_MENU {
-                            app.menu_item(ui, c);
-                        }
-                    });
-                    app.menu_gap();
-                    for c in [Cmd::PracticeMutePart, Cmd::ContinuousScroll] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::ImportMusicXml,
-                        Cmd::ExportMusicXml,
-                        Cmd::ExportTextTab,
-                        Cmd::PrintNotation,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                });
-                self.top_menu(ui, "Transport", |app, ui| {
-                    for c in [
-                        Cmd::PlayStop,
-                        Cmd::ToStart,
-                        Cmd::Record,
-                        Cmd::Loop,
-                        Cmd::Metronome,
-                        Cmd::CountIn,
-                        Cmd::KeepNotes,
-                        Cmd::PlayOrder,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [
-                        Cmd::FrameBack,
-                        Cmd::FrameForward,
-                        Cmd::PrevHitPoint,
-                        Cmd::NextHitPoint,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::Talkback, Cmd::Dim, Cmd::Mono] {
-                        app.menu_item(ui, c);
-                    }
-                });
-                self.top_menu(ui, "View", |app, ui| {
-                    app.menu_mark(ui);
-                    let mut on = app.simple.on;
-                    if ui
-                        .checkbox(&mut on, app.commands.name(Cmd::SimpleMode).to_string())
-                        .on_hover_text(app.commands.hover(Cmd::SimpleMode))
-                        .changed()
-                    {
-                        app.toggle_simple();
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::ZoomIn, Cmd::ZoomOut, Cmd::ZoomSelection] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::Snap, Cmd::Ripple, Cmd::VolumeLines, Cmd::GroupEdit] {
-                        app.menu_item(ui, c);
-                    }
-                    if !app.menu_hold(Cmd::Timecode) {
-                        app.menu_mark(ui);
-                        let mut on = app.timecode.shown;
-                        if ui
-                            .checkbox(&mut on, app.commands.name(Cmd::Timecode).to_string())
-                            .on_hover_text(app.commands.hover(Cmd::Timecode))
-                            .changed()
-                        {
-                            app.timecode.shown = on;
-                        }
-                    }
-                    app.menu_gap();
-                    app.view_menu(ui);
-                });
-                self.top_menu(ui, "Settings", |app, ui| {
-                    for c in [
-                        Cmd::AudioDevice,
-                        Cmd::AudioSetup,
-                        Cmd::MeasureLatency,
-                        Cmd::Plugins,
-                        Cmd::PerformanceCheck,
-                        Cmd::DrumKits,
-                        Cmd::KeyCommands,
-                        Cmd::Theme,
-                        Cmd::Assistants,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_mark(ui);
-                    if ui
-                        .button("Phone remote…")
-                        .on_hover_text("Record and run the transport from your phone")
-                        .clicked()
-                    {
-                        app.remote.open = true;
-                        ui.close();
-                    }
-                });
-                self.top_menu(ui, "Practice", |app, ui| {
-                    for c in [
-                        Cmd::Tuner,
-                        Cmd::Meters,
-                        Cmd::LessonNotes,
-                        Cmd::Lessons,
-                        Cmd::Comments,
-                    ] {
-                        app.menu_item(ui, c);
-                    }
-                    app.menu_gap();
-                    for c in [Cmd::SlowerSpeed, Cmd::FasterSpeed, Cmd::NormalSpeed] {
-                        app.menu_item(ui, c);
-                    }
-                });
-                self.top_menu(ui, "Help", |app, ui| {
-                    app.menu_item(ui, Cmd::FindCommand);
-                    app.menu_item(ui, Cmd::KeyCommands);
-                    app.menu_gap();
-                    app.menu_item(ui, Cmd::CheckUpdates);
-                    app.menu_item(ui, Cmd::CrashReports);
-                    app.menu_item(ui, Cmd::SoundCredits);
-                });
+                self.menu_bar(ui);
                 self.simple_badge(ui);
                 ui.separator();
                 match &self.audio {
@@ -3137,7 +2865,7 @@ impl eframe::App for App {
                         } else {
                             ui.label(RichText::new(text).weak())
                         };
-                        if l.on_hover_text("Settings → Performance check").clicked() {
+                        if l.on_hover_text("Settings → Performance").clicked() {
                             self.perf.open = true;
                         }
                     }
@@ -3225,10 +2953,9 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).inner_margin(2.0))
             .show(ui, |ui| self.panes(ui));
-        self.device_window(&ctx);
         self.latency_window(&ctx);
+        self.settings_window(&ctx);
         self.audio_setup_update(&ctx);
-        self.effects.manager_window(&ctx);
         self.effects.credits_window(&ctx);
         self.said.show(&ctx);
         self.poll_freezing(&ctx);
@@ -3330,9 +3057,8 @@ impl eframe::App for App {
             self.instrument_window(&ctx, i);
         }
         self.perf_window(&ctx);
-        self.kits_update(&ctx);
+        self.kits_update();
         self.layout_windows(&ctx);
-        self.themes.window(&ctx);
         self.command_windows(&ctx);
         self.notation_window(&ctx);
         self.updates.poll(&ctx);

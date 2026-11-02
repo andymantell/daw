@@ -125,11 +125,8 @@ fn every_control_has_a_spoken_name() {
 
     // And in every window.
     let app = h.state_mut();
-    app.show_devices = true;
-    app.effects.show_manager = true;
     app.effects.open_track = Some(0);
     app.tuner.open = true;
-    app.perf.open = true;
     app.export.open = true;
     app.notes_ui.open = true;
     app.comment_ui.open = true;
@@ -145,7 +142,6 @@ fn every_control_has_a_spoken_name() {
         created: 0,
     });
     let ctx = h.ctx.clone();
-    h.state_mut().run(&ctx, Cmd::KeyCommands);
     h.state_mut().run(&ctx, Cmd::FindCommand);
     // The tuner and performance windows ask to be drawn again every few
     // milliseconds while open, so on a slow machine the window never
@@ -153,8 +149,6 @@ fn every_control_has_a_spoken_name() {
     h.run_steps(8);
     assert_eq!(unspoken(&h), Vec::<String>::new());
     for name in [
-        "Driver",
-        "Rescan",
         "Add effect",
         "New comment",
         "Delete comment: Rushing here",
@@ -162,15 +156,38 @@ fn every_control_has_a_spoken_name() {
         "Add tab block",
         "Section for the new tab block",
         "Type a command's name",
-        "Find a command to change",
-        "Add a key for Loop on or off",
-        "Remove Space from Play or stop",
-        "Reset the keys for Loop on or off",
     ] {
         assert!(
             names(&h).iter().any(|n| n == name),
             "no control named {name}"
         );
+    }
+
+    // And in each section of the Settings window, one at a time.
+    let sections: [(Cmd, &[&str]); 4] = [
+        (Cmd::AudioDevice, &["Driver"]),
+        (Cmd::Plugins, &["Rescan"]),
+        (Cmd::PerformanceCheck, &[]),
+        (
+            Cmd::KeyCommands,
+            &[
+                "Find a command to change",
+                "Add a key for Loop on or off",
+                "Remove Space from Play or stop",
+                "Reset the keys for Loop on or off",
+            ],
+        ),
+    ];
+    for (cmd, wanted) in sections {
+        h.state_mut().run(&ctx, cmd);
+        h.run_steps(8);
+        assert_eq!(unspoken(&h), Vec::<String>::new(), "{cmd:?}");
+        for name in wanted {
+            assert!(
+                names(&h).iter().any(|n| n == name),
+                "no control named {name}"
+            );
+        }
     }
 }
 
@@ -604,7 +621,7 @@ fn keys_are_changed_in_the_key_commands_window() {
 #[test]
 fn menus_show_each_commands_keys() {
     let mut h = with_tracks();
-    h.get_by_label("Transport").click();
+    h.get_by_label("Song").click();
     h.run();
     assert!(h.query_by_label_contains("Ctrl+K").is_none());
     h.get_by_label_contains("Metronome on or off").click();
@@ -1066,4 +1083,69 @@ fn controls_stay_in_place() {
             "{n} moved from {a:?} to {b:?}"
         );
     }
+}
+
+/// Right-click menus carry the commands for the thing clicked: a clip,
+/// a track's header and the ruler (UI polish plan, step one).
+#[test]
+fn right_click_menus_offer_what_belongs_to_the_thing_clicked() {
+    let mut h = with_a_clip();
+    let clip = h.get_by_label_contains("backing on Guitar").rect();
+    h.get_by_label_contains("backing on Guitar")
+        .click_secondary();
+    h.run();
+    assert!(h.query_by_label("Fix timing…").is_some(), "{:?}", names(&h));
+    assert!(h.query_by_label("Split here").is_some());
+    h.key_press(Key::Escape);
+    h.run();
+
+    // The track's header, left of where the clip starts.
+    let header = egui::pos2(clip.left() - 40.0, clip.center().y);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerMoved(header));
+        h.event(egui::Event::PointerButton {
+            pos: header,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    h.run();
+    assert!(
+        h.query_by_label("Render in place").is_some(),
+        "{:?}",
+        names(&h)
+    );
+    h.get_by_label("Effects…").click();
+    h.run();
+    assert_eq!(
+        h.state().effects.open_track,
+        Some(0),
+        "Effects… opens its chain"
+    );
+}
+
+/// Settings is one window: its sections are listed, and choosing one
+/// shows it in place of the one before.
+#[test]
+fn settings_is_one_window_with_sections() {
+    let mut h = with_tracks();
+    let ctx = h.ctx.clone();
+    h.state_mut().run(&ctx, Cmd::Settings);
+    h.run();
+    for s in crate::settings::Section::ALL {
+        assert!(
+            h.query_all_by_label(s.title()).next().is_some(),
+            "{s:?} listed"
+        );
+    }
+    h.get_by_label("Theme").click();
+    h.run();
+    h.run();
+    let app = h.state();
+    assert!(
+        app.themes.open && !app.show_devices,
+        "Theme in place of Audio"
+    );
+    assert_eq!(unspoken(&h), Vec::<String>::new());
 }

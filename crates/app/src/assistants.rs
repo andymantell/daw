@@ -205,9 +205,6 @@ impl Assistants {
 impl App {
     /// Settings → AI assistants…, and the calls that have come in.
     pub(crate) fn assistants_tick(&mut self, ctx: &egui::Context) {
-        if self.assistants.open {
-            self.assistants_window(ctx);
-        }
         let Some(server) = &self.assistants.server else {
             return;
         };
@@ -262,133 +259,126 @@ impl App {
         ctx.request_repaint();
     }
 
-    fn assistants_window(&mut self, ctx: &egui::Context) {
+    /// Settings → AI assistants.
+    pub(crate) fn assistants_page(&mut self, ui: &mut egui::Ui) {
         let a = &mut self.assistants;
-        let mut open = a.open;
         let mut turn = None;
         let mut new_token = false;
         let mut stop = false;
         let stop_keys = self.commands.keymap.text(Cmd::StopAssistants);
-        egui::Window::new("AI assistants")
-            .open(&mut open)
-            .default_pos([260.0, 120.0])
-            .default_size([460.0, 420.0])
-            .show(ctx, |ui| {
-                ui.label(
-                    "Let an AI assistant on this computer read the project and use the app's \
+        {
+            ui.label(
+                "Let an AI assistant on this computer read the project and use the app's \
                      commands, through the Model Context Protocol. Only this computer can \
                      connect, and only with the token below.",
-                );
+            );
+            ui.add_space(6.0);
+            if let Some(e) = &a.error {
+                ui.colored_label(ui.visuals().error_fg_color, e);
+            }
+            let mut on = a.on;
+            if ui.checkbox(&mut on, "Let assistants connect").changed() {
+                turn = Some(on);
+            }
+            if let Some(s) = &a.server {
+                let url = s.url();
                 ui.add_space(6.0);
-                if let Some(e) = &a.error {
-                    ui.colored_label(ui.visuals().error_fg_color, e);
-                }
-                let mut on = a.on;
-                if ui.checkbox(&mut on, "Let assistants connect").changed() {
-                    turn = Some(on);
-                }
-                if let Some(s) = &a.server {
-                    let url = s.url();
-                    ui.add_space(6.0);
-                    egui::Grid::new("assistant-server")
-                        .num_columns(2)
-                        .show(ui, |ui| {
-                            ui.label("Address");
-                            ui.horizontal(|ui| {
-                                ui.monospace(&url);
-                                if ui.small_button("Copy").clicked() {
-                                    ui.ctx().copy_text(url.clone());
-                                }
-                            });
-                            ui.end_row();
-                            ui.label("Token");
-                            ui.horizontal(|ui| {
-                                if a.show_token {
-                                    ui.monospace(&a.token);
-                                } else {
-                                    ui.monospace("•".repeat(12));
-                                }
-                                ui.checkbox(&mut a.show_token, "Show");
-                                if ui.small_button("Copy").clicked() {
-                                    ui.ctx().copy_text(a.token.clone());
-                                }
-                                if ui
-                                    .small_button("New token")
-                                    .on_hover_text("The old token stops working")
-                                    .clicked()
-                                {
-                                    new_token = true;
-                                }
-                            });
-                            ui.end_row();
-                        });
-                    ui.collapsing("Settings to paste into an assistant", |ui| {
-                        let text = a.config_text(&url);
-                        ui.label(
-                            "Many assistants take a server in this shape. It holds the token, \
-                             so keep it private.",
-                        );
-                        if ui.button("Copy").clicked() {
-                            ui.ctx().copy_text(text.clone());
-                        }
-                    });
-                    ui.separator();
-                    for c in a.asking.clone() {
-                        ui.label(
-                            RichText::new(format!("{} wants to use the app.", c.name)).strong(),
-                        );
+                egui::Grid::new("assistant-server")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label("Address");
                         ui.horizontal(|ui| {
-                            let mut pick = None;
-                            if ui.button("Look only").clicked() {
-                                pick = Some(Choice::Allowed(Access::Read));
+                            ui.monospace(&url);
+                            if ui.small_button("Copy").clicked() {
+                                ui.ctx().copy_text(url.clone());
                             }
-                            if ui.button("Edit").clicked() {
-                                pick = Some(Choice::Allowed(Access::Edit));
+                        });
+                        ui.end_row();
+                        ui.label("Token");
+                        ui.horizontal(|ui| {
+                            if a.show_token {
+                                ui.monospace(&a.token);
+                            } else {
+                                ui.monospace("•".repeat(12));
+                            }
+                            ui.checkbox(&mut a.show_token, "Show");
+                            if ui.small_button("Copy").clicked() {
+                                ui.ctx().copy_text(a.token.clone());
                             }
                             if ui
-                                .button("Edit and export")
-                                .on_hover_text("Also save, and write files")
+                                .small_button("New token")
+                                .on_hover_text("The old token stops working")
                                 .clicked()
                             {
-                                pick = Some(Choice::Allowed(Access::EditExport));
-                            }
-                            if ui.button("Refuse").clicked() {
-                                pick = Some(Choice::Refused);
-                            }
-                            if let Some(p) = pick {
-                                a.asking.retain(|x| x.id != c.id);
-                                a.chosen.insert(c.id.clone(), (c.clone(), p));
+                                new_token = true;
                             }
                         });
+                        ui.end_row();
+                    });
+                ui.collapsing("Settings to paste into an assistant", |ui| {
+                    let text = a.config_text(&url);
+                    ui.label(
+                        "Many assistants take a server in this shape. It holds the token, \
+                             so keep it private.",
+                    );
+                    if ui.button("Copy").clicked() {
+                        ui.ctx().copy_text(text.clone());
                     }
-                    let mut chosen: Vec<_> = a.chosen.values().cloned().collect();
-                    chosen.sort_by(|x, y| x.0.name.cmp(&y.0.name));
-                    if chosen.is_empty() && a.asking.is_empty() {
-                        ui.weak("No assistant has connected yet.");
-                    }
-                    for (c, choice) in chosen {
-                        ui.horizontal(|ui| {
-                            let what = match choice {
-                                Choice::Allowed(x) => x.name(),
-                                Choice::Refused => "refused",
-                            };
-                            ui.label(format!("{}: {what}", c.name));
-                            if ui.small_button("Forget").clicked() {
-                                a.chosen.remove(&c.id);
-                            }
-                        });
-                    }
-                    ui.separator();
-                    if ui
-                        .button(format!("Stop assistants ({stop_keys})"))
-                        .on_hover_text("Turns the server off and forgets every permission")
-                        .clicked()
-                    {
-                        stop = true;
-                    }
+                });
+                ui.separator();
+                for c in a.asking.clone() {
+                    ui.label(RichText::new(format!("{} wants to use the app.", c.name)).strong());
+                    ui.horizontal(|ui| {
+                        let mut pick = None;
+                        if ui.button("Look only").clicked() {
+                            pick = Some(Choice::Allowed(Access::Read));
+                        }
+                        if ui.button("Edit").clicked() {
+                            pick = Some(Choice::Allowed(Access::Edit));
+                        }
+                        if ui
+                            .button("Edit and export")
+                            .on_hover_text("Also save, and write files")
+                            .clicked()
+                        {
+                            pick = Some(Choice::Allowed(Access::EditExport));
+                        }
+                        if ui.button("Refuse").clicked() {
+                            pick = Some(Choice::Refused);
+                        }
+                        if let Some(p) = pick {
+                            a.asking.retain(|x| x.id != c.id);
+                            a.chosen.insert(c.id.clone(), (c.clone(), p));
+                        }
+                    });
                 }
-            });
-        a.open = open;
+                let mut chosen: Vec<_> = a.chosen.values().cloned().collect();
+                chosen.sort_by(|x, y| x.0.name.cmp(&y.0.name));
+                if chosen.is_empty() && a.asking.is_empty() {
+                    ui.weak("No assistant has connected yet.");
+                }
+                for (c, choice) in chosen {
+                    ui.horizontal(|ui| {
+                        let what = match choice {
+                            Choice::Allowed(x) => x.name(),
+                            Choice::Refused => "refused",
+                        };
+                        ui.label(format!("{}: {what}", c.name));
+                        if ui.small_button("Forget").clicked() {
+                            a.chosen.remove(&c.id);
+                        }
+                    });
+                }
+                ui.separator();
+                if ui
+                    .button(format!("Stop assistants ({stop_keys})"))
+                    .on_hover_text("Turns the server off and forgets every permission")
+                    .clicked()
+                {
+                    stop = true;
+                }
+            }
+        }
         if let Some(on) = turn {
             a.set_on(on);
         }

@@ -15,6 +15,7 @@
 //! command search and anything driving the app from outside make the
 //! same change.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -322,22 +323,28 @@ pub fn controls(
                 c.set_mute(!on);
             }
             if ui
-                .add_enabled(n > 0, egui::Button::new("▲"))
-                .on_hover_text("Move earlier in the list")
+                .add_enabled(
+                    n > 0,
+                    IconButton::new(Icon::MoveUp, "Move earlier in the list"),
+                )
                 .clicked()
             {
                 edit = Some(Edit::Up(n));
             }
             if ui
-                .add_enabled(n + 1 < count, egui::Button::new("▼"))
-                .on_hover_text("Move later in the list")
+                .add_enabled(
+                    n + 1 < count,
+                    IconButton::new(Icon::MoveDown, "Move later in the list"),
+                )
                 .clicked()
             {
                 edit = Some(Edit::Up(n + 1));
             }
             if ui
-                .button("✖")
-                .on_hover_text("Remove this layer and its effects")
+                .add(IconButton::new(
+                    Icon::Close,
+                    "Remove this layer and its effects",
+                ))
                 .clicked()
             {
                 edit = Some(Edit::Remove(n));

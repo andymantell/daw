@@ -32,6 +32,7 @@ const CONTROLS: &[&str] = &[
     "Slider::new(",
     "DragValue::new(",
     "Button::new(",
+    "IconButton::labelled(",
     "TextEdit::singleline(",
     "TextEdit::multiline(",
     ".text_edit_singleline(",
@@ -114,7 +115,9 @@ fn every_control_says_how_an_assistant_reaches_it() {
     files.sort();
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if name == "widget_check.rs" {
+        // icons.rs builds the icon button; the places that show one carry
+        // the marks.
+        if name == "widget_check.rs" || name == "icons.rs" {
             continue;
         }
         let (unmarked, names) = scan(&std::fs::read_to_string(&path).unwrap());

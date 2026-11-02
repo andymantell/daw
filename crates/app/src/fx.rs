@@ -13,6 +13,7 @@
 //! Effects can sit in containers (3.5) that split the audio into chains
 //! of effects, shown nested under the container in the effects window.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1679,27 +1680,32 @@ impl Effects {
                         .accessible_name(format!("Move {}", s.name));
                         if ui
                             // ai: edit_effect
-                            .add_enabled(up.is_some(), egui::Button::new("▲"))
-                            .on_hover_text("Earlier in the chain")
-                            .accessible_name(format!("Move {} up", s.name))
+                            .add_enabled(
+                                up.is_some(),
+                                IconButton::new(Icon::MoveUp, format!("Move {} up", s.name))
+                                    .tip("Earlier in the chain"),
+                            )
                             .clicked()
                         {
                             swap = up.map(|u| (u, i));
                         }
                         if ui
                             // ai: edit_effect
-                            .add_enabled(down.is_some(), egui::Button::new("▼"))
-                            .on_hover_text("Later in the chain")
-                            .accessible_name(format!("Move {} down", s.name))
+                            .add_enabled(
+                                down.is_some(),
+                                IconButton::new(Icon::MoveDown, format!("Move {} down", s.name))
+                                    .tip("Later in the chain"),
+                            )
                             .clicked()
                         {
                             swap = down.map(|d| (i, d));
                         }
                         // ai: remove_effect
                         if ui
-                            .button("✖")
-                            .on_hover_text("Remove")
-                            .accessible_name(format!("Remove {}", s.name))
+                            .add(
+                                IconButton::new(Icon::Close, format!("Remove {}", s.name))
+                                    .tip("Remove"),
+                            )
                             .clicked()
                         {
                             remove = Some(i);
@@ -2603,9 +2609,11 @@ fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String>
                 }
                 if ui
                     // ai: plugin_preset
-                    .small_button("✖")
-                    .on_hover_text("Delete this preset")
-                    .accessible_name(format!("Delete preset {}", p.name))
+                    .add(
+                        IconButton::new(Icon::Close, format!("Delete preset {}", p.name))
+                            .tip("Delete this preset")
+                            .small(),
+                    )
                     .clicked()
                 {
                     delete = Some(p.clone());

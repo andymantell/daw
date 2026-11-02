@@ -13,6 +13,7 @@
 //! The folders, tags and tempos belong to this computer, as the folders
 //! do, and are kept in `browser.txt` beside the device settings.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -491,9 +492,11 @@ impl Browser {
             .accessible_name("Search sounds");
             if !self.query.is_empty()
                 && ui
-                    .small_button("✕")
-                    .accessible_name("Clear the search")
-                    .on_hover_text("Clear")
+                    .add(
+                        IconButton::new(Icon::Close, "Clear the search")
+                            .tip("Clear")
+                            .small(),
+                    )
                     .clicked()
             {
                 self.query.clear();
@@ -569,12 +572,15 @@ impl Browser {
                 let name = f.file_name().map_or(f.display().to_string(), |s| {
                     s.to_string_lossy().into_owned()
                 });
-                ui.label(RichText::new(format!("🗁 {name}")))
+                crate::icons::show(ui, Icon::Folder, "Folder");
+                ui.label(RichText::new(name.as_str()))
                     .on_hover_text(f.display().to_string());
                 if ui
-                    .small_button("✕")
-                    .accessible_name(format!("Stop browsing {name}"))
-                    .on_hover_text("Stop browsing this folder (its files stay where they are)")
+                    .add(
+                        IconButton::new(Icon::Close, format!("Stop browsing {name}"))
+                            .tip("Stop browsing this folder (its files stay where they are)")
+                            .small(),
+                    )
                     .clicked()
                 {
                     remove = Some(n);
@@ -614,14 +620,16 @@ impl Browser {
     ) {
         ui.horizontal(|ui| {
             let playing = self.is_playing(&e.path);
-            let r = ui
-                .small_button(if playing { "■" } else { "▶" })
-                .accessible_name(if playing {
-                    format!("Stop {}", e.name)
-                } else {
-                    format!("Play {}", e.name)
-                })
-                .on_hover_text(if playing { "Stop" } else { "Hear it" });
+            let (icon, verb, tip) = if playing {
+                (Icon::Stop, "Stop", "Stop")
+            } else {
+                (Icon::Play, "Play", "Hear it")
+            };
+            let r = ui.add(
+                IconButton::new(icon, format!("{verb} {}", e.name))
+                    .tip(tip)
+                    .small(),
+            );
             if r.clicked() {
                 self.selected = Some(e.path.clone());
                 self.tags_text = self.tags_of(&e.path).join(", ");
@@ -701,7 +709,10 @@ impl Browser {
                 if (speed - 1.0).abs() > 1e-6 {
                     s.push_str(&format!(", at {:.0}% speed", speed * 100.0));
                 }
-                if ui.small_button("■ Stop").clicked() {
+                if ui
+                    .add(IconButton::labelled(Icon::Stop, "Stop").small())
+                    .clicked()
+                {
                     out.push(Action::Send(self.stop()));
                 }
                 ui.weak(s);

@@ -10,6 +10,7 @@
 //! edited together (see `groups.rs`). Comments show as pins. Undo
 //! belongs to the project document; the timeline only asks for it.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2762,14 +2763,17 @@ impl Timeline {
             }
             ui.separator();
             if ui
-                .button("✂ Split")
+                .add(IconButton::labelled(Icon::Split, "Split"))
                 .on_hover_text("Split the selected clips, or all of them, at the playhead (S)")
                 .clicked()
             {
                 out.changed |= self.split_at(song, view.playhead);
             }
             if ui
-                .add_enabled(!self.selected.is_empty(), egui::Button::new("🗑 Delete"))
+                .add_enabled(
+                    !self.selected.is_empty(),
+                    IconButton::labelled(Icon::Delete, "Delete").spoken("Delete the selected clips"),
+                )
                 .on_hover_text("Delete the selected clips (Delete)")
                 .clicked()
             {
@@ -2792,7 +2796,7 @@ impl Timeline {
                 self.fades_open = true;
             }
             if ui
-                .button("⚑ Marker")
+                .add(IconButton::labelled(Icon::Marker, "Marker"))
                 .on_hover_text("Mark a section at the playhead's bar (M)")
                 .clicked()
             {
@@ -2800,17 +2804,13 @@ impl Timeline {
             }
             ui.separator();
             if ui
-                .add_enabled(view.can_undo, egui::Button::new("↶"))
-                .accessible_name("Undo")
-                .on_hover_text("Undo (Ctrl+Z)")
+                .add_enabled(view.can_undo, IconButton::new(Icon::Undo, "Undo").tip("Undo (Ctrl+Z)"))
                 .clicked()
             {
                 out.undo = true;
             }
             if ui
-                .add_enabled(view.can_redo, egui::Button::new("↷"))
-                .accessible_name("Redo")
-                .on_hover_text("Redo (Ctrl+Shift+Z)")
+                .add_enabled(view.can_redo, IconButton::new(Icon::Redo, "Redo").tip("Redo (Ctrl+Shift+Z)"))
                 .clicked()
             {
                 out.redo = true;
@@ -3847,7 +3847,7 @@ impl Timeline {
                     c.name()
                 };
                 if let Some(bpm) = c.tempo {
-                    name = format!("{name} ♩{bpm:.0}");
+                    name = format!("{name} · {bpm:.0} BPM");
                 }
                 if c.cents != 0 {
                     name = format!("{name} {}", crate::transpose::label(c.cents));

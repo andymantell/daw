@@ -53,6 +53,7 @@ mod groups;
 mod headless;
 mod history;
 mod hitpoints;
+mod icons;
 mod import_project;
 mod instrument;
 mod interchange;
@@ -112,6 +113,7 @@ mod workspace;
 #[cfg(test)]
 mod a11y;
 
+use crate::icons::{Icon, IconButton};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -1851,9 +1853,13 @@ impl App {
         ui.horizontal(|ui| {
             let playing = self.ctl.status().playing();
             // As wide playing or not, so the controls after it stay put.
+            let (icon, word) = if playing {
+                (Icon::Stop, "Stop")
+            } else {
+                (Icon::Play, "Play")
+            };
             // ai: play
-            let play = egui::Button::new(if playing { "⏹ Stop" } else { "▶ Play" })
-                .min_size(egui::vec2(64.0, 0.0));
+            let play = IconButton::labelled(icon, word).min_size(egui::vec2(64.0, 0.0));
             if ui
                 // ai: play
                 .add(play)
@@ -1864,21 +1870,30 @@ impl App {
             }
             if ui
                 // ai: to-start
-                .button("⏮")
-                .accessible_name("Back to the start")
-                .on_hover_text(self.commands.hover(Cmd::ToStart))
+                .add(
+                    IconButton::new(Icon::ToStart, "Back to the start")
+                        .tip(self.commands.hover(Cmd::ToStart)),
+                )
                 .clicked()
             {
                 self.send(Command::Seek(Frames(0)));
             }
-            let rec = RichText::new("⏺ Record").color(if self.recording {
-                crate::theme::look(ui.ctx()).c().record
+            // The dot is always the theme's record colour; the word turns
+            // that colour too while recording.
+            let record = crate::theme::look(ui.ctx()).c().record;
+            let rec = RichText::new("Record").color(if self.recording {
+                record
             } else {
                 ui.visuals().text_color()
             });
             if ui
                 // ai: record
-                .selectable_label(self.recording, rec)
+                .add(
+                    IconButton::labelled(Icon::Record, rec)
+                        .selected(self.recording)
+                        .frame(self.recording)
+                        .colour(record),
+                )
                 .on_hover_text(self.commands.hover(Cmd::Record))
                 .clicked()
             {
@@ -2136,7 +2151,10 @@ impl App {
                 }
             }
             // ai: view
-            if ui.small_button("✖").accessible_name("Dismiss").clicked() {
+            if ui
+                .add(IconButton::new(Icon::Close, "Dismiss").small())
+                .clicked()
+            {
                 self.detected = None;
             }
         }

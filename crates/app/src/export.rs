@@ -14,6 +14,7 @@
 //! Exports wait in a queue and run one after another, so several can be
 //! set going at once.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -726,8 +727,10 @@ impl Export {
                         ui.horizontal(|ui| {
                             ui.label(format!("{}. {}", i + 1, q.label));
                             if ui
-                                .small_button("✕")
-                                .on_hover_text("Take it out of the queue")
+                                .add(
+                                    IconButton::new(Icon::Close, "Take it out of the queue")
+                                        .small(),
+                                )
                                 .clicked()
                             {
                                 gone = Some(i);
@@ -755,7 +758,10 @@ impl Export {
                                 );
                             }
                             Ok(_) => {
-                                ui.label(format!("{name} ✔"));
+                                ui.horizontal(|ui| {
+                                    ui.label(name.as_str());
+                                    crate::icons::show(ui, crate::icons::Icon::Check, "done");
+                                });
                             }
                             Err(e) => {
                                 ui.colored_label(

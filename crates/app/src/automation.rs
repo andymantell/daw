@@ -23,6 +23,7 @@
 //! being written the engine plays the control, not the line; when the
 //! pass ends the values seen go into the lane over the stretch passed.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -1311,9 +1312,12 @@ impl crate::App {
                     let x_btn =
                         Rect::from_min_size(head.right_top() + vec2(-26.0, 4.0), vec2(22.0, 20.0));
                     if ui
-                        .put(x_btn, egui::Button::new("✕").small())
-                        .on_hover_text("Remove this lane")
-                        .accessible_name(format!("Remove the {name} lane"))
+                        .put(
+                            x_btn,
+                            IconButton::new(Icon::Close, format!("Remove the {name} lane"))
+                                .tip("Remove this lane")
+                                .small(),
+                        )
                         .clicked()
                     {
                         remove = Some(i);

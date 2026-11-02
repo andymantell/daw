@@ -16,6 +16,7 @@
 //! lining the timecode up with the film; and a copy of the video with
 //! the mix as its sound (see `App::export_video`).
 
+use crate::icons::{Icon, IconButton};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -863,15 +864,13 @@ impl App {
         let mut run = None;
         ui.horizontal(|ui| {
             for (cmd, label, name) in [
-                (Cmd::PrevHitPoint, "⏮◆", "Previous hit point"),
-                (Cmd::FrameBack, "◀", "Back a frame"),
-                (Cmd::FrameForward, "▶", "On a frame"),
-                (Cmd::NextHitPoint, "◆⏭", "Next hit point"),
+                (Cmd::PrevHitPoint, Icon::PrevHit, "Previous hit point"),
+                (Cmd::FrameBack, Icon::FrameBack, "Back a frame"),
+                (Cmd::FrameForward, Icon::FrameForward, "On a frame"),
+                (Cmd::NextHitPoint, Icon::NextHit, "Next hit point"),
             ] {
                 if ui
-                    .button(label)
-                    .accessible_name(name)
-                    .on_hover_text(self.commands.hover(cmd))
+                    .add(IconButton::new(label, name).tip(self.commands.hover(cmd)))
                     .clicked()
                 {
                     run = Some(cmd);

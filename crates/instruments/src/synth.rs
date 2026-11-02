@@ -4,14 +4,30 @@
 //! across the stereo field, a resonant filter with its own envelope and
 //! key tracking, and an LFO on pitch, filter and level. Sixteen voices,
 //! or one that glides from note to note.
+//!
+//! Besides its clean filter it offers the vintage toolkit's saturating
+//! ones (the ladders, the cascade and the Sallen-Key pair), an
+//! overdrive before the filter, and oscillator drift, so a sound
+//! can have the weight of the old circuits without a new instrument.
 
 use daw_engine::midi::{Event, Instrument, Kind};
 
 use crate::dsp::{Adsr, Env, Mode, Noise, Svf, Wave, db, hz, osc};
 use crate::params::{Live, Param, Unit};
+use crate::vintage::{Cascade, Diode, Drift, Drive, Ladder, Poles, SallenKey, SkMode};
 
 const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Square", "Random"];
-const FILTERS: &[&str] = &["Low-pass", "Band-pass", "High-pass"];
+/// The clean filter's three responses, then the vintage toolkit's.
+const FILTERS: &[&str] = &[
+    "Low-pass",
+    "Band-pass",
+    "High-pass",
+    "Ladder 24 dB",
+    "Diode ladder",
+    "Cascade 24 dB",
+    "Cascade 12 dB",
+    "Sallen-Key",
+];
 const PLAY: &[&str] = &["Chords", "One note, gliding"];
 
 /// Settings by index; the order of [`params`].
@@ -50,6 +66,8 @@ mod at {
     pub const VELOCITY: usize = 31;
     pub const BEND: usize = 32;
     pub const LEVEL: usize = 33;
+    pub const DRIVE: usize = 34;
+    pub const VINTAGE: usize = 35;
 }
 
 /// The synth's settings, in the order of [`at`]. Grouped for showing by
@@ -91,6 +109,8 @@ pub fn params() -> Vec<Param> {
         Param::new("velocity", "Velocity", 0.0, 1.0, 0.7, Amount),
         Param::new("bend", "Bend range", 1.0, 24.0, 2.0, Semitones),
         Param::new("level", "Level", -36.0, 6.0, -10.0, Db),
+        Param::new("drive", "Drive", 0.0, 1.0, 0.0, Amount),
+        Param::new("vintage", "Vintage drift", 0.0, 1.0, 0.0, Amount),
     ]
 }
 
@@ -101,7 +121,67 @@ pub const GROUPS: &[(&str, usize, usize)] = &[
     ("Level", at::ATTACK, at::RELEASE),
     ("LFO", at::LFO_WAVE, at::LFO_LEVEL),
     ("Playing", at::PLAY, at::LEVEL),
+    ("Character", at::DRIVE, at::VINTAGE),
 ];
+
+/// One of the vintage toolkit's filters, by the filter choice.
+#[derive(Clone, Copy)]
+enum Vintage {
+    None,
+    Ladder(Ladder),
+    Diode(Diode),
+    Cascade(Cascade, Poles),
+    SallenKey(SallenKey),
+}
+
+impl Vintage {
+    /// The filter for choice `i`, fresh.
+    fn for_choice(i: u32) -> Vintage {
+        match i {
+            3 => Vintage::Ladder(Ladder::new()),
+            4 => Vintage::Diode(Diode::new()),
+            5 => Vintage::Cascade(Cascade::new(), Poles::Four),
+            6 => Vintage::Cascade(Cascade::new(), Poles::Two),
+            7 => Vintage::SallenKey(SallenKey::new()),
+            _ => Vintage::None,
+        }
+    }
+
+    fn choice(&self) -> u32 {
+        match self {
+            Vintage::None => 0,
+            Vintage::Ladder(_) => 3,
+            Vintage::Diode(_) => 4,
+            Vintage::Cascade(_, Poles::Four) => 5,
+            Vintage::Cascade(_, Poles::Two) => 6,
+            Vintage::SallenKey(_) => 7,
+        }
+    }
+
+    fn set(&mut self, cutoff: f32, res: f32, drive: f32, rate: f32) {
+        // The toolkit's drive is a gain into the first stage; some bass
+        // lost to resonance is put back so the low end holds up.
+        let gain = 1.0 + 3.0 * drive;
+        match self {
+            Vintage::None => {}
+            Vintage::Ladder(f) => f.set(cutoff, res, gain, 0.3, rate),
+            Vintage::Diode(f) => f.set(cutoff, res, gain, 60.0, 0.3, rate),
+            Vintage::Cascade(f, poles) => f.set(*poles, cutoff, res, gain, 0.3, rate),
+            Vintage::SallenKey(f) => f.set(SkMode::Low, cutoff, res, gain, rate),
+        }
+    }
+
+    #[inline]
+    fn run(&mut self, x: f32) -> f32 {
+        match self {
+            Vintage::None => x,
+            Vintage::Ladder(f) => f.run(x),
+            Vintage::Diode(f) => f.run(x),
+            Vintage::Cascade(f, _) => f.run(x),
+            Vintage::SallenKey(f) => f.run(x),
+        }
+    }
+}
 
 const VOICES: usize = 16;
 const UNISON: usize = 4;
@@ -121,25 +201,31 @@ struct Voice {
     amp: Env,
     fenv: Env,
     filter: [Svf; 2],
+    vintage: [Vintage; 2],
+    drift: Drift,
     age: u64,
     held: bool,
 }
 
 impl Voice {
-    const OFF: Voice = Voice {
-        on: false,
-        channel: 0,
-        note: 0,
-        pitch: 60.0,
-        velocity: 0.0,
-        phase: [[0.0; 2]; UNISON],
-        sub: 0.0,
-        amp: Env::IDLE,
-        fenv: Env::IDLE,
-        filter: [crate::dsp::SVF_ZERO; 2],
-        age: 0,
-        held: false,
-    };
+    fn off(seed: usize) -> Voice {
+        Voice {
+            on: false,
+            channel: 0,
+            note: 0,
+            pitch: 60.0,
+            velocity: 0.0,
+            phase: [[0.0; 2]; UNISON],
+            sub: 0.0,
+            amp: Env::IDLE,
+            fenv: Env::IDLE,
+            filter: [crate::dsp::SVF_ZERO; 2],
+            vintage: [Vintage::None; 2],
+            drift: Drift::new(seed as u32 + 1),
+            age: 0,
+            held: false,
+        }
+    }
 }
 
 /// The synth on the audio thread.
@@ -163,7 +249,7 @@ impl Synth {
         Synth {
             params: params.into(),
             rate: rate.max(1) as f32,
-            voices: [Voice::OFF; VOICES],
+            voices: std::array::from_fn(Voice::off),
             bend: 0.0,
             pedal: false,
             clock: 0,
@@ -228,6 +314,7 @@ impl Synth {
                 *p = [k as f32 * 0.37 % 1.0, k as f32 * 0.61 % 1.0];
             }
             v.filter = [crate::dsp::SVF_ZERO; 2];
+            v.vintage = [Vintage::None; 2];
         }
         v.amp.start();
         v.fenv.start();
@@ -347,7 +434,11 @@ impl Synth {
         let unison = (p.read(at::UNISON) as usize).clamp(1, UNISON);
         let detune = p.read(at::DETUNE) / 100.0;
         let spread = p.read(at::SPREAD);
+        let choice = p.read(at::FILTER) as u32;
         let mode = Mode::from_index(p.read(at::FILTER));
+        let drive = Drive::new(p.read(at::DRIVE));
+        let drive_amount = p.read(at::DRIVE);
+        let vintage = p.read(at::VINTAGE);
         let cutoff = p.read(at::CUTOFF);
         let res = p.read(at::RESONANCE);
         let track = p.read(at::KEY_TRACK);
@@ -395,13 +486,20 @@ impl Synth {
                 continue;
             }
             v.pitch += (v.note as f32 - v.pitch) * glide_k;
-            let pitch = v.pitch + bend + lfo_pitch;
+            let cents = v.drift.next(vintage, n, r);
+            let pitch = v.pitch + bend + lfo_pitch + cents / 100.0;
             // The filter's cutoff, from the knob, the key, the envelope
             // (at the chunk's start) and the LFO, in octaves.
             let octaves = track * (pitch - 60.0) / 12.0 + fenv_amt * v.fenv.level + lfo_cut;
             let fc = cutoff * octaves.exp2();
             for f in &mut v.filter {
                 f.set(fc, res, r);
+            }
+            for f in &mut v.vintage {
+                if f.choice() != choice {
+                    *f = Vintage::for_choice(choice);
+                }
+                f.set(fc, res, drive_amount, r);
             }
             let mut dts = [[0.0f32; 2]; UNISON];
             for (k, dt) in dts.iter_mut().enumerate().take(unison) {
@@ -433,8 +531,12 @@ impl Synth {
                 if noise > 0.0 {
                     common += noise * self.noise.tick();
                 }
-                let l = v.filter[0].run(l * norm + common, mode);
-                let rr = v.filter[1].run(rr * norm + common, mode);
+                let (l, rr) = (drive.run(l * norm + common), drive.run(rr * norm + common));
+                let (l, rr) = if choice >= 3 {
+                    (v.vintage[0].run(l), v.vintage[1].run(rr))
+                } else {
+                    (v.filter[0].run(l, mode), v.filter[1].run(rr, mode))
+                };
                 let g = a * v.velocity * gain;
                 left[i] += l * g;
                 right[i] += rr * g;
@@ -501,6 +603,91 @@ mod tests {
             .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
             .count();
         assert!((215..=225).contains(&(c / 2)), "{c}");
+    }
+
+    #[test]
+    fn the_vintage_filters_sound_and_drive_adds_harmonics() {
+        let render = |filter: f64, drive: f64| {
+            let mut s = synth();
+            s.params.set(at::FILTER, filter);
+            s.params.set(at::DRIVE, drive);
+            s.params.set(at::OSC2, 2.0);
+            s.params.set(at::CUTOFF, 6000.0);
+            s.params.set(at::FILTER_ENV, 0.0);
+            let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
+            s.process(&[Event::note_on(0, 0, 45, 100, 0)], &mut l, &mut r);
+            l
+        };
+        let at = |x: &[f32], hz: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, &v) in x.iter().enumerate().skip(24_000) {
+                let p = std::f32::consts::TAU * hz * i as f32 / 48_000.0;
+                re += v * p.cos();
+                im += v * p.sin();
+            }
+            (re * re + im * im).sqrt()
+        };
+        for filter in 3..8 {
+            let x = render(filter as f64, 0.0);
+            assert!(peak(&x[24_000..]) > 0.02, "filter {filter} is silent");
+            assert!(x.iter().all(|v| v.is_finite()));
+        }
+        // Drive into the ladder: the second harmonic of the (odd-only)
+        // square sub grows against the fundamental.
+        let clean = render(3.0, 0.0);
+        let hot = render(3.0, 1.0);
+        let f0 = hz(45.0);
+        let ratio = |x: &[f32]| at(x, 2.0 * f0) / at(x, f0);
+        assert!(
+            ratio(&hot) > ratio(&clean) * 1.2,
+            "{} {}",
+            ratio(&clean),
+            ratio(&hot)
+        );
+    }
+
+    /// The plan's CPU budget: sixteen voices through an oversampled
+    /// vintage filter in a few percent of one core at 48 kHz. This synth
+    /// filters left and right separately, so it runs thirty-two; the
+    /// bound here is loose because test machines differ, and the
+    /// measured figures are in the review notes.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "timed in release builds only")]
+    fn sixteen_ladder_voices_fit_the_budget() {
+        let mut s = synth();
+        s.params.set(at::FILTER, 3.0);
+        s.params.set(at::DRIVE, 0.5);
+        s.params.set(at::RELEASE, 8.0);
+        let events: Vec<Event> = (0..16)
+            .map(|i| Event::note_on(0, 0, 36 + i as u8, 100, i))
+            .collect();
+        let seconds = 2.0;
+        let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+        let start = std::time::Instant::now();
+        s.process(&events, &mut l, &mut r);
+        for _ in 0..(48_000.0 * seconds / 512.0) as usize {
+            s.process(&[], &mut l, &mut r);
+        }
+        let used = start.elapsed().as_secs_f64() / seconds;
+        assert!(used < 0.4, "{:.1}% of one core", used * 100.0);
+    }
+
+    #[test]
+    fn vintage_drift_moves_each_voice_a_little_and_differently() {
+        let mut s = synth();
+        s.params.set(at::VINTAGE, 1.0);
+        s.params.set(at::OSC2_CENTS, 0.0);
+        let (mut l, mut r) = (vec![0.0; 4800], vec![0.0; 4800]);
+        s.process(
+            &[
+                Event::note_on(0, 0, 60, 100, 0),
+                Event::note_on(0, 0, 60, 100, 1),
+            ],
+            &mut l,
+            &mut r,
+        );
+        let (a, b) = (s.voices[0].drift.offset(), s.voices[1].drift.offset());
+        assert_ne!(a, b);
     }
 
     #[test]

@@ -34,6 +34,7 @@ pub mod sfz_player;
 pub mod slicer;
 pub mod stream;
 pub mod synth;
+pub mod vintage;
 
 pub use library::Library;
 pub use params::{Live, Param, Params, Unit};

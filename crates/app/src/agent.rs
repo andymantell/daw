@@ -1977,6 +1977,53 @@ mod tests {
             .collect()
     }
 
+    /// The vintage toolkit through the synth: an assistant picks a
+    /// saturating filter by name, sets drive and drift, and the note
+    /// sounds (plan docs/plans/classic-synths.md, step 0).
+    #[test]
+    fn the_vintage_filters_reach_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "poly-synth"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        let filter = (params.iter())
+            .find(|p| p["param"] == "instrument.filter")
+            .unwrap();
+        let choices = filter["choices"].as_array().unwrap();
+        let ladder = choices.iter().position(|c| c == "Ladder 24 dB").unwrap();
+        assert!(choices.iter().any(|c| c == "Diode ladder"));
+        for key in ["instrument.drive", "instrument.vintage"] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        d.call(
+            "set_parameters",
+            json!({"track": t, "changes": [
+                {"param": "instrument.filter", "value": ladder},
+                {"param": "instrument.drive", "value": 0.8},
+                {"param": "instrument.vintage", "value": 0.5},
+                {"param": "instrument.cutoff", "value": 400.0},
+                {"param": "instrument.resonance", "value": 0.7},
+            ]}),
+        )
+        .unwrap();
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 1, "notes": [
+                {"beat": 0.0, "beats": 2.0, "pitch": 33, "velocity": 110}
+            ]}),
+        )
+        .unwrap();
+        let a = d
+            .call("analyse", json!({"track": t, "from_bar": 1, "to_bar": 2}))
+            .unwrap();
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() > -30.0, "{a}");
+        let now = instrument_params(&mut d, &t);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.filter")
+            .unwrap();
+        assert_eq!(f["text"], "Ladder 24 dB");
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

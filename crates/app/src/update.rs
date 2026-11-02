@@ -436,6 +436,7 @@ impl Updates {
                     self.set_daily(daily);
                 }
                 ui.horizontal(|ui| {
+                    // ai: person
                     if ui
                         .add_enabled(!self.checking(), egui::Button::new("Check now"))
                         .clicked()

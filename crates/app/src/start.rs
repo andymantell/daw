@@ -159,6 +159,18 @@ impl Start {
 
 impl App {
     /// Opens the start screen, reading what it lists afresh.
+    /// Shows the start screen when the app starts, or stops.
+    pub(crate) fn toggle_start_at_launch(&mut self) {
+        self.start.settings.show = !self.start.settings.show;
+        self.message = Some(match self.start.save() {
+            Err(e) => format!("Couldn't keep that choice: {e}"),
+            Ok(()) if self.start.settings.show => {
+                "The start screen shows when the app starts.".into()
+            }
+            Ok(()) => "The start screen no longer shows when the app starts.".into(),
+        });
+    }
+
     pub(crate) fn show_start(&mut self) {
         let (templates, problems) = all_templates(self.template_ui.dir.as_deref());
         self.start.showing = Some(Showing {
@@ -245,6 +257,7 @@ impl App {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
+                    // ai: start-screen-at-launch
                     ui.checkbox(&mut show, "Show this when the app starts");
                     // ai: view
                     if ui.button("Close").clicked() {

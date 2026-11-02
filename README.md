@@ -19,6 +19,35 @@ bundles and shared folders.
 > waiting for the owner are listed in the
 > [review queue](docs/review-queue/README.md).
 
+## Screenshots
+
+A snapshot of the app as it stands, with a deep house test song built
+through the assistant interface (122 bpm, A minor; the vocal is a
+synthesised stand-in). These will change as the app does.
+
+**Arrangement:** sections, linked clip copies and the buses.
+
+![The arrangement of a deep house song](docs/screenshots/arrangement.png)
+
+**Mixer:** desk-style strips with vertical faders, meters, routing and
+sends, playing the drop.
+
+![The mixer as a desk of vertical channel strips](docs/screenshots/mixer.png)
+
+**Note editor:** the electric piano part, with the key, quantise, groove
+and velocity lane.
+
+![The note editor showing a chord part](docs/screenshots/note-editor.png)
+
+**Pitch editor:** a vocal phrase split into notes, with its vibrato
+and drift.
+
+![The pitch editor showing a vocal phrase](docs/screenshots/pitch-editor.png)
+
+**Synth:** the three-oscillator mono synth playing the bass line.
+
+![A built-in synth's window over the arrangement](docs/screenshots/synth.png)
+
 ## Documents
 
 | Document | Purpose |

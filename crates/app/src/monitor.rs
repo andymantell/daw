@@ -315,7 +315,10 @@ impl App {
             let talk = ui
                 .add_enabled(
                     mic.is_some(),
-                    egui::Button::selectable(c.talk, "🎙 Talk").min_size(vec2(64.0, 0.0)),
+                    // ai: talkback
+                    crate::icons::IconButton::labelled(crate::icons::Icon::Mic, "Talk")
+                        .selected(c.talk)
+                        .min_size(vec2(64.0, 0.0)),
                 )
                 .accessible_name("Talkback")
                 .on_hover_text(if c.latch {

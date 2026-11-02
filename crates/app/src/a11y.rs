@@ -258,7 +258,7 @@ fn tab_and_enter_reach_and_press_controls() {
     h.run();
     assert!(h.state().tracks[0].arm, "Enter arms the track");
 
-    tab_to(&mut h, "⏺ Record");
+    tab_to(&mut h, "Record");
     h.key_press(Key::Enter);
     h.run();
     assert!(h.state().recording, "Enter presses Record");
@@ -1048,7 +1048,7 @@ fn controls_stay_in_place() {
         "Solo Bass",
         "Effects on Bass",
         "Back to the start",
-        "⏺ Record",
+        "Record",
         "Click level",
         "Tempo",
         "Undo",

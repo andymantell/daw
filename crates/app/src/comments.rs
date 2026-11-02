@@ -5,6 +5,7 @@
 //! they travel with bundles and shared folders; deleting one takes its
 //! text out of the saved file too (see `daw_project::ProjectDoc`).
 
+use crate::icons::{Icon, IconButton};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use daw_engine::time::{Frames, TempoMap};
@@ -253,7 +254,7 @@ impl Comments {
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .button("▶ Play from here")
+                        .add(IconButton::labelled(Icon::Play, "Play from here"))
                         .on_hover_text("Move the playhead here and play")
                         .clicked()
                     {

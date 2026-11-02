@@ -8,6 +8,7 @@
 //! levels and control-group faders reach the engine without a new graph;
 //! anything else (a new bus, a changed output, a send added) rebuilds it.
 
+use crate::icons::{Icon, IconButton};
 use daw_engine::engine::Command;
 use daw_engine::graph::{GroupSpec, Output, Session, TrackSpec};
 use daw_project::{ControlGroup, Send, TrackKind};
@@ -1243,8 +1244,7 @@ fn sends_menu(
                     .accessible_name(format!("Mute send to {to}"));
                 if ui
                     // ai: set_send
-                    .button("✕")
-                    .accessible_name(format!("Remove send to {to}"))
+                    .add(IconButton::new(Icon::Close, format!("Remove send to {to}")))
                     .clicked()
                 {
                     remove = Some(si);

@@ -9,6 +9,7 @@
 //! share a project have different screens: they are kept in `layout.txt`
 //! beside the device settings.
 
+use crate::icons::{Icon, IconButton};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -1270,14 +1271,16 @@ impl<H: Host> Draw<'_, H> {
 
     fn collapse_button(&mut self, ui: &mut egui::Ui, t: &Tabs, shown: Pane) {
         let (icon, what) = if t.collapsed {
-            ("▸", "Expand")
+            (Icon::Expand, "Expand")
         } else {
-            ("▾", "Collapse")
+            (Icon::Collapse, "Collapse")
         };
         if ui
-            .small_button(icon)
-            .accessible_name(format!("{what} {}", shown.the()))
-            .on_hover_text(what)
+            .add(
+                IconButton::new(icon, format!("{what} {}", shown.the()))
+                    .tip(what)
+                    .small(),
+            )
             .clicked()
         {
             self.acts.push(Act::Collapse(shown));
@@ -1290,9 +1293,14 @@ impl<H: Host> Draw<'_, H> {
         let the = shown.the();
         if !shown.fixed()
             && ui
-                .small_button("✕")
-                .accessible_name(format!("Close {}", shown.title().to_lowercase()))
-                .on_hover_text("Close")
+                .add(
+                    IconButton::new(
+                        Icon::Close,
+                        format!("Close {}", shown.title().to_lowercase()),
+                    )
+                    .tip("Close")
+                    .small(),
+                )
                 .clicked()
         {
             self.acts.push(Act::Close(shown));
@@ -1300,26 +1308,27 @@ impl<H: Host> Draw<'_, H> {
         if self.windows
             && !shown.fixed()
             && ui
-                .small_button("⧉")
-                .accessible_name(format!("Open {the} in its own window"))
-                .on_hover_text("Its own window, to put on another screen")
+                .add(
+                    IconButton::new(Icon::PopOut, format!("Open {the} in its own window"))
+                        .tip("Its own window, to put on another screen")
+                        .small(),
+                )
                 .clicked()
         {
             self.acts.push(Act::Detach(shown));
         }
         let full = self.full.is_some();
         if ui
-            .small_button(if full { "🗗" } else { "⛶" })
-            .accessible_name(if full {
-                "Back to all panes".to_string()
-            } else {
-                format!("Show {the} full size")
-            })
-            .on_hover_text(if full {
-                "Back to all panes"
-            } else {
-                "Full size"
-            })
+            // ai: full-size
+            .add(
+                if full {
+                    IconButton::new(Icon::Restore, "Back to all panes")
+                } else {
+                    IconButton::new(Icon::FullSize, format!("Show {the} full size"))
+                        .tip("Full size")
+                }
+                .small(),
+            )
             .clicked()
         {
             self.acts.push(Act::Full(shown));
@@ -1328,10 +1337,11 @@ impl<H: Host> Draw<'_, H> {
             return;
         }
         self.collapse_button(ui, t, shown);
-        ui.menu_button("⋯", |ui| self.menu(ui, shown))
-            .response
-            .accessible_name(format!("More for {the}"))
-            .on_hover_text("Move, resize and more");
+        // ai: view
+        IconButton::new(Icon::More, format!("More for {the}"))
+            .tip("Move, resize and more")
+            .small()
+            .menu(ui, |ui| self.menu(ui, shown));
     }
 
     /// The pane's menu: moving it, without dragging.
@@ -1671,9 +1681,14 @@ impl crate::App {
                             }
                             ui.weak(self.commands.keymap.text(Cmd::Layout(n as u8)));
                             if ui
-                                .small_button("✕")
-                                .accessible_name(format!("Remove the layout {saved}"))
-                                .on_hover_text("Remove")
+                                .add(
+                                    IconButton::new(
+                                        Icon::Close,
+                                        format!("Remove the layout {saved}"),
+                                    )
+                                    .tip("Remove")
+                                    .small(),
+                                )
                                 .clicked()
                             {
                                 remove = Some(n);

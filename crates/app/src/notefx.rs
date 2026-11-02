@@ -9,6 +9,7 @@
 //! commands and anything driving the app from outside read, so a
 //! setting has one name everywhere.
 
+use crate::icons::{Icon, IconButton};
 use daw_engine::notefx::{
     self, ArpMode, ChordShape, LengthMode, NoteFxKind, NoteFxSpec, RenderNote, ScaleSpec, Snap,
 };
@@ -681,13 +682,24 @@ pub(crate) fn controls(
                     out.changed = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("✕").on_hover_text("Remove").clicked() {
+                    if ui
+                        .add(IconButton::new(Icon::Close, "Remove").small())
+                        .clicked()
+                    {
                         remove = Some(i);
                     }
-                    if i + 1 < n && ui.small_button("⏷").on_hover_text("Move down").clicked() {
+                    if i + 1 < n
+                        && ui
+                            .add(IconButton::new(Icon::MoveDown, "Move down").small())
+                            .clicked()
+                    {
                         swap = Some(i);
                     }
-                    if i > 0 && ui.small_button("⏶").on_hover_text("Move up").clicked() {
+                    if i > 0
+                        && ui
+                            .add(IconButton::new(Icon::MoveUp, "Move up").small())
+                            .clicked()
+                    {
                         swap = Some(i - 1);
                     }
                 });

@@ -5,6 +5,7 @@
 //! `keys.txt` beside the device settings, only where they differ from
 //! the defaults.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -3116,10 +3117,7 @@ impl Commands {
             }
             for s in keys {
                 if ui
-                    .add(
-                        egui::Button::new(format!("{} ✕", s.text()))
-                            .wrap_mode(egui::TextWrapMode::Extend),
-                    )
+                    .add(IconButton::labelled(Icon::Close, s.text()).trailing())
                     .accessible_name(format!("Remove {} from {}", s.text(), i.name))
                     .on_hover_text("Remove this key")
                     .clicked()

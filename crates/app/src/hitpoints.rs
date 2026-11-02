@@ -8,6 +8,7 @@
 //! picture when the tempo changes; the music moves to meet them. Each
 //! one sits on the start of a picture frame.
 
+use crate::icons::{Icon, IconButton};
 use std::collections::HashMap;
 
 use daw_engine::engine::Command;
@@ -595,17 +596,21 @@ impl HitPointsWindow {
                 }
                 let frame = c.frame_at(h.at, rate);
                 if ui
-                    .small_button("◀")
-                    .on_hover_text("A frame earlier")
-                    .accessible_name(format!("Hit point {n} a frame earlier"))
+                    .add(
+                        IconButton::new(Icon::FrameBack, format!("Hit point {n} a frame earlier"))
+                            .tip("A frame earlier")
+                            .small(),
+                    )
                     .clicked()
                 {
                     moved = Some((h.id.clone(), c.frame_start(frame - 1, rate)));
                 }
                 if ui
-                    .small_button("▶")
-                    .on_hover_text("A frame later")
-                    .accessible_name(format!("Hit point {n} a frame later"))
+                    .add(
+                        IconButton::new(Icon::FrameForward, format!("Hit point {n} a frame later"))
+                            .tip("A frame later")
+                            .small(),
+                    )
                     .clicked()
                 {
                     moved = Some((h.id.clone(), c.frame_start(frame + 1, rate)));

@@ -280,6 +280,7 @@ impl App {
                     .or_else(|| self.timecode_tool(name, args))
                     .or_else(|| self.browser_tool(name, args))
                     .or_else(|| self.instrument_tool(name, args))
+                    .or_else(|| self.kits_tool(name, args))
                     .or_else(|| self.plugins_tool(name, args))
                     .or_else(|| self.midi_tool(name, args));
             }

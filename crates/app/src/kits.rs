@@ -426,10 +426,12 @@ impl Kits {
                     let label = ui.label(p);
                     let now = self.for_input(p).name.clone();
                     let mut pick = now.clone();
+                    // ai: drum_kits.kit
                     egui::ComboBox::from_id_salt(("kit-for", p))
                         .selected_text(&pick)
                         .show_ui(ui, |ui| {
                             for n in &names {
+                                // ai: drum_kits.kit
                                 ui.selectable_value(&mut pick, n.clone(), n);
                             }
                         })
@@ -454,6 +456,7 @@ impl Kits {
             } else {
                 format!("{n} (built in)")
             };
+            // ai: drum_kits.select
             if ui.selectable_label(picked, label).clicked() {
                 self.selected = Some(n);
             }
@@ -505,9 +508,11 @@ impl Kits {
             }
             Step::Save => {
                 let h = ui.heading("Name the kit");
+                // ai: drum_kits.name
                 ui.text_edit_singleline(&mut l.name).labelled_by(h.id);
                 ui.label("Are these the notes the module came with?");
                 for f in Factory::ALL {
+                    // ai: drum_kits.factory
                     ui.radio_value(&mut l.profile.factory, f, f.label());
                 }
                 let learned = l.profile.notes.len();
@@ -561,6 +566,118 @@ impl Kits {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(50));
         cmd
+    }
+}
+
+const FACTORY_IDS: [(&str, Factory); 3] = [
+    ("factory", Factory::Factory),
+    ("changed", Factory::Changed),
+    ("unknown", Factory::Unknown),
+];
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "drum_kits",
+    description: "Electronic drum kits (Settings → Drum kits): which pad map each MIDI \
+                  input uses, the kits there are, and the one picked to export \
+                  (file_command export-kit writes it). While a kit is being learned \
+                  (command learn-kit, then kit-next, kit-skip, kit-back as each pad is \
+                  hit), its step and, at the last step, its name and whether the notes \
+                  are the module's own. Only what is given changes; answers with all of it.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        let factory: Vec<&str> = FACTORY_IDS.iter().map(|f| f.0).collect();
+        serde_json::json!({"type": "object", "properties": {
+            "input": {"type": "string", "description": "A MIDI input's name, with kit."},
+            "kit": {"type": "string", "description": "The kit that input uses."},
+            "select": {"type": "string", "description": "The kit picked to export."},
+            "name": {"type": "string", "description": "The name of the kit being learned."},
+            "factory": {"type": "string", "enum": factory,
+                        "description": "Whether the learned notes are the module's own."}
+        }})
+    },
+}];
+
+impl App {
+    pub(crate) fn kits_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "drum_kits").then(|| self.drum_kits(args))
+    }
+
+    fn drum_kits(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>), String> {
+        use serde_json::json;
+        let inputs = self.midi.ports.inputs.clone();
+        let k = &mut self.kits;
+        let known = |k: &Kits, n: &str| {
+            k.by_name(n)
+                .map(|x| x.name.clone())
+                .ok_or_else(|| format!("There is no kit {n}."))
+        };
+        // Check everything before changing anything.
+        let choose = match (args["input"].as_str(), args["kit"].as_str()) {
+            (Some(i), Some(n)) if inputs.iter().any(|x| x == i) => Some((i, known(k, n)?)),
+            (Some(i), Some(_)) => return Err(format!("There is no MIDI input {i}.")),
+            (None, None) => None,
+            _ => return Err("Give the input and its kit together.".into()),
+        };
+        let select = args["select"].as_str().map(|n| known(k, n)).transpose()?;
+        let factory = match args["factory"].as_str() {
+            None => None,
+            Some(f) => Some(
+                (FACTORY_IDS.iter().find(|x| x.0 == f))
+                    .ok_or_else(|| format!("factory is factory, changed or unknown, not {f}."))?
+                    .1,
+            ),
+        };
+        let naming = !args["name"].is_null() || factory.is_some();
+        if naming && !k.learn.as_ref().is_some_and(|l| l.current() == Step::Save) {
+            return Err("A kit's name is given at the last step of learning it.".into());
+        }
+        if let Some((i, n)) = choose {
+            k.choose(i, &n);
+        }
+        if let Some(n) = select {
+            k.selected = Some(n);
+        }
+        if let Some(l) = &mut k.learn {
+            if let Some(n) = args["name"].as_str() {
+                l.name = n.to_string();
+            }
+            if let Some(f) = factory {
+                l.profile.factory = f;
+            }
+        }
+        let learning = k.learn.as_ref().map(|l| {
+            let step = match l.current() {
+                Step::Hit(slot) => slot.name.to_string(),
+                Step::PedalDown => "Hi-hat pedal: down".into(),
+                Step::PedalUp => "Hi-hat pedal: up".into(),
+                Step::Choke => "Choke".into(),
+                Step::Save => "Name the kit".into(),
+            };
+            let factory = FACTORY_IDS.iter().find(|x| x.1 == l.profile.factory);
+            json!({"step": l.step + 1, "of": l.steps.len(), "now": step,
+                   "learned": l.profile.notes.len(), "name": l.name,
+                   "factory": factory.map(|f| f.0), "heard": l.heard,
+                   "warning": l.warning})
+        });
+        let answer = json!({
+            "inputs": inputs.iter()
+                .map(|i| json!({"input": i, "kit": k.for_input(i).name}))
+                .collect::<Vec<_>>(),
+            "kits": (k.learned.iter().map(|x| (x, false)))
+                .chain(k.built_in.iter().map(|x| (x, true)))
+                .map(|(x, built_in)| json!({"name": x.name, "built_in": built_in}))
+                .collect::<Vec<_>>(),
+            "selected": k.to_export().map(|x| &x.name),
+            "learning": learning,
+        });
+        Ok((answer, None))
     }
 }
 
@@ -913,5 +1030,91 @@ mod tests {
             assert_eq!(app.kits.for_input("Kit USB").note("kick"), Some(22));
             assert!(h.query_by_label("Kit USB").is_some());
         }
+    }
+
+    #[test]
+    fn an_assistant_learns_names_chooses_and_exports_a_kit() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.access = crate::agent::Access::EditExport;
+        d.app().midi.ports.inputs = vec!["Kit USB".into()];
+        let r = d.call("drum_kits", json!({})).unwrap();
+        assert_eq!(
+            r["inputs"],
+            json!([{"input": "Kit USB", "kit": GENERAL_MIDI}])
+        );
+        assert_eq!(r["learning"], json!(null));
+        assert!(
+            d.call("drum_kits", json!({"name": "Too soon"})).is_err(),
+            "named at the last step"
+        );
+
+        // Learn one with no pads hit: skip to the end, name it and save.
+        d.command("learn-kit");
+        let r = d.call("drum_kits", json!({})).unwrap();
+        assert_eq!(r["learning"]["step"], 1, "{r}");
+        for _ in 0..100 {
+            if d.app().kits.learn.as_ref().unwrap().current() == Step::Save {
+                break;
+            }
+            let waits = matches!(
+                d.app().kits.learn.as_ref().unwrap().current(),
+                Step::PedalDown | Step::PedalUp
+            );
+            d.command(if waits { "kit-next" } else { "kit-skip" });
+        }
+        assert!(
+            d.call("drum_kits", json!({"factory": "sometimes"}))
+                .is_err()
+        );
+        let r = d
+            .call(
+                "drum_kits",
+                json!({"name": "Practice pads", "factory": "changed"}),
+            )
+            .unwrap();
+        assert_eq!(r["learning"]["name"], "Practice pads");
+        assert_eq!(r["learning"]["factory"], "changed");
+        d.command("kit-next");
+        let r = d.call("drum_kits", json!({})).unwrap();
+        assert_eq!(r["learning"], json!(null));
+        assert_eq!(
+            r["kits"][0],
+            json!({"name": "Practice pads", "built_in": false})
+        );
+        assert_eq!(r["selected"], "Practice pads");
+
+        // Choose it for the input, pick General MIDI to export.
+        let r = d
+            .call(
+                "drum_kits",
+                json!({"input": "Kit USB", "kit": "Practice pads"}),
+            )
+            .unwrap();
+        assert_eq!(r["inputs"][0]["kit"], "Practice pads");
+        assert!(
+            d.call(
+                "drum_kits",
+                json!({"input": "Nothing", "kit": "Practice pads"})
+            )
+            .is_err()
+        );
+        assert!(
+            d.call("drum_kits", json!({"select": "No such kit"}))
+                .is_err()
+        );
+        let r = d
+            .call("drum_kits", json!({"select": GENERAL_MIDI}))
+            .unwrap();
+        assert_eq!(r["selected"], GENERAL_MIDI);
+        let file = std::env::temp_dir().join(format!("daw-kit-export-{}.txt", std::process::id()));
+        d.call(
+            "file_command",
+            json!({"id": "export-kit", "path": file.display().to_string()}),
+        )
+        .unwrap();
+        let back = KitProfile::from_text(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(back.name, GENERAL_MIDI);
+        let _ = std::fs::remove_file(file);
     }
 }

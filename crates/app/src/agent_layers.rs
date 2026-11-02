@@ -363,7 +363,7 @@ impl App {
                     "name": l.name(),
                     "regions": l.sfz.regions.len(),
                     "sounds": l.sources.len(),
-                    "memory_mb": l.bytes >> 20,
+                    "memory_mb": (l.bytes as f64 / 104_857.6).round() / 10.0,
                     "from_disk": l.streamed,
                     "keys": keys,
                     "articulations": switches,
@@ -1176,25 +1176,30 @@ mod sfz_tests {
 
     use crate::agent::driver::Driver;
 
-    fn kit() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("daw-sfz-agent-{}", std::process::id()));
+    /// Writes a mono sine of `frames` frames at `level` to `path`.
+    fn wav(path: &std::path::Path, frames: usize, level: f32) {
+        let mut w = hound::WavWriter::create(
+            path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 48_000,
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+            },
+        )
+        .unwrap();
+        for i in 0..frames {
+            w.write_sample(level * (i as f32 * 0.05).sin()).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    fn kit(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("daw-sfz-agent-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for (name, level) in [("close.wav", 0.5f32), ("room.wav", 0.25)] {
-            let mut w = hound::WavWriter::create(
-                dir.join(name),
-                hound::WavSpec {
-                    channels: 1,
-                    sample_rate: 48_000,
-                    bits_per_sample: 32,
-                    sample_format: hound::SampleFormat::Float,
-                },
-            )
-            .unwrap();
-            for i in 0..96_000 {
-                w.write_sample(level * (i as f32 * 0.05).sin()).unwrap();
-            }
-            w.finalize().unwrap();
+            wav(&dir.join(name), 96_000, level);
         }
         std::fs::write(
             dir.join("Drums.sfz"),
@@ -1219,7 +1224,7 @@ mod sfz_tests {
 
     #[test]
     fn an_assistant_loads_an_sfz_library_and_sets_its_mics() {
-        let dir = kit();
+        let dir = kit("mics");
         let mut d = Driver::new();
         let path = dir.join("Drums.sfz");
         let r = d
@@ -1269,6 +1274,47 @@ mod sfz_tests {
         .unwrap();
         let i = d.call("get_instrument", json!({"track": t})).unwrap();
         assert_eq!(i["library"]["sounds"], 2, "{i}");
+    }
+
+    /// Sounds rendered again while the SFZ file stays as it was: loading
+    /// it again plays the new ones, and says their new size.
+    #[test]
+    fn an_assistant_reloads_a_library_whose_sounds_changed() {
+        let dir = kit("reload");
+        let mut d = Driver::new();
+        let path = dir.join("Drums.sfz");
+        d.call("file_command", json!({"id": "load-sfz", "path": path}))
+            .unwrap();
+        let t = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["library"]["memory_mb"], 0.7, "{i}");
+        {
+            let a = d.app();
+            let mut c = daw_project::NoteClip::new("n".into(), "Kick".into(), 0, 960);
+            c.notes.push(daw_project::Note::new(0, 480, 36, 127));
+            a.tracks[0].note_clips.push(c);
+            a.rebuild();
+        }
+        // Played as recorded, so the new sounds' level shows.
+        d.call(
+            "set_parameter",
+            json!({"track": t, "param": "instrument.normalise", "value": 0}),
+        )
+        .unwrap();
+        let before = rms(&mut d, &t);
+        // Both mics rendered again, much quieter and three times as long.
+        for name in ["close.wav", "room.wav"] {
+            wav(&dir.join(name), 288_000, 0.01);
+        }
+        d.call("file_command", json!({"id": "load-sfz", "path": path}))
+            .unwrap();
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["library"]["memory_mb"], 2.2, "{i}");
+        let after = rms(&mut d, &t);
+        assert!(
+            after < before - 20.0,
+            "still the old sounds: {before} {after}"
+        );
     }
 }
 

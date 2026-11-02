@@ -353,7 +353,7 @@ impl App {
             // ai: set_instrument
             egui::ComboBox::from_id_salt(("inspector sound", slot.id))
                 .selected_text(now.map_or("Your own", |n| sounds[n].name))
-                .width(150.0)
+                .width((ui.available_width() - 36.0).clamp(80.0, 180.0))
                 .show_ui(ui, |ui| {
                     for (n, s) in sounds.iter().enumerate() {
                         // ai: set_instrument

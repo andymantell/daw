@@ -157,7 +157,7 @@ impl App {
 
     /// Leaves section `s`: what it was doing stops, as when its window
     /// was closed.
-    fn leave_section(&mut self, s: Section) {
+    pub(crate) fn leave_section(&mut self, s: Section) {
         *self.section_flag(s) = false;
         match s {
             Section::Latency if self.latency.busy() => {

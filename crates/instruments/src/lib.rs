@@ -26,6 +26,7 @@ pub mod drum_machine;
 pub mod drum_sampler;
 pub mod drum_voice;
 pub mod dsp;
+pub mod june;
 pub mod library;
 pub mod made;
 pub mod model_mono;
@@ -66,6 +67,8 @@ pub enum Kind {
     AcidThree,
     /// The three-oscillator ladder monosynth (classic synths, S1).
     ModelMono,
+    /// The six-voice polysynth with a chorus (classic synths, S4).
+    June,
 }
 
 /// A sound an instrument makes from its settings alone: a name and the
@@ -77,7 +80,7 @@ pub struct Sound {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
@@ -87,6 +90,7 @@ impl Kind {
         Kind::OhOne,
         Kind::AcidThree,
         Kind::ModelMono,
+        Kind::June,
     ];
 
     /// How projects name it. Never change one.
@@ -101,6 +105,7 @@ impl Kind {
             Kind::OhOne => "oh-one",
             Kind::AcidThree => "acid-three",
             Kind::ModelMono => "model-mono",
+            Kind::June => "june",
         }
     }
 
@@ -119,6 +124,7 @@ impl Kind {
             Kind::OhOne => "Oh-One",
             Kind::AcidThree => "Acid Three",
             Kind::ModelMono => "Model Mono",
+            Kind::June => "June",
         }
     }
 
@@ -145,6 +151,9 @@ impl Kind {
             Kind::ModelMono => {
                 "A three-oscillator ladder monosynth for bass and leads: six footages and shapes, white or pink noise, an overdriving mixer, the 24 dB ladder with emphasis and contour, glide"
             }
+            Kind::June => {
+                "A six-voice polysynth with a chorus, for pads, chords, stabs and bass: saw and pulse with width modulation, a sub, noise, a stepped high-pass, the 24 dB filter that sings, one envelope either way up, a delayed LFO and the stereo chorus"
+            }
         }
     }
 
@@ -153,6 +162,7 @@ impl Kind {
     pub fn sounds(self) -> Vec<Sound> {
         match self {
             Kind::ModelMono => model_mono::sounds(),
+            Kind::June => june::sounds(),
             _ => Vec::new(),
         }
     }
@@ -239,6 +249,7 @@ impl Builtin {
             Kind::PatchTwenty => Builtin::of(kind, patch_twenty::params(), Vec::new()),
             Kind::AcidThree => Builtin::of(kind, acid::params(), Vec::new()),
             Kind::ModelMono => Builtin::of(kind, model_mono::params(), Vec::new()),
+            Kind::June => Builtin::of(kind, june::params(), Vec::new()),
         }
     }
 
@@ -308,6 +319,7 @@ impl Builtin {
             Kind::PatchTwenty => patch_twenty::params(),
             Kind::AcidThree => acid::params(),
             Kind::ModelMono => model_mono::params(),
+            Kind::June => june::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -681,6 +693,7 @@ impl Builtin {
             Kind::PatchTwenty => Box::new(patch_twenty::PatchTwenty::new(rate, p)),
             Kind::AcidThree => Box::new(acid::Acid::new(rate, p)),
             Kind::ModelMono => Box::new(model_mono::ModelMono::new(rate, p)),
+            Kind::June => Box::new(june::June::new(rate, p)),
         }
     }
 

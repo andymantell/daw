@@ -115,6 +115,7 @@ impl App {
         // The menu bar takes the whole row; what follows the menus is
         // drawn in the app's own style rather than the menus'.
         let style = ui.style().clone();
+        let width = ui.available_width();
         egui::MenuBar::new().ui(ui, |ui| {
             self.menu_bar(ui);
             self.simple_badge(ui);
@@ -138,7 +139,10 @@ impl App {
                 }
                 self.status_pill(ui);
                 let keys = self.commands.keymap.text(Cmd::FindCommand);
-                let narrow = ui.available_width() < 260.0;
+                // From the bar's whole width, which is the same every
+                // frame: what is left over moves as the clock counts, and
+                // the button would flip between its two forms.
+                let narrow = width < 1600.0;
                 let find = if narrow {
                     // ai: find-command
                     IconButton::new(Icon::Search, "Find a command")

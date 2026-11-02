@@ -601,6 +601,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::theme::TOOLS)
         .chain(crate::agent_device::TOOLS)
         .chain(crate::audio_setup::TOOLS)
+        .chain(crate::video::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)
@@ -1768,6 +1769,10 @@ impl App {
                 "id": m.id, "bar": m.bar, "name": m.name,
             })).collect::<Vec<_>>(),
             "play_order": p.arrangement,
+            "videos": self.video.clips.iter().map(|v| json!({
+                "id": v.key, "name": v.name, "start_seconds": secs(v.start),
+                "seconds": secs(v.len), "sound_clip": v.sound,
+            })).collect::<Vec<_>>(),
             "tracks": tracks,
             // Clips that are instances of one clip: linked copies, and
             // note clips playing the same pattern.

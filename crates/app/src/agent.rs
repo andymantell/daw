@@ -99,8 +99,9 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_transport",
         description: "Where playback is (frames, seconds, bar and beat), whether it is \
-                      playing or recording, the loop, metronome and count-in, and the \
-                      practice speed and transpose.",
+                      playing or recording, the loop, metronome and count-in, the practice \
+                      speed and transpose, the tuner's reference pitch, and the tracks muted \
+                      for practice.",
         access: Access::Read,
         schema: no_args,
     },
@@ -1801,6 +1802,11 @@ impl App {
             "speed_pct": self.speed_pct,
             "semitones": self.semitones,
             "cents": self.cents,
+            "a4_hz": self.tuner.a4,
+            "practice_muted": (self.tracks.iter())
+                .filter(|t| t.practice_mute)
+                .map(|t| &t.key)
+                .collect::<Vec<_>>(),
         })
     }
 

@@ -96,6 +96,7 @@ impl Tuner {
             }
             ui.separator();
             ui.label("A =");
+            // ai: set_practice.a4_hz
             ui.add(
                 egui::DragValue::new(&mut self.a4)
                     .range(400.0..=480.0)

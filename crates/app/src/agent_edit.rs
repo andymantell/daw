@@ -276,6 +276,7 @@ impl App {
                     .or_else(|| self.lyrics_tool(name, args))
                     .or_else(|| self.timecode_tool(name, args))
                     .or_else(|| self.browser_tool(name, args))
+                    .or_else(|| self.instrument_tool(name, args))
                     .or_else(|| self.plugins_tool(name, args))
                     .or_else(|| self.midi_tool(name, args));
             }
@@ -415,7 +416,7 @@ impl App {
             let fits = match kind {
                 daw_instruments::Kind::DrumSampler => slot == "sample",
                 daw_instruments::Kind::Slicer => {
-                    return Err("The loop slicer's loop is chosen in its window for now.".into());
+                    return Err("The loop slicer's loop is set with edit_instrument's loop.".into());
                 }
                 daw_instruments::Kind::Sampler => {
                     slot == daw_instruments::SFZ_SLOT

@@ -595,6 +595,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::lyrics::TOOLS)
         .chain(crate::hitpoints::TOOLS)
         .chain(crate::browser::TOOLS)
+        .chain(crate::instrument::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)
@@ -1730,6 +1731,10 @@ impl App {
                         "id": f.id, "kind": f.kind, "bypass": f.bypass,
                     })).collect::<Vec<_>>(),
                     "frozen": t.freeze,
+                    "note_repeat": (self.tracks.iter())
+                        .find(|a| a.key == t.id)
+                        .and_then(|a| a.note_repeat)
+                        .map(|r| r.label()),
                     "automated": t.automation.iter().map(|l| &l.param).collect::<Vec<_>>(),
                     "clips": clips,
                     "note_clips": note_clips,

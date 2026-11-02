@@ -1234,9 +1234,10 @@ fn note_repeat_picker(ui: &mut egui::Ui, t: &mut crate::Track, changed: &mut boo
         egui::ComboBox::from_id_salt(("note-repeat", &t.key))
             .selected_text(text(now))
             .show_ui(ui, |ui| {
-                // ai: note-repeat
+                // ai: edit_instrument.note_repeat
                 ui.selectable_value(&mut now, None, "Off");
                 for r in daw_project::StepRate::ALL {
+                    // ai: edit_instrument.note_repeat
                     ui.selectable_value(&mut now, Some(r), r.label());
                 }
             })
@@ -1570,6 +1571,7 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
                 renew = true;
             }
         }
+        // ai: edit_instrument.spread_zones
         if ui
             .button("Spread over the keys")
             .on_hover_text("Each zone from halfway to the one below to halfway to the one above")
@@ -1618,6 +1620,7 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
                 b.set_sample(&format!("zone{chosen}"), Some(l));
                 renew = true;
             }
+            // ai: edit_instrument.remove_zone
             if ui.button("Remove zone").clicked() {
                 remove = Some(chosen);
             }
@@ -2175,6 +2178,7 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
         ));
     }
     ui.horizontal(|ui| {
+        // ai: edit_instrument.slice.at_hits
         if ui
             .button("Cut at the hits")
             .on_hover_text("A slice where each hit starts")
@@ -2183,15 +2187,18 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
             b.slice_at_hits(sensitivity);
             renew = true;
         }
+        // ai: edit_instrument.slice.at_hits
         ui.add(egui::Slider::new(&mut sensitivity, 0.0..=1.0).text("Sensitivity"))
             .accessible_name("Sensitivity")
             .on_hover_text("Higher finds quieter hits too");
     });
     ui.horizontal(|ui| {
+        // ai: edit_instrument.slice.parts
         if ui.button("Cut into equal parts").clicked() {
             b.slice_equally(parts);
             renew = true;
         }
+        // ai: edit_instrument.slice.parts
         ui.add(
             egui::DragValue::new(&mut parts)
                 .range(1..=slicer::MAX_SLICES)
@@ -2582,6 +2589,147 @@ impl crate::App {
         if !shown.open {
             self.instrument_open = None;
         }
+    }
+}
+
+// ---- For assistants ----
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "edit_instrument",
+    description: "What a track's instrument window does beyond its settings (which are \
+                  set_parameter's): note repeat, how often held keys and pads play again; \
+                  for a sampler, spreading its zones over the keys by their root notes, and \
+                  removing a zone (the zones after it move down one); for the loop \
+                  slicer, its loop (a sound file, cut where its hits start), and cutting it \
+                  again at the hits or into equal parts. Answers with the zones or slices \
+                  there are now.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        let rates: Vec<&str> = std::iter::once("off")
+            .chain(daw_project::StepRate::ALL.iter().map(|r| r.label()))
+            .collect();
+        serde_json::json!({"type": "object", "properties": {
+            "track": {"type": "string"},
+            "note_repeat": {"type": "string", "enum": rates},
+            "spread_zones": {"type": "boolean"},
+            "remove_zone": {"type": "integer", "description": "The zone's number, from 0 (zone0)."},
+            "loop": {"type": "string", "description": "The slicer's loop: a sound file's path."},
+            "slice": {"type": "object", "description": "Cut the slicer's loop again: at_hits or parts.", "properties": {
+                "at_hits": {"type": "number", "description": "Sensitivity, 0 to 1: higher finds quieter hits too."},
+                "parts": {"type": "integer", "description": "Into this many equal parts."}
+            }}
+        }, "required": ["track"]})
+    },
+}];
+
+impl crate::App {
+    pub(crate) fn instrument_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "edit_instrument").then(|| self.edit_instrument(args))
+    }
+
+    fn edit_instrument(
+        &mut self,
+        args: &serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>), String> {
+        use serde_json::json;
+        let key = args["track"].as_str().ok_or("Give the track's id.")?;
+        let i = (self.tracks.iter())
+            .position(|t| t.key == key)
+            .ok_or_else(|| format!("There is no track {key}."))?;
+        if !self.tracks[i].kind.plays_notes() {
+            return Err(format!("{} plays no notes.", self.tracks[i].name));
+        }
+        // Check everything before changing anything.
+        let repeat = match args["note_repeat"].as_str() {
+            None => None,
+            Some("off") => Some(None),
+            Some(r) => Some(Some(
+                (daw_project::StepRate::ALL.into_iter())
+                    .find(|x| x.label() == r)
+                    .ok_or_else(|| format!("Note repeat is off or one of the rates, not {r}."))?,
+            )),
+        };
+        let kind = self.tracks[i].instrument.as_ref().and_then(Slot::kind);
+        let zones = args["spread_zones"].as_bool() == Some(true) || !args["remove_zone"].is_null();
+        if zones && kind != Some(Kind::Sampler) {
+            return Err("Zones are a sampler's.".into());
+        }
+        if let Some(z) = args["remove_zone"].as_u64() {
+            let n = (self.tracks[i].instrument.as_ref())
+                .and_then(Slot::builtin_ref)
+                .map_or(0, |b| b.zones());
+            if z as usize >= n {
+                return Err(format!("The sampler has {n} zones, numbered from 0."));
+            }
+        }
+        let slicing = !args["loop"].is_null() || !args["slice"].is_null();
+        if slicing && kind != Some(Kind::Slicer) {
+            return Err("The loop and its slices are the loop slicer's.".into());
+        }
+        let sound = match args["loop"].as_str() {
+            None => None,
+            Some(path) => {
+                let read = self.sound_reader();
+                Some(Arc::new(
+                    daw_instruments::load(path, &read)
+                        .map_err(|e| format!("Couldn't read the sound: {e}"))?,
+                ))
+            }
+        };
+        let slice = &args["slice"];
+        let at_hits = match slice["at_hits"].as_f64() {
+            Some(x) if !(0.0..=1.0).contains(&x) => {
+                return Err("The sensitivity goes from 0 to 1.".into());
+            }
+            x => x.map(|x| x as f32),
+        };
+        let parts = match slice["parts"].as_u64() {
+            Some(n) if n == 0 || n as usize > slicer::MAX_SLICES => {
+                return Err(format!("From 1 to {} parts.", slicer::MAX_SLICES));
+            }
+            n => n.map(|n| n as usize),
+        };
+
+        let t = &mut self.tracks[i];
+        if let Some(r) = repeat {
+            t.note_repeat = r;
+        }
+        let slot = t.instrument.as_mut();
+        let mut answer = json!({"note_repeat": t.note_repeat.map_or("off", |r| r.label())});
+        if let Some(slot) = slot {
+            let sensitivity = at_hits.unwrap_or(slot.sensitivity);
+            if let Some(n) = parts {
+                slot.parts = n;
+            }
+            slot.sensitivity = sensitivity;
+            if let Some(b) = slot.builtin_mut() {
+                if let Some(z) = args["remove_zone"].as_u64() {
+                    b.remove_zone(z as usize);
+                }
+                if args["spread_zones"].as_bool() == Some(true) {
+                    b.spread_zones();
+                }
+                if let Some(l) = sound {
+                    b.set_loop(l, sensitivity);
+                }
+                if at_hits.is_some() {
+                    b.slice_at_hits(sensitivity);
+                } else if let Some(n) = parts {
+                    b.slice_equally(n);
+                }
+                match kind {
+                    Some(Kind::Sampler) => answer["zones"] = json!(b.zones()),
+                    Some(Kind::Slicer) => answer["slices"] = json!(b.slices().len()),
+                    _ => {}
+                }
+            }
+        }
+        self.rebuild();
+        Ok((answer, Some("Change an instrument".into())))
     }
 }
 
@@ -3052,5 +3200,111 @@ mod plugin_tests {
         let p = app.proj.doc.get();
         assert!(p.tracks[0].layers[0].instrument.state.is_some());
         assert!(!alone.is_empty());
+    }
+
+    #[test]
+    fn an_assistant_spreads_and_removes_zones_slices_loops_and_repeats_notes() {
+        use serde_json::json;
+        let mut d = crate::agent::driver::Driver::new();
+        d.command("add-sampler-track");
+        let t = d.project()["tracks"][0]["id"].as_str().unwrap().to_string();
+        for (z, sound, root) in [
+            (0, "made:keys", 48.0),
+            (1, "made:pluck", 60.0),
+            (2, "made:keys", 72.0),
+        ] {
+            d.call(
+                "set_sound",
+                json!({"track": t, "slot": format!("zone{z}"), "sound": sound}),
+            )
+            .unwrap();
+            d.call(
+                "set_parameter",
+                json!({"track": t, "param": format!("instrument.zone{z}.root"), "value": root}),
+            )
+            .unwrap();
+        }
+        let r = d
+            .call(
+                "edit_instrument",
+                json!({"track": t, "spread_zones": true, "note_repeat": "1/8"}),
+            )
+            .unwrap();
+        assert_eq!(r["zones"], 3);
+        assert_eq!(r["note_repeat"], "1/8");
+        assert_eq!(d.project()["tracks"][0]["note_repeat"], "1/8");
+        let zone = |d: &mut crate::agent::driver::Driver, z: usize, k: usize| {
+            let a = d.app();
+            let b = a.tracks[0]
+                .instrument
+                .as_ref()
+                .unwrap()
+                .builtin_ref()
+                .unwrap();
+            b.params().get(daw_instruments::zone_at(z, k))
+        };
+        let (lo, hi) = (
+            daw_instruments::sampler::zone::LO,
+            daw_instruments::sampler::zone::HI,
+        );
+        assert!(
+            zone(&mut d, 0, hi) < zone(&mut d, 1, lo),
+            "spread out over the keys"
+        );
+        let r = d
+            .call("edit_instrument", json!({"track": t, "remove_zone": 1}))
+            .unwrap();
+        assert_eq!(r["zones"], 2);
+        assert_eq!(
+            zone(&mut d, 1, daw_instruments::sampler::zone::ROOT),
+            72.0,
+            "the one after moved down"
+        );
+        assert!(
+            d.call("edit_instrument", json!({"track": t, "remove_zone": 5}))
+                .is_err()
+        );
+        assert!(
+            d.call(
+                "edit_instrument",
+                json!({"track": t, "slice": {"parts": 4}})
+            )
+            .is_err()
+        );
+        d.call("edit_instrument", json!({"track": t, "note_repeat": "off"}))
+            .unwrap();
+        assert!(d.project()["tracks"][0]["note_repeat"].is_null());
+
+        d.command("add-slicer-track");
+        let s = d.project()["tracks"][1]["id"].as_str().unwrap().to_string();
+        let r = d
+            .call("edit_instrument", json!({"track": s, "loop": "made:loop"}))
+            .unwrap();
+        assert!(r["slices"].as_u64().unwrap() > 1, "{r}");
+        let r = d
+            .call(
+                "edit_instrument",
+                json!({"track": s, "slice": {"parts": 8}}),
+            )
+            .unwrap();
+        assert_eq!(r["slices"], 8);
+        let r = d
+            .call(
+                "edit_instrument",
+                json!({"track": s, "slice": {"at_hits": 0.9}}),
+            )
+            .unwrap();
+        assert!(r["slices"].as_u64().unwrap() > 1, "{r}");
+        assert!(
+            d.call("edit_instrument", json!({"track": s, "spread_zones": true}))
+                .is_err()
+        );
+        assert!(
+            d.call(
+                "edit_instrument",
+                json!({"track": s, "slice": {"at_hits": 2}})
+            )
+            .is_err()
+        );
     }
 }

@@ -238,6 +238,14 @@ assistant finds them for itself. In outline:
 - **Practice:** `set_practice` (speed, transpose, fine pitch, the
   metronome, count-in, the tempo trainer, and measuring how far a
   track is from concert pitch).
+- **Recording:** `set_record_options` (punch in and out, pre-roll and
+  post-roll, how much armed tracks' input is always kept, and whether
+  notes make a new clip or merge); `get_transport` reads them back as
+  `record_options`, and the `keep-last` command makes takes of what
+  was kept.
+- **Top bar option panels:** `record-options`, `loop-options`,
+  `metronome-options` and `speed-options` open a panel for the person
+  to see; `get_selection` says which is open as `top_bar`.
 - **Monitor section:** `get_monitor`, `edit_headphone_mixes` (add,
   change, remove, copy the main mix, and each track's level, pan and
   mute in a mix) and `set_monitor` (the speakers' controls, talkback,

@@ -16,7 +16,7 @@ use eframe::egui::{self, RichText};
 use crate::App;
 
 /// Beat units offered for a time signature.
-const UNITS: [u32; 4] = [2, 4, 8, 16];
+pub(crate) const UNITS: [u32; 4] = [2, 4, 8, 16];
 
 /// The song's time, beyond its starting tempo and beats per bar.
 #[derive(Clone, Debug, PartialEq)]
@@ -329,23 +329,6 @@ fn meter_rows(ui: &mut egui::Ui, c: &mut Changes) -> bool {
     changed
 }
 
-/// The beat unit picker for the start's time signature, in the transport
-/// bar.
-pub(crate) fn unit_picker(ui: &mut egui::Ui, unit: &mut u32) -> bool {
-    let mut changed = false;
-    egui::ComboBox::from_id_salt("beat unit")
-        .width(44.0)
-        .selected_text(unit.to_string())
-        .show_ui(ui, |ui| {
-            for u in UNITS {
-                changed |= ui.selectable_value(unit, u, u.to_string()).changed();
-            }
-        })
-        .response
-        .accessible_name("Beat unit");
-    changed
-}
-
 impl App {
     pub(crate) fn tempo_window(&mut self, ctx: &egui::Context) {
         let map = self.tempo_map();
@@ -497,7 +480,10 @@ mod tests {
     fn changes_made_in_the_window_move_the_bars_and_are_saved() {
         use egui_kittest::kittest::Queryable;
         let mut h = app();
-        h.get_by_label("Changes…").click();
+        // From the time signature's button in the top bar.
+        h.get_by_label("Time signature, 4/4").click();
+        h.run();
+        h.get_by_label("Tempo and signature changes…").click();
         h.run();
         h.get_by_label("Add tempo change at bar 2").click();
         h.run();

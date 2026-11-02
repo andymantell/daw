@@ -12,36 +12,59 @@ use crate::agent::{Access, Tool};
 /// What the tools here answer: a value, and the undo step's name.
 type Done = Result<(Value, Option<String>), String>;
 
-pub(crate) const TOOLS: &[Tool] = &[Tool {
-    name: "set_practice",
-    description: "The practice controls: speed (without changing pitch), transpose and \
+pub(crate) const TOOLS: &[Tool] = &[
+    Tool {
+        name: "set_practice",
+        description: "The practice controls: speed (without changing pitch), transpose and \
                   fine pitch (without changing speed; +1 plays a half-step-down recording \
                   in standard tuning), the metronome (on, clicks per beat, level), \
                   count-in, and the tempo trainer (speed up by a step every few loops, up \
                   to a target). detect_tuning measures how far a track's newest clip is \
                   from concert pitch, in cents. Tempo is set_tempo; the loop is set_loop.",
-    access: Access::Edit,
-    schema: || {
-        json!({"type": "object", "properties": {
-            "speed_pct": {"type": "number", "description": "50 to 150."},
-            "semitones": {"type": "integer", "description": "-12 to 12."},
-            "cents": {"type": "integer", "description": "-50 to 50."},
-            "metronome": {"type": "object", "properties": {
-                "on": {"type": "boolean"},
-                "subdivision": {"type": "integer", "description": "Clicks per beat: 1, 2, 3 (triplets) or 4."},
-                "level_db": {"type": "number", "description": "-40 to 0."}
-            }},
-            "count_in": {"type": "boolean"},
-            "trainer": {"type": "object", "properties": {
-                "on": {"type": "boolean"},
-                "step_pct": {"type": "number", "description": "1 to 25."},
-                "every_loops": {"type": "integer", "description": "1 to 32."},
-                "target_pct": {"type": "number", "description": "50 to 150."}
-            }},
-            "detect_tuning": {"type": "string", "description": "A track's id."}
-        }})
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "speed_pct": {"type": "number", "description": "50 to 150."},
+                "semitones": {"type": "integer", "description": "-12 to 12."},
+                "cents": {"type": "integer", "description": "-50 to 50."},
+                "metronome": {"type": "object", "properties": {
+                    "on": {"type": "boolean"},
+                    "subdivision": {"type": "integer", "description": "Clicks per beat: 1, 2, 3 (triplets) or 4."},
+                    "level_db": {"type": "number", "description": "-40 to 0."},
+                    "accent": {"type": "boolean", "description": "A higher click on each bar's first beat."}
+                }},
+                "count_in": {"type": "boolean"},
+                "trainer": {"type": "object", "properties": {
+                    "on": {"type": "boolean"},
+                    "step_pct": {"type": "number", "description": "1 to 25."},
+                    "every_loops": {"type": "integer", "description": "1 to 32."},
+                    "target_pct": {"type": "number", "description": "50 to 150."}
+                }},
+                "detect_tuning": {"type": "string", "description": "A track's id."}
+            }})
+        },
     },
-}];
+    Tool {
+        name: "set_record_options",
+        description: "The record options (the arrow beside Record): punch in and out at \
+                  bars, bars of pre-roll and post-roll, how many seconds of armed \
+                  tracks' input are always kept (0, 30, 60, 120 or 300; keep-last makes \
+                  takes of it), and whether each pass on an instrument track makes a new \
+                  note clip or merges into the clip there. Gives back all of them.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "punch": {"type": "boolean"},
+                "punch_in_bar": {"type": "integer", "description": "From 1."},
+                "punch_out_bar": {"type": "integer", "description": "After punch_in_bar."},
+                "pre_roll_bars": {"type": "integer", "description": "0 to 8."},
+                "post_roll_bars": {"type": "integer", "description": "0 to 8."},
+                "keep_seconds": {"type": "integer"},
+                "notes": {"type": "string", "enum": ["new-clip", "merge"]}
+            }})
+        },
+    },
+];
 
 /// A number from `v`, which must lie in `lo..=hi`.
 fn within(v: &Value, what: &str, lo: f64, hi: f64) -> Result<Option<f64>, String> {
@@ -54,7 +77,11 @@ fn within(v: &Value, what: &str, lo: f64, hi: f64) -> Result<Option<f64>, String
 
 impl App {
     pub(crate) fn practice_tool(&mut self, name: &str, args: &Value) -> Option<Done> {
-        (name == "set_practice").then(|| self.set_practice(args))
+        match name {
+            "set_practice" => Some(self.set_practice(args)),
+            "set_record_options" => Some(self.set_record_options(args)),
+            _ => None,
+        }
     }
 
     fn set_practice(&mut self, args: &Value) -> Done {
@@ -110,6 +137,9 @@ impl App {
         if let Some(x) = level {
             met.level_db = x as f32;
         }
+        if let Some(b) = m["accent"].as_bool() {
+            met.accent = b;
+        }
         if met != self.metronome {
             self.metronome = met;
             self.send(Command::SetMetronome(met));
@@ -132,7 +162,7 @@ impl App {
         let mut v = json!({
             "speed_pct": self.speed_pct, "semitones": self.semitones, "cents": self.cents,
             "metronome": {"on": self.metronome.enabled, "subdivision": self.metronome.subdivision,
-                          "level_db": self.metronome.level_db},
+                          "level_db": self.metronome.level_db, "accent": self.metronome.accent},
             "count_in": self.count_in,
             "trainer": {"on": self.trainer.on, "step_pct": self.trainer.step,
                         "every_loops": self.trainer.every, "target_pct": self.trainer.target},
@@ -150,6 +180,86 @@ impl App {
             });
         }
         Ok((v, None))
+    }
+
+    /// The record options, as `set_record_options` and `get_transport`
+    /// give them.
+    pub(crate) fn record_options_value(&self) -> Value {
+        let o = &self.record;
+        json!({
+            "punch": o.punch,
+            "punch_in_bar": o.punch_bars.0,
+            "punch_out_bar": o.punch_bars.1,
+            "pre_roll_bars": o.pre_roll,
+            "post_roll_bars": o.post_roll,
+            "keep_seconds": o.capture_secs,
+            "kept_seconds": self.ctl.captured_frames() as f64 / self.rate.max(1) as f64,
+            "notes": match self.midi.mode {
+                crate::midi::Mode::NewClip => "new-clip",
+                crate::midi::Mode::Merge => "merge",
+            },
+        })
+    }
+
+    fn set_record_options(&mut self, args: &Value) -> Done {
+        // Check everything before changing anything.
+        let bars = |key: &str, what: &str| within(&args[key], what, 0.0, 8.0);
+        let pre = bars("pre_roll_bars", "Pre-roll")?;
+        let post = bars("post_roll_bars", "Post-roll")?;
+        let (mut pin, mut pout) = self.record.punch_bars;
+        if let Some(b) = args["punch_in_bar"].as_i64() {
+            pin = b;
+        }
+        if let Some(b) = args["punch_out_bar"].as_i64() {
+            pout = b;
+        }
+        if pin < 1 || pout <= pin {
+            return Err("Punch in at bar 1 or later, and out at a later bar.".into());
+        }
+        let keep = match args["keep_seconds"].as_u64() {
+            None => None,
+            Some(s)
+                if crate::recording::CAPTURE_CHOICES
+                    .iter()
+                    .any(|c| c.0 as u64 == s) =>
+            {
+                Some(s as u32)
+            }
+            Some(_) => return Err("Keep 0, 30, 60, 120 or 300 seconds.".into()),
+        };
+        let notes = match args["notes"].as_str() {
+            None => None,
+            Some("new-clip") => Some(crate::midi::Mode::NewClip),
+            Some("merge") => Some(crate::midi::Mode::Merge),
+            Some(_) => return Err("Notes are \"new-clip\" or \"merge\".".into()),
+        };
+
+        let o = &mut self.record;
+        let before = (o.punch, o.punch_bars, o.post_roll);
+        if let Some(b) = args["punch"].as_bool() {
+            o.punch = b;
+        }
+        o.punch_bars = (pin, pout);
+        if let Some(x) = pre {
+            o.pre_roll = x as u32;
+        }
+        if let Some(x) = post {
+            o.post_roll = x as u32;
+        }
+        let punched = (o.punch, o.punch_bars, o.post_roll) != before;
+        if let Some(s) = keep
+            && s != self.record.capture_secs
+        {
+            self.record.capture_secs = s;
+            self.send_capture();
+        }
+        if let Some(m) = notes {
+            self.midi.mode = m;
+        }
+        if punched && self.ctl.status().playing() {
+            self.send_punch();
+        }
+        Ok((self.record_options_value(), None))
     }
 }
 

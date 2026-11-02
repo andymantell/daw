@@ -1049,8 +1049,10 @@ fn controls_stay_in_place() {
         "Effects on Bass",
         "Back to the start",
         "Record",
-        "Click level",
+        "Loop",
+        "Metronome",
         "Tempo",
+        "Find a command",
         "Undo",
     ];
     let places = |h: &Harness<'_, App>| -> Vec<egui::Rect> {

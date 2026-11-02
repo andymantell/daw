@@ -21,7 +21,7 @@ kits.rs 8
 latency.rs 3
 layers.rs 14
 lessons.rs 0
-main.rs 26
+main.rs 25
 meters.rs 4
 mixer.rs 1
 monitor.rs 0
@@ -35,14 +35,14 @@ people.rs 8
 perf.rs 3
 presets.rs 23
 project.rs 12
-recording.rs 9
+recording.rs 2
 remote.rs 4
 sections.rs 14
 snapshots.rs 15
 start.rs 5
 stretch.rs 13
 templates.rs 9
-tempo.rs 12
+tempo.rs 11
 theme.rs 4
 timeline.rs 77
 timing.rs 6

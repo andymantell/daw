@@ -20,7 +20,7 @@ use eframe::egui::{self, RichText};
 use crate::{App, Audio, Track};
 
 /// The choices for how much input retrospective capture keeps, seconds.
-const CAPTURE_CHOICES: &[(u32, &str)] = &[
+pub(crate) const CAPTURE_CHOICES: &[(u32, &str)] = &[
     (0, "Off"),
     (30, "30 seconds"),
     (60, "1 minute"),
@@ -42,7 +42,7 @@ pub struct RecordOptions {
 }
 
 /// A count of bars, 0 to 8, said as "1 bar" or "2 bars".
-fn bars(n: &mut u32) -> egui::DragValue<'_> {
+pub(crate) fn bars(n: &mut u32) -> egui::DragValue<'_> {
     egui::DragValue::new(n)
         .range(0..=8)
         .custom_formatter(|n, _| match n as u32 {
@@ -113,119 +113,6 @@ impl App {
     pub(crate) fn send_capture(&mut self) {
         if self.ctl.set_capture(self.record.capture_secs).is_err() {
             self.message = Some("The audio engine is busy; try again.".into());
-        }
-    }
-
-    /// The transport's recording row: punch range, pre-roll and
-    /// post-roll, and retrospective capture.
-    pub(crate) fn recording_controls(&mut self, ui: &mut egui::Ui) {
-        let o = &mut self.record;
-        let mut punch = ui
-            .checkbox(&mut o.punch, "Punch bars")
-            .on_hover_text("With Record on, record only from the start of the first bar to the start of the second")
-            .changed();
-        punch |= ui
-            .add(egui::DragValue::new(&mut o.punch_bars.0).range(1..=999))
-            .accessible_name("Punch in at bar")
-            .changed();
-        ui.label("to");
-        punch |= ui
-            .add(egui::DragValue::new(&mut o.punch_bars.1).range(2..=1000))
-            .accessible_name("Punch out at bar")
-            .changed();
-        if o.punch_bars.1 <= o.punch_bars.0 {
-            o.punch_bars.1 = o.punch_bars.0 + 1;
-        }
-        ui.label("Pre-roll");
-        ui.add(bars(&mut o.pre_roll))
-            .accessible_name("Pre-roll bars")
-            .on_hover_text("Bars played before the punch-in");
-        ui.label("Post-roll");
-        punch |= ui
-            .add(bars(&mut o.post_roll))
-            .accessible_name("Post-roll bars")
-            .on_hover_text("Bars played after the punch-out, then playback stops")
-            .changed();
-        ui.separator();
-
-        let before = o.capture_secs;
-        let label = |s: u32| {
-            CAPTURE_CHOICES
-                .iter()
-                .find(|c| c.0 == s)
-                .map_or(format!("{s} s"), |c| c.1.to_string())
-        };
-        ui.label("Always keep");
-        egui::ComboBox::from_id_salt("capture")
-            .width(90.0)
-            .selected_text(label(o.capture_secs))
-            .show_ui(ui, |ui| {
-                for &(s, name) in CAPTURE_CHOICES {
-                    ui.selectable_value(&mut o.capture_secs, s, name);
-                }
-            })
-            .response
-            .accessible_name("Always keep the last of armed tracks' input")
-            .on_hover_text(
-                "Armed tracks' input is kept in memory while playing without \
-                 recording, so a good part played without Record on can still be kept",
-            );
-        let changed = o.capture_secs != before;
-        let held = self.ctl.captured_frames();
-        let secs = held as f64 / self.rate.max(1) as f64;
-        let keep = ui
-            .add_enabled(
-                held > 0,
-                egui::Button::new(format!(
-                    "Keep last {}:{:02}",
-                    secs as u64 / 60,
-                    secs as u64 % 60
-                )),
-            )
-            .on_hover_text("Make takes from armed tracks' input that wasn't recorded")
-            .on_disabled_hover_text(if self.record.capture_secs == 0 {
-                "Choose how much to keep first"
-            } else {
-                "Nothing kept yet: arm a track and play"
-            });
-        if keep.clicked() {
-            self.ctl.keep_capture();
-        }
-        if changed {
-            self.send_capture();
-        }
-        if punch && self.ctl.status().playing() {
-            self.send_punch();
-        }
-        ui.separator();
-        ui.label("Notes");
-        egui::ComboBox::from_id_salt("notes-mode")
-            .width(170.0)
-            .selected_text(self.midi.mode.label())
-            .show_ui(ui, |ui| {
-                for m in [crate::midi::Mode::NewClip, crate::midi::Mode::Merge] {
-                    ui.selectable_value(&mut self.midi.mode, m, m.label());
-                }
-            })
-            .response
-            .accessible_name("Notes recording mode")
-            .on_hover_text(
-                "Each recording pass on an instrument track makes a new note clip, or \
-                 merges its notes into the clip already there (to build up a part)",
-            );
-        let keep_notes = ui
-            .add_enabled(self.midi.has_recent(), egui::Button::new("Keep notes"))
-            .on_hover_text("Make clips from notes played on instrument tracks without Record on")
-            .on_disabled_hover_text(
-                "Nothing played yet: monitor or arm an instrument track and play",
-            );
-        if keep_notes.clicked() && self.keep_notes() {
-            self.rebuild();
-        }
-        if self.record.capture_secs > 0 && self.tracks.iter().any(|t| t.arm) {
-            // The kept time counts up.
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
 
@@ -374,6 +261,9 @@ mod tests {
         // asks for another.
         assert!(until(&mut h, 2, |a| !a.ctl.status().playing()));
         h.run();
+        // It is in the record options, by the Record button.
+        h.get_by_label("Record options").click();
+        h.run();
         h.get_by_label_contains("Keep last").click();
         assert!(until(&mut h, 2, |a| !a.tracks[0].clips.is_empty()));
         let clips = &h.state().tracks[0].clips;
@@ -416,6 +306,7 @@ mod tests {
         app.recording = true;
         app.send(Command::SetRecording(true));
         h.run();
+        // Said beside Record.
         assert!(h.query_by_label_contains("Recording at 70%").is_some());
         h.state_mut().toggle_play();
         assert!(until(&mut h, 2, |a| a.ctl.status().playing()));

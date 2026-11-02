@@ -133,6 +133,11 @@ pub(crate) enum Cmd {
     Loop,
     Metronome,
     CountIn,
+    RecordOptions,
+    KeepLast,
+    LoopOptions,
+    MetronomeOptions,
+    SpeedOptions,
     Mixer,
     MonitorSection,
     Talkback,
@@ -1689,6 +1694,42 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("One bar of clicks before playing")
     .words("pre-roll")
     .everyday(),
+    info(
+        Cmd::RecordOptions,
+        "record-options",
+        "Song",
+        "Record options…",
+        &[],
+    )
+    .hint("Punch in, pre-roll and post-roll, what is always kept, and how notes are recorded")
+    .words("punch pre-roll post-roll capture keep takes settings"),
+    info(
+        Cmd::KeepLast,
+        "keep-last",
+        "Song",
+        "Keep what armed tracks just played",
+        &[],
+    )
+    .hint("Make takes from armed tracks' input that wasn't recorded")
+    .words("retrospective capture keep last take"),
+    info(
+        Cmd::LoopOptions,
+        "loop-options",
+        "Song",
+        "Loop options…",
+        &[],
+    )
+    .hint("The bars the loop plays")
+    .words("loop bars range cycle"),
+    info(
+        Cmd::MetronomeOptions,
+        "metronome-options",
+        "Song",
+        "Metronome options…",
+        &[],
+    )
+    .hint("The click's sound and level, and the count-in")
+    .words("click level subdivision count-in accent"),
     info(Cmd::Mixer, "mixer", "View", "Mixer", &[])
         .hint("Show or hide the mixer")
         .words("pane faders tracks")
@@ -2039,6 +2080,16 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .words("reset speed transpose 100%")
+    .everyday(),
+    info(
+        Cmd::SpeedOptions,
+        "speed-options",
+        "Practice",
+        "Speed and pitch…",
+        &[],
+    )
+    .hint("Practice speed and pitch, tuning presets and the speed trainer")
+    .words("speed slow transpose pitch tuning trainer cents")
     .everyday(),
     info(Cmd::Settings, "settings", "File", "Settings…", &[key(CTRL, Key::Comma)])
         .hint("The audio device, MIDI, plugins, keys, theme and more, in one window")
@@ -3177,6 +3228,15 @@ impl App {
     /// Runs the commands whose keys were pressed. Called before
     /// anything is drawn, so they come before the controls see the keys.
     pub(crate) fn command_keys(&mut self, ctx: &egui::Context) {
+        // A top bar option panel is open: Escape closes it, and the other
+        // keys still run their commands (unless typing in one of its
+        // fields, as anywhere).
+        if self.top.open.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.top.open = None;
+            return;
+        }
         // Typing tab takes numbers and arrows first, then typing on
         // the fretboard.
         self.notation_keys(ctx);
@@ -3396,6 +3456,21 @@ impl App {
                 self.send(Command::SetMetronome(self.metronome));
             }
             Cmd::CountIn => self.count_in = !self.count_in,
+            Cmd::RecordOptions => self.top.open = Some(crate::top_bar::Options::Record),
+            Cmd::LoopOptions => self.top.open = Some(crate::top_bar::Options::Loop),
+            Cmd::MetronomeOptions => self.top.open = Some(crate::top_bar::Options::Metronome),
+            Cmd::SpeedOptions => self.top.open = Some(crate::top_bar::Options::Speed),
+            Cmd::KeepLast => {
+                if self.ctl.captured_frames() > 0 {
+                    self.ctl.keep_capture();
+                } else {
+                    self.message = Some(
+                        "Nothing to keep: choose how much to keep in the record options, \
+                         arm a track and play."
+                            .into(),
+                    );
+                }
+            }
             Cmd::Mixer => self.workspace.toggle(Pane::Mixer),
             Cmd::MonitorSection => self.workspace.toggle(Pane::Monitor),
             Cmd::Talkback => self.toggle_talkback(),

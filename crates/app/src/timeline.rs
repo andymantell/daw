@@ -1434,6 +1434,9 @@ pub struct Timeline {
     note_drag: Option<NoteDrag>,
     /// Scrubbing the playhead along the ruler.
     scrubbing: bool,
+    /// Dragging one end of the loop along the ruler: 0 its start, 1 its
+    /// end.
+    loop_drag: Option<usize>,
     waves: Waveforms,
     /// The words found in each recording (crate::lyrics), by its file.
     pub words: HashMap<PathBuf, Arc<daw_speech::Transcript>>,
@@ -1493,6 +1496,7 @@ impl Default for Timeline {
             selected: HashSet::new(),
             drag: None,
             scrubbing: false,
+            loop_drag: None,
             waves: Waveforms::default(),
             words: HashMap::new(),
             menu: None,
@@ -1545,7 +1549,7 @@ const HEAD_METER: f32 = 6.0;
 const HEAD_TWO_ROWS: f32 = 50.0;
 /// The ruler: marker flags on top, then tempo and time-signature
 /// changes, then the loop and bar numbers.
-const RULER: f32 = 38.0;
+pub(crate) const RULER: f32 = 38.0;
 /// Edge grab width for trimming, in points.
 const EDGE: f32 = 6.0;
 /// A fade handle's size, and how near counts as on the volume line.
@@ -3258,6 +3262,18 @@ impl Timeline {
             Some(Hit::Lane)
         };
 
+        // The loop's ends, at the foot of the ruler, drag to new bars.
+        let loop_end_at = |p: Pos2| -> Option<usize> {
+            let (a, b) = view.loop_bars?;
+            if !(rect.top() + RULER - 14.0..=rect.top() + RULER).contains(&p.y) {
+                return None;
+            }
+            [a, b].iter().position(|&bar| {
+                let x = x_of(view.map.frames_at(view.map.bar_start(bar)).0);
+                x >= left && (p.x - x).abs() < 6.0
+            })
+        };
+
         // Pointer: cursors, selection, dragging.
         let modifiers = ui.input(|i| i.modifiers);
         let (grid, snapping) = (self.grid, self.snap);
@@ -3295,6 +3311,10 @@ impl Timeline {
             snap(view.map, f, grid.at_zoom(view.map, f, pps))
         };
         if let Some(p) = resp.hover_pos()
+            && (self.loop_drag.is_some() || loop_end_at(p).is_some())
+        {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+        } else if let Some(p) = resp.hover_pos()
             && self.drag.is_none()
         {
             match hit(p, song) {
@@ -3327,6 +3347,7 @@ impl Timeline {
             && let Some(p) = ui.input(|i| i.pointer.press_origin())
         {
             match hit(p, song) {
+                _ if loop_end_at(p).is_some() => self.loop_drag = loop_end_at(p),
                 Some(Hit::Clip { id, zone }) => {
                     // Ctrl held as a clip's body is dragged slips its
                     // audio; it doesn't add to the selection.
@@ -3429,6 +3450,24 @@ impl Timeline {
             && let Some(p) = resp.interact_pointer_pos()
         {
             out.seek = Some(snap_to(frame_of(p.x.max(left))).max(0));
+        }
+        if let Some(end) = self.loop_drag
+            && let Some(p) = resp.interact_pointer_pos()
+            && let Some((a, b)) = view.loop_bars
+        {
+            // To the nearer bar line.
+            let t = view.map.ticks_at(Frames(frame_of(p.x.max(left)).max(0)));
+            let bar = view.map.bar_beat(t).bar;
+            let (from, to) = (view.map.bar_start(bar).0, view.map.bar_start(bar + 1).0);
+            let bar = if t.0 - from > to - t.0 { bar + 1 } else { bar };
+            let new = if end == 0 {
+                (bar.clamp(1, b - 1), b)
+            } else {
+                (a, bar.max(a + 1))
+            };
+            if new != (a, b) {
+                out.loop_bars = Some(new);
+            }
         }
         if let Some(d) = &mut self.drag
             && let Some(p) = resp.interact_pointer_pos()
@@ -3585,6 +3624,7 @@ impl Timeline {
         }
         if resp.drag_stopped() {
             self.scrubbing = false;
+            self.loop_drag = None;
             if let Some(d) = self.note_drag.take()
                 && d.moved
             {

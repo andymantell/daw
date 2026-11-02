@@ -2224,6 +2224,92 @@ mod tests {
         );
     }
 
+    /// The Model Mono through the assistant interface (classic synths,
+    /// S1): add the track, read its settings and the sounds made in
+    /// code, voice a bass from them, play notes and render.
+    #[test]
+    fn the_model_mono_is_played_through_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "model-mono"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        for key in [
+            "instrument.osc1_wave",
+            "instrument.osc3_keys",
+            "instrument.noise_colour",
+            "instrument.overdrive",
+            "instrument.cutoff",
+            "instrument.emphasis",
+            "instrument.contour",
+            "instrument.key_track",
+            "instrument.decay_release",
+            "instrument.glide",
+            "instrument.priority",
+            "instrument.trigger",
+        ] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        let choices = |params: &[Value], key: &str| -> Vec<Value> {
+            let p = params.iter().find(|p| p["param"] == key).unwrap();
+            p["choices"].as_array().unwrap().clone()
+        };
+        assert!(
+            choices(&params, "instrument.osc1_wave")
+                .iter()
+                .any(|c| c == "Shark tooth")
+        );
+        let ranges = choices(&params, "instrument.osc1_range");
+        let low = ranges.iter().position(|c| c == "32'").unwrap();
+        assert_eq!(choices(&params, "instrument.key_track").len(), 4);
+        // The sounds made in code come with the settings that make them.
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let sounds = info["instrument"]["sounds"].as_array().unwrap();
+        let fat = (sounds.iter()).find(|s| s["name"] == "Fat bass").unwrap();
+        d.call(
+            "set_instrument",
+            json!({"track": t, "settings": fat["settings"]}),
+        )
+        .unwrap();
+        // Then voiced further: hotter, lower, with more emphasis.
+        d.call(
+            "set_parameters",
+            json!({"track": t, "changes": [
+                {"param": "instrument.overdrive", "value": 0.7},
+                {"param": "instrument.emphasis", "value": 0.5},
+                {"param": "instrument.cutoff", "value": 300.0},
+                {"param": "instrument.osc1_range", "value": low},
+            ]}),
+        )
+        .unwrap();
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 1, "notes": [
+                {"beat": 0.0, "beats": 1.5, "pitch": 33, "velocity": 110},
+                {"beat": 1.0, "beats": 1.0, "pitch": 40, "velocity": 100},
+                {"beat": 2.0, "beats": 2.0, "pitch": 36, "velocity": 110}
+            ]}),
+        )
+        .unwrap();
+        let a = d
+            .call("analyse", json!({"track": t, "from_bar": 1, "to_bar": 2}))
+            .unwrap();
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() > -30.0, "{a}");
+        let now = instrument_params(&mut d, &t);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.osc1_range")
+            .unwrap();
+        assert_eq!(f["text"], "32'");
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.osc3_level")
+            .unwrap();
+        assert_eq!(f["value"], 0.5);
+        // The command is in the table too.
+        d.call("run_command", json!({"id": "add-model-mono-track"}))
+            .unwrap();
+        let p = d.call("get_project", json!({})).unwrap();
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Instruments that come with the app (roadmap 3.4): a synth of our own
 //! design, a multi-zone sampler, a drum sampler, a drum machine with
-//! layered pads, and a slicer that turns a loop into a playable
-//! instrument.
+//! layered pads, a slicer that turns a loop into a playable
+//! instrument, and the classic synths built on the [`vintage`] toolkit
+//! (`docs/plans/classic-synths.md`), starting with the Model Mono.
 //!
 //! A [`Builtin`] holds an instrument's settings and sounds off the
 //! audio thread; [`Builtin::make`] makes the instrument that plays on
@@ -27,6 +28,7 @@ pub mod drum_voice;
 pub mod dsp;
 pub mod library;
 pub mod made;
+pub mod model_mono;
 pub mod oh_one;
 pub mod params;
 pub mod patch_twenty;
@@ -62,10 +64,20 @@ pub enum Kind {
     OhOne,
     /// The acid bass line synth (classic synths, S2).
     AcidThree,
+    /// The three-oscillator ladder monosynth (classic synths, S1).
+    ModelMono,
+}
+
+/// A sound an instrument makes from its settings alone: a name and the
+/// settings that differ from the defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sound {
+    pub name: &'static str,
+    pub settings: &'static [(&'static str, f64)],
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
@@ -74,6 +86,7 @@ impl Kind {
         Kind::PatchTwenty,
         Kind::OhOne,
         Kind::AcidThree,
+        Kind::ModelMono,
     ];
 
     /// How projects name it. Never change one.
@@ -87,6 +100,7 @@ impl Kind {
             Kind::PatchTwenty => "patch-twenty",
             Kind::OhOne => "oh-one",
             Kind::AcidThree => "acid-three",
+            Kind::ModelMono => "model-mono",
         }
     }
 
@@ -104,6 +118,7 @@ impl Kind {
             Kind::PatchTwenty => "Patch Twenty",
             Kind::OhOne => "Oh-One",
             Kind::AcidThree => "Acid Three",
+            Kind::ModelMono => "Model Mono",
         }
     }
 
@@ -127,6 +142,18 @@ impl Kind {
             Kind::AcidThree => {
                 "A bass line synth: one oscillator into a diode ladder, accents from velocity, slides from overlapping notes"
             }
+            Kind::ModelMono => {
+                "A three-oscillator ladder monosynth for bass and leads: six footages and shapes, white or pink noise, an overdriving mixer, the 24 dB ladder with emphasis and contour, glide"
+            }
+        }
+    }
+
+    /// The sounds it makes from its settings, by name, for the browser
+    /// and the assistant; none for the samplers, whose sounds are files.
+    pub fn sounds(self) -> Vec<Sound> {
+        match self {
+            Kind::ModelMono => model_mono::sounds(),
+            _ => Vec::new(),
         }
     }
 }
@@ -211,6 +238,7 @@ impl Builtin {
             }
             Kind::PatchTwenty => Builtin::of(kind, patch_twenty::params(), Vec::new()),
             Kind::AcidThree => Builtin::of(kind, acid::params(), Vec::new()),
+            Kind::ModelMono => Builtin::of(kind, model_mono::params(), Vec::new()),
         }
     }
 
@@ -279,6 +307,7 @@ impl Builtin {
             Kind::Slicer => slicer::params(count("slice", false)),
             Kind::PatchTwenty => patch_twenty::params(),
             Kind::AcidThree => acid::params(),
+            Kind::ModelMono => model_mono::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -309,6 +338,20 @@ impl Builtin {
 
     pub fn params(&self) -> &Arc<Params> {
         &self.params
+    }
+
+    /// Sets the instrument to one of its kind's sounds: every setting
+    /// back to its default, then the sound's own. `None` if it has no
+    /// sound of that name.
+    pub fn set_sound(&self, name: &str) -> Option<()> {
+        let s = self.kind.sounds().into_iter().find(|s| s.name == name)?;
+        for p in self.params.list() {
+            self.params.set_key(&p.key, p.default);
+        }
+        for (k, v) in s.settings {
+            self.params.set_key(k, *v);
+        }
+        Some(())
     }
 
     /// Its sounds by slot, as the project saves them.
@@ -637,6 +680,7 @@ impl Builtin {
             }
             Kind::PatchTwenty => Box::new(patch_twenty::PatchTwenty::new(rate, p)),
             Kind::AcidThree => Box::new(acid::Acid::new(rate, p)),
+            Kind::ModelMono => Box::new(model_mono::ModelMono::new(rate, p)),
         }
     }
 
@@ -708,7 +752,7 @@ mod tests {
         for k in Kind::ALL {
             let b = Builtin::new(k);
             let note = match k {
-                Kind::DrumMachine | Kind::Slicer => 36,
+                Kind::DrumMachine | Kind::Slicer | Kind::ModelMono => 36,
                 _ => 60,
             };
             let peak = loudness(&b, note);
@@ -743,6 +787,22 @@ mod tests {
             b.samples(),
             [("sample".to_string(), "gone.wav".to_string())]
         );
+    }
+
+    #[test]
+    fn every_sound_made_here_sets_real_settings_and_plays() {
+        for k in Kind::ALL {
+            for s in k.sounds() {
+                let b = Builtin::new(k);
+                for (key, _) in s.settings {
+                    assert!(b.params.index(key).is_some(), "{k:?} {}: {key}", s.name);
+                }
+                assert!(b.set_sound(s.name).is_some());
+                let peak = loudness(&b, 36);
+                assert!(peak > 0.005 && peak < 4.0, "{k:?} {}: {peak}", s.name);
+            }
+            assert!(Builtin::new(k).set_sound("no such sound").is_none());
+        }
     }
 
     #[test]

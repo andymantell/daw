@@ -1165,6 +1165,7 @@ pub(crate) fn slot_controls(
         Some(Kind::Slicer) => slicer_controls(ui, slot, cx, shown),
         Some(Kind::PatchTwenty) => patch_twenty_controls(ui, slot),
         Some(Kind::AcidThree) => acid_controls(ui, slot),
+        Some(Kind::ModelMono) => model_mono_controls(ui, slot),
     };
     if renew {
         slot.renew(cx.rate, cx.pending);
@@ -1323,6 +1324,31 @@ fn acid_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
         .weak(),
     );
     grouped_controls(ui, slot, "acid", daw_instruments::acid::GROUPS)
+}
+
+/// The Model Mono's controls: its sounds made in code, then its
+/// settings in groups.
+fn model_mono_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
+    if let Some(b) = slot.builtin_ref() {
+        ui.horizontal(|ui| {
+            ui.label("Sound");
+            // ai: set_instrument
+            egui::ComboBox::from_id_salt(("model-mono-sound", slot.id))
+                .selected_text("Choose a sound…")
+                .show_ui(ui, |ui| {
+                    for s in b.kind().sounds() {
+                        // ai: set_instrument
+                        if ui.selectable_label(false, s.name).clicked() {
+                            b.set_sound(s.name);
+                        }
+                    }
+                })
+                .response
+                .accessible_name("Sound")
+                .on_hover_text("Sounds made from the settings: choosing one sets them all");
+        });
+    }
+    grouped_controls(ui, slot, "model-mono", daw_instruments::model_mono::GROUPS)
 }
 
 /// Reads `reference` into a sound, telling the user if it couldn't be.

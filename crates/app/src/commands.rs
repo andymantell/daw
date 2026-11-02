@@ -685,6 +685,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("A bass line synth: one oscillator into a diode ladder, accents from velocity, slides from overlapping notes")
     .words("instrument acid bass line squelch 303 techno"),
     info(
+        Cmd::AddInstrument(8),
+        "add-model-mono-track",
+        "Edit",
+        "Add Model Mono track",
+        &[],
+    )
+    .hint("A three-oscillator ladder monosynth for bass and leads, with an overdriving mixer and the 24 dB ladder filter")
+    .words("instrument mono synth bass lead ladder analogue vintage"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

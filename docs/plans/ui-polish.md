@@ -13,8 +13,9 @@ keeps its command, and stays reachable through the AI assistant
 interface.
 
 Who it is for: the owner and their guitar teacher, recording, practising
-and making songs; and the simpler mode for beginners. Laptop screens
-(about 1440 × 900 usable) are the size to design for; bigger screens get
+and making songs; and the simpler mode for beginners. The layout is
+designed for laptop screens (about 1440 × 900) and full HD monitors
+(1920 × 1080) equally: every thread checks both, and a bigger screen gets
 more room, not more clutter.
 
 ## What is wrong today
@@ -276,3 +277,4 @@ Asked one at a time in the project thread; answers are recorded here.
 3. Own drawn icons, or a bundled open-licence icon font?
    **Answer (2026-11-02): draw our own.**
 4. Is 1440 × 900 the right screen to design for?
+   **Answer (2026-11-02): design for 1440 × 900 and 1920 × 1080 equally.**

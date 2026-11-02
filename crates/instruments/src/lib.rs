@@ -30,6 +30,7 @@ pub mod dsp;
 pub mod eighty;
 pub mod june;
 pub mod library;
+pub mod lucky_seven;
 pub mod made;
 pub mod model_mono;
 pub mod oh_one;
@@ -80,6 +81,8 @@ pub enum Kind {
     /// The eight-bit wavetable synth with an analogue filter (classic
     /// synths, S9).
     BlueWave,
+    /// The six-operator FM synth (classic synths, S8).
+    LuckySeven,
 }
 
 /// A sound an instrument makes from its settings alone: a name and the
@@ -91,7 +94,7 @@ pub struct Sound {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 13] = [
+    pub const ALL: [Kind; 14] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
@@ -105,6 +108,7 @@ impl Kind {
         Kind::Eighty,
         Kind::Oracle,
         Kind::BlueWave,
+        Kind::LuckySeven,
     ];
 
     /// How projects name it. Never change one.
@@ -123,6 +127,7 @@ impl Kind {
             Kind::Eighty => "eighty",
             Kind::Oracle => "oracle",
             Kind::BlueWave => "blue-wave",
+            Kind::LuckySeven => "lucky-seven",
         }
     }
 
@@ -145,6 +150,7 @@ impl Kind {
             Kind::Eighty => "Eighty",
             Kind::Oracle => "Oracle",
             Kind::BlueWave => "Blue Wave",
+            Kind::LuckySeven => "Lucky Seven",
         }
     }
 
@@ -183,6 +189,9 @@ impl Kind {
             Kind::BlueWave => {
                 "An eight-bit wavetable synth with an analogue filter, for glassy pads, bells, digital keys and the 80s sound: two oscillators a voice reading tables of 64 waves made in code, the position swept by its own envelope, the LFO, the keyboard and the wheel, smooth or eight-bit with the aliasing kept, the 24 dB filter with its own envelope"
             }
+            Kind::LuckySeven => {
+                "A six-operator FM synth for electric pianos, bells, FM bass, brass and plucks: six sine operators with rate/level envelopes, level and rate scaling and velocity each, thirty-two algorithms with feedback, an LFO to pitch and level, a pitch envelope; reads the public bank format for your own sounds"
+            }
         }
     }
 
@@ -195,6 +204,7 @@ impl Kind {
             Kind::Eighty => eighty::sounds(),
             Kind::Oracle => oracle::sounds(),
             Kind::BlueWave => blue_wave::sounds(),
+            Kind::LuckySeven => lucky_seven::sounds(),
             _ => Vec::new(),
         }
     }
@@ -285,6 +295,7 @@ impl Builtin {
             Kind::Eighty => Builtin::of(kind, eighty::params(), Vec::new()),
             Kind::Oracle => Builtin::of(kind, oracle::params(), Vec::new()),
             Kind::BlueWave => Builtin::of(kind, blue_wave::params(), Vec::new()),
+            Kind::LuckySeven => Builtin::of(kind, lucky_seven::params(), Vec::new()),
         }
     }
 
@@ -358,6 +369,7 @@ impl Builtin {
             Kind::Eighty => eighty::params(),
             Kind::Oracle => oracle::params(),
             Kind::BlueWave => blue_wave::params(),
+            Kind::LuckySeven => lucky_seven::params(),
         };
         let mut loaded: Vec<(String, Arc<Loaded>)> = (samples.iter())
             .map(|(k, r)| {
@@ -402,6 +414,18 @@ impl Builtin {
             self.params.set_key(k, *v);
         }
         Some(())
+    }
+
+    /// Sets the Lucky Seven to a sound read from a bank: every setting
+    /// back to its default, then the sound's own, so what the bank
+    /// doesn't say (the voices, the glide, the level) is as new.
+    pub fn set_bank_voice(&self, v: &lucky_seven::bank::BankVoice) {
+        for p in self.params.list() {
+            self.params.set_key(&p.key, p.default);
+        }
+        for (k, v) in &v.settings {
+            self.params.set_key(k, *v);
+        }
     }
 
     /// Its sounds by slot, as the project saves them.
@@ -735,6 +759,7 @@ impl Builtin {
             Kind::Eighty => Box::new(eighty::Eighty::new(rate, p)),
             Kind::Oracle => Box::new(oracle::Oracle::new(rate, p)),
             Kind::BlueWave => Box::new(blue_wave::BlueWave::new(rate, p)),
+            Kind::LuckySeven => Box::new(lucky_seven::LuckySeven::new(rate, p)),
         }
     }
 

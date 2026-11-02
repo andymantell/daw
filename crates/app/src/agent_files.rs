@@ -35,6 +35,7 @@ pub(crate) const FILE_COMMANDS: &[(Cmd, bool)] = &[
     (Cmd::ImportKit, false),
     (Cmd::ExportKit, true),
     (Cmd::LoadSfz, false),
+    (Cmd::LoadBank, false),
 ];
 
 pub(crate) const TOOLS: &[Tool] = &[
@@ -46,13 +47,17 @@ pub(crate) const TOOLS: &[Tool] = &[
                       export-text-tab, print-notation (a PDF), import-kit, export-kit or \
                       load-sfz (an SFZ sample library, on the sampler track given, else the \
                       first sampler track, else a new one; a big library takes a few \
-                      seconds). Those that write a file need the edit and export permission.",
+                      seconds) or load-synth-bank (a bank of sounds in the public six-operator \
+                      FM bank format, a .syx file of 32 sounds or one, onto the Lucky Seven \
+                      track given, else the first, else a new one; the first sound is set and \
+                      get_instrument then lists the bank's sounds with their settings for \
+                      set_instrument). Those that write a file need the edit and export permission.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
                 "id": {"type": "string", "description": "The command's id."},
                 "path": {"type": "string", "description": "The file's full path."},
-                "track": {"type": "string", "description": "For load-sfz: the sampler track to load it on."}
+                "track": {"type": "string", "description": "For load-sfz: the sampler track to load it on; for load-synth-bank: the Lucky Seven track."}
             }, "required": ["id", "path"]})
         },
     },
@@ -220,6 +225,17 @@ impl App {
                 self.message = Some(m);
             }
             Cmd::ExportKit => self.export_kit(&path),
+            Cmd::LoadBank => {
+                let track = match args["track"].as_str() {
+                    Some(key) => Some(
+                        self.track_index(key)
+                            .ok_or_else(|| format!("There is no track {key}."))?,
+                    ),
+                    None => None,
+                };
+                let m = self.load_bank(&path, track)?;
+                self.message = Some(m);
+            }
             _ => unreachable!("only the commands listed"),
         }
         let name = self.commands.name(cmd).to_string();

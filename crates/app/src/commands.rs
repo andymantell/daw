@@ -202,6 +202,9 @@ pub(crate) enum Cmd {
     PadBuses,
     LoadSfz,
     UnloadSfz,
+    /// Loads a bank of sounds in the public FM bank format onto the
+    /// Lucky Seven.
+    LoadBank,
     NormaliseZones,
     InstrumentOutputBuses,
     KeepNotes,
@@ -729,6 +732,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("An eight-bit wavetable synth with an analogue filter, for glassy pads, bells, digital keys and the 80s sound: two oscillators sweeping tables of 64 waves, smooth or eight-bit with the aliasing kept, the 24 dB filter")
     .words("instrument poly synth wavetable wave table digital pad bell keys eighties eight-bit"),
+    info(
+        Cmd::AddInstrument(13),
+        "add-lucky-seven-track",
+        "Edit",
+        "Add Lucky Seven track",
+        &[],
+    )
+    .hint("A six-operator FM synth for electric pianos, bells, FM bass, brass and plucks: thirty-two algorithms, rate/level envelopes, and it reads the public bank format for your own sounds")
+    .words("instrument fm synth operator algorithm electric piano bell bass brass pluck digital bank"),
+    info(
+        Cmd::LoadBank,
+        "load-synth-bank",
+        "Edit",
+        "Load an FM sound bank…",
+        &[],
+    )
+    .hint("Reads a bank of sounds in the public six-operator FM bank format (a system-exclusive file of 32 sounds, or one sound) onto the Lucky Seven, or onto a new Lucky Seven track")
+    .words("fm bank sysex syx load import sound patch voice lucky seven"),
     info(
         Cmd::InstrumentWindow,
         "instrument-window",
@@ -3464,6 +3485,15 @@ impl App {
             Cmd::UnloadSfz => {
                 if let Err(e) = self.unload_sfz() {
                     self.message = Some(e);
+                }
+            }
+            Cmd::LoadBank => {
+                let picked = rfd::FileDialog::new()
+                    .set_title("Load an FM sound bank")
+                    .add_filter("Sound bank", &["syx", "SYX", "bin"])
+                    .pick_file();
+                if let Some(p) = picked {
+                    self.message = Some(self.load_bank(&p, None).unwrap_or_else(|e| e));
                 }
             }
             Cmd::NormaliseZones => {

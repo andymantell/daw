@@ -21,7 +21,7 @@ type Done = Result<(Value, Option<String>), String>;
 
 const INSTRUMENT: &str = "The instrument: synth (the simple synth), one that comes with the \
                           app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer, patch-twenty, oh-one, \
-                          model-mono, june, eighty, oracle, blue-wave), or a plugin instrument by name (list_effect_kinds gives them).";
+                          model-mono, june, eighty, oracle, blue-wave, lucky-seven), or a plugin instrument by name (list_effect_kinds gives them).";
 
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
@@ -31,7 +31,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                       effects), the sounds a synth makes from its settings (each a name \
                       and the settings to give set_instrument), the effects on a drum \
                       machine's pads, and the instrument's \
-                      extra outputs with the bus each goes to; for a sampler playing an \
+                      extra outputs with the bus each goes to; for a Lucky Seven with a \
+                      sound bank loaded (load-synth-bank), the bank's sounds with their \
+                      settings; for a sampler playing an \
                       SFZ library, the library: its keys, articulations and controls \
                       (mic levels and the like, each a setting). Its settings are in \
                       list_parameters.",
@@ -372,9 +374,23 @@ impl App {
                     "problems": l.problems,
                 })
             });
+        let bank = (t.instrument.as_ref())
+            .and_then(|s| s.bank.as_ref())
+            .map(|b| {
+                let voices: Vec<Value> = (b.voices.iter())
+                    .map(|v| {
+                        let settings: serde_json::Map<String, Value> = (v.settings.iter())
+                            .map(|(k, v)| (k.clone(), json!(v)))
+                            .collect();
+                        json!({"name": v.name, "settings": settings})
+                    })
+                    .collect();
+                json!({"file": b.file, "sounds": voices})
+            });
         Ok(json!({
             "track": key,
             "instrument": pt.instrument.as_ref().map(instrument),
+            "bank": bank,
             "library": library,
             "layers": layers,
             "outputs": outputs,

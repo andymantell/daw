@@ -64,6 +64,7 @@ impl Editor {
         ui.horizontal_wrapped(|ui| {
             ui.label("Name");
             changed |= ui
+                // ai: edit_pattern.name
                 .add(egui::TextEdit::singleline(&mut p.name).desired_width(140.0))
                 .accessible_name("Pattern name")
                 .changed();
@@ -72,6 +73,7 @@ impl Editor {
             let mut bars = (p.len as f64 / bar.max(1) as f64).max(0.25);
             if ui
                 .add(
+                    // ai: edit_pattern.bars
                     egui::DragValue::new(&mut bars)
                         .range(0.25..=16.0)
                         .speed(0.05)
@@ -87,6 +89,7 @@ impl Editor {
             ui.label("Swing");
             let mut swing = (p.swing * 100.0) as f32;
             if ui
+                // ai: edit_pattern.swing
                 .add(egui::Slider::new(&mut swing, 0.0..=100.0).suffix("%"))
                 .accessible_name("Swing")
                 .on_hover_text("Every second step of each lane is this much of half a step late")
@@ -97,6 +100,7 @@ impl Editor {
             }
             ui.separator();
             if ui
+                // ai: edit_pattern.add_lanes
                 .add_enabled(p.lanes.len() < 32, egui::Button::new("Add lane"))
                 .on_hover_text("Another sound, with steps of its own")
                 .clicked()
@@ -127,6 +131,7 @@ impl Editor {
                 .collect();
             if !missing.is_empty()
                 && ui
+                    // ai: edit_pattern.add_lanes
                     .button("A lane for every pad")
                     .on_hover_text("Add a lane for each of the drum machine's pads that has none")
                     .clicked()
@@ -351,6 +356,7 @@ impl Editor {
         ui.horizontal_wrapped(|ui| {
             ui.strong("Lane");
             changed |= ui
+                // ai: edit_pattern.lanes.name
                 .add(egui::TextEdit::singleline(&mut lane.name).desired_width(110.0))
                 .accessible_name("Lane name")
                 .changed();
@@ -365,6 +371,7 @@ impl Editor {
                     .show_ui(ui, |ui| {
                         for (n, name) in &self.pads {
                             let text = format!("{name} ({})", Note::pitch_name(*n));
+                            // ai: edit_pattern.lanes.pad
                             if ui.selectable_label(*n == lane.pitch, text).clicked() {
                                 pick = Some((*n, name.clone()));
                             }
@@ -388,6 +395,7 @@ impl Editor {
             ui.label("Note");
             changed |= ui
                 .add(
+                    // ai: edit_pattern.lanes.pitch
                     egui::DragValue::new(&mut lane.pitch)
                         .range(0..=127)
                         .custom_formatter(|v, _| format!("{} ({v})", Note::pitch_name(v as u8))),
@@ -398,6 +406,7 @@ impl Editor {
             ui.label("Steps");
             let mut n = lane.steps.len();
             if ui
+                // ai: edit_pattern.lanes.steps
                 .add(egui::DragValue::new(&mut n).range(1..=MAX_STEPS))
                 .accessible_name("Lane steps")
                 .on_hover_text("How many steps before it starts again; lanes of different lengths drift against each other")
@@ -411,6 +420,7 @@ impl Editor {
                 .selected_text(lane.rate.label())
                 .show_ui(ui, |ui| {
                     for r in StepRate::ALL {
+                        // ai: edit_pattern.lanes.rate
                         changed |= ui.selectable_value(&mut lane.rate, r, r.label()).changed();
                     }
                 })
@@ -421,6 +431,7 @@ impl Editor {
                 .selected_text(lane.direction.label())
                 .show_ui(ui, |ui| {
                     for d in Direction::ALL {
+                        // ai: edit_pattern.lanes.direction
                         changed |= ui.selectable_value(&mut lane.direction, d, d.label()).changed();
                     }
                 })
@@ -430,11 +441,14 @@ impl Editor {
             ui.separator();
             let steps = lane.steps.len();
             self.hits = self.hits.min(steps);
+            // ai: edit_pattern.lanes.euclid.hits
             ui.add(egui::DragValue::new(&mut self.hits).range(0..=steps).suffix(" hits"))
                 .accessible_name("Fill hits");
+            // ai: edit_pattern.lanes.euclid.rotate
             ui.add(egui::DragValue::new(&mut self.rotate).range(0..=steps.saturating_sub(1)).prefix("turned "))
                 .accessible_name("Fill turn");
             if ui
+                // ai: edit_pattern.lanes.euclid
                 .button("Fill")
                 .on_hover_text("Spread the hits as evenly as they go over the steps (a Euclidean rhythm)")
                 .clicked()
@@ -442,11 +456,13 @@ impl Editor {
                 lane.fill(self.hits, self.rotate);
                 changed = true;
             }
+            // ai: edit_pattern.lanes.euclid
             if ui.button("Clear").on_hover_text("Turn every step off").clicked() {
                 lane.fill(0, 0);
                 changed = true;
             }
             ui.separator();
+            // ai: edit_pattern.remove_lanes
             if ui.button("Remove lane").clicked() {
                 remove = true;
             }
@@ -477,20 +493,24 @@ impl Editor {
         let k = self.step.unwrap_or(0) + 1;
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("Step {k}"));
+            // ai: edit_pattern.steps.on
             changed |= ui.checkbox(&mut s.on, "On").changed();
             ui.label("Velocity");
             changed |= ui
+                // ai: edit_pattern.steps.velocity
                 .add(egui::DragValue::new(&mut s.velocity).range(1..=127))
                 .accessible_name("Step velocity")
                 .changed();
             ui.label("±");
             changed |= ui
+                // ai: edit_pattern.steps.vary
                 .add(egui::DragValue::new(&mut s.vary).range(0..=127))
                 .accessible_name("Step velocity variance")
                 .on_hover_text("Up to how far the velocity varies either way, hit to hit")
                 .changed();
             ui.label("Pitch");
             changed |= ui
+                // ai: edit_pattern.steps.pitch
                 .add(egui::DragValue::new(&mut s.pitch).range(-48..=48).suffix(" st"))
                 .accessible_name("Step pitch")
                 .on_hover_text("Semitones from the lane's note")
@@ -498,6 +518,7 @@ impl Editor {
             ui.label("Chance");
             let mut chance = (s.chance * 100.0).round() as i32;
             if ui
+                // ai: edit_pattern.steps.chance
                 .add(egui::DragValue::new(&mut chance).range(0..=100).suffix("%"))
                 .accessible_name("Step chance")
                 .on_hover_text("How likely it is to play each time round")
@@ -508,6 +529,7 @@ impl Editor {
             }
             ui.label("Repeats");
             changed |= ui
+                // ai: edit_pattern.steps.repeats
                 .add(egui::DragValue::new(&mut s.repeats).range(1..=MAX_REPEATS))
                 .accessible_name("Step repeats")
                 .on_hover_text("Hits in the step (a ratchet)")
@@ -515,6 +537,7 @@ impl Editor {
             ui.label("Offset");
             let mut off = (s.offset * 100.0).round() as i32;
             if ui
+                // ai: edit_pattern.steps.offset
                 .add(egui::DragValue::new(&mut off).range(-50..=50).suffix("%"))
                 .accessible_name("Step offset")
                 .on_hover_text("Early or late, as a share of a step")
@@ -527,6 +550,7 @@ impl Editor {
             let mut gate = (s.gate * 100.0).round() as i32;
             if ui
                 .add(
+                    // ai: edit_pattern.steps.gate
                     egui::DragValue::new(&mut gate)
                         .range((MIN_GATE * 100.0) as i32..=(MAX_GATE * 100.0) as i32)
                         .suffix("%"),
@@ -721,6 +745,7 @@ impl crate::App {
                 .show_ui(ui, |ui| {
                     for (id, n) in &names {
                         if ui
+                            // ai: view
                             .selectable_label(current.as_ref() == Some(id), n)
                             .clicked()
                         {
@@ -743,6 +768,7 @@ impl crate::App {
                     .weak(),
                 );
                 delete = ui
+                    // ai: edit_pattern.delete
                     .add_enabled(uses == 0, egui::Button::new("Delete pattern"))
                     .on_disabled_hover_text("Clips still play it")
                     .clicked();

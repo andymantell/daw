@@ -691,6 +691,7 @@ impl Slot {
                 .selected_text(current)
                 .show_ui(ui, |ui| {
                     for (i, w) in Wave::ALL.iter().enumerate() {
+                        // ai: set_parameter
                         if ui.selectable_value(&mut wave, i, w.label()).changed() {
                             p.set("wave", i as f64);
                             changed = true;
@@ -717,6 +718,7 @@ impl Slot {
                     };
                     ui.label(label);
                     let mut v = p.get(name);
+                    // ai: set_parameter
                     let slider = egui::Slider::new(&mut v, lo..=hi).suffix(suffix);
                     let slider = if name == "cutoff" || name == "attack" || name == "release" {
                         slider.logarithmic(true)
@@ -832,6 +834,7 @@ fn param(
                 .selected_text(info.text(v))
                 .show_ui(ui, |ui| {
                     for (k, name) in info.choices.iter().enumerate() {
+                        // ai: set_parameter
                         moved |= ui.selectable_value(&mut c, k, *name).changed();
                     }
                 })
@@ -842,6 +845,7 @@ fn param(
         }
         Unit::Switch => {
             let mut on = v >= 0.5;
+            // ai: set_parameter
             let r = ui.checkbox(&mut on, "").accessible_name(info.name.as_str());
             v = if on { 1.0 } else { 0.0 };
             r.changed()
@@ -849,6 +853,7 @@ fn param(
         Unit::Note | Unit::Count => {
             let text = info.clone();
             ui.add(
+                // ai: set_parameter
                 egui::DragValue::new(&mut v)
                     .range(info.min..=info.max)
                     .speed(0.2)
@@ -860,6 +865,7 @@ fn param(
         _ => {
             let text = info.clone();
             ui.add(
+                // ai: set_parameter
                 egui::Slider::new(&mut v, info.min..=info.max)
                     .logarithmic(info.log)
                     .custom_formatter(move |x, _| text.text(x)),
@@ -930,6 +936,7 @@ fn sound_menu(
         .selected_text(shown)
         .width(180.0)
         .show_ui(ui, |ui| {
+            // ai: set_sound.sound
             if ui.button("Choose a file…").clicked() {
                 pick = pick_sounds("Choose a sound", false)
                     .first()
@@ -940,6 +947,7 @@ fn sound_menu(
             ui.label(egui::RichText::new("Made here").weak());
             for (id, name) in made::SOUNDS {
                 let r = made::reference(id);
+                // ai: set_sound.sound
                 if ui.selectable_label(current == r, *name).clicked() {
                     pick = Some(r);
                 }
@@ -1011,6 +1019,7 @@ pub(crate) fn plugin_choices(
         let cid: Vec<u8> = p.class.cid.iter().map(|&b| b as u8).collect();
         let on = now.as_ref().is_some_and(|v| v.class == cid);
         if ui
+            // ai: set_instrument.instrument
             .selectable_label(on, &p.class.name)
             .on_hover_text(format!("{} plugin", p.format()))
             .clicked()
@@ -1058,6 +1067,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                     .show_ui(ui, |ui| {
                         let none = t.instrument.is_none() && !layered;
                         if ui
+                            // ai: set_instrument.instrument
                             .selectable_label(none, "None")
                             .on_hover_text("Notes go only to the MIDI output, if one is chosen")
                             .clicked()
@@ -1073,6 +1083,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                                 |k| k.about(),
                             );
                             if ui
+                                // ai: set_instrument.instrument
                                 .selectable_label(now == Some(kind), name)
                                 .on_hover_text(hint)
                                 .clicked()
@@ -1096,6 +1107,7 @@ pub fn window(ctx: &egui::Context, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                         }
                         ui.separator();
                         if ui
+                            // ai: add-layer
                             .selectable_label(layered, "Layered instruments")
                             .on_hover_text(
                                 "Several instruments playing the same notes, each with its own \
@@ -1222,6 +1234,7 @@ fn note_repeat_picker(ui: &mut egui::Ui, t: &mut crate::Track, changed: &mut boo
         egui::ComboBox::from_id_salt(("note-repeat", &t.key))
             .selected_text(text(now))
             .show_ui(ui, |ui| {
+                // ai: note-repeat
                 ui.selectable_value(&mut now, None, "Off");
                 for r in daw_project::StepRate::ALL {
                     ui.selectable_value(&mut now, Some(r), r.label());
@@ -1254,6 +1267,7 @@ fn midi_out_picker(
         egui::ComboBox::from_id_salt("midi-out")
             .selected_text(current)
             .show_ui(ui, |ui| {
+                // ai: set_track_input.midi_out
                 if ui.selectable_label(t.midi_out.is_none(), "None").clicked()
                     && t.midi_out.is_some()
                 {
@@ -1261,6 +1275,7 @@ fn midi_out_picker(
                     *changed = true;
                 }
                 for (p, name) in outputs.iter().enumerate() {
+                    // ai: set_track_input.midi_out
                     if ui.selectable_label(t.midi_out == Some(p), name).clicked()
                         && t.midi_out != Some(p)
                     {
@@ -1534,6 +1549,7 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
     ui.horizontal(|ui| {
         ui.strong("Zones");
         if ui
+            // ai: set_sound.slot
             .button("Add sound files…")
             .on_hover_text(
                 "Each file becomes a zone, at the note its name gives (\"Piano C4\") or on \
@@ -1582,6 +1598,7 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
                 let root = p.list()[daw_instruments::zone_at(z, sampler::zone::ROOT)]
                     .text(p.get(daw_instruments::zone_at(z, sampler::zone::ROOT)));
                 if ui
+                    // ai: view
                     .selectable_label(chosen == z, format!("{name} ({root})"))
                     .clicked()
                 {
@@ -1790,6 +1807,7 @@ fn drum_machine_controls(
             .into_iter()
             .enumerate()
         {
+            // ai: view
             if ui.selectable_label(tab == k, name).clicked() {
                 tab = k;
             }
@@ -1818,6 +1836,7 @@ fn drum_machine_controls(
                             .selected_text(text(o))
                             .show_ui(ui, |ui| {
                                 for n in 0..=dm::OUTPUTS {
+                                    // ai: set_parameter
                                     ui.selectable_value(&mut o, n, text(n));
                                 }
                             })
@@ -1894,6 +1913,7 @@ fn drum_machine_controls(
                 .show_ui(ui, |ui| {
                     for k in pad_effects() {
                         if ui
+                            // ai: edit_pad_effect.add
                             .selectable_label(false, k.name())
                             .on_hover_text(k.about())
                             .clicked()
@@ -1919,10 +1939,12 @@ fn drum_machine_controls(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let mut on = !f.bypass;
+                        // ai: edit_pad_effect.on
                         if ui.checkbox(&mut on, "On").changed() {
                             f.bypass = !on;
                             renew = true;
                         }
+                        // ai: edit_pad_effect.remove
                         if ui.button("Remove").clicked() {
                             remove = Some(fi);
                         }
@@ -1943,6 +1965,7 @@ fn drum_machine_controls(
         ui.separator();
         ui.horizontal(|ui| {
             if ui
+                // ai: pad-buses
                 .button("Put each pad on a bus")
                 .on_hover_text("Gives every pad with a sound an output of its own and a bus in the mixer for it")
                 .clicked()
@@ -1989,10 +2012,12 @@ fn route_rows(
                 egui::ComboBox::from_id_salt(("route", id, *o))
                     .selected_text(shown_name)
                     .show_ui(ui, |ui| {
+                        // ai: set_instrument_output.to
                         if ui.selectable_label(now.is_none(), "Nowhere").clicked() {
                             pick = Some(None);
                         }
                         for (k, n) in cx.buses {
+                            // ai: set_instrument_output.to
                             if ui.selectable_label(now.as_ref() == Some(k), n).clicked() {
                                 pick = Some(Some(k.clone()));
                             }
@@ -2063,6 +2088,7 @@ fn plugin_controls(
              fader and effects. One that goes nowhere plays through the track",
         );
         if ui
+            // ai: instrument-output-buses
             .button("Put each output on a bus")
             .on_hover_text("Gives every extra output a bus in the mixer of its own")
             .clicked()
@@ -2185,6 +2211,7 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
             .selected_text(format!("Slice {} ({})", chosen + 1, key(chosen)))
             .show_ui(ui, |ui| {
                 for k in 0..n {
+                    // ai: view
                     ui.selectable_value(&mut chosen, k, format!("Slice {} ({})", k + 1, key(k)));
                 }
             });
@@ -2192,6 +2219,7 @@ fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sho
         params_grid(ui, "slice", id, &p, from, slicer::slice_at(chosen + 1, 0));
     }
     if ui
+        // ai: slice-notes
         .button("Make notes that play the loop")
         .on_hover_text(
             "A note clip playing the slices in order on their beats, so the loop follows \

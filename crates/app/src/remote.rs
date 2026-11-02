@@ -166,11 +166,13 @@ impl Remote {
                         RichText::new("The code works once, for the next phone that scans it.")
                             .weak(),
                     );
+                    // ai: person
                     if ui.button("Hide code").clicked() {
                         hide = true;
                     }
                 }
                 None => {
+                    // ai: person
                     if ui.button("Show a code to pair a phone").clicked() {
                         show = true;
                     }

@@ -1059,6 +1059,7 @@ impl crate::App {
                 .selected_text(&pick_of(ti).name)
                 .show_ui(ui, |ui| {
                     for (i, t) in self.tracks.iter().chain([&self.master]).enumerate() {
+                        // ai: view
                         ui.selectable_value(&mut chosen, i, &t.name);
                     }
                 })
@@ -1074,6 +1075,7 @@ impl crate::App {
                 .selected_text(mode.name())
                 .show_ui(ui, |ui| {
                     for m in Mode::ALL {
+                        // ai: set_automation_mode.mode
                         ui.selectable_value(&mut mode, m, m.name())
                             .on_hover_text(m.hint());
                     }
@@ -1091,6 +1093,7 @@ impl crate::App {
                 ui.set_min_width(240.0);
                 for c in choices(t, &buses) {
                     if ui
+                        // ai: edit_automation.add_lane
                         .add_enabled(!have.contains(c.param.as_str()), egui::Button::new(&c.name))
                         .clicked()
                     {
@@ -1237,15 +1240,18 @@ impl crate::App {
                         return;
                     };
                     if let Some(j) = point
+                        // ai: edit_automation.delete
                         && ui.button("Delete point").clicked()
                     {
                         delete = Some((i, j));
                         ui.close();
                     }
+                    // ai: edit_automation.clear
                     if ui.button("Clear the lane").clicked() {
                         clear = Some(i);
                         ui.close();
                     }
+                    // ai: edit_automation.remove_lane
                     if ui.button("Remove the lane").clicked() {
                         remove = Some(i);
                         ui.close();
@@ -1343,6 +1349,7 @@ impl crate::App {
                     if ui
                         .put(
                             x_btn,
+                            // ai: edit_automation.remove_lane
                             IconButton::new(Icon::Close, format!("Remove the {name} lane"))
                                 .tip("Remove this lane")
                                 .small(),

@@ -84,6 +84,7 @@ impl Snapshots {
                         let l = ui.label("Name");
                         let r = ui
                             .add(
+                                // ai: edit_snapshot.name
                                 egui::TextEdit::singleline(&mut self.draft)
                                     .char_limit(MAX_SNAPSHOT_NAME)
                                     .hint_text("e.g. Lesson 3 end")
@@ -91,6 +92,7 @@ impl Snapshots {
                             )
                             .labelled_by(l.id);
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        // ai: edit_snapshot.action
                         if ui.button("Take snapshot").clicked() || enter {
                             let name = match self.draft.trim() {
                                 "" => format!("Snapshot {}", list.len() + 1),
@@ -143,15 +145,18 @@ impl Snapshots {
             let mut done = false;
             ui.horizontal(|ui| {
                 let r = ui.add(
+                    // ai: edit_snapshot.name
                     egui::TextEdit::singleline(name)
                         .char_limit(MAX_SNAPSHOT_NAME)
                         .desired_width(240.0),
                 );
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // ai: edit_snapshot.action
                 if (ui.button("OK").clicked() || enter) && !name.trim().is_empty() {
                     action = Some(Action::Rename(s.id.clone(), name.clone()));
                     done = true;
                 }
+                // ai: view
                 if ui.button("Cancel").clicked() {
                     done = true;
                 }
@@ -190,6 +195,7 @@ impl Snapshots {
                         Ask::Restore => "Restore",
                         Ask::Delete => "Delete",
                     };
+                    // ai: edit_snapshot.action
                     if ui.button(yes).clicked() {
                         action = Some(match ask {
                             Ask::Restore => Action::Restore(s.id.clone()),
@@ -197,6 +203,7 @@ impl Snapshots {
                         });
                         self.asked = None;
                     }
+                    // ai: view
                     if ui.button("Cancel").clicked() {
                         self.asked = None;
                     }
@@ -206,20 +213,24 @@ impl Snapshots {
                 ui.add_enabled_ui(may_edit, |ui| {
                     ui.horizontal(|ui| {
                         if ui
+                            // ai: edit_snapshot.action
                             .add_enabled(s.restorable, egui::Button::new("Restore…"))
                             .clicked()
                         {
                             self.asked = Some((s.id.clone(), Ask::Restore));
                         }
+                        // ai: edit_snapshot.action
                         if ui.button("Rename").clicked() {
                             self.renaming = Some((s.id.clone(), s.name.clone()));
                         }
+                        // ai: edit_snapshot.action
                         if ui.button("Delete…").clicked() {
                             self.asked = Some((s.id.clone(), Ask::Delete));
                         }
                     });
                 });
                 if ui
+                    // ai: view
                     .add_enabled(s.restorable, egui::Button::new("What changed…"))
                     .on_hover_text("What has changed since this snapshot")
                     .clicked()
@@ -249,6 +260,7 @@ impl Snapshots {
                 .selected_text(name(from))
                 .show_ui(ui, |ui| {
                     for s in list.iter().filter(|s| s.restorable) {
+                        // ai: view
                         ui.selectable_value(from, s.id.clone(), &s.name);
                     }
                 })
@@ -259,13 +271,16 @@ impl Snapshots {
             egui::ComboBox::from_id_salt("compare to")
                 .selected_text(to_name)
                 .show_ui(ui, |ui| {
+                    // ai: view
                     ui.selectable_value(to, None, "now");
                     for s in list.iter().filter(|s| s.restorable) {
+                        // ai: view
                         ui.selectable_value(to, Some(s.id.clone()), &s.name);
                     }
                 })
                 .response
                 .accessible_name("Compare to");
+            // ai: view
             close = ui.button("Close").clicked();
         });
         match changes {

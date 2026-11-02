@@ -477,6 +477,7 @@ impl HitPointsWindow {
     ) {
         ui.heading("Timecode");
         asks.changed |= ui
+            // ai: timecode
             .checkbox(
                 &mut setup.shown,
                 "Show timecode on the ruler and in the transport bar",
@@ -623,8 +624,11 @@ impl HitPointsWindow {
                     .width(80.0)
                     .selected_text(land.map_or("Not fitted", Land::label))
                     .show_ui(ui, |ui| {
+                        // ai: view
                         ui.selectable_value(&mut land, None, "Not fitted");
+                        // ai: view
                         ui.selectable_value(&mut land, Some(Land::Beat), Land::Beat.label());
+                        // ai: view
                         ui.selectable_value(&mut land, Some(Land::Bar), Land::Bar.label());
                     })
                     .response
@@ -660,6 +664,7 @@ impl HitPointsWindow {
             self.lands.remove(&h.id);
             asks.changed = true;
         }
+        // ai: hit-point
         if ui.button("Add hit point at the playhead").clicked() {
             asks.add = true;
         }
@@ -679,10 +684,13 @@ impl HitPointsWindow {
              or bars, and shows how close each gets.",
         );
         ui.horizontal(|ui| {
+            // ai: view
             ui.radio_value(&mut self.from_bar, false, "The song's tempo");
+            // ai: view
             ui.radio_value(&mut self.from_bar, true, "A tempo change from bar");
             ui.add_enabled(
                 self.from_bar,
+                // ai: view
                 egui::DragValue::new(&mut self.bar).range(2..=9999),
             )
             .accessible_name("Tempo change bar");
@@ -690,6 +698,7 @@ impl HitPointsWindow {
         ui.horizontal(|ui| {
             ui.label("Between");
             ui.add(
+                // ai: view
                 egui::DragValue::new(&mut self.range.0)
                     .range(20.0..=300.0)
                     .suffix(" BPM"),
@@ -697,11 +706,13 @@ impl HitPointsWindow {
             .accessible_name("Slowest tempo");
             ui.label("and");
             ui.add(
+                // ai: view
                 egui::DragValue::new(&mut self.range.1)
                     .range(20.0..=300.0)
                     .suffix(" BPM"),
             )
             .accessible_name("Fastest tempo");
+            // ai: view
             ui.checkbox(&mut self.whole, "Whole BPM only");
         });
         let how = if self.from_bar {
@@ -717,6 +728,7 @@ impl HitPointsWindow {
             ui.label(RichText::new("Choose what at least one hit point lands on.").weak());
         }
         if ui
+            // ai: view
             .add_enabled(!chosen.is_empty(), egui::Button::new("Find tempos"))
             .clicked()
         {
@@ -750,6 +762,7 @@ impl HitPointsWindow {
                     How::FromBar(b) => format!("Add as a tempo change at bar {b}"),
                 };
                 if ui
+                    // ai: set_tempo.bpm
                     .button(what)
                     .accessible_name(format!("Use tempo {}", k + 1))
                     .clicked()

@@ -999,6 +999,7 @@ impl Themes {
                     if !t.built_in {
                         name = egui::RichText::new(format!("{} (yours)", t.name)).strong();
                     }
+                    // ai: next-theme
                     let r = ui.selectable_label(chosen, name).on_hover_text(&t.about);
                     if r.clicked() {
                         pick = Some(t.id.clone());

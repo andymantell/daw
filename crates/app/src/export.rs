@@ -555,13 +555,16 @@ impl Export {
             .resizable(false)
             .default_width(360.0)
             .show(ctx, |ui| {
+                // ai: export_mix
                 ui.radio_value(&mut self.what, What::Song, "The whole song");
+                // ai: export_mix.loop
                 ui.radio_value(
                     &mut self.what,
                     What::Loop,
                     format!("The loop ({loop_text})"),
                 );
                 ui.add_enabled_ui(!sections.is_empty(), |ui| {
+                    // ai: export_sections
                     ui.radio_value(
                         &mut self.what,
                         What::Sections,
@@ -579,6 +582,7 @@ impl Export {
                         for s in sections {
                             let mut on = !self.skipped.contains(&s.id);
                             let text = format!("{} (bars {} to {})", s.name, s.from, s.to);
+                            // ai: export_sections.sections
                             if ui.checkbox(&mut on, text).changed() {
                                 if on {
                                     self.skipped.remove(&s.id);
@@ -589,17 +593,20 @@ impl Export {
                         }
                     });
                 }
+                // ai: export_mix.play_along
                 ui.checkbox(
                     &mut self.play_along,
                     "Leave out the tracks muted for practice, to play along with",
                 )
                 .on_hover_text("Tracks with practice mute (P) on are not in the file");
                 ui.add_enabled_ui(!per_section, |ui| {
+                    // ai: export_mix.stems
                     ui.checkbox(&mut self.stems, "Also each track on its own (stems)")
                         .on_hover_text(
                             "Each through the master's effects and fader, as in the mix",
                         );
                     ui.add_enabled_ui(buses, |ui| {
+                        // ai: export_mix.bus_stems
                         ui.checkbox(
                             &mut self.bus_stems,
                             "Also each bus, as it sounds in the mix",
@@ -617,6 +624,7 @@ impl Export {
                             }
                             None => "Also a copy of the video with this mix".into(),
                         };
+                        // ai: export-video
                         ui.checkbox(&mut self.video, label)
                             .on_hover_text(
                                 "The whole film with the mix as its sound, from its first \
@@ -635,6 +643,7 @@ impl Export {
                         .selected_text(self.kind.label())
                         .show_ui(ui, |ui| {
                             for k in Kind::ALL {
+                                // ai: export_mix.format
                                 ui.selectable_value(&mut self.kind, k, k.label());
                             }
                         })
@@ -674,6 +683,7 @@ impl Export {
                     ui.label(RichText::new(format!("Into {}", self.dir().display())).small());
                 });
                 ui.horizontal(|ui| {
+                    // ai: export_mix.folder
                     if ui.button("Choose folder…").clicked()
                         && let Some(d) = rfd::FileDialog::new()
                             .set_title("Export into")
@@ -682,6 +692,7 @@ impl Export {
                     {
                         self.chosen = Some(d);
                     }
+                    // ai: export_mix.folder
                     if self.chosen.is_some() && ui.button("Back to the usual folder").clicked() {
                         self.chosen = None;
                     }
@@ -716,10 +727,12 @@ impl Export {
                 };
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(ready, |ui| {
+                        // ai: export_mix
                         if !self.busy() && ui.button("Export").clicked() {
                             action = Some(Action::Export(request()));
                         }
                         if ui
+                            // ai: export_mix
                             .button("Add to queue")
                             .on_hover_text(
                                 "Exports wait in the queue and run one after another, with \
@@ -765,6 +778,7 @@ impl Export {
                     if let Some(i) = gone {
                         self.queue.remove(i);
                     }
+                    // ai: clear-export-queue
                     if ui.button("Clear the queue").clicked() {
                         self.queue.clear();
                     }
@@ -799,6 +813,7 @@ impl Export {
                     if !folder.as_os_str().is_empty() {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(folder.display().to_string()).small());
+                            // ai: view
                             if ui.button("Open folder").clicked() {
                                 open_folder(folder);
                             }

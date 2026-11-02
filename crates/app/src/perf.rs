@@ -143,6 +143,7 @@ impl Perf {
                 });
                 ui.end_row();
             });
+            // ai: view
             if ui.button("Reset").clicked() {
                 action = Some(Action::Reset);
             }
@@ -177,6 +178,7 @@ impl Perf {
                         .width(260.0)
                         .show_ui(ui, |ui| {
                             for p in effects {
+                                // ai: add_effect.effect
                                 if ui.selectable_label(false, &p.class.name).clicked() {
                                     action = Some(Action::AddPlugin(p.clone()));
                                 }

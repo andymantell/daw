@@ -87,6 +87,7 @@ impl Tuner {
                     .selected_text(format!("In {}", self.input + 1))
                     .show_ui(ui, |ui| {
                         for c in 0..inputs {
+                            // ai: view
                             ui.selectable_value(&mut self.input, c, format!("In {}", c + 1));
                         }
                     })

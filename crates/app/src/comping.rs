@@ -532,6 +532,7 @@ impl crate::App {
                 .selected_text(&self.tracks[ti].name)
                 .show_ui(ui, |ui| {
                     for (i, t) in self.tracks.iter().enumerate() {
+                        // ai: view
                         ui.selectable_value(&mut pick, i, &t.name);
                     }
                 })
@@ -546,9 +547,11 @@ impl crate::App {
             egui::ComboBox::from_id_salt("takes-comp")
                 .selected_text(t.comp_name().unwrap_or("As recorded"))
                 .show_ui(ui, |ui| {
+                    // ai: edit_comp.action
                     ui.selectable_value(&mut choice, None, "As recorded")
                         .on_hover_text("No comp: the newest take plays");
                     for (i, c) in t.comps.iter().enumerate() {
+                        // ai: edit_comp.action
                         ui.selectable_value(&mut choice, Some(i), &c.name);
                     }
                 })
@@ -559,6 +562,7 @@ impl crate::App {
             }
             let has_takes = !takes(&t.clips).is_empty();
             if ui
+                // ai: edit_comp.action
                 .add_enabled(has_takes, egui::Button::new("New comp"))
                 .on_hover_text("Start another comp of these takes")
                 .clicked()
@@ -567,6 +571,7 @@ impl crate::App {
             }
             if let Some(i) = now {
                 if ui
+                    // ai: edit_comp.action
                     .button("Duplicate")
                     .on_hover_text("Copy this comp, to try changes on")
                     .clicked()
@@ -576,6 +581,7 @@ impl crate::App {
                 match &mut self.takes_ui.renaming {
                     Some((j, name)) if *j == i => {
                         let r = ui.add(
+                            // ai: edit_comp.action
                             egui::TextEdit::singleline(name)
                                 .desired_width(110.0)
                                 .hint_text("Comp name"),
@@ -589,12 +595,14 @@ impl crate::App {
                         }
                     }
                     _ => {
+                        // ai: edit_comp.action
                         if ui.button("Rename").clicked() {
                             self.takes_ui.renaming = Some((i, t.comps[i].name.clone()));
                         }
                     }
                 }
                 if ui
+                    // ai: edit_comp.action
                     .button("Delete")
                     .on_hover_text("Delete this comp; the takes stay")
                     .clicked()
@@ -602,6 +610,7 @@ impl crate::App {
                     ask = Some(Ask::Delete(i));
                 }
                 if ui
+                    // ai: edit_comp.action
                     .button("Flatten")
                     .on_hover_text(
                         "Keep this comp as plain clips, and let the takes and other \
@@ -719,6 +728,7 @@ impl crate::App {
                 resp.context_menu(|ui| match menu_part {
                     Some(p) => {
                         if ui
+                            // ai: edit_comp.action
                             .button(format!("Leave Take {} out here", p.take + 1))
                             .clicked()
                         {
@@ -784,6 +794,7 @@ impl crate::App {
                         Some(n) => {
                             let r = ui.put(
                                 head.shrink2(vec2(6.0, 8.0)),
+                                // ai: edit_comp.action
                                 egui::Button::new(format!("Take {}", n + 1)),
                             );
                             let r = r

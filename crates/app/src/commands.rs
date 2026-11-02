@@ -3003,6 +3003,7 @@ impl Commands {
                     )
                 });
                 let field = ui.add(
+                    // ai: view
                     egui::TextEdit::singleline(&mut self.palette.query)
                         .hint_text("Type to find a command")
                         .desired_width(f32::INFINITY),
@@ -3033,6 +3034,7 @@ impl Commands {
                         n => format!("Show advanced commands too ({n} more found)"),
                     };
                     if ui
+                        // ai: view
                         .checkbox(&mut self.palette.all, text)
                         .on_hover_text("The commands the simpler mode leaves out")
                         .changed()
@@ -3084,6 +3086,7 @@ impl Commands {
         {
             ui.horizontal(|ui| {
                 ui.add(
+                    // ai: view
                     egui::TextEdit::singleline(&mut self.editor.filter)
                         .hint_text("Find a command")
                         .desired_width(240.0),
@@ -3127,6 +3130,7 @@ impl Commands {
                         ));
                         self.save();
                     }
+                    // ai: view
                     if ui.button("Leave it").clicked() {
                         self.editor.clash = None;
                     }
@@ -3374,6 +3378,7 @@ impl App {
         let keys = self.commands.keymap.text(cmd);
         let mut r = ui.add_enabled(
             self.can_run(cmd),
+            // ai: run_command.id
             egui::Button::new(self.commands.name(cmd)).shortcut_text(keys),
         );
         if !i.hint.is_empty() {

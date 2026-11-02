@@ -1097,6 +1097,7 @@ impl Workspace {
                         ui.strong(p.title());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
+                                // ai: view
                                 .button("Put back")
                                 .accessible_name(format!("Put {} back in the main window", p.the()))
                                 .on_hover_text("Back in the main window")
@@ -1302,6 +1303,7 @@ impl<H: Host> Draw<'_, H> {
         };
         if ui
             .add(
+                // ai: view
                 IconButton::new(icon, format!("{what} {}", shown.the()))
                     .tip(what)
                     .small(),
@@ -1319,6 +1321,7 @@ impl<H: Host> Draw<'_, H> {
         if !shown.fixed()
             && ui
                 .add(
+                    // ai: view
                     IconButton::new(
                         Icon::Close,
                         format!("Close {}", shown.title().to_lowercase()),
@@ -1334,6 +1337,7 @@ impl<H: Host> Draw<'_, H> {
             && !shown.fixed()
             && ui
                 .add(
+                    // ai: view
                     IconButton::new(Icon::PopOut, format!("Open {the} in its own window"))
                         .tip("Its own window, to put on another screen")
                         .small(),
@@ -1349,6 +1353,7 @@ impl<H: Host> Draw<'_, H> {
                 if full {
                     IconButton::new(Icon::Restore, "Back to all panes")
                 } else {
+                    // ai: full-size
                     IconButton::new(Icon::FullSize, format!("Show {the} full size"))
                         .tip("Full size")
                 }
@@ -1377,6 +1382,7 @@ impl<H: Host> Draw<'_, H> {
                 for q in others {
                     ui.menu_button(q.title(), |ui| {
                         for (side, words) in SIDES {
+                            // ai: view
                             if ui.button(format!("{words} {}", q.the())).clicked() {
                                 self.acts.push(Act::Put(p, q, side));
                                 ui.close();
@@ -1386,15 +1392,19 @@ impl<H: Host> Draw<'_, H> {
                 }
             });
         });
+        // ai: view
         if ui.button("Larger").clicked() {
             self.acts.push(Act::Grow(p, 0.1));
         }
+        // ai: view
         if ui.button("Smaller").clicked() {
             self.acts.push(Act::Grow(p, -0.1));
         }
+        // ai: view
         if self.windows && !p.fixed() && ui.button("Open in its own window").clicked() {
             self.acts.push(Act::Detach(p));
         }
+        // ai: view
         if !p.fixed() && ui.button("Close").clicked() {
             self.acts.push(Act::Close(p));
         }
@@ -1647,6 +1657,7 @@ impl crate::App {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(n);
+                    // ai: view
                     if ui.button("OK").clicked() {
                         self.workspace.note = None;
                     }
@@ -1691,6 +1702,7 @@ impl crate::App {
                         ws.save_as(&name);
                         done = true;
                     }
+                    // ai: view
                     if ui.button("Cancel").clicked() {
                         done = true;
                     }

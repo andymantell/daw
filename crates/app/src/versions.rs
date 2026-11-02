@@ -247,6 +247,7 @@ impl App {
                         .selected_text(&name)
                         .show_ui(ui, |ui| {
                             for (k, n) in &tracks {
+                                // ai: view
                                 if ui.selectable_label(*k == key, n).clicked() {
                                     action = Some(Action::Track(k.clone()));
                                 }
@@ -277,6 +278,7 @@ impl App {
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui
+                            // ai: duplicate-track-version
                             .button("Duplicate")
                             .on_hover_text("A copy of the version playing, to change and compare")
                             .clicked()
@@ -284,6 +286,7 @@ impl App {
                             action = Some(Action::Duplicate);
                         }
                         if ui
+                            // ai: new-track-version
                             .button("New empty")
                             .on_hover_text(
                                 "A version with the same instrument, effects and fader, but no \
@@ -350,6 +353,7 @@ impl Versions {
                 if ui.button("Rename").clicked() || enter {
                     action = Some(Action::Rename(id.to_string(), text.clone()));
                 }
+                // ai: view
                 if ui.button("Cancel").clicked() || action.is_some() {
                     done = true;
                 }
@@ -368,6 +372,7 @@ impl Versions {
                     action = Some(Action::Delete(id.to_string()));
                     self.asked = None;
                 }
+                // ai: view
                 if ui.button("Cancel").clicked() {
                     self.asked = None;
                 }
@@ -376,6 +381,7 @@ impl Versions {
         }
         ui.horizontal(|ui| {
             if ui
+                // ai: switch_version.version
                 .radio(playing, name)
                 .on_hover_text("Play this version")
                 .clicked()

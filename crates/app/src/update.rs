@@ -367,6 +367,7 @@ impl Updates {
                 Version::current()
             ));
             ui.hyperlink_to("Open the release page", &page);
+            // ai: view
             if ui.button("Not now").clicked() {
                 self.settings.dismissed = Some(v);
                 self.save();
@@ -394,9 +395,11 @@ impl Updates {
                 ui.label(Self::WHY);
                 ui.label("You can change this later in Help → Check for updates.");
                 ui.horizontal(|ui| {
+                    // ai: person
                     if ui.button("Yes, check once a day").clicked() {
                         self.answer(true);
                     }
+                    // ai: person
                     if ui.button("No thanks").clicked() {
                         self.answer(false);
                     }
@@ -427,6 +430,7 @@ impl Updates {
                 }
                 ui.label(Self::WHY);
                 let mut daily = self.settings.daily;
+                // ai: person
                 if ui.checkbox(&mut daily, "Check once a day").changed() {
                     self.settings.asked = true;
                     self.set_daily(daily);

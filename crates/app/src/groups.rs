@@ -198,13 +198,16 @@ impl App {
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.add(
+                                // ai: edit_groups.change.name
                                 egui::TextEdit::singleline(&mut g.name)
                                     .desired_width(150.0)
                                     .char_limit(40),
                             )
                             .accessible_name("Group name");
+                            // ai: edit_groups.change.on
                             ui.checkbox(&mut g.active, "On")
                                 .on_hover_text("Off, its tracks are edited one at a time");
+                            // ai: edit_groups.remove
                             if ui.button("Remove").clicked() {
                                 remove = Some(gi);
                             }
@@ -212,6 +215,7 @@ impl App {
                         ui.horizontal_wrapped(|ui| {
                             for (key, name) in &names {
                                 let mut on = g.tracks.contains(key);
+                                // ai: edit_groups.change.tracks
                                 if ui.checkbox(&mut on, name).changed() {
                                     moves.push((key.clone(), on.then(|| g.id.clone())));
                                 }
@@ -230,6 +234,7 @@ impl App {
                     } else {
                         "New group"
                     };
+                    // ai: edit_groups.add
                     if ui.button(text).clicked() {
                         let name = new_name(groups);
                         add_group(groups, name, if chosen.len() > 1 { &chosen } else { &[] });

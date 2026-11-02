@@ -1623,6 +1623,7 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 let mut shown = n.is_some();
+                // ai: notation-lane
                 ui.checkbox(&mut shown, "Show a notation lane under the track");
                 if shown != n.is_some() {
                     n = shown
@@ -1637,6 +1638,7 @@ impl App {
                         (NotationView::Staff, "Staff"),
                         (NotationView::Drums, "Drums"),
                     ] {
+                        // ai: notation-view
                         ui.selectable_value(&mut n.view, v, label);
                     }
                 });
@@ -1653,22 +1655,26 @@ impl App {
                         .show_ui(ui, |ui| {
                             for t in Tuning::presets() {
                                 let label = format!("{} ({})", t.name, t.letters());
+                                // ai: fretboard-tuning
                                 if ui.selectable_label(t.strings == n.tuning, label).clicked() {
                                     n.tuning = t.strings.clone();
                                     n.tuning_name = t.name.clone();
                                 }
                             }
                         });
+                    // ai: fretboard-capo-up
                     ui.add(egui::Slider::new(&mut n.capo, 0..=12).text("Capo"));
                     ui.checkbox(&mut n.staff, "Standard staff above the tab");
                     ui.checkbox(&mut n.rhythm, "Rhythm under the tab");
                     assign = ui
+                        // ai: assign-frets
                         .button("Choose strings and frets")
                         .on_hover_text(
                             "Write the shown strings and frets into notes that have none",
                         )
                         .clicked();
                 }
+                // ai: practice-mute-part
                 ui.checkbox(&mut mute, "Practice-mute this part, to play it yourself");
             });
         if !open {

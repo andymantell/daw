@@ -222,7 +222,9 @@ impl App {
                     }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        // ai: export_project_file.path
                         go = ui.button("Export…").clicked();
+                        // ai: view
                         cancel = ui.button("Cancel").clicked();
                     });
                 });
@@ -247,6 +249,7 @@ impl App {
                         ui.label(RichText::new("What didn't go").strong());
                         report_list(ui, r);
                     }
+                    // ai: view
                     close = ui.button("Close").clicked();
                 });
             if close {

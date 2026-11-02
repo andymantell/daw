@@ -1352,6 +1352,7 @@ impl App {
                 ui.label(RichText::new("Restored, it is still unsaved until you save it.").weak());
                 ui.horizontal(|ui| {
                     restore = ui.button("Restore").clicked();
+                    // ai: person
                     discard = ui.button("Discard").clicked();
                 });
             });
@@ -1396,6 +1397,7 @@ impl App {
                         );
                         ui.horizontal(|ui| {
                             go = ui.button("Save").clicked() || enter;
+                            // ai: view
                             if ui.button("Cancel").clicked() {
                                 keep = false;
                             }
@@ -1461,6 +1463,7 @@ impl App {
                                     let name = f.file_name().map_or(String::new(), |n| {
                                         n.to_string_lossy().into_owned()
                                     });
+                                    // ai: open_project.project
                                     if ui.selectable_label(false, name).clicked() {
                                         pick = Some(f.clone());
                                     }
@@ -1470,12 +1473,14 @@ impl App {
                         ui.horizontal(|ui| {
                             // The system's own window, for a project
                             // folder anywhere else.
+                            // ai: open_project.project
                             if ui.button("Browse…").clicked() {
                                 pick = rfd::FileDialog::new()
                                     .set_title("Open project folder")
                                     .set_directory(projects_dir())
                                     .pick_folder();
                             }
+                            // ai: view
                             if ui.button("Cancel").clicked() {
                                 keep = false;
                             }
@@ -1497,6 +1502,7 @@ impl App {
                     .show(ctx, |ui| {
                         ui.label("This project hasn't been saved. Save it first?");
                         ui.horizontal(|ui| {
+                            // ai: save_project.name
                             if ui.button("Save…").clicked() {
                                 keep = false;
                                 self.proj.dialog = Some(Dialog::SaveAs {
@@ -1504,10 +1510,12 @@ impl App {
                                     then: Some(then.clone()),
                                 });
                             }
+                            // ai: person
                             if ui.button("Don't save").clicked() {
                                 keep = false;
                                 self.go(ctx, then.clone());
                             }
+                            // ai: view
                             if ui.button("Cancel").clicked() {
                                 keep = false;
                             }

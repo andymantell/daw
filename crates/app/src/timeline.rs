@@ -1962,6 +1962,7 @@ impl Timeline {
                         ui.label(name);
                         let r = ui
                             .add(
+                                // ai: edit_clip.fade_in_seconds
                                 egui::DragValue::new(&mut fade_ms[i])
                                     .range(0.0..=ms(longest))
                                     .speed(1.0)
@@ -1976,6 +1977,7 @@ impl Timeline {
                             .selected_text(curve_label(fade[i].curve))
                             .show_ui(ui, |ui| {
                                 for c in Curve::ALL {
+                                    // ai: edit_clip_volume.fade_in_curve
                                     ui.selectable_value(&mut fade[i].curve, c, curve_label(c));
                                 }
                             })
@@ -1987,6 +1989,7 @@ impl Timeline {
                     ui.label("Volume");
                     let r = ui
                         .add(
+                            // ai: edit_clip.gain_db
                             egui::Slider::new(&mut gain, MIN_DB..=MAX_DB)
                                 .suffix(" dB")
                                 .max_decimals(1),
@@ -1994,6 +1997,7 @@ impl Timeline {
                         .accessible_name("Clip volume");
                     set_gain = r.changed();
                     settled &= !r.dragged();
+                    // ai: edit_clip.gain_db
                     if ui.button("0 dB").clicked() {
                         gain = 0.0;
                         set_gain = true;
@@ -2003,12 +2007,14 @@ impl Timeline {
                     ui.label("Volume points");
                     ui.label(points.to_string());
                     clear = ui
+                        // ai: edit_clip_volume.clear_points
                         .add_enabled(points > 0, egui::Button::new("Remove all"))
                         .clicked();
                     ui.end_row();
                 });
                 ui.weak("Drag a fade's square handle at the top of a clip, or turn on Volume in the toolbar to draw a volume line.");
                 cross = ui
+                    // ai: crossfade
                     .add_enabled(ids.len() > 1, egui::Button::new("Crossfade where they meet"))
                     .on_hover_text("Select clips next to each other on a track first")
                     .clicked();
@@ -2452,10 +2458,12 @@ impl Timeline {
             self.strip_at = frame_of(p.x).max(0);
         }
         resp.context_menu(|ui| {
+            // ai: hit-point
             if ui.button("Add hit point here").clicked() {
                 out.hit = Some(HitAsk::Add(self.strip_at));
                 ui.close();
             }
+            // ai: hit-points
             if ui.button("Timecode and hit points…").clicked() {
                 out.hit = Some(HitAsk::Open);
                 ui.close();
@@ -2965,6 +2973,7 @@ impl Timeline {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, song: &mut Song, view: &View, out: &mut Outcome) {
         ui.horizontal_wrapped(|ui| {
+            // ai: view
             ui.checkbox(&mut self.snap, "Snap")
                 .on_hover_text("Snap to the grid while dragging. Hold Alt to place freely");
             let shown = self.grid.at_zoom(view.map, view.playhead, self.px_per_sec as f64);
@@ -2977,6 +2986,7 @@ impl Timeline {
                 .selected_text(text)
                 .show_ui(ui, |ui| {
                     for g in Grid::ALL {
+                        // ai: view
                         ui.selectable_value(&mut self.grid, g, g.label());
                     }
                 })
@@ -2987,22 +2997,27 @@ impl Timeline {
                      The arrow keys move clips by it",
                 );
             if !self.simple {
+                // ai: person
                 ui.checkbox(&mut self.magnet, "To clips")
                     .on_hover_text("Also snap to other clips' edges, markers and the playhead");
+                // ai: ripple
                 ui.checkbox(&mut self.ripple, "Ripple").on_hover_text(
                     "Deleting a clip, or trimming its end, moves the later clips on its track to close the gap",
                 );
+                // ai: volume-lines
                 ui.checkbox(&mut self.show_volume, "Volume").on_hover_text(
                     "Show each clip's volume line: drag it up or down, double-click to add a point",
                 );
             }
             if !self.groups.is_empty() && !self.simple {
+                // ai: group-edit
                 ui.checkbox(&mut self.group_edit, "Groups").on_hover_text(
                     "Edit the clips on grouped tracks together. Untick to edit one track alone",
                 );
             }
             ui.separator();
             if ui
+                // ai: zoom-out
                 .button("−")
                 .accessible_name("Zoom out")
                 .on_hover_text("Zoom out (Ctrl + wheel)")
@@ -3011,6 +3026,7 @@ impl Timeline {
                 self.zoom_by(1.0 / 1.5);
             }
             if ui
+                // ai: zoom-in
                 .button("+")
                 .accessible_name("Zoom in")
                 .on_hover_text("Zoom in (Ctrl + wheel)")
@@ -3019,6 +3035,7 @@ impl Timeline {
                 self.zoom_by(1.5);
             }
             if ui
+                // ai: view
                 .button("Fit")
                 .on_hover_text("Show the whole song")
                 .clicked()
@@ -3029,6 +3046,7 @@ impl Timeline {
                 self.scroll = 0.0;
             }
             if ui
+                // ai: zoom-selection
                 .add_enabled(!self.selected.is_empty(), egui::Button::new("Zoom to clips"))
                 .on_hover_text("Show the selected clips across the timeline (Z)")
                 .clicked()
@@ -3037,6 +3055,7 @@ impl Timeline {
             }
             ui.separator();
             if ui
+                // ai: split
                 .add(IconButton::labelled(Icon::Split, "Split"))
                 .on_hover_text("Split the selected clips, or all of them, at the playhead (S)")
                 .clicked()
@@ -3046,6 +3065,7 @@ impl Timeline {
             if ui
                 .add_enabled(
                     !self.selected.is_empty(),
+                    // ai: delete
                     IconButton::labelled(Icon::Delete, "Delete").spoken("Delete the selected clips"),
                 )
                 .on_hover_text("Delete the selected clips (Delete)")
@@ -3054,6 +3074,7 @@ impl Timeline {
                 out.changed |= self.delete_selected(song);
             }
             if ui
+                // ai: crossfade
                 .button("Crossfade")
                 .on_hover_text(
                     "Fade clips into each other where they meet: the selected ones, or all (X)",
@@ -3063,6 +3084,7 @@ impl Timeline {
                 out.changed |= self.crossfade_selected(song, view.rate);
             }
             if ui
+                // ai: clip-fades
                 .add_enabled(!self.selected.is_empty(), egui::Button::new("Fades…"))
                 .on_hover_text("Fades and volume of the selected clips (F)")
                 .clicked()
@@ -3070,6 +3092,7 @@ impl Timeline {
                 self.fades_open = true;
             }
             if ui
+                // ai: marker
                 .add(IconButton::labelled(Icon::Marker, "Marker"))
                 .on_hover_text("Mark a section at the playhead's bar (M)")
                 .clicked()
@@ -3078,12 +3101,14 @@ impl Timeline {
             }
             ui.separator();
             if ui
+                // ai: undo
                 .add_enabled(view.can_undo, IconButton::new(Icon::Undo, "Undo").tip("Undo (Ctrl+Z)"))
                 .clicked()
             {
                 out.undo = true;
             }
             if ui
+                // ai: redo
                 .add_enabled(view.can_redo, IconButton::new(Icon::Redo, "Redo").tip("Redo (Ctrl+Shift+Z)"))
                 .clicked()
             {
@@ -4316,15 +4341,18 @@ impl Timeline {
         let end_bar = Self::end_bar(view.map, song);
         resp.context_menu(|ui| match self.menu {
             Some((Hit::Clip { id, zone }, at)) => {
+                // ai: split
                 if ui.button("Split here").clicked() {
                     out.changed |= self.split_at(song, snap_to(at));
                     ui.close();
                 }
+                // ai: delete
                 if ui.button("Delete").clicked() {
                     out.changed |= self.delete_selected(song);
                     ui.close();
                 }
                 ui.separator();
+                // ai: clip-fades
                 if ui.button("Fades and volume…").clicked() {
                     self.fades_open = true;
                     ui.close();
@@ -4332,6 +4360,7 @@ impl Timeline {
                 for (end, name) in [(false, "Fade in shape"), (true, "Fade out shape")] {
                     ui.menu_button(name, |ui| {
                         for c in Curve::ALL {
+                            // ai: edit_clip_volume.fade_in_curve
                             if ui.button(curve_label(c)).clicked() {
                                 out.changed |= self.set_curves(song, end, c);
                                 ui.close();
@@ -4339,6 +4368,7 @@ impl Timeline {
                         }
                     });
                 }
+                // ai: crossfade
                 if ui.button("Crossfade where they meet").clicked() {
                     out.changed |= self.crossfade_selected(song, view.rate);
                     ui.close();
@@ -4350,6 +4380,7 @@ impl Timeline {
                     .all(|c| c.tempo.is_some());
                 let mut follow = follows;
                 if ui
+                    // ai: follow-tempo
                     .checkbox(&mut follow, "Follow tempo")
                     .on_hover_text(
                         "The clip keeps to the song's beats, stretched to the tempo map",
@@ -4359,6 +4390,7 @@ impl Timeline {
                     out.command = Some(Cmd::FollowTempo);
                     ui.close();
                 }
+                // ai: clip-tempo
                 if ui.button("Clip tempo…").clicked() {
                     out.command = Some(Cmd::ClipTempo);
                     ui.close();
@@ -4387,6 +4419,7 @@ impl Timeline {
                     }
                 }
                 if let Zone::Marker(i) = zone {
+                    // ai: stretch_clips.remove_markers
                     if ui.button("Delete stretch marker").clicked() {
                         if let Some(c) = song.find_mut(id)
                             && i < c.markers.len()
@@ -4398,6 +4431,7 @@ impl Timeline {
                         ui.close();
                     }
                 } else if ui
+                    // ai: stretch_clips.add_markers
                     .button("Add stretch marker here")
                     .on_hover_text("Drag it onto a beat to move the attack under it")
                     .clicked()
@@ -4416,10 +4450,12 @@ impl Timeline {
                     }
                     ui.close();
                 }
+                // ai: stretch-markers-from-attacks
                 if ui.button("Stretch markers from attacks").clicked() {
                     out.command = Some(Cmd::StretchMarkersFromAttacks);
                     ui.close();
                 }
+                // ai: clear-stretch-markers
                 if ui.button("Clear stretch markers").clicked() {
                     out.command = Some(Cmd::ClearStretchMarkers);
                     ui.close();
@@ -4429,10 +4465,12 @@ impl Timeline {
                     out.command = Some(Cmd::FixTiming);
                     ui.close();
                 }
+                // ai: quantise-audio
                 if ui.button("Quantise audio…").clicked() {
                     out.command = Some(Cmd::QuantiseAudio);
                     ui.close();
                 }
+                // ai: tempo-from-clip
                 if ui.button("Tempo from performance…").clicked() {
                     out.command = Some(Cmd::TempoFromClip);
                     ui.close();
@@ -4453,6 +4491,7 @@ impl Timeline {
                     ui.close();
                 }
                 if let Zone::Volume(Some(i)) = zone
+                    // ai: edit_clip_volume.points
                     && ui.button("Delete volume point").clicked()
                 {
                     if let Some(c) = song.find_mut(id)
@@ -4465,16 +4504,19 @@ impl Timeline {
                 }
                 if !self.simple {
                     ui.separator();
+                    // ai: process_clips.how
                     if ui.button("Normalise").clicked() {
                         out.process = Some(Process::Normalise);
                         ui.close();
                     }
+                    // ai: process_clips.how
                     if ui.button("Reverse").clicked() {
                         out.process = Some(Process::Reverse);
                         ui.close();
                     }
                     ui.menu_button("Change gain", |ui| {
                         for db in GAIN_STEPS {
+                            // ai: process_clips.how
                             if ui.button(Process::Gain(db).label()).clicked() {
                                 out.process = Some(Process::Gain(db));
                                 ui.close();
@@ -4483,11 +4525,13 @@ impl Timeline {
                     });
                 }
                 ui.separator();
+                // ai: copy
                 if ui.button("Copy").clicked() {
                     out.copy = true;
                     ui.close();
                 }
                 if ui
+                    // ai: bounce
                     .button("Bounce to a new track")
                     .on_hover_text(
                         "The selected clips through their track's effects, as new audio on a \
@@ -4499,6 +4543,7 @@ impl Timeline {
                     ui.close();
                 }
                 ui.separator();
+                // ai: add_comment.track
                 if ui.button("Add comment here…").clicked() {
                     out.comment_at = Some((self.menu_lane, snap_to(at)));
                     ui.close();
@@ -4511,12 +4556,14 @@ impl Timeline {
                 if let Some(key) = key {
                     let linked = song.lanes[lane].notes[index].pattern.is_some();
                     if linked {
+                        // ai: pattern-editor
                         if ui.button("Edit pattern…").clicked() {
                             self.note_sel = Some(key.clone());
                             out.pattern = Some(PatternAsk::Edit(key.clone()));
                             ui.close();
                         }
                         if ui
+                            // ai: edit_clip.pattern_unique
                             .button("Make unique")
                             .on_hover_text(
                                 "Give this clip a copy of the pattern of its own, so editing it \
@@ -4528,6 +4575,7 @@ impl Timeline {
                             ui.close();
                         }
                         if ui
+                            // ai: pattern-to-notes
                             .button("Convert to plain notes")
                             .on_hover_text(
                                 "Keep the notes the pattern plays here as notes to edit one by \
@@ -4538,12 +4586,14 @@ impl Timeline {
                             out.pattern = Some(PatternAsk::ToNotes(key.clone()));
                             ui.close();
                         }
+                    // ai: notes-editor
                     } else if ui.button("Edit notes…").clicked() {
                         self.note_sel = Some(key.clone());
                         out.edit_notes = Some(key.clone());
                         ui.close();
                     }
                     let muted = song.lanes[lane].notes[index].muted;
+                    // ai: edit_clip.muted
                     if ui.button(if muted { "Unmute" } else { "Mute" }).clicked() {
                         song.lanes[lane].notes[index].muted = !muted;
                         out.changed = true;
@@ -4622,6 +4672,7 @@ impl Timeline {
                         out.changed = true;
                         ui.close();
                     }
+                    // ai: delete_clip
                     if ui.button("Delete").clicked() {
                         song.lanes[lane].notes.remove(index);
                         self.note_sel = None;
@@ -4660,25 +4711,30 @@ impl Timeline {
                 }
             }
             Some((Hit::Pin(i), _)) if i < view.pins.len() => {
+                // ai: view
                 if ui.button("Show comment").clicked() {
                     out.pin = Some(view.pins[i].id.clone());
                     ui.close();
                 }
             }
             Some((Hit::Marker(i), _)) if i < song.markers.len() => {
+                // ai: set_loop.from_bar
                 if ui.button("Loop this section").clicked() {
                     out.loop_bars = Some(section(song.markers, i, end_bar));
                     ui.close();
                 }
+                // ai: edit_lesson_notes.add_tabs
                 if ui.button("Add tab for this section…").clicked() {
                     out.tab_for = Some(song.markers[i].id.clone());
                     ui.close();
                 }
+                // ai: edit_markers.change
                 if ui.button("Rename…").clicked() {
                     self.rename = Some((i, song.markers[i].name.clone()));
                     self.rename_focused = false;
                     ui.close();
                 }
+                // ai: edit_markers.remove
                 if ui.button("Delete marker").clicked() {
                     song.markers.remove(i);
                     ui.close();
@@ -4715,6 +4771,7 @@ impl Timeline {
                     ui.separator();
                 }
                 let bar = Self::bar_at(view.map, snap(view.map, at, Grid::Bar));
+                // ai: edit_markers.add
                 if ui.button(format!("Add marker at bar {bar}")).clicked() {
                     self.add_marker(song, bar);
                     ui.close();
@@ -4728,6 +4785,7 @@ impl Timeline {
                     let (b, beat) = (bb.bar, bb.beat as u32);
                     if (b, beat) != (1, 1)
                         && ui
+                            // ai: set_tempo.changes
                             .button(format!("Add tempo change at bar {b}, beat {beat}…"))
                             .clicked()
                     {
@@ -4736,16 +4794,19 @@ impl Timeline {
                     }
                     if bar > 1
                         && ui
+                            // ai: set_tempo.meters
                             .button(format!("Add time signature change at bar {bar}…"))
                             .clicked()
                     {
                         out.tempo = Some(crate::tempo::Ask::Meter(bar));
                         ui.close();
                     }
+                    // ai: view
                     if ui.button("Tempo and time signature…").clicked() {
                         out.tempo = Some(crate::tempo::Ask::Open);
                         ui.close();
                     }
+                    // ai: hit-point
                     if ui.button("Add hit point here").clicked() {
                         out.hit = Some(crate::hitpoints::HitAsk::Add(at));
                         ui.close();
@@ -4760,6 +4821,7 @@ impl Timeline {
                     }
                 }
                 if let Some(l) = self.menu_lane.filter(|&l| song.lanes[l].kind.plays_notes())
+                    // ai: add_note_clip.track
                     && ui.button("Add note clip here").clicked()
                 {
                     let n = song.lanes.iter().map(|l| l.notes.len()).sum::<usize>() + 1;
@@ -4772,6 +4834,7 @@ impl Timeline {
                 }
                 if let Some(l) = self.menu_lane.filter(|&l| song.lanes[l].kind.plays_notes())
                     && ui
+                        // ai: edit_pattern.new
                         .button("Add drum pattern here")
                         .on_hover_text("A clip playing a new pattern of steps, to edit in the pattern editor")
                         .clicked()
@@ -4783,6 +4846,7 @@ impl Timeline {
                     Some(l) => format!("Add comment on {} here…", l.name),
                     None => "Add comment on the whole song here…".into(),
                 };
+                // ai: add_comment.track
                 if ui.button(on).clicked() {
                     out.comment_at = Some((self.menu_lane, snap_to(at)));
                     ui.close();
@@ -4808,6 +4872,7 @@ impl Timeline {
                 .show(ui.ctx(), |ui| {
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
                     let r = ui
+                        // ai: edit_markers.change
                         .text_edit_singleline(&mut text)
                         .accessible_name("Marker name");
                     if !self.rename_focused {
@@ -4815,7 +4880,9 @@ impl Timeline {
                         self.rename_focused = true;
                     }
                     ui.horizontal(|ui| {
+                        // ai: edit_markers.change
                         done = ui.button("OK").clicked() || (enter && r.lost_focus());
+                        // ai: view
                         if ui.button("Cancel").clicked() {
                             keep = false;
                         }
@@ -4854,6 +4921,7 @@ fn track_entries(
         "Render group in place"
     };
     if ui
+        // ai: render_track.track
         .button(render)
         .on_hover_text(
             "Its audio through its effects, before its fader, as a new track \
@@ -4865,11 +4933,13 @@ fn track_entries(
         ui.close();
     }
     if frozen {
+        // ai: freeze_track.frozen
         if ui.button("Unfreeze").clicked() {
             out.track = Some((l, TrackAsk::Freeze));
             ui.close();
         }
     } else if ui
+        // ai: freeze_track.frozen
         .add_enabled(can, egui::Button::new("Freeze"))
         .on_hover_text(
             "Play it from audio rendered through its effects, with them switched \
@@ -4882,6 +4952,7 @@ fn track_entries(
         ui.close();
     }
     if ui
+        // ai: save_preset.kind
         .button("Save track as preset…")
         .on_hover_text("Keep its instrument, effects, sends and settings to use again")
         .clicked()
@@ -4894,6 +4965,7 @@ fn track_entries(
         ui.menu_button("Versions", |ui| {
             let (names, at) = view.versions.get(l).cloned().unwrap_or_default();
             for (i, n) in names.iter().enumerate() {
+                // ai: switch_version.version
                 if ui.radio(i == at, n).clicked() {
                     out.track = ask(VersionAsk::Switch(i));
                     ui.close();
@@ -4903,6 +4975,7 @@ fn track_entries(
                 ui.separator();
             }
             if ui
+                // ai: duplicate-track-version
                 .button("Duplicate this version")
                 .on_hover_text("A copy of what the track plays, to change and compare")
                 .clicked()
@@ -4911,6 +4984,7 @@ fn track_entries(
                 ui.close();
             }
             if ui
+                // ai: new-track-version
                 .button("New empty version")
                 .on_hover_text(
                     "Same instrument, effects and fader, no clips, notes or \
@@ -4921,6 +4995,7 @@ fn track_entries(
                 out.track = ask(VersionAsk::New);
                 ui.close();
             }
+            // ai: track-versions
             if ui.button("Track versions…").clicked() {
                 out.track = ask(VersionAsk::Window);
                 ui.close();

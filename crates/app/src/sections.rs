@@ -170,16 +170,19 @@ impl App {
                 ui.add_enabled_ui(may_edit, |ui| {
                     egui::Grid::new("time_grid").show(ui, |ui| {
                         ui.label("From bar");
+                        // ai: set_loop.from_bar
                         ui.add(egui::DragValue::new(&mut w.bar).range(1..=9999))
                             .accessible_name("From bar");
                         ui.end_row();
                         ui.label("Bars");
+                        // ai: set_loop.to_bar
                         ui.add(egui::DragValue::new(&mut w.count).range(1..=MAX_BARS))
                             .accessible_name("How many bars");
                         ui.end_row();
                     });
                     ui.horizontal(|ui| {
                         if ui
+                            // ai: insert-bars
                             .button("Insert empty bars")
                             .on_hover_text("Before the first bar; what was there moves later")
                             .clicked()
@@ -187,6 +190,7 @@ impl App {
                             act = Some(true);
                         }
                         if ui
+                            // ai: delete-bars
                             .button("Delete bars")
                             .on_hover_text("What is in them goes; what comes after moves up")
                             .clicked()
@@ -481,6 +485,7 @@ impl App {
                             ui.label(name);
                             ui.label(format!("bars {}–{}", s.from, s.to - 1));
                             if ui
+                                // ai: loop-section
                                 .button("Loop")
                                 .on_hover_text("Loop it, to practise")
                                 .clicked()
@@ -488,6 +493,7 @@ impl App {
                                 act = Some((s.clone(), "loop"));
                             }
                             if ui
+                                // ai: add-to-play-order
                                 .button("+ Play order")
                                 .on_hover_text("Add it to the end of the play order")
                                 .clicked()
@@ -497,6 +503,7 @@ impl App {
                             ui.add_enabled_ui(may_edit, |ui| {
                                 ui.horizontal(|ui| {
                                     if ui
+                                        // ai: section-earlier
                                         .add_enabled(i > 0, egui::Button::new("Earlier"))
                                         .accessible_name(format!("Move {} earlier", s.name))
                                         .clicked()
@@ -504,6 +511,7 @@ impl App {
                                         act = Some((s.clone(), "earlier"));
                                     }
                                     if ui
+                                        // ai: section-later
                                         .add_enabled(i + 1 < all.len(), egui::Button::new("Later"))
                                         .accessible_name(format!("Move {} later", s.name))
                                         .clicked()
@@ -511,6 +519,7 @@ impl App {
                                         act = Some((s.clone(), "later"));
                                     }
                                     if ui
+                                        // ai: duplicate-section
                                         .button("Copy after")
                                         .on_hover_text("Put a copy of it straight after it")
                                         .clicked()
@@ -518,6 +527,7 @@ impl App {
                                         act = Some((s.clone(), "copy"));
                                     }
                                     if ui
+                                        // ai: delete-section
                                         .button("Delete")
                                         .on_hover_text("Take its bars out of every track")
                                         .clicked()
@@ -565,6 +575,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let some = !order.is_empty();
                     if ui
+                        // ai: play-order
                         .add_enabled(some, egui::Button::new("Play in this order"))
                         .on_hover_text("Plays the sections in this order, round and round")
                         .clicked()
@@ -573,6 +584,7 @@ impl App {
                     }
                     ui.add_enabled_ui(may_edit && some, |ui| {
                         if ui
+                            // ai: write-play-order
                             .button("Write into the song")
                             .on_hover_text(
                                 "Lays the song out in this order, so it plays this way \
@@ -583,6 +595,7 @@ impl App {
                             write = true;
                         }
                     });
+                    // ai: clear-play-order
                     if ui.add_enabled(some, egui::Button::new("Clear")).clicked() {
                         order.clear();
                     }

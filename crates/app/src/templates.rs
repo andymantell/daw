@@ -168,6 +168,7 @@ impl App {
                                 ui.label(RichText::new(group).strong());
                                 heading = Some(group);
                             }
+                            // ai: new_project.template
                             let r = ui.selectable_label(c.picked == i, &t.name);
                             if r.clicked() {
                                 c.picked = i;
@@ -191,6 +192,7 @@ impl App {
                         if ui.button("Delete").clicked() {
                             delete = Some(i);
                         }
+                        // ai: view
                         if ui.button("Cancel").clicked() {
                             c.deleting = None;
                         }
@@ -198,9 +200,11 @@ impl App {
                     return;
                 }
                 ui.horizontal(|ui| {
+                    // ai: new_project.template
                     if ui.button("Create").clicked() {
                         create = Some(c.picked);
                     }
+                    // ai: view
                     if ui.button("Cancel").clicked() {
                         keep = false;
                     }
@@ -267,6 +271,7 @@ impl App {
                 }
                 ui.horizontal(|ui| {
                     go |= ui.button(if exists { "Replace" } else { "Save" }).clicked();
+                    // ai: view
                     if ui.button("Cancel").clicked() {
                         keep = false;
                     }

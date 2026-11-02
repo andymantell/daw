@@ -811,6 +811,7 @@ impl App {
                 .selected_text(show.label())
                 .show_ui(ui, |ui| {
                     for s in Show::ALL {
+                        // ai: view
                         ui.selectable_value(&mut show, s, s.label());
                     }
                 })
@@ -826,6 +827,7 @@ impl App {
                 .width(48.0)
                 .show_ui(ui, |ui| {
                     for (i, r) in ROOTS.iter().enumerate() {
+                        // ai: view
                         ui.selectable_value(&mut root, i as u8, *r);
                     }
                 })
@@ -841,6 +843,7 @@ impl App {
                     .show_ui(ui, |ui| {
                         for k in ChordKind::ALL {
                             let name = format!("{}{}", ROOTS[usize::from(root)], k.symbol());
+                            // ai: view
                             ui.selectable_value(&mut kind, k, name);
                         }
                     })
@@ -853,6 +856,7 @@ impl App {
                     .selected_text(kind.label())
                     .show_ui(ui, |ui| {
                         for k in ScaleKind::ALL {
+                            // ai: view
                             ui.selectable_value(&mut kind, k, k.label());
                         }
                     })
@@ -867,6 +871,7 @@ impl App {
             }
             let own = self.fretboard.own_key.is_some() || self.fretboard.chord_root.is_some();
             if ui
+                // ai: fretboard-song-key
                 .add_enabled(own, egui::Button::new("Song's key"))
                 .on_hover_text(if song_key {
                     self.commands.hover(Cmd::FretboardSongKey)
@@ -888,6 +893,7 @@ impl App {
                     for t in &presets {
                         let on = t.strings == neck.tuning.strings;
                         if ui
+                            // ai: fretboard-tuning
                             .selectable_label(on, format!("{} ({})", t.name, t.letters()))
                             .clicked()
                         {
@@ -908,6 +914,7 @@ impl App {
             ui.label("Capo");
             let mut capo = neck.capo;
             if ui
+                // ai: fretboard-capo-up
                 .add(egui::DragValue::new(&mut capo).range(0..=neck.frets - SPAN))
                 .on_hover_text("The fret the capo is on, 0 for none")
                 .changed()
@@ -917,6 +924,7 @@ impl App {
             ui.label("Position");
             let mut pos = self.fretboard.position;
             ui.add(
+                // ai: view
                 egui::DragValue::new(&mut pos)
                     .range(0..=neck.frets + 1 - SPAN)
                     .custom_formatter(|v, _| {
@@ -934,6 +942,7 @@ impl App {
                 .selected_text(labels.label())
                 .show_ui(ui, |ui| {
                     for l in Labels::ALL {
+                        // ai: view
                         ui.selectable_value(&mut labels, l, l.label());
                     }
                 })
@@ -941,6 +950,7 @@ impl App {
                 .accessible_name("Labels");
             self.fretboard.labels = labels;
             if ui
+                // ai: fretboard-type
                 .selectable_label(self.fretboard.typing, "Type on it")
                 .on_hover_text(self.commands.hover(Cmd::FretboardType))
                 .clicked()
@@ -948,6 +958,7 @@ impl App {
                 run = Some(Cmd::FretboardType);
             }
             if ui
+                // ai: fretboard-hear
                 .selectable_label(self.fretboard.hear, "Hear notes")
                 .on_hover_text(self.commands.hover(Cmd::FretboardHear))
                 .clicked()

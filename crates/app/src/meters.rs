@@ -148,8 +148,10 @@ impl Meters {
                 .width(160.0)
                 .selected_text(name(&self.track))
                 .show_ui(ui, |ui| {
+                    // ai: view
                     ui.selectable_value(&mut chosen, None, "Master");
                     for (k, n) in tracks {
+                        // ai: view
                         ui.selectable_value(&mut chosen, Some(k.to_string()), *n);
                     }
                 })
@@ -159,12 +161,14 @@ impl Meters {
                 self.show(chosen);
             }
             if ui
+                // ai: view
                 .button("Reset")
                 .on_hover_text("Start integrated loudness, range and the highest readings again")
                 .clicked()
             {
                 self.reset();
             }
+            // ai: view
             ui.checkbox(&mut self.reset_on_play, "Reset on play");
         });
         ui.add_space(6.0);

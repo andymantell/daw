@@ -100,6 +100,7 @@ impl Comments {
                 n => format!("{n} open"),
             });
             if resolved > 0 {
+                // ai: view
                 ui.checkbox(&mut self.show_resolved, format!("Show {resolved} resolved"));
             }
         });
@@ -139,8 +140,10 @@ impl Comments {
             egui::ComboBox::from_id_salt("comment track")
                 .selected_text(name(&track))
                 .show_ui(ui, |ui| {
+                    // ai: add_comment.track
                     ui.selectable_value(&mut track, None, name(&None));
                     for (id, n) in cx.tracks {
+                        // ai: add_comment.track
                         ui.selectable_value(&mut track, Some(id.clone()), n);
                     }
                 })
@@ -155,6 +158,7 @@ impl Comments {
             if self.target.is_some() {
                 ui.label(format!("at {}", place(cx.map, target.start, target.end)));
                 if ui
+                    // ai: add_comment.bar
                     .small_button("Use playhead")
                     .on_hover_text("Pin it at the playhead instead")
                     .clicked()
@@ -162,6 +166,7 @@ impl Comments {
                     self.target = None;
                 }
             } else {
+                // ai: add_comment
                 ui.radio_value(&mut self.on_loop, false, "At the playhead");
                 ui.add_enabled_ui(cx.loop_frames.is_some(), |ui| {
                     ui.radio_value(&mut self.on_loop, true, "On the loop")
@@ -170,6 +175,7 @@ impl Comments {
             }
         });
         let field = ui.add(
+            // ai: add_comment.text
             egui::TextEdit::multiline(&mut self.draft)
                 .desired_rows(2)
                 .desired_width(f32::INFINITY)
@@ -182,6 +188,7 @@ impl Comments {
         let send = ui
             .add_enabled(
                 !self.draft.trim().is_empty(),
+                // ai: add_comment.text
                 egui::Button::new("Add comment"),
             )
             .on_hover_text("Ctrl+Enter in the text adds it too")
@@ -254,6 +261,7 @@ impl Comments {
                 }
                 ui.horizontal_wrapped(|ui| {
                     if ui
+                        // ai: seek.seconds
                         .add(IconButton::labelled(Icon::Play, "Play from here"))
                         .on_hover_text("Move the playhead here and play")
                         .clicked()
@@ -262,11 +270,13 @@ impl Comments {
                         out.play_from = Some(root.start);
                     }
                     if self.reply.as_ref().is_none_or(|(id, _)| *id != root.id)
+                        // ai: add_comment.reply_to
                         && ui.button("Reply").clicked()
                     {
                         self.reply = Some((root.id.clone(), String::new()));
                     }
                     let label = if root.resolved { "Reopen" } else { "Resolve" };
+                    // ai: resolve_comment.resolved
                     if ui.button(label).clicked()
                         && let Some(c) = comments.iter_mut().find(|c| c.id == root.id)
                     {
@@ -277,6 +287,7 @@ impl Comments {
                     && let Some((id, mut text)) = self.reply.take()
                 {
                     let field = ui.add(
+                        // ai: add_comment.reply_to
                         egui::TextEdit::multiline(&mut text)
                             .desired_rows(2)
                             .desired_width(f32::INFINITY)
@@ -286,6 +297,7 @@ impl Comments {
                     let mut keep = true;
                     ui.horizontal(|ui| {
                         let send = ui
+                            // ai: add_comment.reply_to
                             .add_enabled(!text.trim().is_empty(), egui::Button::new("Send reply"))
                             .clicked()
                             || (field.has_focus()
@@ -307,6 +319,7 @@ impl Comments {
                             });
                             keep = false;
                         }
+                        // ai: view
                         if ui.button("Cancel").clicked() {
                             keep = false;
                         }
@@ -338,6 +351,7 @@ impl Comments {
                 {
                     done = Some(true);
                 }
+                // ai: view
                 if ui.button("Cancel").clicked() {
                     done = Some(false);
                 }
@@ -372,6 +386,7 @@ impl Comments {
                     delete(comments, &c.id);
                     self.deleting = None;
                 }
+                // ai: view
                 if ui.small_button("Keep").clicked() {
                     self.deleting = None;
                 }

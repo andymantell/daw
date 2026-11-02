@@ -360,6 +360,7 @@ impl Editor {
                 .first()
                 .map_or(100, |&i| (clip.notes[i].chance * 100.0).round() as i32);
             if ui
+                // ai: edit_notes.change.chance
                 .add(egui::DragValue::new(&mut c).range(0..=100).suffix("%"))
                 .accessible_name("Note chance")
                 .on_hover_text("How likely the selected notes are to play each time round")
@@ -372,6 +373,7 @@ impl Editor {
             }
             let grouped = picked.iter().any(|&i| clip.notes[i].group.is_some());
             if ui
+                // ai: edit_notes.group
                 .button("Play together")
                 .on_hover_text(
                     "The selected notes share one roll of their chance: all play, or none",
@@ -386,6 +388,7 @@ impl Editor {
                 changed = true;
             }
             if ui
+                // ai: edit_notes.group.one_of
                 .button("Play one at random")
                 .on_hover_text("Each time round, one of the selected notes plays, picked at random")
                 .clicked()
@@ -397,6 +400,7 @@ impl Editor {
                 }
                 changed = true;
             }
+            // ai: edit_notes.ungroup
             if grouped && ui.button("Ungroup").clicked() {
                 for &i in &picked {
                     clip.notes[i].group = None;
@@ -602,16 +606,19 @@ impl Editor {
                 .selected_text(self.grid.label())
                 .show_ui(ui, |ui| {
                     for g in Grid::ALL {
+                        // ai: note_tool.grid
                         ui.selectable_value(&mut self.grid, g, g.label());
                     }
                 })
                 .response
                 .accessible_name("Note grid");
+            // ai: view
             ui.toggle_value(&mut self.snap, "Snap")
                 .on_hover_text("Snap drawn and moved notes to the grid");
             ui.separator();
             ui.label("Strength");
             ui.add(
+                // ai: note_tool.strength
                 egui::DragValue::new(&mut self.strength)
                     .range(0.0..=100.0)
                     .suffix("%"),
@@ -620,6 +627,7 @@ impl Editor {
             .on_hover_text("How far towards the grid quantising moves notes");
             ui.label("Swing");
             ui.add(
+                // ai: note_tool.swing
                 egui::DragValue::new(&mut self.swing)
                     .range(0.0..=100.0)
                     .suffix("%"),
@@ -627,6 +635,7 @@ impl Editor {
             .accessible_name("Quantise swing")
             .on_hover_text("Every second grid line is this much of a step later");
             if ui
+                // ai: note_tool.tool
                 .button("Quantise")
                 .on_hover_text("Move the selected notes (or all) towards the grid")
                 .clicked()
@@ -637,6 +646,7 @@ impl Editor {
             ui.label("Transpose");
             for (by, label) in [(-12, "−12"), (-1, "−1"), (1, "+1"), (12, "+12")] {
                 if ui
+                    // ai: edit_notes.change.pitch
                     .button(label)
                     .accessible_name(format!("Transpose {by:+} semitones"))
                     .clicked()
@@ -672,11 +682,13 @@ impl Editor {
                         } else {
                             v.label()
                         };
+                        // ai: view
                         ui.selectable_value(&mut self.lane, v, text);
                     }
                     ui.menu_button("Other controller", |ui| {
                         for n in 0..120u8 {
                             let v = LaneView::Controller(Controller::Cc(n));
+                            // ai: view
                             ui.selectable_value(&mut self.lane, v, v.label());
                         }
                     });
@@ -692,6 +704,7 @@ impl Editor {
                     _ => (0.5, 0.4),
                 };
                 if ui
+                    // ai: edit_note_lanes.expression
                     .button("Wobble")
                     .on_hover_text(
                         "Fill the note's line with a wobble, two a beat: vibrato on its pitch",
@@ -703,6 +716,7 @@ impl Editor {
                         daw_project::noteops::wobble(n.len, 2.0, centre, depth);
                     changed = true;
                 }
+                // ai: edit_note_lanes.expression
                 if ui.button("Clear line").clicked()
                     && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
                 {
@@ -712,10 +726,12 @@ impl Editor {
             }
             changed |= self.chance_tools(ui, clip);
             ui.separator();
+            // ai: edit_notes
             if ui.button("Select all").clicked() {
                 self.selected = clip.notes.iter().map(|n| n.id.clone()).collect();
             }
             if ui
+                // ai: edit_notes.remove
                 .add_enabled(!self.selected.is_empty(), egui::Button::new("Delete"))
                 .clicked()
             {
@@ -1576,6 +1592,7 @@ impl crate::App {
                 .show_ui(ui, |ui| {
                     for (k, n) in &clips {
                         if ui
+                            // ai: view
                             .selectable_label(self.notes_editor.clip.as_ref() == Some(k), n)
                             .clicked()
                         {
@@ -1620,10 +1637,12 @@ impl crate::App {
         if clip.pattern.is_some() {
             ui.label("This clip plays a drum pattern: its notes follow the pattern.");
             ui.horizontal(|ui| {
+                // ai: view
                 if ui.button("Edit the pattern").clicked() {
                     self.edit_pattern_of(&key);
                 }
                 if ui
+                    // ai: pattern-to-notes
                     .button("Convert to plain notes")
                     .on_hover_text(
                         "Keep its notes as notes to edit here, no longer following the pattern",

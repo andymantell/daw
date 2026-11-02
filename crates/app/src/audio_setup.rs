@@ -444,6 +444,7 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui
+                        // ai: audio-setup-back
                         .add_enabled(s.step != Step::Device, egui::Button::new("Back"))
                         .clicked()
                     {
@@ -456,6 +457,7 @@ impl App {
                         _ => "Next",
                     };
                     if ui
+                        // ai: audio-setup-next
                         .add_enabled(s.checking.is_none(), egui::Button::new(next))
                         .clicked()
                     {
@@ -463,12 +465,14 @@ impl App {
                     }
                     if !matches!(s.step, Step::Done | Step::Monitoring)
                         && ui
+                            // ai: audio-setup-skip
                             .button("Skip")
                             .on_hover_text("Go on without changing this")
                             .clicked()
                     {
                         cmd = Some(Cmd::AudioSetupSkip);
                     }
+                    // ai: audio-setup-cancel
                     if ui.button("Cancel").clicked() {
                         cmd = Some(Cmd::AudioSetupCancel);
                     }
@@ -522,6 +526,7 @@ impl AudioSetup {
                         ui.label(RichText::new(&c.why).small().weak());
                     });
                 }
+                // ai: audio-setup
                 if ui.button("Look again").clicked() {
                     cmd = Some(Cmd::AudioSetup);
                 }
@@ -671,6 +676,7 @@ impl AudioSetup {
                         );
                     }
                 }
+                // ai: measure-latency
                 if ui.button("Measure latency…").clicked() {
                     cmd = Some(Cmd::MeasureLatency);
                 }

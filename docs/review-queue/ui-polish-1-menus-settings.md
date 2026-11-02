@@ -79,7 +79,9 @@ At 1920 × 1200 (the baseline) and 1440 × 900, in
 The icons still draw as empty boxes in these pictures: a separate
 thread is drawing our own icon set.
 
-## For you to decide
+## Decided
+
+Answered 2026-11-02: all four are fine as they are for now.
 
 1. **Play, record, loop and the metronome are in the Song menu.** The
    plan's nine menus have no Transport menu, so these sit at the top of

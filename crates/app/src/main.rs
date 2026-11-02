@@ -23,6 +23,7 @@
 mod agent;
 mod agent_arrange;
 mod agent_automation;
+mod agent_device;
 mod agent_edit;
 mod agent_files;
 mod agent_layers;
@@ -551,6 +552,9 @@ struct App {
     inspector: inspector::Inspector,
     proj: project::Proj,
     latency: latency::Latency,
+    /// A simulated loopback cable's delay for measuring in tests.
+    #[cfg(test)]
+    loopback_for_tests: Option<u32>,
     /// The guided audio setup.
     audio_setup: audio_setup::AudioSetup,
     updates: update::Updates,
@@ -721,6 +725,8 @@ impl App {
             inspector: inspector::Inspector::default(),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
+            #[cfg(test)]
+            loopback_for_tests: None,
             audio_setup: audio_setup::AudioSetup::new(
                 (!cfg!(test)).then(|| config_dir().join("audio-setup.txt")),
             ),
@@ -1938,6 +1944,7 @@ impl App {
                         .selected_text(&draft.host)
                         .show_ui(ui, |ui| {
                             for h in &self.hosts {
+                                // ai: set_audio_device.driver
                                 ui.selectable_value(&mut draft.host, h.name.clone(), &h.name);
                             }
                         })
@@ -1952,6 +1959,7 @@ impl App {
                         .width(260.0)
                         .show_ui(ui, |ui| {
                             for d in host.map(|h| h.devices.as_slice()).unwrap_or(&[]) {
+                                // ai: set_audio_device.device
                                 if ui
                                     .selectable_value(&mut draft.device, d.name.clone(), &d.name)
                                     .clicked()
@@ -1973,6 +1981,7 @@ impl App {
                         .show_ui(ui, |ui| {
                             let rates = dev.map(|d| d.rates.clone()).unwrap_or_default();
                             for r in rates {
+                                // ai: set_audio_device.rate
                                 ui.selectable_value(&mut draft.rate, r, format!("{r} Hz"));
                             }
                         })
@@ -1986,11 +1995,13 @@ impl App {
                             format!("{b} samples ({:.1} ms)", b as f64 * 1000.0 / draft.rate as f64)
                         }))
                         .show_ui(ui, |ui| {
+                            // ai: set_audio_device.buffer
                             ui.selectable_value(&mut draft.buffer, None, "Driver default");
                             for b in [32, 64, 128, 256, 512, 1024, 2048] {
                                 let ok = dev
                                     .and_then(|d| d.buffer_range)
                                     .is_none_or(|(lo, hi)| (lo..=hi).contains(&b));
+                                // ai: set_audio_device.buffer
                                 if ok {
                                     ui.selectable_value(&mut draft.buffer, Some(b), format!("{b} samples"));
                                 }
@@ -2032,8 +2043,10 @@ impl App {
                         .selected_text(draft.input.as_deref().unwrap_or("None"))
                         .width(260.0)
                         .show_ui(ui, |ui| {
+                            // ai: set_audio_device.input
                             ui.selectable_value(&mut draft.input, None, "None");
                             for d in &self.input_devices {
+                                // ai: set_audio_device.input
                                 ui.selectable_value(&mut draft.input, Some(d.clone()), d);
                             }
                         })
@@ -2045,11 +2058,13 @@ impl App {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             let mut manual = draft.record_offset.is_some();
+                            // ai: set_audio_device.record_offset
                             if ui.checkbox(&mut manual, "Measured").changed() {
                                 draft.record_offset = manual.then_some(0);
                                 draft.measured_at = None;
                             }
                             if let Some(o) = &mut draft.record_offset {
+                                // ai: set_audio_device.record_offset
                                 if ui
                                     .add(egui::DragValue::new(o).range(0..=48_000).suffix(" frames"))
                                     .changed()
@@ -2085,6 +2100,7 @@ impl App {
                     ui.end_row();
 
                     ui.label("Monitoring");
+                    // ai: set_audio_device.direct_monitoring
                     ui.checkbox(&mut draft.direct_monitoring, "Direct: I listen through the interface")
                         .on_hover_text("The app never plays inputs back, so you don't hear them twice. Use when the interface's own monitor knob or switch is on.");
                     ui.end_row();
@@ -2093,8 +2109,10 @@ impl App {
                     egui::ComboBox::from_id_salt("click")
                         .selected_text(draft.click.map_or("Main mix".into(), |c| format!("Output {}", c + 1)))
                         .show_ui(ui, |ui| {
+                            // ai: set_audio_device.click_output
                             ui.selectable_value(&mut draft.click, None, "Main mix");
                             for c in 0..outs {
+                                // ai: set_audio_device.click_output
                                 ui.selectable_value(&mut draft.click, Some(c), format!("Output {}", c + 1));
                             }
                         })
@@ -2163,6 +2181,7 @@ impl App {
                     .weak(),
                 );
             ui.horizontal(|ui| {
+                // ai: set_audio_device
                 if ui.button("Apply").clicked() {
                     apply = true;
                 }
@@ -2174,6 +2193,7 @@ impl App {
                 {
                     guide = true;
                 }
+                // ai: set_audio_device.rescan
                 if ui.button("Rescan devices").clicked() {
                     self.hosts = audio::list();
                     self.input_devices = input_names(&draft_host(&self.draft));
@@ -2207,7 +2227,14 @@ impl App {
     /// cable.
     fn measure_target(&self) -> Result<audio::latency::Target, String> {
         let draft = self.draft.as_ref().ok_or("Choose an audio device first.")?;
-        match audio::SilentInput::from_env() {
+        #[cfg(test)]
+        let input = match self.loopback_for_tests {
+            Some(delay) => audio::SilentInput::Loopback { delay },
+            None => audio::SilentInput::from_env(),
+        };
+        #[cfg(not(test))]
+        let input = audio::SilentInput::from_env();
+        match input {
             input @ audio::SilentInput::Loopback { .. } => Ok(audio::latency::Target::Silent {
                 rate: draft.rate,
                 buffer: draft.buffer.unwrap_or(256),
@@ -2440,6 +2467,7 @@ fn channel_picker(ui: &mut egui::Ui, id: &str, name: &str, ch: &mut usize, outs:
         .selected_text(format!("{}", *ch + 1))
         .show_ui(ui, |ui| {
             for c in 0..outs {
+                // ai: set_audio_device.main_outputs
                 ui.selectable_value(ch, c, format!("{}", c + 1));
             }
         })

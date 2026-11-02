@@ -2,8 +2,6 @@
 # it (see src/widget_check.rs), by file. Counts may only go down.
 audio_setup.rs 5
 export.rs 3
-latency.rs 3
-main.rs 15
 sections.rs 1
 timeline.rs 2
 video.rs 2

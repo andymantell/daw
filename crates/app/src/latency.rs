@@ -48,6 +48,20 @@ impl Latency {
         }
     }
 
+    /// The input channel measured on, from 0.
+    pub fn channel(&self) -> usize {
+        self.channel
+    }
+
+    pub fn set_channel(&mut self, c: usize) {
+        self.channel = c;
+    }
+
+    /// How far a measurement is, 0 to 1, if one is running.
+    pub fn progress(&self) -> Option<f32> {
+        self.measuring.as_ref().map(Measuring::progress)
+    }
+
     /// The last measurement's result, if one ran.
     pub fn last(&self) -> Option<&Result<Measured, String>> {
         self.last.as_ref()
@@ -92,6 +106,7 @@ impl Latency {
                         .selected_text(format!("Input {}", self.channel + 1))
                         .show_ui(ui, |ui| {
                             for c in 0..inputs {
+                                // ai: measure_latency.input
                                 ui.selectable_value(
                                     &mut self.channel,
                                     c,
@@ -116,12 +131,14 @@ impl Latency {
             match &self.measuring {
                 Some(m) => {
                     ui.add(egui::ProgressBar::new(m.progress()).text("Measuring…"));
+                    // ai: measure_latency.cancel
                     if ui.button("Cancel").clicked() {
                         action = Some(Action::Cancel);
                     }
                 }
                 None => {
                     let can = !recording && draft.input.is_some();
+                    // ai: measure_latency.start
                     let b = ui
                         .add_enabled(can, egui::Button::new("Start measuring"))
                         .on_disabled_hover_text(if recording {

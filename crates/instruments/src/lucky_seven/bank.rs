@@ -70,7 +70,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<BankVoice>, String> {
                     if len != PACKED * 32 || data.len() < len {
                         return Err("a bank dump that isn't 32 sounds long".into());
                     }
-                    for v in data[..len].chunks_exact(PACKED) {
+                    for v in data[..len].as_chunks::<PACKED>().0 {
                         voices.push(unpack(v));
                     }
                 }
@@ -99,7 +99,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<BankVoice>, String> {
         if bytes.is_empty() || !bytes.len().is_multiple_of(PACKED) {
             return Err("not a sound bank: no dump header, and not whole sounds".into());
         }
-        for v in bytes.chunks_exact(PACKED) {
+        for v in bytes.as_chunks::<PACKED>().0 {
             voices.push(unpack(v));
         }
     }

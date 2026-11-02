@@ -549,6 +549,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::agent_pitch::TOOLS)
         .chain(crate::lyrics::TOOLS)
         .chain(crate::hitpoints::TOOLS)
+        .chain(crate::browser::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)

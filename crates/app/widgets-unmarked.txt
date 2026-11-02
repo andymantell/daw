@@ -1,7 +1,6 @@
 # Controls drawn before every control had to say how an assistant reaches
 # it (see src/widget_check.rs), by file. Counts may only go down.
 audio_setup.rs 5
-commands.rs 4
 export.rs 3
 latency.rs 3
 main.rs 15

@@ -2310,6 +2310,104 @@ mod tests {
         assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
     }
 
+    /// The June through the assistant interface (classic synths, S4):
+    /// add the track, read its settings and the sounds made in code,
+    /// voice a pad from them, play a chord and render it in stereo.
+    #[test]
+    fn the_june_is_played_through_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "june"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        for key in [
+            "instrument.range",
+            "instrument.pwm_source",
+            "instrument.sub",
+            "instrument.highpass",
+            "instrument.cutoff",
+            "instrument.filter_env",
+            "instrument.lfo_delay",
+            "instrument.chorus",
+            "instrument.mode",
+            "instrument.voices",
+            "instrument.unison_detune",
+            "instrument.vintage",
+        ] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        let choices = |params: &[Value], key: &str| -> Vec<Value> {
+            let p = params.iter().find(|p| p["param"] == key).unwrap();
+            p["choices"].as_array().unwrap().clone()
+        };
+        assert_eq!(
+            choices(&params, "instrument.chorus"),
+            json!(["Off", "I", "II", "I + II"])
+                .as_array()
+                .unwrap()
+                .clone()
+        );
+        assert!(
+            choices(&params, "instrument.highpass")
+                .iter()
+                .any(|c| c == "Bass lift")
+        );
+        let both = choices(&params, "instrument.chorus")
+            .iter()
+            .position(|c| c == "I + II")
+            .unwrap();
+        // The sounds made in code come with the settings that make them.
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let sounds = info["instrument"]["sounds"].as_array().unwrap();
+        let pad = (sounds.iter())
+            .find(|s| s["name"] == "Strings pad")
+            .unwrap();
+        d.call(
+            "set_instrument",
+            json!({"track": t, "settings": pad["settings"]}),
+        )
+        .unwrap();
+        // Then voiced further: both choruses, a brighter filter, more voices.
+        d.call(
+            "set_parameters",
+            json!({"track": t, "changes": [
+                {"param": "instrument.chorus", "value": both},
+                {"param": "instrument.cutoff", "value": 2000.0},
+                {"param": "instrument.voices", "value": 8},
+                {"param": "instrument.attack", "value": 0.05},
+            ]}),
+        )
+        .unwrap();
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 1, "notes": [
+                {"beat": 0.0, "beats": 4.0, "pitch": 57, "velocity": 100},
+                {"beat": 0.0, "beats": 4.0, "pitch": 60, "velocity": 100},
+                {"beat": 0.0, "beats": 4.0, "pitch": 64, "velocity": 100},
+                {"beat": 2.0, "beats": 2.0, "pitch": 67, "velocity": 100}
+            ]}),
+        )
+        .unwrap();
+        let a = d
+            .call("analyse", json!({"track": t, "from_bar": 1, "to_bar": 2}))
+            .unwrap();
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() > -30.0, "{a}");
+        let now = instrument_params(&mut d, &t);
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.chorus")
+            .unwrap();
+        assert_eq!(f["text"], "I + II");
+        let f = (now.iter())
+            .find(|p| p["param"] == "instrument.voices")
+            .unwrap();
+        assert_eq!(f["value"], 8.0);
+        // The command is in the table too.
+        d.call("run_command", json!({"id": "add-june-track"}))
+            .unwrap();
+        let p = d.call("get_project", json!({})).unwrap();
+        assert_eq!(p["tracks"].as_array().unwrap().len(), 2);
+        assert_eq!(p["tracks"][1]["instrument"]["builtin"], "june", "{p}");
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

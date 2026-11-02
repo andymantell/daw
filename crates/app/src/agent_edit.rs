@@ -33,12 +33,13 @@ pub(crate) const TOOLS: &[Tool] = &[
         schema: || {
             json!({"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["audio", "instrument", "poly-synth",
-                         "sampler", "drum-sampler", "drum-machine", "slicer", "patch-twenty", "oh-one", "acid-three", "model-mono", "bus", "folder"],
+                         "sampler", "drum-sampler", "drum-machine", "slicer", "patch-twenty", "oh-one", "acid-three", "model-mono", "june", "bus", "folder"],
                          "description": "instrument has the simple synth; poly-synth the bigger one; \
                                          patch-twenty the semi-modular monosynth; oh-one the one-oscillator \
                                          bass and lead monosynth; acid-three the acid bass line synth \
                                          (accent = velocity, slide = overlapping notes); model-mono the \
-                                         three-oscillator ladder monosynth for bass and leads."},
+                                         three-oscillator ladder monosynth for bass and leads; june the \
+                                         six-voice polysynth with a chorus, for pads, chords and stabs."},
                 "name": {"type": "string"},
                 "index": {"type": "integer", "description": "Where in the track list, from 0; the end if left out."}
             }, "required": ["kind"]})
@@ -418,7 +419,8 @@ impl App {
                 | daw_instruments::Kind::PatchTwenty
                 | daw_instruments::Kind::OhOne
                 | daw_instruments::Kind::AcidThree
-                | daw_instruments::Kind::ModelMono => false,
+                | daw_instruments::Kind::ModelMono
+                | daw_instruments::Kind::June => false,
             };
             if !fits {
                 return Err(format!("A {} has no sound slot {slot}.", kind.name()));

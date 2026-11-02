@@ -694,6 +694,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("A three-oscillator ladder monosynth for bass and leads, with an overdriving mixer and the 24 dB ladder filter")
     .words("instrument mono synth bass lead ladder analogue vintage"),
     info(
+        Cmd::AddInstrument(9),
+        "add-june-track",
+        "Edit",
+        "Add June track",
+        &[],
+    )
+    .hint("A six-voice polysynth with a chorus, for pads, chords, house stabs and bass: saw and pulse, a sub, a stepped high-pass, the 24 dB filter, one envelope, a delayed LFO")
+    .words("instrument poly synth pad chord stab chorus analogue vintage"),
+    info(
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",

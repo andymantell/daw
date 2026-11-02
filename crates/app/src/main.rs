@@ -72,6 +72,7 @@ mod note_tools;
 mod notefx;
 mod notes;
 mod notes_editor;
+mod patch_twenty;
 mod patterns;
 mod people;
 mod perf;

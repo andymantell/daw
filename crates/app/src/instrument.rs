@@ -160,6 +160,12 @@ impl Slot {
         }
     }
 
+    /// Whether it plays the track's audio input through itself (see
+    /// [`Builtin::takes_input`]).
+    pub fn takes_input(&self) -> bool {
+        matches!(&self.inner, Inner::Builtin(b) if b.takes_input())
+    }
+
     /// Its settings, for assistants: (key, name, value, min, max, as
     /// text). None for a plugin, whose settings it keeps itself.
     pub fn settings(&self) -> Vec<(String, String, f64, f64, f64, String)> {
@@ -1156,6 +1162,7 @@ pub(crate) fn slot_controls(
         Some(Kind::DrumSampler) => drum_sampler_controls(ui, slot, cx, shown),
         Some(Kind::DrumMachine) => drum_machine_controls(ui, slot, outputs, cx, shown),
         Some(Kind::Slicer) => slicer_controls(ui, slot, cx, shown),
+        Some(Kind::PatchTwenty) => patch_twenty_controls(ui, slot),
     };
     if renew {
         slot.renew(cx.rate, cx.pending);
@@ -1254,6 +1261,31 @@ fn synth_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
             .id_salt(("synth-group", heading))
             .default_open(true)
             .show(ui, |ui| params_grid(ui, heading, slot.id, &p, from, to + 1));
+    }
+    false
+}
+
+/// The semi-modular monosynth's settings in their groups, with a word
+/// on how its external input is fed (from the mixer strip).
+fn patch_twenty_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
+    let Some(b) = slot.builtin_ref() else {
+        return false;
+    };
+    let p = b.params().clone();
+    for &(heading, from, to) in daw_instruments::patch_twenty::GROUPS {
+        egui::CollapsingHeader::new(heading)
+            .id_salt(("patch-twenty-group", heading))
+            .default_open(from == 0)
+            .show(ui, |ui| {
+                if from == daw_instruments::patch_twenty::at::EXT_IN {
+                    ui.label(
+                        "Feeds the track's audio input through the filters and amplifier: \
+                         pick the input on the mixer strip and turn on Monitor. Triggering \
+                         starts the envelopes when the input gets loud.",
+                    );
+                }
+                params_grid(ui, heading, slot.id, &p, from, to + 1)
+            });
     }
     false
 }

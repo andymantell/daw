@@ -626,6 +626,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::AddInstrument(0), "add-synth-track", "Edit", "Add synth track", &[])
         .hint("An instrument track with the synth: two oscillators, a filter with its own envelope, an LFO")
         .words("instrument poly unison pad lead bass"),
+    info(
+        Cmd::AddInstrument(5),
+        "add-patch-twenty-track",
+        "Edit",
+        "Add Patch Twenty track",
+        &[],
+    )
+    .hint("An instrument track with the semi-modular monosynth: two oscillators through a screaming high-pass and low-pass, two envelopes, patch cords, a guitar input")
+    .words("instrument mono semi-modular lead bass drone acid guitar filter"),
     info(Cmd::AddInstrument(1), "add-sampler-track", "Edit", "Add sampler track", &[])
         .hint("An instrument track that plays your sound files over the keys")
         .words("instrument multisample zones keys"),

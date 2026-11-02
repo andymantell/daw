@@ -578,6 +578,7 @@ impl App {
                     .on_disabled_hover_text("Direct monitoring is on (Settings → Audio)");
                 });
                 if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
+                    // ai: set_practice.practice_mute
                     ui.toggle_value(&mut t.practice_mute, "P")
                         .accessible_name(format!("Practice mute {name}"))
                         .on_hover_text(

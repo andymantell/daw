@@ -20,7 +20,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                   in standard tuning), the metronome (on, clicks per beat, level), \
                   count-in, and the tempo trainer (speed up by a step every few loops, up \
                   to a target). detect_tuning measures how far a track's newest clip is \
-                  from concert pitch, in cents. Tempo is set_tempo; the loop is set_loop.",
+                  from concert pitch, in cents (against a4_hz, the tuner's A). \
+                  practice_mute silences parts to play them yourself. Tempo is set_tempo; \
+                  the loop is set_loop.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -40,7 +42,12 @@ pub(crate) const TOOLS: &[Tool] = &[
                     "every_loops": {"type": "integer", "description": "1 to 32."},
                     "target_pct": {"type": "number", "description": "50 to 150."}
                 }},
-                "detect_tuning": {"type": "string", "description": "A track's id."}
+                "detect_tuning": {"type": "string", "description": "A track's id."},
+            "a4_hz": {"type": "number", "description": "The tuner's reference pitch, 400 to 480; detect_tuning measures against it."},
+            "practice_mute": {"type": "array", "description": "Silence parts to play them yourself; the mix keeps its own mute.",
+                              "items": {"type": "object", "properties": {
+                                  "track": {"type": "string"}, "on": {"type": "boolean"}
+                              }, "required": ["track", "on"]}}
             }})
         },
     },
@@ -100,6 +107,26 @@ impl App {
         let step = within(&t["step_pct"], "The trainer's step", 1.0, 25.0)?;
         let every = within(&t["every_loops"], "Loops between steps", 1.0, 32.0)?;
         let target = within(&t["target_pct"], "The trainer's target", 50.0, 150.0)?;
+        let a4 = within(&args["a4_hz"], "The reference pitch", 400.0, 480.0)?;
+        let mut mutes = Vec::new();
+        for m in args["practice_mute"].as_array().into_iter().flatten() {
+            let id = m["track"]
+                .as_str()
+                .ok_or("Each practice mute needs a track's id.")?;
+            let i = (self.tracks.iter())
+                .position(|t| t.key == id)
+                .ok_or_else(|| format!("There is no track {id}."))?;
+            if !matches!(
+                self.tracks[i].kind,
+                daw_project::TrackKind::Audio | daw_project::TrackKind::Instrument
+            ) {
+                return Err(format!(
+                    "{} is not an audio or instrument track.",
+                    self.tracks[i].name
+                ));
+            }
+            mutes.push((i, m["on"].as_bool().unwrap_or(true)));
+        }
         let source = match args["detect_tuning"].as_str() {
             None => None,
             Some(id) => {
@@ -159,7 +186,19 @@ impl App {
         if let Some(x) = target {
             self.trainer.target = x;
         }
+        if let Some(x) = a4 {
+            self.tuner.a4 = x as f32;
+        }
+        for (i, on) in mutes {
+            self.set_practice_mute(i, on);
+        }
+        let muted: Vec<&str> = (self.tracks.iter())
+            .filter(|t| t.practice_mute)
+            .map(|t| t.key.as_str())
+            .collect();
         let mut v = json!({
+            "a4_hz": self.tuner.a4,
+            "practice_muted": muted,
             "speed_pct": self.speed_pct, "semitones": self.semitones, "cents": self.cents,
             "metronome": {"on": self.metronome.enabled, "subdivision": self.metronome.subdivision,
                           "level_db": self.metronome.level_db, "accent": self.metronome.accent},
@@ -298,6 +337,39 @@ mod tests {
             d.call("get_transport", json!({})).unwrap()["speed_pct"],
             75.0,
             "a refused call changes nothing"
+        );
+    }
+
+    #[test]
+    fn parts_are_muted_for_practice_and_the_tuner_tuned() {
+        let mut d = Driver::new();
+        let a = d.call("add_track", json!({"kind": "audio"})).unwrap()["track"].clone();
+        let b = d.call("add_track", json!({"kind": "instrument"})).unwrap()["track"].clone();
+        let r = d
+            .call(
+                "set_practice",
+                json!({"a4_hz": 432, "practice_mute": [{"track": a, "on": true}, {"track": b, "on": true}]}),
+            )
+            .unwrap();
+        assert_eq!(r["a4_hz"], 432.0);
+        assert_eq!(r["practice_muted"], json!([a, b]));
+        d.call(
+            "set_practice",
+            json!({"practice_mute": [{"track": b, "on": false}]}),
+        )
+        .unwrap();
+        let t = d.call("get_transport", json!({})).unwrap();
+        assert_eq!(t["practice_muted"], json!([a]));
+        assert_eq!(t["a4_hz"], 432.0);
+        assert!(d.app().tracks[0].heard().mute, "the engine hears it muted");
+        assert!(!d.app().tracks[0].mix.mute, "the mix keeps its own mute");
+        assert!(d.call("set_practice", json!({"a4_hz": 300})).is_err());
+        assert!(
+            d.call(
+                "set_practice",
+                json!({"practice_mute": [{"track": "nope", "on": true}]})
+            )
+            .is_err()
         );
     }
 }

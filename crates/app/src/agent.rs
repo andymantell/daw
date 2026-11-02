@@ -603,6 +603,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::audio_setup::TOOLS)
         .chain(crate::video::TOOLS)
         .chain(crate::workspace::TOOLS)
+        .chain(crate::notation::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)
@@ -1738,6 +1739,7 @@ impl App {
                         "id": f.id, "kind": f.kind, "bypass": f.bypass,
                     })).collect::<Vec<_>>(),
                     "frozen": t.freeze,
+                    "notation": t.notation.as_ref().map(crate::notation::notation_value),
                     "note_repeat": (self.tracks.iter())
                         .find(|a| a.key == t.id)
                         .and_then(|a| a.note_repeat)

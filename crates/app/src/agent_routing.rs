@@ -244,6 +244,9 @@ impl App {
                     v["missing"] = json!(true);
                     return v;
                 };
+                if let Some(why) = &s.crashed {
+                    v["stopped"] = json!(why);
+                }
                 if s.chains() > 0 {
                     v["chains"] = json!(s.chains());
                 }
@@ -711,5 +714,52 @@ mod tests {
         let i = d.call("get_instrument", json!({"track": t})).unwrap();
         assert_eq!(i["layers"][0]["instrument"]["kind"], "plugin");
         assert_eq!(i["layers"][1]["instrument"]["kind"], "plugin");
+    }
+
+    #[test]
+    fn a_stopped_plugin_is_started_again() {
+        let mut d = with_plugins("restart");
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        let g = add(&mut d, json!({"track": t, "effect": daw_test_plugin::NAME}));
+        d.call(
+            "set_instrument",
+            json!({"track": t, "instrument": daw_test_plugin::SYNTH_NAME}),
+        )
+        .unwrap();
+        // Running: nothing to restart.
+        assert_eq!(effect(&mut d, &t, &g)["stopped"], json!(null));
+        assert!(
+            d.call(
+                "edit_effect",
+                json!({"track": t, "effect": g, "restart": true})
+            )
+            .is_err()
+        );
+        // As a crashed helper leaves them.
+        let app = d.app();
+        let ti = app.track_index(&t).unwrap();
+        let tr = &mut app.tracks[ti];
+        tr.fx.iter_mut().find(|s| s.key == g).unwrap().crashed = Some("It crashed".into());
+        let inst = tr.instrument.as_mut().and_then(|i| i.plugin_mut()).unwrap();
+        inst.crashed = Some("It crashed".into());
+
+        assert_eq!(effect(&mut d, &t, &g)["stopped"], "It crashed");
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["stopped"], "It crashed", "{i}");
+        let r = d
+            .call(
+                "edit_effect",
+                json!({"track": t, "effect": g, "restart": true}),
+            )
+            .unwrap();
+        assert_eq!(r["restarted"], true);
+        assert_eq!(effect(&mut d, &t, &g)["stopped"], json!(null));
+        d.call("edit_instrument", json!({"track": t, "restart": true}))
+            .unwrap();
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["stopped"], json!(null), "{i}");
     }
 }

@@ -2602,7 +2602,8 @@ pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
                   removing a zone (the zones after it move down one); for the loop \
                   slicer, its loop (a sound file, cut where its hits start), and cutting it \
                   again at the hits or into equal parts. Answers with the zones or slices \
-                  there are now.",
+                  there are now. restart starts a plugin instrument that stopped again, \
+                  with its last saved settings.",
     access: crate::agent::Access::Edit,
     schema: || {
         let rates: Vec<&str> = std::iter::once("off")
@@ -2610,6 +2611,8 @@ pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
             .collect();
         serde_json::json!({"type": "object", "properties": {
             "track": {"type": "string"},
+            "restart": {"type": "boolean", "description": "Start the stopped plugin instrument again (get_instrument says why as stopped)."},
+            "layer": {"type": "string", "description": "With restart: the layer whose plugin to start again."},
             "note_repeat": {"type": "string", "enum": rates},
             "spread_zones": {"type": "boolean"},
             "remove_zone": {"type": "integer", "description": "The zone's number, from 0 (zone0)."},
@@ -2694,6 +2697,26 @@ impl crate::App {
             n => n.map(|n| n as usize),
         };
 
+        if args["restart"].as_bool() == Some(true) {
+            let rate = self.rate;
+            let t = &mut self.tracks[i];
+            let slot = match args["layer"].as_str() {
+                None => t.instrument.as_mut(),
+                Some(l) => Some(
+                    &mut (t.layers.iter_mut().find(|x| x.key == l))
+                        .ok_or_else(|| format!("The track has no layer {l}."))?
+                        .slot,
+                ),
+            };
+            let fx = (slot.and_then(Slot::plugin_mut)).ok_or("Only a plugin restarts.")?;
+            if fx.crashed.is_none() {
+                return Err(format!(
+                    "{} is running; only a stopped plugin restarts.",
+                    fx.name
+                ));
+            }
+            self.effects.reload(fx, rate)?;
+        }
         let t = &mut self.tracks[i];
         if let Some(r) = repeat {
             t.note_repeat = r;

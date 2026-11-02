@@ -1711,6 +1711,7 @@ impl Effects {
                                 RichText::new(format!("Stopped: {why}. Its audio passes through."))
                                     .color(ui.visuals().error_fg_color),
                             );
+                            // ai: edit_effect.restart
                             if ui
                                 .button("Restart")
                                 .on_hover_text(
@@ -2222,6 +2223,7 @@ pub(crate) fn plugin_instrument_controls(
                 RichText::new(format!("Stopped: {why}. It plays nothing."))
                     .color(ui.visuals().error_fg_color),
             );
+            // ai: edit_instrument.restart
             if ui
                 .button("Restart")
                 .on_hover_text("Start the plugin again with its last saved settings")

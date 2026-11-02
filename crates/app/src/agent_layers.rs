@@ -387,9 +387,17 @@ impl App {
                     .collect();
                 json!({"file": b.file, "sounds": voices})
             });
+        let stopped = |s: Option<&crate::instrument::Slot>| {
+            s.and_then(|s| s.plugin()).and_then(|f| f.crashed.clone())
+        };
+        let mut layers = layers;
+        for (v, live) in layers.iter_mut().zip(&t.layers) {
+            v["stopped"] = json!(stopped(Some(&live.slot)));
+        }
         Ok(json!({
             "track": key,
             "instrument": pt.instrument.as_ref().map(instrument),
+            "stopped": stopped(t.instrument.as_ref()),
             "bank": bank,
             "library": library,
             "layers": layers,

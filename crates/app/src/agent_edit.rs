@@ -125,14 +125,17 @@ pub(crate) const TOOLS: &[Tool] = &[
                       and the file a reverb, cabinet or amp capture player uses. get_effects \
                       shows all of these. Only what is given changes; settings are set with \
                       set_parameter. A note effect's id (get_project lists them as \
-                      note_effects) moves it among the note effects, or bypasses it.",
+                      note_effects) moves it among the note effects, or bypasses it. \
+                      restart starts a plugin that stopped (get_effects says why as \
+                      stopped) again with its last saved settings.",
         access: Access::Edit,
         schema: || {
             let mut props = json!({
                 "track": {"type": "string"},
                 "effect": {"type": "string", "description": "The effect's id."},
                 "bypass": {"type": "boolean"},
-                "index": {"type": "integer"}
+                "index": {"type": "integer"},
+                "restart": {"type": "boolean", "description": "Start a stopped plugin again."}
             });
             extend(&mut props, crate::agent_routing::place_schema());
             extend(&mut props, crate::agent_routing::wiring_schema());
@@ -665,6 +668,30 @@ impl App {
                     .ok_or_else(|| format!("There is no track {key}."))?,
             )
         };
+        if args["restart"].as_bool() == Some(true) {
+            let rate = self.rate;
+            let fx = match ti {
+                None => &mut self.master.fx,
+                Some(ti) => &mut self.tracks[ti].fx,
+            };
+            let slot = (fx.iter_mut().find(|s| s.key == id))
+                .ok_or_else(|| format!("The track has no effect {id}."))?;
+            if slot.crashed.is_none() {
+                return Err(format!(
+                    "{} is running; only a stopped plugin restarts.",
+                    slot.name
+                ));
+            }
+            self.effects.reload(slot, rate)?;
+            self.rebuild();
+            let only = |o: &serde_json::Map<String, Value>| {
+                o.keys()
+                    .all(|k| ["track", "effect", "restart"].contains(&k.as_str()))
+            };
+            if args.as_object().is_some_and(only) {
+                return Ok((json!({"effect": id, "restarted": true}), None));
+            }
+        }
         let place = self.place_arg(ti, args, Some(&id))?;
         let fx = ti.map_or(&self.master.fx, |ti| &self.tracks[ti].fx);
         if let Some(s) = fx.iter().find(|s| s.key == id) {

@@ -20,15 +20,17 @@ use crate::instrument::Slot;
 type Done = Result<(Value, Option<String>), String>;
 
 const INSTRUMENT: &str = "The instrument: synth (the simple synth), one that comes with the \
-                          app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer, patch-twenty, oh-one), \
-                          or a plugin instrument by name (list_effect_kinds gives them).";
+                          app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer, patch-twenty, oh-one, \
+                          model-mono), or a plugin instrument by name (list_effect_kinds gives them).";
 
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "get_instrument",
         description: "An instrument track's instrument, or its layers (each with its \
                       instrument, level, pan, note and velocity ranges, transpose and \
-                      effects), the effects on a drum machine's pads, and the instrument's \
+                      effects), the sounds a synth makes from its settings (each a name \
+                      and the settings to give set_instrument), the effects on a drum \
+                      machine's pads, and the instrument's \
                       extra outputs with the bus each goes to; for a sampler playing an \
                       SFZ library, the library: its keys, articulations and controls \
                       (mic levels and the like, each a setting). Its settings are in \
@@ -271,7 +273,20 @@ impl App {
                                .collect::<serde_json::Map<_, _>>()})
                 })
                 .collect();
-            json!({"id": e.id, "name": e.name, "kind": kind, "pad_effects": pads})
+            let mut v = json!({"id": e.id, "name": e.name, "kind": kind, "pad_effects": pads});
+            let sounds: Vec<Value> = (daw_instruments::Kind::from_id(&e.builtin).into_iter())
+                .flat_map(|k| k.sounds())
+                .map(|s| {
+                    let settings: serde_json::Map<String, Value> = (s.settings.iter())
+                        .map(|(k, v)| (k.to_string(), json!(v)))
+                        .collect();
+                    json!({"name": s.name, "settings": settings})
+                })
+                .collect();
+            if !sounds.is_empty() {
+                v["sounds"] = json!(sounds);
+            }
+            v
         };
         let effects_of = |id: &str| {
             let mut ids = inside(&pt.effects, id);

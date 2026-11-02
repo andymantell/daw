@@ -132,7 +132,8 @@ assistant finds them for itself. In outline:
   `get_project` shows it as `master`. Exported stems go through it.
 - **Instruments and layers:** `set_instrument` (a built-in or plugin
   instrument, for a track or one layer, and/or a `settings` dict for it,
-  as `edit_layer` takes for a layer), an SFZ sample library on the
+  as `edit_layer` takes for a layer; `get_instrument` lists the sounds a
+  synth makes in code, each with the settings to give here), an SFZ sample library on the
   sampler (`file_command` with `load-sfz`, or `set_sound` with the
   slot `sfz`; `get_instrument` then lists its keys, articulations and
   controls, and each control, such as a mic level, is a setting,

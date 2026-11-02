@@ -503,6 +503,7 @@ impl App {
                         Some(daw_instruments::Kind::PatchTwenty) => "Patch",
                         Some(daw_instruments::Kind::OhOne) => "Oh-One",
                         Some(daw_instruments::Kind::AcidThree) => "Acid",
+                        Some(daw_instruments::Kind::ModelMono) => "Mono",
                     },
                 );
                 // ai: view

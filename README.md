@@ -25,7 +25,7 @@ A snapshot of the app as it stands, with a deep house test song built
 through the assistant interface (122 bpm, A minor; the vocal is a
 synthesised stand-in). These will change as the app does.
 
-**Arrangement:** sections, linked clip copies and the buses.
+**Arrangement:** song sections and linked clip copies.
 
 ![The arrangement of a deep house song](docs/screenshots/arrangement.png)
 

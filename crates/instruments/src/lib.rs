@@ -26,6 +26,7 @@ pub mod drum_voice;
 pub mod dsp;
 pub mod library;
 pub mod made;
+pub mod oh_one;
 pub mod params;
 pub mod patch_twenty;
 pub mod sample;
@@ -56,16 +57,19 @@ pub enum Kind {
     Slicer,
     /// The semi-modular dual-filter monosynth (classic synths, S7).
     PatchTwenty,
+    /// The one-oscillator monosynth (classic synths, S3).
+    OhOne,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Synth,
         Kind::Sampler,
         Kind::DrumSampler,
         Kind::DrumMachine,
         Kind::Slicer,
         Kind::PatchTwenty,
+        Kind::OhOne,
     ];
 
     /// How projects name it. Never change one.
@@ -77,6 +81,7 @@ impl Kind {
             Kind::DrumMachine => "drum-machine",
             Kind::Slicer => "slicer",
             Kind::PatchTwenty => "patch-twenty",
+            Kind::OhOne => "oh-one",
         }
     }
 
@@ -92,6 +97,7 @@ impl Kind {
             Kind::DrumMachine => "Drum machine",
             Kind::Slicer => "Loop slicer",
             Kind::PatchTwenty => "Patch Twenty",
+            Kind::OhOne => "Oh-One",
         }
     }
 
@@ -108,6 +114,9 @@ impl Kind {
             Kind::Slicer => "Cuts a loop at each hit and puts the slices on the keys",
             Kind::PatchTwenty => {
                 "A semi-modular monosynth: two oscillators through a screaming high-pass and low-pass, two envelopes, a mod generator, patch cords, and a guitar input through its filters"
+            }
+            Kind::OhOne => {
+                "A one-oscillator bass and lead monosynth: saw and pulse with width modulation, a sub, noise, a 24 dB filter that sings, one envelope, an LFO and portamento"
             }
         }
     }
@@ -170,6 +179,7 @@ impl Builtin {
     pub fn new(kind: Kind) -> Builtin {
         match kind {
             Kind::Synth => Builtin::of(kind, synth::params(), Vec::new()),
+            Kind::OhOne => Builtin::of(kind, oh_one::params(), Vec::new()),
             Kind::Sampler => Builtin::of(
                 kind,
                 sampler::params(1),
@@ -246,6 +256,7 @@ impl Builtin {
         }
         let list = match kind {
             Kind::Synth => synth::params(),
+            Kind::OhOne => oh_one::params(),
             Kind::Sampler => {
                 let mut v = sampler::params(count("zone", true));
                 if let Some(l) = &library {
@@ -587,6 +598,7 @@ impl Builtin {
         let at = |slot: &str| self.sample(slot).and_then(|l| l.at(rate));
         match self.kind {
             Kind::Synth => Box::new(synth::Synth::new(rate, p)),
+            Kind::OhOne => Box::new(oh_one::OhOne::new(rate, p)),
             Kind::Sampler => {
                 let zones = (0..self.zones()).map(|z| at(&format!("zone{z}"))).collect();
                 let s = sampler::Sampler::new(rate, p, zones);

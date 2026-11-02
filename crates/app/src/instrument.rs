@@ -1158,6 +1158,7 @@ pub(crate) fn slot_controls(
             false
         }
         Some(Kind::Synth) => synth_controls(ui, slot),
+        Some(Kind::OhOne) => grouped_controls(ui, slot, "oh-one", daw_instruments::oh_one::GROUPS),
         Some(Kind::Sampler) => sampler_controls(ui, slot, cx, shown),
         Some(Kind::DrumSampler) => drum_sampler_controls(ui, slot, cx, shown),
         Some(Kind::DrumMachine) => drum_machine_controls(ui, slot, outputs, cx, shown),
@@ -1286,6 +1287,27 @@ fn patch_twenty_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
                 }
                 params_grid(ui, heading, slot.id, &p, from, to + 1)
             });
+    }
+    false
+}
+
+/// The controls of an instrument whose settings are only its `params`,
+/// shown in `groups` of (heading, first, last).
+fn grouped_controls(
+    ui: &mut egui::Ui,
+    slot: &mut Slot,
+    salt: &str,
+    groups: &[(&str, usize, usize)],
+) -> bool {
+    let Some(b) = slot.builtin_ref() else {
+        return false;
+    };
+    let p = b.params().clone();
+    for &(heading, from, to) in groups {
+        egui::CollapsingHeader::new(heading)
+            .id_salt((salt, "group", heading))
+            .default_open(true)
+            .show(ui, |ui| params_grid(ui, heading, slot.id, &p, from, to + 1));
     }
     false
 }

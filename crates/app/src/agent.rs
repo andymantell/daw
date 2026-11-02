@@ -2031,6 +2031,103 @@ mod tests {
         assert_eq!(f["text"], "Ladder 24 dB");
     }
 
+    /// The Oh-One monosynth from the assistant's side (plan
+    /// docs/plans/classic-synths.md, S3): add it, voice a house bass
+    /// from its settings by name, play a line with a slide, render it,
+    /// and read the settings back.
+    #[test]
+    fn the_oh_one_is_voiced_played_and_read_through_the_assistant() {
+        let mut d = Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "oh-one", "name": "House bass"}))
+            .unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        let choice = |key: &str, name: &str| -> usize {
+            let p = (params.iter())
+                .find(|p| p["param"] == key)
+                .unwrap_or_else(|| panic!("{key} is a setting"));
+            (p["choices"].as_array().unwrap().iter())
+                .position(|c| c == name)
+                .unwrap_or_else(|| panic!("{key} offers {name}: {p}"))
+        };
+        for key in [
+            "instrument.saw",
+            "instrument.pulse",
+            "instrument.sub",
+            "instrument.noise",
+            "instrument.cutoff",
+            "instrument.resonance",
+            "instrument.filter_env",
+            "instrument.attack",
+            "instrument.decay",
+            "instrument.sustain",
+            "instrument.release",
+            "instrument.lfo_rate",
+            "instrument.glide",
+            "instrument.drive",
+            "instrument.vintage",
+        ] {
+            assert!(params.iter().any(|p| p["param"] == key), "{key}");
+        }
+        let sub = choice("instrument.sub_shape", "2 octaves down");
+        let pwm = choice("instrument.pwm_source", "LFO");
+        let gate = choice("instrument.amp", "Gate");
+        let slide = choice("instrument.portamento", "Overlapping notes only");
+        d.call(
+            "set_parameters",
+            json!({"track": t, "changes": [
+                {"param": "instrument.saw", "value": 1.0},
+                {"param": "instrument.pulse", "value": 0.4},
+                {"param": "instrument.pwm_source", "value": pwm},
+                {"param": "instrument.sub", "value": 0.8},
+                {"param": "instrument.sub_shape", "value": sub},
+                {"param": "instrument.cutoff", "value": 300.0},
+                {"param": "instrument.resonance", "value": 0.55},
+                {"param": "instrument.filter_env", "value": 2.5},
+                {"param": "instrument.decay", "value": 0.35},
+                {"param": "instrument.amp", "value": gate},
+                {"param": "instrument.portamento", "value": slide},
+                {"param": "instrument.glide", "value": 0.08},
+                {"param": "instrument.drive", "value": 0.4},
+            ]}),
+        )
+        .unwrap();
+        // A bar of eighths with the last two overlapping, so they slide.
+        let notes: Vec<Value> = (0..8)
+            .map(|i| {
+                let beats = if i == 6 { 0.7 } else { 0.4 };
+                json!({"beat": i as f64 * 0.5, "beats": beats,
+                       "pitch": if i % 4 == 3 { 41 } else { 36 }, "velocity": 110})
+            })
+            .collect();
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 1, "notes": notes}),
+        )
+        .unwrap();
+        let a = d
+            .call("analyse", json!({"track": t, "from_bar": 1, "to_bar": 2}))
+            .unwrap();
+        assert!(a["sample_peak_dbfs"].as_f64().unwrap() > -24.0, "{a}");
+        let now = instrument_params(&mut d, &t);
+        let text = |key: &str| {
+            (now.iter().find(|p| p["param"] == key).unwrap())["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(text("instrument.amp"), "Gate");
+        assert_eq!(text("instrument.sub_shape"), "2 octaves down");
+        assert_eq!(text("instrument.cutoff"), "300 Hz");
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["instrument"]["kind"], "oh-one", "{i}");
+        // And by its command, as a person would.
+        d.command("add-oh-one-track");
+        let p = d.project();
+        assert_eq!(p["tracks"][1]["instrument"]["builtin"], "oh-one", "{p}");
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

@@ -335,6 +335,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Pane(Cmd::PitchEditor),
             Pane(Cmd::AutomationLanes),
             Pane(Cmd::Browser),
+            Pane(Cmd::Inspector),
             Pane(Cmd::Video),
             Run(Cmd::InstrumentWindow),
             Run(Cmd::Meters),

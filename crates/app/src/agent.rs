@@ -113,7 +113,11 @@ pub(crate) const TOOLS: &[Tool] = &[
                       Settings window showing (audio, midi, latency, plugins, drum-kits, \
                       key-commands, theme, assistants, phone-remote or performance; null \
                       while it is closed). The settings command opens the window, and \
-                      audio-device, midi-devices, plugins and the like open a section.",
+                      audio-device, midi-devices, plugins and the like open a section. \
+                      inspector says whether the inspector pane is open (the inspector \
+                      command shows or hides it), the track it shows and the clip: the \
+                      track chosen with select_track or by clicking its header, or the \
+                      track of the clip or mixer strip selected last.",
         access: Access::Read,
         schema: no_args,
     },
@@ -364,6 +368,18 @@ pub(crate) const TOOLS: &[Tool] = &[
             json!({"type": "object", "properties": {
                 "clips": {"type": "array", "items": {"type": "string"}}
             }, "required": ["clips"]})
+        },
+    },
+    Tool {
+        name: "select_track",
+        description: "Shows a track, by id, in the inspector: its volume, pan, output, \
+                      sends, instrument and sound, effects, and its selected clip. As \
+                      clicking the track's header does.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string"}
+            }, "required": ["track"]})
         },
     },
     Tool {
@@ -1250,6 +1266,13 @@ impl App {
                 self.timeline.note_sel = note;
                 Ok((json!({"selected": keys.len()}), None))
             }
+            "select_track" => {
+                let key = args["track"].as_str().ok_or("Give the track's id.")?;
+                if !self.inspect_track(key) {
+                    return Err(format!("There is no track {key}."));
+                }
+                Ok((json!({"inspector": self.inspector_value()}), None))
+            }
             "import_from_project" => self.import_tool(ctx, args),
             "export_as_project" => {
                 let name = args["name"].as_str().unwrap_or("").trim();
@@ -1659,7 +1682,7 @@ impl App {
         })
     }
 
-    fn selection_value(&self) -> Value {
+    fn selection_value(&mut self) -> Value {
         let clips: Vec<Value> = (self.tracks.iter())
             .flat_map(|t| t.clips.iter().map(move |c| (t, c)))
             .filter(|(_, c)| self.timeline.selected.contains(&c.id))
@@ -1671,6 +1694,7 @@ impl App {
             "mixer_strips": self.desk.selected,
             "mixer_narrow": self.desk.narrow,
             "settings": self.settings_section().map(|s| s.id()),
+            "inspector": self.inspector_value(),
         })
     }
 

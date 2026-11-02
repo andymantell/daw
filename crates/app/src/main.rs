@@ -55,6 +55,7 @@ mod history;
 mod hitpoints;
 mod icons;
 mod import_project;
+mod inspector;
 mod instrument;
 mod interchange;
 mod kits;
@@ -545,6 +546,8 @@ struct App {
     simple: simple_mode::Simple,
     /// How the mixer desk is shown: narrow strips, and which are selected.
     desk: mixer::DeskView,
+    /// The inspector's track, and what it last saw selected.
+    inspector: inspector::Inspector,
     proj: project::Proj,
     latency: latency::Latency,
     /// The guided audio setup.
@@ -713,6 +716,7 @@ impl App {
                 (!cfg!(test)).then(|| config_dir().join("simple.txt")),
             ),
             desk: mixer::DeskView::default(),
+            inspector: inspector::Inspector::default(),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
             audio_setup: audio_setup::AudioSetup::new(
@@ -1701,6 +1705,8 @@ impl App {
             .map(|t| (render::can_freeze(t), t.freeze))
             .collect();
         let versions = self.lane_versions();
+        let heads = self.heads();
+        let inspected = self.inspected();
         let view = timeline::View {
             map: &map,
             rate: self.rate,
@@ -1717,6 +1723,8 @@ impl App {
             versions: &versions,
             can_paste: !self.renders.copied.is_empty(),
             bands: &[],
+            heads: &heads,
+            inspected,
         };
         self.timeline.groups = self.lane_groups();
         self.timeline.simple = self.simple.on;
@@ -1824,6 +1832,9 @@ impl App {
             } else if self.paste_clips(Some(lane), at) {
                 self.rebuild();
             }
+        }
+        if let Some((i, ask)) = out.head {
+            self.header_asked(i, ask);
         }
         match out.track {
             Some((i, timeline::TrackAsk::Instrument)) => self.instrument_open = Some(i),

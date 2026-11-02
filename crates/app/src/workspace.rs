@@ -37,9 +37,10 @@ pub(crate) enum Pane {
     Video,
     Fretboard,
     PitchEditor,
+    Inspector,
 }
 
-pub(crate) const PANES: [Pane; 15] = [
+pub(crate) const PANES: [Pane; 16] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -55,6 +56,7 @@ pub(crate) const PANES: [Pane; 15] = [
     Pane::Video,
     Pane::Fretboard,
     Pane::PitchEditor,
+    Pane::Inspector,
 ];
 
 impl Pane {
@@ -76,6 +78,7 @@ impl Pane {
             Pane::Video => "video",
             Pane::Fretboard => "fretboard",
             Pane::PitchEditor => "pitch-editor",
+            Pane::Inspector => "inspector",
         }
     }
 
@@ -100,6 +103,7 @@ impl Pane {
             Pane::Video => "Video",
             Pane::Fretboard => "Fretboard",
             Pane::PitchEditor => "Pitch editor",
+            Pane::Inspector => "Inspector",
         }
     }
 
@@ -114,6 +118,9 @@ impl Pane {
         self == Pane::Timeline
     }
 }
+
+/// The part of the main window's width left of the inspector.
+const INSPECTOR_SHARE: f32 = 0.83;
 
 /// Where a pane goes, beside another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,10 +299,15 @@ impl Layout {
     pub(crate) fn recording() -> Layout {
         Layout {
             dock: Node::split(
-                false,
-                0.62,
-                Tabs::of(&[Pane::Timeline]),
-                Tabs::of(&[Pane::Mixer]),
+                true,
+                INSPECTOR_SHARE,
+                Node::split(
+                    false,
+                    0.62,
+                    Tabs::of(&[Pane::Timeline]),
+                    Tabs::of(&[Pane::Mixer]),
+                ),
+                Tabs::of(&[Pane::Inspector]),
             ),
             windows: Vec::new(),
         }
@@ -413,6 +425,12 @@ impl Layout {
             | Pane::Fretboard
             | Pane::PitchEditor => (Pane::Timeline, Side::Below),
             Pane::Video => (Pane::Timeline, Side::Right),
+            // On the right of everything, across the whole height.
+            Pane::Inspector => {
+                let old = std::mem::replace(&mut self.dock, Tabs::of(&[]));
+                self.dock = Node::split(true, INSPECTOR_SHARE, old, Tabs::of(&[Pane::Inspector]));
+                return;
+            }
             // Below the side panes open now, so all can be seen.
             _ => match side_panes.into_iter().rfind(|&q| q != p && self.docked(q)) {
                 Some(q) => (q, Side::Below),
@@ -697,7 +715,7 @@ impl Workspace {
     /// for each saved layout. Lines it can't read are left out.
     pub(crate) fn to_text(&self) -> String {
         let mut t = format!(
-            "windows {}\nlayout {}\n",
+            "windows {}\ninspector known\nlayout {}\n",
             if self.windows_allowed { "on" } else { "off" },
             self.layout.to_text()
         );
@@ -709,10 +727,13 @@ impl Workspace {
 
     pub(crate) fn read(&mut self, text: &str) {
         let mut saved = Vec::new();
+        // Kept from before the inspector came: it opens once.
+        let mut known = false;
         for line in text.lines() {
             let (what, rest) = line.split_once(' ').unwrap_or((line, ""));
             match what {
                 "windows" => self.windows_allowed = rest.trim() == "on",
+                "inspector" => known = true,
                 "layout" => {
                     if let Some(l) = Layout::from_text(rest) {
                         self.layout = l;
@@ -732,6 +753,10 @@ impl Workspace {
         }
         if text.lines().any(|l| l.starts_with("saved ")) {
             self.saved = saved;
+        }
+        if !known && text.lines().any(|l| l.starts_with("layout ")) {
+            self.layout.open(Pane::Inspector);
+            self.changed = true;
         }
         if !self.windows_allowed {
             self.dock_all();
@@ -1584,6 +1609,7 @@ impl crate::App {
             Cmd::TakeLanes => self.workspace.layout.is_open(Pane::Takes),
             Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
             Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
+            Cmd::Inspector => self.workspace.layout.is_open(Pane::Inspector),
             Cmd::Video => self.workspace.layout.is_open(Pane::Video),
             Cmd::Fretboard => self.workspace.layout.is_open(Pane::Fretboard),
             Cmd::PitchEditor => self.workspace.layout.is_open(Pane::PitchEditor),
@@ -1725,6 +1751,7 @@ impl Host for crate::App {
             Pane::Takes => self.takes_pane(ui),
             Pane::Automation => self.automation_pane(ui),
             Pane::Browser => self.browser_pane(ui),
+            Pane::Inspector => self.inspector_pane(ui),
             Pane::Video => self.video_pane(ui),
             Pane::Fretboard => {
                 egui::ScrollArea::vertical()
@@ -1768,6 +1795,44 @@ impl Host for crate::App {
 mod tests {
     use super::*;
 
+    /// The timeline over the mixer, without the inspector.
+    fn plain() -> Layout {
+        let mut l = Layout::recording();
+        l.remove(Pane::Inspector);
+        l
+    }
+
+    #[test]
+    fn the_inspector_is_on_the_right_from_the_start() {
+        let Node::Split {
+            across: true,
+            second,
+            ..
+        } = &Layout::recording().dock
+        else {
+            panic!()
+        };
+        assert_eq!(**second, Tabs::of(&[Pane::Inspector]));
+        // Closed and opened again, it goes back there.
+        let mut l = plain();
+        l.open(Pane::Inspector);
+        assert_eq!(l, Layout::recording());
+    }
+
+    #[test]
+    fn a_layout_from_before_the_inspector_gets_it_once() {
+        let mut w = Workspace::default();
+        w.read("windows off\nlayout dock tabs 0 0 timeline\n");
+        assert!(w.layout.is_open(Pane::Inspector));
+        let mut w = Workspace::default();
+        w.read("windows off\ninspector known\nlayout dock tabs 0 0 timeline\n");
+        assert!(
+            !w.layout.is_open(Pane::Inspector),
+            "closed since stays closed"
+        );
+        assert!(w.to_text().contains("inspector known"));
+    }
+
     fn panes(l: &Layout) -> Vec<Pane> {
         let mut all = Vec::new();
         l.dock.panes(&mut all);
@@ -1776,7 +1841,7 @@ mod tests {
 
     #[test]
     fn opens_panes_where_they_go() {
-        let mut l = Layout::recording();
+        let mut l = plain();
         l.open(Pane::Comments);
         l.open(Pane::Notes);
         assert_eq!(
@@ -1800,7 +1865,7 @@ mod tests {
 
     #[test]
     fn closing_the_last_pane_of_a_split_gives_its_room_back() {
-        let mut l = Layout::recording();
+        let mut l = plain();
         l.remove(Pane::Mixer);
         assert_eq!(l.dock, Tabs::of(&[Pane::Timeline]));
         // The timeline stays.
@@ -1810,7 +1875,7 @@ mod tests {
 
     #[test]
     fn moves_a_pane_beside_another() {
-        let mut l = Layout::recording();
+        let mut l = plain();
         l.put(Pane::Mixer, Pane::Timeline, Side::Left);
         match &l.dock {
             Node::Split {
@@ -1831,7 +1896,7 @@ mod tests {
 
     #[test]
     fn grows_a_pane() {
-        let mut l = Layout::recording();
+        let mut l = plain();
         l.grow(Pane::Mixer, 0.1);
         let Node::Split { share, .. } = l.dock else {
             panic!()
@@ -2085,6 +2150,8 @@ mod tests {
         #[test]
         fn a_tab_dragged_to_an_edge_goes_beside() {
             let mut h = harness();
+            h.state_mut().workspace.close(Pane::Inspector);
+            h.run();
             let from = h.get_by_label("Mixer tab").rect().center();
             // The timeline's group: from the top to the gap above the mixer.
             let timeline = h.get_by_label("Timeline tab").rect();

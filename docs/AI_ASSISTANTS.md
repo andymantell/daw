@@ -144,7 +144,7 @@ assistant finds them for itself. In outline:
   instrument's extra outputs to buses).
 - **Arranging:** `import_audio`, `edit_clip`, `delete_clip`,
   `add_note_clip`, `edit_notes`, `edit_markers`, `set_tempo`, `set_key`,
-  `set_loop`, `seek`, `select_clips`, `undo_steps`, `add_comment`,
+  `set_loop`, `seek`, `select_clips`, `select_track`, `undo_steps`, `add_comment`,
   `resolve_comment`. `set_tempo` takes time signature changes too.
   `edit_clip` with `anchor_seconds` moves an audio clip by a point in it
   (timeline seconds, such as a note start or downbeat from `analyse`):

@@ -1777,6 +1777,8 @@ mod app_tests {
             app.tracks[0].note_clips.push(clip);
             app.notes_editor.edit("clip1");
             app.workspace.open(Pane::NotesEditor);
+            // Room for the whole grid beside the inspector.
+            app.workspace.close(Pane::Mixer);
             app.rebuild();
         }
         h.run();

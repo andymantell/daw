@@ -124,6 +124,7 @@ pub(crate) const TOOLS: &[Tool] = &[
             json!({"type": "object", "properties": {
                 "format": {"type": "string", "enum": ["wav", "flac", "mp3", "opus"],
                            "description": "As the Export window is set if left out."},
+                "kbps": {"type": "integer", "description": "With mp3 (320 if left out) or opus (160): the bit rate, in kbit/s."},
                 "from_bar": {"type": "integer"},
                 "to_bar": {"type": "integer", "description": "The bar it stops at the start of."},
                 "loop": {"type": "boolean", "description": "Only the loop."},
@@ -140,17 +141,40 @@ pub(crate) const TOOLS: &[Tool] = &[
             }})
         },
     },
+    Tool {
+        name: "manage_exports",
+        description: "Stops the export running (cancel; what it has written so far is \
+                      kept), or takes one out of the export queue (remove, its place in \
+                      get_exports' queue, from 1). Answers with the queue now.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "cancel": {"type": "boolean"},
+                "remove": {"type": "integer"}
+            }})
+        },
+    },
 ];
 
 fn format_arg(args: &Value) -> Result<Option<Format>, String> {
-    Ok(match args["format"].as_str() {
+    let kbps = args["kbps"].as_u64().map(|k| k as u32);
+    let rate = |usual: u32, rates: &[u32]| match kbps {
+        None => Ok(usual),
+        Some(k) if rates.contains(&k) => Ok(k),
+        Some(k) => Err(format!("{k} kbit/s isn't one of {rates:?}.")),
+    };
+    let format = match args["format"].as_str() {
         None => None,
         Some("wav") => Some(Format::Wav),
         Some("flac") => Some(Format::Flac),
-        Some("mp3") => Some(Format::Mp3(320)),
-        Some("opus") => Some(Format::Opus(160)),
+        Some("mp3") => Some(Format::Mp3(rate(320, &daw_engine::export::MP3_KBPS)?)),
+        Some("opus") => Some(Format::Opus(rate(160, &daw_engine::export::OPUS_KBPS)?)),
         Some(f) => return Err(format!("There is no file type {f}.")),
-    })
+    };
+    if kbps.is_some() && !matches!(format, Some(Format::Mp3(_) | Format::Opus(_))) {
+        return Err("A bit rate is for mp3 or opus: give the format too.".into());
+    }
+    Ok(format)
 }
 
 fn project_path(name: &str) -> PathBuf {
@@ -175,6 +199,7 @@ impl App {
             "open_project" => self.leave_for(ctx, args, true),
             "new_project" => self.leave_for(ctx, args, false),
             "export_mix" => self.export_mix_tool(args),
+            "manage_exports" => self.manage_exports_tool(args),
             _ => return None,
         })
     }
@@ -353,6 +378,18 @@ impl App {
             return Err(e);
         }
         Ok((json!({"started": true}), None))
+    }
+
+    fn manage_exports_tool(&mut self, args: &Value) -> Done {
+        if let Some(n) = args["remove"].as_u64() {
+            let len = self.export.queue().count();
+            if n == 0 || !self.export.unqueue(n as usize - 1) {
+                return Err(format!("{len} exports are waiting, from 1."));
+            }
+        }
+        let cancelled = args["cancel"].as_bool() == Some(true) && self.export.cancel();
+        let queue: Vec<&str> = self.export.queue().map(|q| q.label.as_str()).collect();
+        Ok((json!({"cancelled": cancelled, "queue": queue}), None))
     }
 
     fn export_mix_tool(&mut self, args: &Value) -> Done {
@@ -579,5 +616,39 @@ mod tests {
         assert!(peaks[0].1 > 0.001, "{peaks:?}");
         assert!((peaks[0].1 - peaks[1].1).abs() < 0.002, "{peaks:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_export_is_cancelled_and_taken_out_of_the_queue() {
+        let mut d = Driver::new();
+        d.access = crate::agent::Access::EditExport;
+        d.call("add_track", json!({"kind": "instrument"})).unwrap();
+        let dir = std::env::temp_dir().join(format!("daw-export-manage-{}", std::process::id()));
+        assert!(
+            d.call("export_mix", json!({"format": "mp3", "kbps": 999}))
+                .is_err()
+        );
+        assert!(
+            d.call("export_mix", json!({"kbps": 192})).is_err(),
+            "needs mp3 or opus"
+        );
+        // A long one, then two waiting behind it.
+        let long = json!({"format": "wav", "from_bar": 1, "to_bar": 2000, "folder": dir});
+        assert_eq!(d.call("export_mix", long).unwrap()["started"], true);
+        for kbps in [192, 128] {
+            let r = d
+                .call(
+                    "export_mix",
+                    json!({"format": "mp3", "kbps": kbps, "from_bar": 1, "to_bar": 2, "folder": dir}),
+                )
+                .unwrap();
+            assert_eq!(r["queued"], true);
+        }
+        assert!(d.call("manage_exports", json!({"remove": 3})).is_err());
+        let r = d.call("manage_exports", json!({"remove": 2})).unwrap();
+        assert_eq!(r["queue"].as_array().unwrap().len(), 1, "{r}");
+        let r = d.call("manage_exports", json!({"cancel": true})).unwrap();
+        assert_eq!(r["cancelled"], true, "{r}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

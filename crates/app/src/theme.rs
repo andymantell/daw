@@ -985,6 +985,7 @@ impl Themes {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Colours:");
                 for m in Mode::ALL {
+                    // ai: set_theme.mode
                     if ui.selectable_label(self.mode == m, m.label()).clicked() {
                         self.set_mode(m);
                     }
@@ -999,11 +1000,12 @@ impl Themes {
                     if !t.built_in {
                         name = egui::RichText::new(format!("{} (yours)", t.name)).strong();
                     }
-                    // ai: next-theme
+                    // ai: set_theme.theme
                     let r = ui.selectable_label(chosen, name).on_hover_text(&t.about);
                     if r.clicked() {
                         pick = Some(t.id.clone());
                     }
+                    // ai: set_theme.copy
                     if self.dir.is_some()
                         && ui
                             .small_button("Copy to edit")
@@ -1025,6 +1027,7 @@ impl Themes {
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new(format!("Your themes: {}", dir.display())).weak());
+                    // ai: set_theme.reload
                     if ui.button("Reload").clicked() {
                         reload = true;
                     }
@@ -1041,14 +1044,99 @@ impl Themes {
             self.copy_to_edit(&t);
         }
         if reload {
-            self.load_user_themes();
-            // A reloaded file may have changed the chosen theme.
-            self.applied = None;
-            self.note = Some(format!(
-                "{} themes of yours loaded.",
-                self.all.len() - BUILT_IN.len()
-            ));
+            self.reload();
         }
+    }
+
+    /// Reads the user's theme files again.
+    fn reload(&mut self) {
+        self.load_user_themes();
+        // A reloaded file may have changed the chosen theme.
+        self.applied = None;
+        self.note = Some(format!(
+            "{} themes of yours loaded.",
+            self.all.len() - BUILT_IN.len()
+        ));
+    }
+
+    /// The assistant's set_theme.
+    fn tool(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let find = |all: &[Arc<Theme>], id: &str| {
+            (all.iter().find(|t| t.id == id).cloned())
+                .ok_or_else(|| format!("There is no theme {id}."))
+        };
+        let pick = args["theme"]
+            .as_str()
+            .map(|id| find(&self.all, id))
+            .transpose()?;
+        let copy = args["copy"]
+            .as_str()
+            .map(|id| find(&self.all, id))
+            .transpose()?;
+        let mode = match args["mode"].as_str() {
+            None => None,
+            Some(m) => Some(
+                (Mode::ALL.into_iter().find(|x| x.id() == m))
+                    .ok_or_else(|| format!("mode is designed, system, dark or light, not {m}."))?,
+            ),
+        };
+        if (copy.is_some() || args["reload"].as_bool() == Some(true)) && self.dir.is_none() {
+            return Err("There is no folder for themes of your own here.".into());
+        }
+        if let Some(t) = pick {
+            self.choose(&t.id);
+        }
+        if let Some(m) = mode {
+            self.set_mode(m);
+        }
+        if let Some(t) = copy {
+            self.copy_to_edit(&t);
+        }
+        if args["reload"].as_bool() == Some(true) {
+            self.reload();
+        }
+        Ok(json!({
+            "themes": self.all.iter()
+                .map(|t| json!({"id": t.id, "name": t.name, "yours": !t.built_in}))
+                .collect::<Vec<_>>(),
+            "theme": self.chosen,
+            "mode": self.mode.id(),
+            "folder": self.dir.as_ref().map(|d| d.display().to_string()),
+            "problems": self.problems.iter()
+                .map(|(f, why)| json!({"file": f, "problem": why}))
+                .collect::<Vec<_>>(),
+            "note": self.note,
+        }))
+    }
+}
+
+pub(crate) const TOOLS: &[crate::agent::Tool] = &[crate::agent::Tool {
+    name: "set_theme",
+    description: "How the app looks on this computer (Settings → Theme; never saved in the \
+                  project): the theme, and its colours as designed, following the computer, \
+                  dark or light. copy writes a copy of a theme into the folder of your own \
+                  themes to edit as text; reload reads that folder again. Only what is given \
+                  changes; answers with the themes, the choice, and any files that didn't read.",
+    access: crate::agent::Access::Edit,
+    schema: || {
+        let modes: Vec<&str> = Mode::ALL.iter().map(|m| m.id()).collect();
+        serde_json::json!({"type": "object", "properties": {
+            "theme": {"type": "string", "description": "A theme's id."},
+            "mode": {"type": "string", "enum": modes},
+            "copy": {"type": "string", "description": "The id of a theme to copy to edit."},
+            "reload": {"type": "boolean"}
+        }})
+    },
+}];
+
+impl crate::App {
+    pub(crate) fn theme_tool(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<(serde_json::Value, Option<String>), String>> {
+        (name == "set_theme").then(|| self.themes.tool(args).map(|v| (v, None)))
     }
 }
 
@@ -1401,5 +1489,43 @@ mod tests {
         assert!((ratio(w, w, w) - 1.0).abs() < 0.01);
         // #777 on white is the usual just-failing grey, 4.48:1.
         assert!((ratio(Color32::from_gray(0x77), w, w) - 4.48).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_assistant_chooses_copies_and_reloads_themes() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("daw-theme-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut d = crate::agent::driver::Driver::new();
+        assert!(
+            d.call("set_theme", json!({"reload": true})).is_err(),
+            "no folder in tests"
+        );
+        d.app().themes = Themes::new(Some(&dir));
+        let r = d.call("set_theme", json!({})).unwrap();
+        let second = r["themes"][1]["id"].as_str().unwrap().to_string();
+        let r = d
+            .call("set_theme", json!({"theme": second, "mode": "light"}))
+            .unwrap();
+        assert_eq!(
+            (r["theme"].as_str(), r["mode"].as_str()),
+            (Some(second.as_str()), Some("light"))
+        );
+        assert!(d.call("set_theme", json!({"theme": "nothing"})).is_err());
+        assert!(d.call("set_theme", json!({"mode": "purple"})).is_err());
+        let r = d.call("set_theme", json!({"copy": second})).unwrap();
+        let yours: Vec<&serde_json::Value> = r["themes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["yours"] == true)
+            .collect();
+        assert_eq!(yours.len(), 1, "{r}");
+        // A broken file is reported on reload.
+        std::fs::write(dir.join("themes").join("broken.theme"), "nonsense").unwrap();
+        let r = d.call("set_theme", json!({"reload": true})).unwrap();
+        assert!(r["note"].as_str().unwrap().contains("loaded"), "{r}");
+        assert_eq!(r["problems"][0]["file"], "broken.theme", "{r}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

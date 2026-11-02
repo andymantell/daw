@@ -2128,6 +2128,102 @@ mod tests {
         assert_eq!(p["tracks"][1]["instrument"]["builtin"], "oh-one", "{p}");
     }
 
+    /// The Acid Three bass line synth (plan docs/plans/classic-synths.md,
+    /// S2) from the assistant's side: it adds the track by kind or by
+    /// command, every setting is listed with its choices and can be
+    /// set, and a line of plain notes, an accented note (velocity) and
+    /// a slide (overlap) renders with the accent louder and brighter.
+    #[test]
+    fn the_acid_bass_synth_reaches_the_assistant() {
+        let mut d = Driver::new();
+        let t = d.call("add_track", json!({"kind": "acid-three"})).unwrap();
+        let t = t["track"].as_str().unwrap().to_string();
+        let params = instrument_params(&mut d, &t);
+        let keys: Vec<&str> = params
+            .iter()
+            .map(|p| p["param"].as_str().unwrap())
+            .collect();
+        for key in [
+            "instrument.wave",
+            "instrument.cutoff",
+            "instrument.resonance",
+            "instrument.env_mod",
+            "instrument.decay",
+            "instrument.accent",
+            "instrument.accent_velocity",
+            "instrument.slide",
+            "instrument.drive",
+        ] {
+            assert!(keys.contains(&key), "{key} missing from {keys:?}");
+        }
+        let wave = (params.iter())
+            .find(|p| p["param"] == "instrument.wave")
+            .unwrap();
+        let square = (wave["choices"].as_array().unwrap().iter())
+            .position(|c| c == "Square")
+            .unwrap();
+        d.call(
+            "set_parameters",
+            json!({"track": t, "changes": [
+                {"param": "instrument.wave", "value": square},
+                {"param": "instrument.cutoff", "value": 400.0},
+                {"param": "instrument.resonance", "value": 0.7},
+                {"param": "instrument.env_mod", "value": 0.4},
+                {"param": "instrument.decay", "value": 0.25},
+                {"param": "instrument.accent_velocity", "value": 100},
+                {"param": "instrument.vintage", "value": 0.0},
+            ]}),
+        )
+        .unwrap();
+        // Bar 1: a plain note. Bar 2: the same note accented. Bar 3: a
+        // note that overlaps the next, which slides up to it.
+        d.call(
+            "add_note_clip",
+            json!({"track": t, "bar": 1, "bars": 3, "notes": [
+                {"beat": 0.0, "beats": 1.0, "pitch": 33, "velocity": 80},
+                {"beat": 4.0, "beats": 1.0, "pitch": 33, "velocity": 120},
+                {"beat": 8.0, "beats": 1.5, "pitch": 33, "velocity": 80},
+                {"beat": 9.0, "beats": 1.0, "pitch": 45, "velocity": 80}
+            ]}),
+        )
+        .unwrap();
+        let bar = |d: &mut Driver, b: i64| -> Value {
+            d.call(
+                "analyse",
+                json!({"track": t, "from_bar": b, "to_bar": b + 1}),
+            )
+            .unwrap()
+        };
+        let highs = |a: &Value| -> f64 {
+            let power: f64 = (a["third_octave_bands"].as_array().unwrap().iter())
+                .filter(|b| b["hz"].as_f64().unwrap() >= 1000.0)
+                .map(|b| 10f64.powf(b["db"].as_f64().unwrap() / 10.0))
+                .sum();
+            10.0 * power.max(1e-12).log10()
+        };
+        let plain = bar(&mut d, 1);
+        let accented = bar(&mut d, 2);
+        let slid = bar(&mut d, 3);
+        let peak = |a: &Value| a["sample_peak_dbfs"].as_f64().unwrap();
+        assert!(peak(&plain) > -30.0, "{plain}");
+        assert!(peak(&accented) > peak(&plain) + 2.0, "{plain} {accented}");
+        assert!(highs(&accented) > highs(&plain) + 3.0, "{plain} {accented}");
+        assert!(peak(&slid) > -30.0, "{slid}");
+        let now = instrument_params(&mut d, &t);
+        let w = (now.iter())
+            .find(|p| p["param"] == "instrument.wave")
+            .unwrap();
+        assert_eq!(w["text"], "Square");
+        // The command adds one too, and names the synth.
+        d.command("add-acid-three-track");
+        let tracks = d.project()["tracks"].as_array().unwrap().len();
+        assert_eq!(tracks, 2);
+        assert_eq!(
+            d.project()["tracks"][1]["instrument"]["builtin"],
+            "acid-three"
+        );
+    }
+
     #[test]
     fn many_settings_are_set_in_one_call_as_one_undo_step() {
         let mut d = Driver::new();

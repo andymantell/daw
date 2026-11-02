@@ -502,6 +502,7 @@ impl App {
                         Some(daw_instruments::Kind::Slicer) => "Slicer",
                         Some(daw_instruments::Kind::PatchTwenty) => "Patch",
                         Some(daw_instruments::Kind::OhOne) => "Oh-One",
+                        Some(daw_instruments::Kind::AcidThree) => "Acid",
                     },
                 );
                 // ai: view

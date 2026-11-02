@@ -24,8 +24,8 @@ use daw_engine::stream::StreamSource;
 use daw_engine::time::{Frames, PPQ as ENGINE_PPQ, TempoMap, Ticks};
 use daw_engine::warp::{Warp, WarpPoint};
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke,
-    StrokeKind, pos2, vec2,
+    self, Align2, Color32, CursorIcon, FontId, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke,
+    StrokeKind, Vec2, pos2, vec2,
 };
 
 use crate::commands::Cmd;
@@ -1101,6 +1101,32 @@ pub struct View<'a> {
     pub can_paste: bool,
     /// Each lane's notation band under its row, if it shows one.
     pub bands: &'a [Option<crate::notation::Band<'a>>],
+    /// Each lane's header: its mute, solo and arm, and its meter.
+    pub heads: &'a [Head],
+    /// The lane shown in the inspector, marked on its header.
+    pub inspected: Option<usize>,
+}
+
+/// What a track header shows besides the name.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Head {
+    pub mute: bool,
+    pub solo: bool,
+    /// Armed for recording; `None` for a track that can't record (a
+    /// bus, a folder, or an audio track with no input).
+    pub arm: Option<bool>,
+    /// Peak levels, 0 to 1 and over, left and right.
+    pub meter: (f32, f32),
+}
+
+/// Something asked of a track from its header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadAsk {
+    /// Show it in the inspector.
+    Select,
+    Mute,
+    Solo,
+    Arm,
 }
 
 /// Something asked of a track from its menu.
@@ -1164,6 +1190,8 @@ pub struct Outcome {
     pub off_band: bool,
     /// Run this command on the selection.
     pub command: Option<Cmd>,
+    /// A track header was clicked, or one of its buttons.
+    pub head: Option<(usize, HeadAsk)>,
 }
 
 /// What the timeline asks of patterns, which the app keeps.
@@ -1482,8 +1510,39 @@ impl Default for Timeline {
     }
 }
 
-/// Track names to the left of the lanes.
-pub(crate) const HEADER: f32 = 110.0;
+/// A header's first row (the name's), and where its buttons go: beside
+/// the name in a short lane, on a row of their own under it in a tall
+/// one.
+fn header_rows(r: Rect, head: Head) -> (Rect, Option<Rect>) {
+    let n = if head.arm.is_some() { 3.0 } else { 2.0 };
+    let w = n * HEAD_BUTTON.x + (n - 1.0) * HEAD_GAP;
+    let right = r.right() - HEAD_METER - 10.0;
+    if r.height() >= HEAD_TWO_ROWS {
+        let row = Rect::from_x_y_ranges(r.x_range(), r.top() + 4.0..=r.top() + 24.0);
+        let b = Rect::from_min_size(
+            pos2(r.left() + 16.0, r.bottom() - HEAD_BUTTON.y - 6.0),
+            vec2(w, HEAD_BUTTON.y),
+        );
+        (row, Some(b))
+    } else {
+        let b = Rect::from_min_size(
+            pos2(right - w, r.center().y - HEAD_BUTTON.y / 2.0),
+            vec2(w, HEAD_BUTTON.y),
+        );
+        (r, Some(b))
+    }
+}
+
+/// Track headers to the left of the lanes: colour, kind, name, mute,
+/// solo, arm and a level meter.
+pub(crate) const HEADER: f32 = 176.0;
+/// A header button's size, and the gap between them.
+const HEAD_BUTTON: Vec2 = vec2(20.0, 18.0);
+const HEAD_GAP: f32 = 3.0;
+/// The header's level meter: its width, inside the right edge.
+const HEAD_METER: f32 = 6.0;
+/// A lane this tall or taller shows its buttons on a second row.
+const HEAD_TWO_ROWS: f32 = 50.0;
 /// The ruler: marker flags on top, then tempo and time-signature
 /// changes, then the loop and bar numbers.
 const RULER: f32 = 38.0;
@@ -2027,6 +2086,211 @@ impl Timeline {
 
     pub fn add_marker(&mut self, song: &mut Song, bar: i64) {
         add_marker(song.markers, bar);
+    }
+
+    /// A track's header: its colour, kind, name, the marks of its edit
+    /// group and version, and its level meter. Its buttons are drawn
+    /// over it afterwards by [`Timeline::header_buttons`].
+    #[allow(clippy::too_many_arguments)]
+    fn paint_header(
+        &self,
+        painter: &egui::Painter,
+        r: Rect,
+        i: usize,
+        lane: &Lane,
+        head: Head,
+        view: &View,
+        look: &Look,
+    ) {
+        let tc = look.c();
+        let inspected = view.inspected == Some(i);
+        painter.rect_filled(r, 0.0, if inspected { tc.raised } else { tc.panel });
+        let colour = tc.track(i);
+        // The track's colour as a tag, as in the mixer.
+        painter.rect_filled(
+            Rect::from_min_size(r.min + vec2(6.0, 6.0), vec2(4.0, r.height() - 12.0)),
+            2.0,
+            colour,
+        );
+        if inspected {
+            painter.rect_stroke(
+                r.shrink(1.0),
+                0.0,
+                Stroke::new(1.0, tc.accent),
+                StrokeKind::Inside,
+            );
+        }
+        let (row, buttons) = header_rows(r, head);
+        let indent = if lane.in_folder { 12.0 } else { 0.0 };
+        // What kind of track it is, as an icon.
+        let icon = match lane.kind {
+            daw_project::TrackKind::Audio => Icon::Wave,
+            daw_project::TrackKind::Instrument => Icon::Keys,
+            daw_project::TrackKind::Bus => Icon::Speaker,
+            daw_project::TrackKind::Folder => Icon::Folder,
+        };
+        let icon_rect = Rect::from_center_size(
+            pos2(r.left() + 22.0 + indent, row.center().y),
+            vec2(13.0, 13.0),
+        );
+        crate::icons::paint(painter, icon_rect, icon, tc.text_dim);
+        // The name, cut off before the buttons (or the meter).
+        let name_left = icon_rect.right() + 6.0;
+        let name_right = match buttons {
+            Some(b) if (b.center().y - row.center().y).abs() < 1.0 => b.left() - 4.0,
+            _ => r.right() - HEAD_METER - 8.0,
+        };
+        let name_clip = Rect::from_x_y_ranges(name_left..=name_right.max(name_left), r.y_range());
+        painter
+            .with_clip_rect(name_clip.intersect(painter.clip_rect()))
+            .text(
+                pos2(name_left, row.center().y),
+                Align2::LEFT_CENTER,
+                lane.name,
+                look.font(look.body),
+                tc.text,
+            );
+        // Under the name, after the buttons: its edit group, faint while
+        // group editing is off, and the version playing if it has others.
+        let mut notes = Vec::new();
+        if let Some(g) = groups::group_of(&self.groups, i) {
+            notes.push((
+                g.name.clone(),
+                if self.group_edit { tc.text } else { tc.line },
+            ));
+        }
+        if let Some((names, at)) = view.versions.get(i)
+            && let Some(v) = names.get(*at)
+        {
+            notes.push((format!("{v} ({}/{})", at + 1, names.len()), tc.text_dim));
+        }
+        if !notes.is_empty() {
+            let left = match buttons {
+                Some(b) if b.top() > row.bottom() - 1.0 => b.right() + 6.0,
+                _ => name_left,
+            };
+            let y = r.bottom() - 6.0;
+            let clip = Rect::from_x_y_ranges(left..=r.right() - HEAD_METER - 8.0, r.y_range());
+            let p = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
+            let mut x = left;
+            for (text, c) in notes {
+                let at = p.text(
+                    pos2(x, y),
+                    Align2::LEFT_BOTTOM,
+                    text,
+                    look.font(look.small),
+                    c,
+                );
+                x = at.right() + 6.0;
+            }
+        }
+        // The level meter at the right edge: left and right.
+        let m = Rect::from_x_y_ranges(
+            r.right() - HEAD_METER - 4.0..=r.right() - 4.0,
+            r.top() + 5.0..=r.bottom() - 5.0,
+        );
+        painter.rect_filled(m, 1.0, tc.meter_bg);
+        for (k, peak) in [head.meter.0, head.meter.1].into_iter().enumerate() {
+            let db = if peak > 0.0 {
+                20.0 * peak.log10()
+            } else {
+                -120.0
+            };
+            let level = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+            if level <= 0.0 {
+                continue;
+            }
+            let w = m.width() / 2.0;
+            let bar = Rect::from_x_y_ranges(
+                m.left() + k as f32 * w..=m.left() + (k as f32 + 1.0) * w - 0.5,
+                m.bottom() - level * m.height()..=m.bottom(),
+            );
+            let c = if db > 0.0 {
+                tc.meter_high
+            } else if db > -12.0 {
+                tc.meter_mid
+            } else {
+                tc.meter_low
+            };
+            painter.rect_filled(bar, 0.0, c);
+        }
+    }
+
+    /// Each header's mute, solo and arm buttons, lit when on, drawn over
+    /// the headers so they take the clicks. A header half scrolled out of
+    /// view shows none.
+    fn header_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        song: &Song,
+        heads: &[(usize, Rect, Head)],
+        clip: Rect,
+        out: &mut Outcome,
+    ) {
+        let c = crate::theme::look(ui.ctx()).c().clone();
+        for &(i, r, head) in heads {
+            let (_, Some(b)) = header_rows(r, head) else {
+                continue;
+            };
+            if !clip.contains_rect(b) {
+                continue;
+            }
+            let name = song.lanes.get(i).map_or("", |l| l.name);
+            let mut at = b.left();
+            let mut button = |ui: &mut egui::Ui,
+                              on: bool,
+                              text: &str,
+                              lit: Color32,
+                              spoken: String,
+                              tip: &str| {
+                let br = Rect::from_min_size(pos2(at, b.top()), HEAD_BUTTON);
+                at += HEAD_BUTTON.x + HEAD_GAP;
+                crate::mixer::lit(ui, lit, |ui| {
+                    ui.put(
+                        br,
+                        egui::Button::selectable(on, RichText::new(text).small().strong()),
+                    )
+                })
+                .accessible_name(spoken)
+                .on_hover_text(tip)
+                .clicked()
+            };
+            // ai: set_parameter
+            if button(
+                ui,
+                head.mute,
+                "M",
+                c.warn,
+                format!("Mute the {name} track"),
+                "Mute",
+            ) {
+                out.head = Some((i, HeadAsk::Mute));
+            }
+            // ai: set_parameter
+            if button(
+                ui,
+                head.solo,
+                "S",
+                c.good,
+                format!("Solo the {name} track"),
+                "Solo",
+            ) {
+                out.head = Some((i, HeadAsk::Solo));
+            }
+            if let Some(arm) = head.arm {
+                // ai: set_track_input
+                if button(
+                    ui,
+                    arm,
+                    "R",
+                    c.record,
+                    format!("Arm the {name} track"),
+                    "Arm for recording (R records)",
+                ) {
+                    out.head = Some((i, HeadAsk::Arm));
+                }
+            }
+        }
     }
 
     /// Tempo and time-signature changes along the ruler's middle row:
@@ -3343,6 +3607,12 @@ impl Timeline {
         {
             let h = hit(p, song);
             out.off_band = !matches!(h, Some(Hit::Band(_)));
+            if h.is_none() && p.x < left && p.y >= rect.top() + tracks_top {
+                let lane = lane_under(p.y);
+                if lane < song.lanes.len() {
+                    out.head = Some((lane, HeadAsk::Select));
+                }
+            }
             match h {
                 Some(Hit::Header(_)) => {}
                 Some(Hit::Clip { id, .. }) => {
@@ -3676,64 +3946,14 @@ impl Timeline {
             rect.max,
         ));
         let links = crate::linked::Links::of(song, &self.selected, self.note_sel.as_deref());
+        let mut heads = Vec::with_capacity(song.lanes.len());
         for (i, lane) in song.lanes.iter().enumerate() {
             let top = lane_top(i);
             let name_rect = Rect::from_min_size(pos2(rect.left(), top), vec2(HEADER, lane_h));
             let colour = tc.track(i);
-            lanes.rect_filled(name_rect, 0.0, tc.panel);
-            // The track's colour as a tag, as in the mixer.
-            lanes.rect_filled(
-                Rect::from_min_size(name_rect.min + vec2(6.0, 8.0), vec2(4.0, lane_h - 16.0)),
-                2.0,
-                colour,
-            );
-            let indent = if lane.in_folder { 14.0 } else { 0.0 };
-            let name_end = lanes.text(
-                name_rect.left_center() + vec2(16.0 + indent, 0.0),
-                Align2::LEFT_CENTER,
-                lane.name,
-                look.font(look.body),
-                tc.text,
-            );
-            // Its edit group's name, faint while group editing is off.
-            if let Some(g) = groups::group_of(&self.groups, i) {
-                let c = if self.group_edit { tc.text } else { tc.line };
-                lanes.text(
-                    name_rect.left_bottom() + vec2(16.0, -6.0),
-                    Align2::LEFT_BOTTOM,
-                    &g.name,
-                    look.font(look.small),
-                    c,
-                );
-            }
-            // Buses and folders have no clips: say what they are.
-            let tag = match lane.kind {
-                daw_project::TrackKind::Audio => None,
-                daw_project::TrackKind::Instrument => Some("instrument"),
-                daw_project::TrackKind::Bus => Some("bus"),
-                daw_project::TrackKind::Folder => Some("folder"),
-            };
-            // The version playing, if it has others.
-            if let Some((names, at)) = view.versions.get(i)
-                && let Some(v) = names.get(*at)
-            {
-                lanes.text(
-                    name_rect.right_bottom() + vec2(-8.0, -6.0),
-                    Align2::RIGHT_BOTTOM,
-                    format!("{v} ({}/{})", at + 1, names.len()),
-                    look.font(look.small),
-                    tc.text_dim,
-                );
-            }
-            if let Some(tag) = tag {
-                lanes.text(
-                    pos2(name_end.right() + 6.0, name_rect.center().y),
-                    Align2::LEFT_CENTER,
-                    tag,
-                    look.font(look.small),
-                    tc.text_dim,
-                );
-            }
+            let head = view.heads.get(i).copied().unwrap_or_default();
+            heads.push((i, name_rect, head));
+            self.paint_header(&lanes, name_rect, i, lane, head, view, &look);
             lanes.line_segment(
                 [
                     pos2(rect.left(), top + lane_h),
@@ -3930,6 +4150,8 @@ impl Timeline {
                 );
             }
         }
+        let heads_clip = Rect::from_min_max(pos2(rect.left(), rect.top() + tracks_top), rect.max);
+        self.header_buttons(ui, song, &heads, heads_clip, &mut out);
         if song.lanes.is_empty() {
             painter.text(
                 pos2(left + 10.0, rect.top() + tracks_top + 20.0),

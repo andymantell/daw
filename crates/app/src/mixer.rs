@@ -139,7 +139,11 @@ impl Rows {
 }
 
 /// Mute, solo and arm lit in their own colours when on.
-fn lit<R>(ui: &mut egui::Ui, colour: Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn lit<R>(
+    ui: &mut egui::Ui,
+    colour: Color32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     let on = theme::look(ui.ctx()).c().bg;
     ui.scope(|ui| {
         let v = ui.visuals_mut();
@@ -607,9 +611,13 @@ impl App {
                     self.effects.open_master = false;
                 }
             }
-            Part::Out => rebuild |= output_picker(ui, i, t, &r.buses, &r.allowed[i]),
+            Part::Out => {
+                let spoken = format!("Output of {}", t.name);
+                rebuild |= output_picker(ui, i, t, &r.buses, &r.allowed[i], &spoken);
+            }
             Part::Sends => {
-                if let Some(changed) = sends_menu(ui, i, t, &r.buses, &r.allowed[i]) {
+                let spoken = format!("Sends from {}", t.name);
+                if let Some(changed) = sends_menu(ui, i, t, &r.buses, &r.allowed[i], &spoken) {
                     if changed {
                         rebuild = true;
                     } else {
@@ -1010,6 +1018,52 @@ impl App {
         }
     }
 
+    /// The inspector's routing for track `i`: where it goes and its
+    /// sends. Returns true if the graph must be rebuilt.
+    pub(crate) fn inspector_routing(&mut self, ui: &mut egui::Ui, i: usize) -> bool {
+        if i >= self.tracks.len() {
+            return false;
+        }
+        let r = self.routing();
+        let mut rebuild = false;
+        let mut levels = false;
+        egui::Grid::new("inspector routing")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Output");
+                // ai: edit_track
+                rebuild |= output_picker(
+                    ui,
+                    i,
+                    &mut self.tracks[i],
+                    &r.buses,
+                    &r.allowed[i],
+                    "Track output",
+                );
+                ui.end_row();
+                ui.label("Sends");
+                // ai: set_send
+                match sends_menu(
+                    ui,
+                    i,
+                    &mut self.tracks[i],
+                    &r.buses,
+                    &r.allowed[i],
+                    "Track sends",
+                ) {
+                    Some(true) => rebuild = true,
+                    Some(false) => levels = true,
+                    None => {}
+                }
+                ui.end_row();
+            });
+        if levels && !rebuild {
+            rebuild |= self.desk_actions(vec![Action::Sends(i)]);
+        }
+        rebuild
+    }
+
     /// Does what the strips asked. Returns true if the graph must be
     /// rebuilt.
     fn desk_actions(&mut self, actions: Vec<Action>) -> bool {
@@ -1171,6 +1225,7 @@ fn output_picker(
     t: &mut Track,
     buses: &[(String, String)],
     allowed: &[bool],
+    spoken: &str,
 ) -> bool {
     let name = |k: &Option<String>| match k {
         None if t.parent.is_some() => "Folder".to_string(),
@@ -1181,7 +1236,7 @@ fn output_picker(
             .map_or("Master".into(), |(_, n)| n.clone()),
     };
     let before = t.output.clone();
-    egui::ComboBox::from_id_salt(("output", i))
+    egui::ComboBox::from_id_salt(("output", i, spoken))
         .width(76.0)
         .selected_text(name(&t.output))
         .show_ui(ui, |ui| {
@@ -1195,7 +1250,7 @@ fn output_picker(
             }
         })
         .response
-        .accessible_name(format!("Output of {}", t.name))
+        .accessible_name(spoken)
         .on_hover_text("Where this track's audio goes after its fader");
     t.output != before
 }
@@ -1209,6 +1264,7 @@ fn sends_menu(
     t: &mut Track,
     buses: &[(String, String)],
     allowed: &[bool],
+    spoken: &str,
 ) -> Option<bool> {
     let label = match t.sends.len() {
         0 => "Sends".to_string(),
@@ -1281,7 +1337,7 @@ fn sends_menu(
         }
     });
     menu.response
-        .accessible_name(format!("Sends from {}", t.name))
+        .accessible_name(spoken)
         .on_hover_text("Copies of this track's audio sent to buses, with their own levels");
     let _ = i;
     result

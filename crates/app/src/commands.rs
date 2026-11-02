@@ -142,6 +142,7 @@ pub(crate) enum Cmd {
     TakeLanes,
     AutomationLanes,
     Browser,
+    Inspector,
     Video,
     Fretboard,
     FretboardView,
@@ -1885,6 +1886,16 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Show or hide your sound folders and the project's audio, to hear and add")
     .words("samples loops sounds library files search tags preview audition"),
+    info(
+        Cmd::Inspector,
+        "inspector",
+        "View",
+        "Inspector",
+        &[key(CTRL, Key::I)],
+    )
+    .hint("Show or hide the selected track's and clip's settings on the right")
+    .words("track clip settings properties volume pan sound effects details side panel")
+    .everyday(),
     info(Cmd::SimpleMode, "simpler-mode", "View", "Simpler mode", &[])
         .hint("Show only the everyday commands and controls; the rest stay under More")
         .words("beginner basic easy simple advanced hide everyday")
@@ -2440,6 +2451,7 @@ impl Cmd {
                 | Cmd::PatternEditor
                 | Cmd::AutomationLanes
                 | Cmd::Browser
+                | Cmd::Inspector
                 | Cmd::Video
                 | Cmd::Fretboard
                 | Cmd::PitchEditor
@@ -3566,6 +3578,7 @@ impl App {
             Cmd::PrintNotation => self.export_notation(crate::notation::NotationFile::Pdf),
             Cmd::AutomationLanes => self.workspace.toggle(Pane::Automation),
             Cmd::Browser => self.workspace.toggle(Pane::Browser),
+            Cmd::Inspector => self.workspace.toggle(Pane::Inspector),
             Cmd::Video => self.workspace.toggle(Pane::Video),
             Cmd::Fretboard => self.workspace.toggle(Pane::Fretboard),
             Cmd::PitchEditor => self.workspace.toggle(Pane::PitchEditor),

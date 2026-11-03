@@ -1178,6 +1178,9 @@ pub struct Outcome {
     pub paste: Option<(usize, i64, bool)>,
     /// Open the note editor on this note clip, by key.
     pub edit_notes: Option<String>,
+    /// Open the pitch editor on the audio clip now selected (a
+    /// double-click on it).
+    pub edit_audio: bool,
     /// Where the band asked for with [`Timeline::band`] is, track names'
     /// column and all, for the app to draw in.
     pub band: Option<Rect>,
@@ -3739,6 +3742,14 @@ impl Timeline {
                         song.lanes[lane].notes.push(c);
                         out.changed = true;
                     }
+                }
+                // An audio clip: its editor, in the dock.
+                Some(Hit::Clip {
+                    id,
+                    zone: Zone::Body,
+                }) => {
+                    self.select_only(song, id);
+                    out.edit_audio = true;
                 }
                 Some(Hit::Marker(i)) => {
                     self.rename = Some((i, song.markers[i].name.clone()));

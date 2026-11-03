@@ -572,6 +572,8 @@ struct App {
     drawing_panes: bool,
     /// Workspace commands that came while it was out.
     workspace_cmds: Vec<Cmd>,
+    /// Panes asked for while the panes were drawn, opened after.
+    panes_to_open: Vec<workspace::Pane>,
     /// The look, chosen per computer.
     themes: theme::Themes,
     /// MIDI devices, and notes being recorded.
@@ -747,6 +749,7 @@ impl App {
             ),
             drawing_panes: false,
             workspace_cmds: Vec::new(),
+            panes_to_open: Vec::new(),
             themes: theme::Themes::new((!cfg!(test)).then(config_dir).as_deref()),
             browser: browser::Browser::new((!cfg!(test)).then(|| config_dir().join("browser.txt"))),
             browser_sent: false,
@@ -1813,7 +1816,10 @@ impl App {
         }
         if let Some(key) = out.edit_notes {
             self.notes_editor.edit(&key);
-            self.workspace.open(workspace::Pane::NotesEditor);
+            self.open_pane(workspace::Pane::NotesEditor);
+        }
+        if out.edit_audio {
+            self.open_pane(workspace::Pane::PitchEditor);
         }
         match out.pattern {
             Some(timeline::PatternAsk::Add(lane, at)) => {

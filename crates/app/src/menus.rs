@@ -266,7 +266,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Gap,
             Run(Cmd::NotationLane),
             Run(Cmd::NotationView),
-            Run(Cmd::NotationSettings),
+            Pane(Cmd::NotationSettings),
             Sub(
                 "Tab",
                 &[
@@ -341,7 +341,8 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Pane(Cmd::Browser),
             Pane(Cmd::Inspector),
             Pane(Cmd::Video),
-            Run(Cmd::InstrumentWindow),
+            Pane(Cmd::InstrumentWindow),
+            Pane(Cmd::EffectsPane),
             Run(Cmd::Meters),
             Run(Cmd::FullSize),
             Gap,

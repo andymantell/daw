@@ -674,6 +674,8 @@ mod tests {
         let ctx = h.ctx.clone();
         h.state_mut().run(&ctx, Cmd::AddLayer);
         h.run();
+        h.state_mut().workspace.full = Some(crate::workspace::Pane::Instrument);
+        h.run();
         let before = h.state().tracks[0].layers[1].slot.id;
         h.get_by_label("Layer 2: Simple synth instrument").click();
         h.run();

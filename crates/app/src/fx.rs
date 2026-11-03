@@ -1429,15 +1429,15 @@ impl Effects {
         }
     }
 
-    /// The effects window for one track, with the names of its effects
+    /// The effects pane for one track, with the names of its effects
     /// whose plugins are missing here and a line about its frozen audio.
     /// `layers` are its layered instrument's layers (key and heading),
     /// shown as chains before the track's own. Returns true if the chain
     /// changed and the graph needs rebuilding.
     #[allow(clippy::too_many_arguments)]
-    pub fn track_window(
+    pub fn track_panel(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         track: &str,
         slots: &mut Vec<FxSlot>,
         layers: &[(String, String)],
@@ -1447,7 +1447,6 @@ impl Effects {
         others: &[(String, String)],
         message: &mut Option<String>,
     ) -> bool {
-        let mut open = true;
         let mut changed = false;
         let mut remove = None;
         let mut swap = None;
@@ -1458,12 +1457,11 @@ impl Effects {
         // Plugins whose side buses changed, to make again.
         let mut relayout = Vec::new();
         let mut picks = Vec::new();
-        egui::Window::new(format!("Effects: {track}"))
-            .id(egui::Id::unique("track-fx"))
-            .open(&mut open)
-            .default_pos(egui::pos2(300.0, 240.0))
-            .default_width(420.0)
-            .show(ctx, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("effects-pane")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.label(RichText::new(track).strong());
                 if slots.is_empty() && missing.is_empty() && layers.is_empty() {
                     ui.label("No effects on this track.");
                 }
@@ -1846,10 +1844,6 @@ impl Effects {
                 slots.remove(j);
             }
             changed = true;
-        }
-        if !open {
-            self.open_track = None;
-            self.open_master = false;
         }
         changed
     }
@@ -2897,6 +2891,8 @@ mod tests {
         h.state_mut().effects.open_track = Some(0);
         // Searched for, as it is far down the list.
         h.state_mut().effects.filter = "parallel".into();
+        h.run();
+        h.state_mut().workspace.full = Some(crate::workspace::Pane::Effects);
         h.run();
         h.get_by_label("Add effect").click();
         h.run();

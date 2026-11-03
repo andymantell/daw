@@ -206,6 +206,8 @@ pub(crate) enum Cmd {
     /// in `daw_instruments::Kind::ALL`.
     AddInstrument(u8),
     InstrumentWindow,
+    /// Opens the Effects pane on the selected track.
+    EffectsPane,
     SliceNotes,
     PadBuses,
     LoadSfz,
@@ -775,11 +777,14 @@ pub(crate) const COMMANDS: &[Info] = &[
         Cmd::InstrumentWindow,
         "instrument-window",
         "View",
-        "Instrument…",
+        "Instrument",
         &[],
     )
-    .hint("The instrument of the instrument track, and its controls")
-    .words("synth sampler drum machine slicer settings"),
+    .hint("Show the instrument track's instrument and its controls in a pane")
+    .words("synth sampler drum machine slicer settings panel"),
+    info(Cmd::EffectsPane, "effects", "View", "Effects", &[])
+        .hint("Show the selected track's effects in a pane: add, reorder and change them")
+        .words("fx chain insert plugin reverb delay compressor eq panel"),
     info(
         Cmd::SliceNotes,
         "slice-notes",
@@ -2395,10 +2400,10 @@ pub(crate) const COMMANDS: &[Info] = &[
         Cmd::NotationSettings,
         "notation-settings",
         "Notes",
-        "Notation lane…",
+        "Notation lane",
         &[],
     )
-    .hint("Tuning, capo, staff and rhythm for the track's notation lane")
+    .hint("Show the notation pane: tuning, capo, staff and rhythm for the track's lane")
     .words("tab tuning capo drop strings bass guitar"),
     info(Cmd::TabEntry, "tab-entry", "Notes", "Type tab", &[key(NONE, Key::T)])
         .hint("Type fret numbers onto the tab: arrows move, Delete clears, Escape stops")
@@ -3683,10 +3688,18 @@ impl App {
                     self.add_instrument_track(kind);
                 }
             }
-            Cmd::InstrumentWindow => match self.instrument_track(None) {
+            Cmd::InstrumentWindow if self.workspace.layout.is_open(Pane::Instrument) => {
+                self.instrument_open = None;
+            }
+            Cmd::InstrumentWindow => match self.instrument_pick() {
                 Some(i) => self.instrument_open = Some(i),
                 None => self.message = Some("There is no instrument track yet.".into()),
             },
+            Cmd::EffectsPane if self.workspace.layout.is_open(Pane::Effects) => {
+                self.effects.open_track = None;
+                self.effects.open_master = false;
+            }
+            Cmd::EffectsPane => self.open_effects_pane(),
             Cmd::SliceNotes => {
                 if let Err(e) = self.slice_notes() {
                     self.message = Some(e);
@@ -3746,6 +3759,9 @@ impl App {
             Cmd::ExportMidi => self.export_midi_file(),
             Cmd::NotationLane => self.toggle_notation_lane(),
             Cmd::NotationView => self.next_notation_view(),
+            Cmd::NotationSettings if self.workspace.layout.is_open(Pane::Notation) => {
+                self.notation.shown = None;
+            }
             Cmd::NotationSettings => self.open_notation_window(),
             Cmd::TabEntry => self.toggle_tab_entry(),
             Cmd::StringUp => self.notes_to_string(-1),

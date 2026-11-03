@@ -105,6 +105,7 @@ mod theme;
 mod timeline;
 mod timing;
 mod top_bar;
+mod track_panes;
 mod trainer;
 mod transpose;
 mod tuner;
@@ -550,6 +551,7 @@ struct App {
     desk: mixer::DeskView,
     /// The inspector's track, and what it last saw selected.
     inspector: inspector::Inspector,
+    track_panes: track_panes::Follow,
     proj: project::Proj,
     latency: latency::Latency,
     /// A simulated loopback cable's delay for measuring in tests.
@@ -723,6 +725,7 @@ impl App {
             ),
             desk: mixer::DeskView::default(),
             inspector: inspector::Inspector::default(),
+            track_panes: track_panes::Follow::default(),
             proj: project::Proj::new(),
             latency: latency::Latency::default(),
             #[cfg(test)]
@@ -2669,59 +2672,10 @@ impl eframe::App for App {
         if self.meters.open {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
-        if self.effects.open_master {
-            let (_, missing) = self.frozen_note(&self.master);
-            let mut fx = std::mem::take(&mut self.master.fx);
-            let changed = self.effects.track_window(
-                &ctx,
-                "Master",
-                &mut fx,
-                &[],
-                &missing,
-                None,
-                self.rate,
-                &[],
-                &mut self.message,
-            );
-            self.master.fx = fx;
-            if changed {
-                self.rebuild();
-            }
-        }
-        if let Some(i) = self.effects.open_track {
-            let note = self.tracks.get(i).map(|t| self.frozen_note(t));
-            let others: Vec<(String, String)> = (self.tracks.iter().enumerate())
-                .filter(|(j, _)| *j != i)
-                .map(|(_, t)| (t.key.clone(), t.name.clone()))
-                .collect();
-            match (self.tracks.get_mut(i), note) {
-                (Some(t), Some((note, missing))) => {
-                    let layers = layers::chains(&t.layers);
-                    if self.effects.track_window(
-                        &ctx,
-                        &t.name,
-                        &mut t.fx,
-                        &layers,
-                        &missing,
-                        note.as_deref(),
-                        self.rate,
-                        &others,
-                        &mut self.message,
-                    ) {
-                        self.rebuild();
-                    }
-                }
-                _ => self.effects.open_track = None,
-            }
-        }
-        if let Some(i) = self.instrument_open {
-            self.instrument_window(&ctx, i);
-        }
         self.perf_window(&ctx);
         self.kits_update();
         self.layout_windows(&ctx);
         self.command_windows(&ctx);
-        self.notation_window(&ctx);
         self.updates.poll(&ctx);
         self.updates.window(&ctx);
         self.updates.ask_window(&ctx);

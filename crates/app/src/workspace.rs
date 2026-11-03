@@ -38,9 +38,15 @@ pub(crate) enum Pane {
     Fretboard,
     PitchEditor,
     Inspector,
+    /// The shown track's instrument.
+    Instrument,
+    /// The shown track's (or the master's) effect chain.
+    Effects,
+    /// How the shown track's notation lane draws its notes.
+    Notation,
 }
 
-pub(crate) const PANES: [Pane; 16] = [
+pub(crate) const PANES: [Pane; 19] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -57,6 +63,9 @@ pub(crate) const PANES: [Pane; 16] = [
     Pane::Fretboard,
     Pane::PitchEditor,
     Pane::Inspector,
+    Pane::Instrument,
+    Pane::Effects,
+    Pane::Notation,
 ];
 
 impl Pane {
@@ -79,6 +88,9 @@ impl Pane {
             Pane::Fretboard => "fretboard",
             Pane::PitchEditor => "pitch-editor",
             Pane::Inspector => "inspector",
+            Pane::Instrument => "instrument",
+            Pane::Effects => "effects",
+            Pane::Notation => "notation",
         }
     }
 
@@ -104,6 +116,9 @@ impl Pane {
             Pane::Fretboard => "Fretboard",
             Pane::PitchEditor => "Pitch editor",
             Pane::Inspector => "Inspector",
+            Pane::Instrument => "Instrument",
+            Pane::Effects => "Effects",
+            Pane::Notation => "Notation",
         }
     }
 
@@ -423,7 +438,10 @@ impl Layout {
             | Pane::Automation
             | Pane::Patterns
             | Pane::Fretboard
-            | Pane::PitchEditor => (Pane::Timeline, Side::Below),
+            | Pane::PitchEditor
+            | Pane::Instrument
+            | Pane::Effects
+            | Pane::Notation => (Pane::Timeline, Side::Below),
             Pane::Video => (Pane::Timeline, Side::Right),
             // On the right of everything, across the whole height.
             Pane::Inspector => {
@@ -1589,6 +1607,7 @@ impl crate::App {
         if let Some(c) = self.tuner.set_open(tuner) {
             self.send(c);
         }
+        changed |= self.sync_track_panes();
         if changed {
             ui.ctx().request_repaint();
         }
@@ -1620,6 +1639,9 @@ impl crate::App {
             Cmd::AutomationLanes => self.workspace.layout.is_open(Pane::Automation),
             Cmd::Browser => self.workspace.layout.is_open(Pane::Browser),
             Cmd::Inspector => self.workspace.layout.is_open(Pane::Inspector),
+            Cmd::InstrumentWindow => self.workspace.layout.is_open(Pane::Instrument),
+            Cmd::EffectsPane => self.workspace.layout.is_open(Pane::Effects),
+            Cmd::NotationSettings => self.workspace.layout.is_open(Pane::Notation),
             Cmd::Video => self.workspace.layout.is_open(Pane::Video),
             Cmd::Fretboard => self.workspace.layout.is_open(Pane::Fretboard),
             Cmd::PitchEditor => self.workspace.layout.is_open(Pane::PitchEditor),
@@ -1642,6 +1664,9 @@ impl crate::App {
                 (Cmd::Comments, true) => self.workspace.close(Pane::Comments),
                 (Cmd::LessonNotes, true) => self.workspace.close(Pane::Notes),
                 (Cmd::Tuner, true) => self.workspace.close(Pane::Tuner),
+                (Cmd::InstrumentWindow, true) => self.workspace.close(Pane::Instrument),
+                (Cmd::EffectsPane, true) => self.workspace.close(Pane::Effects),
+                (Cmd::NotationSettings, true) => self.workspace.close(Pane::Notation),
                 _ => self.run(&ctx, c),
             }
         }
@@ -1817,6 +1842,9 @@ impl Host for crate::App {
             Pane::Automation => self.automation_pane(ui),
             Pane::Browser => self.browser_pane(ui),
             Pane::Inspector => self.inspector_pane(ui),
+            Pane::Instrument => self.instrument_pane(ui),
+            Pane::Effects => self.effects_pane(ui),
+            Pane::Notation => self.notation_pane(ui),
             Pane::Video => self.video_pane(ui),
             Pane::Fretboard => {
                 egui::ScrollArea::vertical()

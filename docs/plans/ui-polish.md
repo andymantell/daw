@@ -177,6 +177,33 @@ One panel kit, used by every built-in instrument and effect:
 The panels open in the dock's Instrument tab, where a wide, short panel
 fits a laptop screen; they can still go full size or pop out.
 
+**A hint of a rack.** (Owner's ask, 2026-11-03.) Inside the Instrument
+and Effects tabs, each built-in instrument and effect sits in the panel
+as if it were a unit mounted in a hardware rack: a hint, not a
+photograph.
+- **What the hint is:** a thin rail down each side of the tab with the
+  unit's mounting ears and a screw mark at each corner; a front-panel
+  surface a shade apart from the dock behind it, with a slight edge
+  highlight at the top and shadow at the bottom so it reads as a plate
+  standing proud of the rack; a fixed set of unit heights (one, two or
+  three units) so panels line up like gear in a rack rather than each
+  being its own size; the name plate in the header as the maker's badge;
+  an effect chain as a row of half-width or full-width units in the same
+  rails, so the chain reads as a rack of outboard.
+- **What it is not:** no wood, brushed-metal or leather textures from
+  images, no fake reflections, no rendered cables, no 3D knob caps with
+  lighting, no vent slots for decoration. The knobs, switches and
+  displays stay the panel kit's flat drawn widgets.
+- **Per theme:** the rail, plate, edge and screw marks are theme tokens
+  (colour, line weight, corner radius, whether the plate has a surface
+  texture drawn by code), so the hint fits each look: dark anodised
+  with amber lettering in one theme, painted steel in another, a
+  ruled card in the paper theme, and so on. Each stays within the
+  theme contrast rules.
+- **What it costs:** a frame drawn once around the panel by the panel
+  kit, so every instrument and effect gets it with no per-instrument
+  work; the rails take about 16 pixels each side.
+
 ![An effect chain in the dock](ui-polish/after-effects.png)
 
 **Effect chains** show left to right in the dock's Effects tab: the
@@ -253,7 +280,8 @@ In order; threads on one line can run in parallel.
 3. **Dock and side panels**: fixed regions in the workspace; editors as
    dock tabs; floating instrument and effect windows retired.
 4. **Panel kit**: knobs, switches, modules, displays, the instrument
-   header, the effect card. Applied first to the poly-synth and the EQ.
+   header, the effect card, and the rack frame (rails, plate, unit
+   heights). Applied first to the poly-synth and the EQ.
 5. **Synth panels**, three threads of three synths each, plus the
    sampler, drum machine and slicer.
    **Effect panels** for the built-in effects.

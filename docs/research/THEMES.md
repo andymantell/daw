@@ -77,8 +77,9 @@ Colour tokens (surfaces, text, lines, accent, record, playhead, loop,
 comment pin, meter gradient, track palette), type (faces and sizes for
 labels, numerals and headings), shape (corner radii, line weights,
 spacing), waveform style (filled, outlined, single line, glowing trace),
-textures (drawn by code, no image assets) and glow (on or off, colour,
-radius). Light and dark variants share everything but the colour tokens.
+textures (drawn by code, no image assets), glow (on or off, colour,
+radius) and the rack frame for instrument and effect panels (rail, plate,
+edge and screw-mark colours, line weight; see the UI polish plan). Light and dark variants share everything but the colour tokens.
 
 ## Rules
 

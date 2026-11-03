@@ -203,6 +203,16 @@ photograph.
 - **What it costs:** a frame drawn once around the panel by the panel
   kit, so every instrument and effect gets it with no per-instrument
   work; the rails take about 16 pixels each side.
+- **Choose what is in the rack.** (Owner's ask, 2026-11-03.) Not every
+  unit has to be on show. Each unit in the rack can be **collapsed** to a
+  slim one-unit strip (its name plate, on/off and a meter, nothing else)
+  or **hidden** from the rack; a "Show in rack" menu at the rail lists
+  every unit on the track (the instrument and each effect) with a tick
+  per unit, and a Show all. Hidden units keep running; hiding changes
+  the view, not the sound. The choice is kept per track in the project,
+  so the rack opens as it was left. Collapsing and hiding are commands
+  and are reported in the selection, so assistants and the phone remote
+  see the same rack.
 
 ![An effect chain in the dock](ui-polish/after-effects.png)
 

@@ -17,7 +17,9 @@ changes if they do is listed at the end.
 | `latest.txt` | The version and every file's SHA-256 checksum. |
 | `latest.txt.minisig` | The release workflow's signature over `latest.txt`. |
 
-There is no macOS release until the Apple developer decision is made.
+macOS builds are not in the release yet. The owner chose (2026-11-05)
+unsigned macOS builds, as for Windows; adding them to the release
+workflow is planned.
 
 ## Making one
 
@@ -108,5 +110,5 @@ change:
   replace `crates/app/src/update.rs` and `latest.txt`.
 - **Linux packaging:** if Flatpak came first, the AppImage step would be
   swapped; the `.tar.gz` stays useful either way.
-- **macOS:** no release until the Apple developer decision; then a
-  signed, notarised universal app would be added.
+- **macOS:** unsigned for now (owner, 2026-11-05). Joining the paid
+  developer program later would add signing and notarisation.

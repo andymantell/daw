@@ -79,6 +79,9 @@ keeps its own types.
   cabinet impulse responses under licences that allow it, credited like
   the recorded rooms, beside the five made in code. After the polish
   pass.
+- **Unsigned macOS release builds** (decided 2026-11-05): add a macOS
+  job to the release workflow that ships an unsigned universal app, and
+  document how to allow it on first launch.
 - **Small items**, for any thread with room: keeping recent notes played
   without Record on (3.1); chaining several commands into one key
   (macros); finding and removing audio no longer used; turning a track off

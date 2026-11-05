@@ -77,6 +77,7 @@ mod note_tools;
 mod notefx;
 mod notes;
 mod notes_editor;
+mod panel_kit;
 mod patch_twenty;
 mod patterns;
 mod people;
@@ -99,6 +100,7 @@ mod spoken;
 mod start;
 mod stretch;
 mod switch;
+mod synth_panel;
 mod templates;
 mod tempo;
 mod theme;
@@ -172,6 +174,8 @@ struct Track {
     /// Note effects (Phase 4, A6), as in the project: the notes go
     /// through them before the instrument.
     note_fx: Vec<daw_project::NoteFx>,
+    /// How its units show in the rack panel (collapsed or hidden ones).
+    rack: Vec<daw_project::RackUnit>,
     /// Insert effects, in order.
     fx: Vec<FxSlot>,
     /// The track rendered through its effects, as the document has it.
@@ -265,6 +269,7 @@ impl Track {
             midi_out: None,
             note_repeat: None,
             note_fx: Vec::new(),
+            rack: Vec::new(),
             fx: Vec::new(),
             frozen: None,
             frozen_audio: None,

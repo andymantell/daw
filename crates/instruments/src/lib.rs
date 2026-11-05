@@ -199,6 +199,7 @@ impl Kind {
     /// and the assistant; none for the samplers, whose sounds are files.
     pub fn sounds(self) -> Vec<Sound> {
         match self {
+            Kind::Synth => synth::sounds(),
             Kind::ModelMono => model_mono::sounds(),
             Kind::June => june::sounds(),
             Kind::Eighty => eighty::sounds(),
@@ -414,6 +415,22 @@ impl Builtin {
             self.params.set_key(k, *v);
         }
         Some(())
+    }
+
+    /// The sound of its kind the settings are at now, if they are one
+    /// exactly (its settings over the defaults).
+    pub fn current_sound(&self) -> Option<&'static str> {
+        let now = self.params.values();
+        self.kind.sounds().into_iter().find_map(|s| {
+            let same = (self.params.list().iter().zip(&now)).all(|(p, (_, v))| {
+                let want = (s.settings.iter())
+                    .find(|(k, _)| *k == p.key)
+                    .map_or(p.default, |(_, v)| *v);
+                // The settings are kept as f32.
+                (want - v).abs() <= 1e-5 * want.abs().max(1.0)
+            });
+            same.then_some(s.name)
+        })
     }
 
     /// Sets the Lucky Seven to a sound read from a bank: every setting

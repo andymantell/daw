@@ -64,6 +64,9 @@ pub(crate) enum Icon {
     More,
     Expand,
     Collapse,
+    /// Chevrons left and right: the previous and next of a list.
+    Previous,
+    Next,
     /// The small arrow beside a button that opens its options.
     Options,
     MoveUp,
@@ -88,7 +91,7 @@ pub(crate) enum Icon {
 
 #[allow(dead_code, reason = "for the icon sheet and tests")]
 impl Icon {
-    pub(crate) const ALL: [Icon; 52] = [
+    pub(crate) const ALL: [Icon; 54] = [
         Icon::Play,
         Icon::Stop,
         Icon::Pause,
@@ -123,6 +126,8 @@ impl Icon {
         Icon::More,
         Icon::Expand,
         Icon::Collapse,
+        Icon::Previous,
+        Icon::Next,
         Icon::Options,
         Icon::MoveUp,
         Icon::MoveDown,
@@ -180,6 +185,8 @@ impl Icon {
             Icon::More => "More",
             Icon::Expand => "Expand",
             Icon::Collapse => "Collapse",
+            Icon::Previous => "Previous",
+            Icon::Next => "Next",
             Icon::Options => "Options",
             Icon::MoveUp => "Move up",
             Icon::MoveDown => "Move down",
@@ -455,6 +462,8 @@ pub(crate) fn paint(painter: &Painter, rect: Rect, icon: Icon, colour: Color32) 
         }
         Icon::Expand => pen.fill(&[(0.36, 0.26), (0.68, 0.5), (0.36, 0.74)]),
         Icon::Collapse => pen.fill(&[(0.26, 0.36), (0.74, 0.36), (0.5, 0.68)]),
+        Icon::Previous => pen.line(&[(0.62, 0.22), (0.34, 0.5), (0.62, 0.78)]),
+        Icon::Next => pen.line(&[(0.38, 0.22), (0.66, 0.5), (0.38, 0.78)]),
         Icon::Options => pen.fill(&[(0.32, 0.42), (0.68, 0.42), (0.5, 0.62)]),
         Icon::MoveUp => pen.fill(&[(0.18, 0.7), (0.5, 0.26), (0.82, 0.7)]),
         Icon::MoveDown => pen.fill(&[(0.18, 0.3), (0.82, 0.3), (0.5, 0.74)]),

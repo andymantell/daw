@@ -33,6 +33,11 @@ weight = 1.6
 [texture]
 kind = grain
 
+[rack]
+radius = 2
+line = 1
+plate = ruled
+
 [glow]
 on = no
 radius = 0
@@ -77,6 +82,12 @@ warn = #7a5000
 error = #b0301f
 texture = #00000014
 shadow = #00000000
+rail = #ddd4c2
+plate = #f5efe2
+plate_edge = #fffdf7
+plate_shadow = #c9bfab
+screw = #8a8070
+badge = #2a2622
 tracks = #0a3c8a #8a1f6e #0f6b3a #7a5000 #5a2a8a #00646b #8a3a1f #3a4a5a
 
 [dark]
@@ -119,4 +130,10 @@ warn = #e8c06a
 error = #ff8a75
 texture = #ffffff0c
 shadow = #00000000
+rail = #171412
+plate = #2a2520
+plate_edge = #3d362e
+plate_shadow = #0f0d0b
+screw = #6a6052
+badge = #ede6d6
 tracks = #8fb0ef #e39ad0 #7fc79a #e0b35c #b59bef #6cc7c9 #f0997a #a8b4c4

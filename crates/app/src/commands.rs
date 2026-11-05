@@ -215,6 +215,11 @@ pub(crate) enum Cmd {
     /// Loads a bank of sounds in the public FM bank format onto the
     /// Lucky Seven.
     LoadBank,
+    /// The instrument panel's sound buttons: the next or previous of
+    /// the instrument's sounds, and Compare.
+    NextSound,
+    PreviousSound,
+    CompareSound,
     NormaliseZones,
     InstrumentOutputBuses,
     KeepNotes,
@@ -773,6 +778,27 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Reads a bank of sounds in the public six-operator FM bank format (a system-exclusive file of 32 sounds, or one sound) onto the Lucky Seven, or onto a new Lucky Seven track")
     .words("fm bank sysex syx load import sound patch voice lucky seven"),
+    info(Cmd::NextSound, "next-sound", "Track", "Next sound", &[])
+        .hint("The instrument's next sound, of those made from its settings")
+        .words("instrument sound preset patch step forward"),
+    info(
+        Cmd::PreviousSound,
+        "previous-sound",
+        "Track",
+        "Previous sound",
+        &[],
+    )
+    .hint("The instrument's previous sound, of those made from its settings")
+    .words("instrument sound preset patch step back"),
+    info(
+        Cmd::CompareSound,
+        "compare-sound",
+        "Track",
+        "Compare sound",
+        &[],
+    )
+    .hint("Hears the instrument's sound as it was when its panel opened or a sound was chosen; again for the changes since")
+    .words("instrument sound compare a b before after edits"),
     info(
         Cmd::InstrumentWindow,
         "instrument-window",
@@ -3438,6 +3464,14 @@ impl App {
             Cmd::ClearExportQueue => self.export.queue().next().is_some(),
             Cmd::TimecodeFromFilm => !self.video.clips.is_empty(),
             Cmd::SaveTrackPreset | Cmd::SaveChainPreset => !self.tracks.is_empty(),
+            Cmd::NextSound | Cmd::PreviousSound => self.instrument_track(None).is_some_and(|i| {
+                (self.tracks[i].instrument.as_ref())
+                    .and_then(|s| s.kind())
+                    .is_some_and(|k| !k.sounds().is_empty())
+            }),
+            Cmd::CompareSound => self.instrument_track(None).is_some_and(|i| {
+                (self.tracks[i].instrument.as_ref()).is_some_and(|s| s.builtin_ref().is_some())
+            }),
             Cmd::NextHitPoint | Cmd::PrevHitPoint => !self.hit_points.is_empty(),
             Cmd::LoopSection
             | Cmd::DuplicateSection
@@ -3722,6 +3756,23 @@ impl App {
             Cmd::UnloadSfz => {
                 if let Err(e) = self.unload_sfz() {
                     self.message = Some(e);
+                }
+            }
+            Cmd::NextSound | Cmd::PreviousSound | Cmd::CompareSound => {
+                if let Some(i) = self.instrument_track(None)
+                    && let Some(slot) = &self.tracks[i].instrument
+                {
+                    match cmd {
+                        Cmd::CompareSound => crate::instrument::compare_sound(ctx, slot),
+                        Cmd::NextSound => {
+                            crate::instrument::step_sound(ctx, slot, 1);
+                        }
+                        _ => {
+                            crate::instrument::step_sound(ctx, slot, -1);
+                        }
+                    }
+                } else {
+                    self.message = Some("There is no instrument track yet.".into());
                 }
             }
             Cmd::LoadBank => {

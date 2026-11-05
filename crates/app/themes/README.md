@@ -30,6 +30,8 @@ from that theme, Valve Glow if left out.
 | `[waveform] style` | `filled`, `outline`, `line` or `trace` (a line with a glow) |
 | `[waveform] weight` | Line weight of outlined and line waveforms |
 | `[texture] kind` | `none` or `grain` (paper specks over the timeline) |
+| `[rack] radius`, `line` | Corner radius and line weight of the rack the built-in instruments and effects sit in |
+| `[rack] plate` | The surface of a rack unit's front plate, drawn by code: `plain`, `brushed` (faint hairlines across) or `ruled` (faint rules down) |
 | `[glow] on`, `radius` | A glow around the playhead and traced waveforms |
 | `[dark]`, `[light]` | The two sets of colours, below |
 
@@ -51,6 +53,7 @@ can also be `track` (the track's colour) or `track 35%` (see-through).
 | `scribble`, `scribble_text` | The name tag at the foot of each mixer strip |
 | `good`, `warn`, `error` | Messages |
 | `texture`, `shadow` | The grain's specks, and shadows |
+| `rail`, `plate`, `plate_edge`, `plate_shadow`, `screw`, `badge` | The rack: its rails at each side, a unit's front plate, the light along the plate's top edge and the shade under its bottom edge, the screw marks at its corners, and the lettering of its name plate |
 | `tracks` | Track colours, used in turn, separated by spaces |
 
 ## Fonts

@@ -100,7 +100,7 @@ fn scale_text(db: f64) -> String {
 /// Steps asked for from the keyboard and a screen reader this frame: up
 /// (and increase) positive. Locks the arrows so they step the control
 /// and don't move the focus.
-fn key_steps(ui: &Ui, r: &Response, horizontal_too: bool) -> f64 {
+pub(crate) fn key_steps(ui: &Ui, r: &Response, horizontal_too: bool) -> f64 {
     if !r.has_focus() {
         return 0.0;
     }
@@ -126,7 +126,7 @@ fn key_steps(ui: &Ui, r: &Response, horizontal_too: bool) -> f64 {
 }
 
 /// A value a screen reader asked the control to take.
-fn asked_value(ui: &Ui, id: Id) -> Option<f64> {
+pub(crate) fn asked_value(ui: &Ui, id: Id) -> Option<f64> {
     ui.input(|i| {
         use egui::accesskit::{Action, ActionData};
         i.accesskit_action_requests(id, Action::SetValue)
@@ -140,7 +140,7 @@ fn asked_value(ui: &Ui, id: Id) -> Option<f64> {
 
 /// Wheel steps over a hovered control (up positive), taken so the pane
 /// doesn't scroll as well.
-fn wheel_steps(ui: &Ui, r: &Response) -> f64 {
+pub(crate) fn wheel_steps(ui: &Ui, r: &Response) -> f64 {
     if !r.hovered() {
         return 0.0;
     }

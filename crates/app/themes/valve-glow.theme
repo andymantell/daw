@@ -31,6 +31,11 @@ weight = 1
 [texture]
 kind = none
 
+[rack]
+radius = 4
+line = 1
+plate = brushed
+
 [glow]
 on = yes
 radius = 8
@@ -75,6 +80,12 @@ warn = #f0c24b
 error = #ff7a5c
 texture = #00000000
 shadow = #00000099
+rail = #15110e
+plate = #2a211b
+plate_edge = #4a3b30
+plate_shadow = #0d0a08
+screw = #6b5847
+badge = #f0a23b
 tracks = #f0a23b #d98ab0 #86b36b #7aa6d6 #c9a86a #9ec9b8 #d6866a #b39ddb
 
 [light]
@@ -117,4 +128,10 @@ warn = #855600
 error = #b3261e
 texture = #00000000
 shadow = #5a3c1a40
+rail = #d9cbb3
+plate = #e9dcc6
+plate_edge = #fffaf1
+plate_shadow = #b9a88c
+screw = #8f7a5e
+badge = #a9600e
 tracks = #a9600e #a8437a #4f7d3a #3f6fa3 #8a6d2a #2f7d70 #b0502f #6f5aa8

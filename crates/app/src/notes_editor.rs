@@ -590,6 +590,182 @@ impl Editor {
     }
 
     /// The editor for `clip`. Returns true if the notes changed.
+    /// The editor's tools, drawn into the pane's one toolbar row: the
+    /// grid and snap, then menus for quantise, transpose and the
+    /// selected notes, the lane below the notes, and Delete. True if
+    /// notes changed.
+    pub fn toolbar(&mut self, ui: &mut egui::Ui, clip: &mut NoteClip, map: &TempoMap) -> bool {
+        let mut changed = false;
+        ui.label("Grid");
+        egui::ComboBox::from_id_salt("notes-grid")
+            .selected_text(self.grid.label())
+            .show_ui(ui, |ui| {
+                for g in Grid::ALL {
+                    // ai: note_tool.grid
+                    ui.selectable_value(&mut self.grid, g, g.label());
+                }
+            })
+            .response
+            .accessible_name("Note grid");
+        // ai: view
+        ui.toggle_value(&mut self.snap, "Snap")
+            .on_hover_text("Snap drawn and moved notes to the grid");
+        ui.menu_button("Quantise", |ui| {
+            ui.add(
+                // ai: note_tool.strength
+                egui::DragValue::new(&mut self.strength)
+                    .range(0.0..=100.0)
+                    .prefix("strength ")
+                    .suffix("%"),
+            )
+            .accessible_name("Quantise strength")
+            .on_hover_text("How far towards the grid quantising moves notes");
+            ui.add(
+                // ai: note_tool.swing
+                egui::DragValue::new(&mut self.swing)
+                    .range(0.0..=100.0)
+                    .prefix("swing ")
+                    .suffix("%"),
+            )
+            .accessible_name("Quantise swing")
+            .on_hover_text("Every second grid line is this much of a step later");
+            if ui
+                // ai: note_tool.tool
+                .button("Quantise the notes")
+                .on_hover_text("Move the selected notes (or all) towards the grid")
+                .clicked()
+            {
+                changed |= self.quantise(clip, map);
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("Move the selected notes (or all) towards the grid");
+        ui.menu_button("Transpose", |ui| {
+            ui.horizontal(|ui| {
+                for (by, label) in [(-12, "−12"), (-1, "−1"), (1, "+1"), (12, "+12")] {
+                    if ui
+                        // ai: edit_notes.change.pitch
+                        .button(label)
+                        .accessible_name(format!("Transpose {by:+} semitones"))
+                        .clicked()
+                    {
+                        changed |= self.transpose(clip, by);
+                    }
+                }
+            });
+        })
+        .response
+        .on_hover_text("Move the selected notes (or all) by semitones or octaves");
+        ui.label("Lane");
+        let mut views = vec![LaneView::Velocity, LaneView::Chance];
+        views.extend(Controller::COMMON.map(LaneView::Controller));
+        views.extend(
+            (clip.controllers.iter())
+                .filter_map(|l| Controller::from_param(&l.param))
+                .map(LaneView::Controller)
+                .filter(|v| !views_has(&Controller::COMMON, *v)),
+        );
+        views.extend(Note::EXPRESSIONS.map(LaneView::Expression));
+        egui::ComboBox::from_id_salt("notes-lane")
+            .selected_text(self.lane.label())
+            .width(130.0)
+            .show_ui(ui, |ui| {
+                for v in views {
+                    let used = match v {
+                        LaneView::Controller(c) => clip
+                            .controllers
+                            .iter()
+                            .any(|l| l.param == c.param() && !l.points.is_empty()),
+                        _ => false,
+                    };
+                    let text = if used {
+                        format!("{} •", v.label())
+                    } else {
+                        v.label()
+                    };
+                    // ai: view
+                    ui.selectable_value(&mut self.lane, v, text);
+                }
+                ui.menu_button("Other controller", |ui| {
+                    for n in 0..120u8 {
+                        let v = LaneView::Controller(Controller::Cc(n));
+                        // ai: view
+                        ui.selectable_value(&mut self.lane, v, v.label());
+                    }
+                });
+            })
+            .response
+            .accessible_name("Lane below the notes");
+        if let LaneView::Expression(kind) = self.lane
+            && self.selected.len() == 1
+        {
+            let (centre, depth) = match kind {
+                Note::PITCH => (0.0, 0.3),
+                Note::PRESSURE => (0.7, 0.3),
+                _ => (0.5, 0.4),
+            };
+            if ui
+                // ai: edit_note_lanes.expression
+                .button("Wobble")
+                .on_hover_text(
+                    "Fill the note's line with a wobble, two a beat: vibrato on its pitch",
+                )
+                .clicked()
+                && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
+            {
+                n.expression_mut(kind).points =
+                    daw_project::noteops::wobble(n.len, 2.0, centre, depth);
+                changed = true;
+            }
+            // ai: edit_note_lanes.expression
+            if ui.button("Clear line").clicked()
+                && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
+            {
+                n.expression.retain(|l| l.param != kind);
+                changed = true;
+            }
+        }
+        // The selected notes: chance and grouping, and selecting all.
+        let picked = self.selected.len();
+        let title = if picked == 0 {
+            "Selected".to_string()
+        } else {
+            format!("Selected ({picked})")
+        };
+        ui.menu_button(title, |ui| {
+            // ai: edit_notes
+            if ui.button("Select all").clicked() {
+                self.selected = clip.notes.iter().map(|n| n.id.clone()).collect();
+                ui.close();
+            }
+            ui.separator();
+            changed |= self.chance_tools(ui, clip);
+        })
+        .response
+        .on_hover_text("Select all, and the selected notes' chance and grouping");
+        if ui
+            // ai: edit_notes.remove
+            .add_enabled(!self.selected.is_empty(), egui::Button::new("Delete"))
+            .clicked()
+        {
+            changed |= self.delete_selected(clip);
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "{} notes{}",
+                clip.notes.len(),
+                if self.selected.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} selected", self.selected.len())
+                }
+            ))
+            .weak(),
+        );
+        changed
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -599,158 +775,6 @@ impl Editor {
         playing: bool,
     ) -> bool {
         let mut changed = false;
-        // Toolbar.
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Grid");
-            egui::ComboBox::from_id_salt("notes-grid")
-                .selected_text(self.grid.label())
-                .show_ui(ui, |ui| {
-                    for g in Grid::ALL {
-                        // ai: note_tool.grid
-                        ui.selectable_value(&mut self.grid, g, g.label());
-                    }
-                })
-                .response
-                .accessible_name("Note grid");
-            // ai: view
-            ui.toggle_value(&mut self.snap, "Snap")
-                .on_hover_text("Snap drawn and moved notes to the grid");
-            ui.separator();
-            ui.label("Strength");
-            ui.add(
-                // ai: note_tool.strength
-                egui::DragValue::new(&mut self.strength)
-                    .range(0.0..=100.0)
-                    .suffix("%"),
-            )
-            .accessible_name("Quantise strength")
-            .on_hover_text("How far towards the grid quantising moves notes");
-            ui.label("Swing");
-            ui.add(
-                // ai: note_tool.swing
-                egui::DragValue::new(&mut self.swing)
-                    .range(0.0..=100.0)
-                    .suffix("%"),
-            )
-            .accessible_name("Quantise swing")
-            .on_hover_text("Every second grid line is this much of a step later");
-            if ui
-                // ai: note_tool.tool
-                .button("Quantise")
-                .on_hover_text("Move the selected notes (or all) towards the grid")
-                .clicked()
-            {
-                changed |= self.quantise(clip, map);
-            }
-            ui.separator();
-            ui.label("Transpose");
-            for (by, label) in [(-12, "−12"), (-1, "−1"), (1, "+1"), (12, "+12")] {
-                if ui
-                    // ai: edit_notes.change.pitch
-                    .button(label)
-                    .accessible_name(format!("Transpose {by:+} semitones"))
-                    .clicked()
-                {
-                    changed |= self.transpose(clip, by);
-                }
-            }
-            ui.separator();
-            ui.label("Lane");
-            let mut views = vec![LaneView::Velocity, LaneView::Chance];
-            views.extend(Controller::COMMON.map(LaneView::Controller));
-            views.extend(
-                (clip.controllers.iter())
-                    .filter_map(|l| Controller::from_param(&l.param))
-                    .map(LaneView::Controller)
-                    .filter(|v| !views_has(&Controller::COMMON, *v)),
-            );
-            views.extend(Note::EXPRESSIONS.map(LaneView::Expression));
-            egui::ComboBox::from_id_salt("notes-lane")
-                .selected_text(self.lane.label())
-                .width(170.0)
-                .show_ui(ui, |ui| {
-                    for v in views {
-                        let used = match v {
-                            LaneView::Controller(c) => clip
-                                .controllers
-                                .iter()
-                                .any(|l| l.param == c.param() && !l.points.is_empty()),
-                            _ => false,
-                        };
-                        let text = if used {
-                            format!("{} •", v.label())
-                        } else {
-                            v.label()
-                        };
-                        // ai: view
-                        ui.selectable_value(&mut self.lane, v, text);
-                    }
-                    ui.menu_button("Other controller", |ui| {
-                        for n in 0..120u8 {
-                            let v = LaneView::Controller(Controller::Cc(n));
-                            // ai: view
-                            ui.selectable_value(&mut self.lane, v, v.label());
-                        }
-                    });
-                })
-                .response
-                .accessible_name("Lane below the notes");
-            if let LaneView::Expression(kind) = self.lane
-                && self.selected.len() == 1
-            {
-                let (centre, depth) = match kind {
-                    Note::PITCH => (0.0, 0.3),
-                    Note::PRESSURE => (0.7, 0.3),
-                    _ => (0.5, 0.4),
-                };
-                if ui
-                    // ai: edit_note_lanes.expression
-                    .button("Wobble")
-                    .on_hover_text(
-                        "Fill the note's line with a wobble, two a beat: vibrato on its pitch",
-                    )
-                    .clicked()
-                    && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
-                {
-                    n.expression_mut(kind).points =
-                        daw_project::noteops::wobble(n.len, 2.0, centre, depth);
-                    changed = true;
-                }
-                // ai: edit_note_lanes.expression
-                if ui.button("Clear line").clicked()
-                    && let Some(n) = (clip.notes.iter_mut()).find(|n| self.selected.contains(&n.id))
-                {
-                    n.expression.retain(|l| l.param != kind);
-                    changed = true;
-                }
-            }
-            changed |= self.chance_tools(ui, clip);
-            ui.separator();
-            // ai: edit_notes
-            if ui.button("Select all").clicked() {
-                self.selected = clip.notes.iter().map(|n| n.id.clone()).collect();
-            }
-            if ui
-                // ai: edit_notes.remove
-                .add_enabled(!self.selected.is_empty(), egui::Button::new("Delete"))
-                .clicked()
-            {
-                changed |= self.delete_selected(clip);
-            }
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} notes{}",
-                    clip.notes.len(),
-                    if self.selected.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", {} selected", self.selected.len())
-                    }
-                ))
-                .weak(),
-            );
-        });
-
         let size = vec2(ui.available_width(), ui.available_height().max(160.0));
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Group, true, "Note editor grid"));
@@ -1580,7 +1604,18 @@ impl crate::App {
         {
             self.notes_editor.edit(&key.clone());
         }
-        ui.horizontal(|ui| {
+        // One toolbar row: the clip, the key and note tools, then the
+        // editor's own tools. The rest is the notes.
+        let map = self.tempo_map();
+        let editing = (self.notes_editor.clip.clone())
+            .filter(|k| clips.iter().any(|(c, _)| c == k))
+            .filter(|k| {
+                (self.tracks.iter())
+                    .flat_map(|t| &t.note_clips)
+                    .any(|c| &c.id == k && c.pattern.is_none())
+            });
+        let mut changed = false;
+        ui.horizontal_wrapped(|ui| {
             ui.label("Clip");
             let current = (self.notes_editor.clip.as_ref())
                 .and_then(|k| clips.iter().find(|(c, _)| c == k))
@@ -1588,7 +1623,7 @@ impl crate::App {
             let mut pick = None;
             egui::ComboBox::from_id_salt("notes-clip")
                 .selected_text(current)
-                .width(220.0)
+                .width(180.0)
                 .show_ui(ui, |ui| {
                     for (k, n) in &clips {
                         if ui
@@ -1606,7 +1641,25 @@ impl crate::App {
                 self.notes_editor.edit(&k);
                 self.timeline.note_sel = Some(k);
             }
+            if self.notes_editor.clip.is_some() {
+                ui.separator();
+                changed |= self.note_tools_bar(ui);
+            }
+            if let Some(key) = &editing {
+                ui.separator();
+                let editor = &mut self.notes_editor;
+                if let Some(clip) = (self.tracks.iter_mut())
+                    .flat_map(|t| t.note_clips.iter_mut())
+                    .find(|c| &c.id == key)
+                {
+                    changed |= editor.toolbar(ui, clip, &map);
+                }
+            }
         });
+        if changed {
+            self.rebuild();
+            return;
+        }
         if clips.is_empty() {
             ui.label(
                 "No note clips yet. Add an instrument track, then double-click it on the \
@@ -1614,12 +1667,8 @@ impl crate::App {
             );
             return;
         }
-        if self.notes_editor.clip.is_some() && self.note_tools_bar(ui) {
-            return;
-        }
         self.notes_editor.scale = self.editing_scale();
         self.notes_editor.scale_mode = self.note_tools.scale_mode;
-        let map = self.tempo_map();
         let playhead = self.ctl.status().position().0;
         let playing = self.ctl.status().playing();
         let Some(key) = self.notes_editor.clip.clone() else {
@@ -1827,7 +1876,9 @@ mod app_tests {
         assert_eq!(notes.len(), 1, "a click draws one note");
         let drawn = notes[0].clone();
         assert_eq!(drawn.start % (PPQ / 4), 0, "snapped to the sixteenth grid");
-        // Transposing acts on it.
+        // Transposing, from its menu on the toolbar, acts on it.
+        h.get_by_label("Transpose").click();
+        h.run();
         h.get_by_label("Transpose +12 semitones").click();
         h.run();
         assert_eq!(
@@ -1836,6 +1887,8 @@ mod app_tests {
         );
         // Quantise with strength and swing leaves a note on the grid.
         h.get_by_label("Quantise").click();
+        h.run();
+        h.get_by_label("Quantise the notes").click();
         h.run();
         assert_eq!(
             h.state().tracks[0].note_clips[0].notes[0].start,

@@ -567,10 +567,13 @@ impl Export {
         if sections.is_empty() && self.what == What::Sections {
             self.what = What::Song;
         }
+        let screen = ctx.content_rect();
         egui::Window::new("Export")
             .open(&mut open)
             .resizable(false)
+            .collapsible(false)
             .default_width(360.0)
+            .default_pos(screen.center() - egui::vec2(180.0, 220.0))
             .show(ctx, |ui| {
                 // ai: export_mix
                 ui.radio_value(&mut self.what, What::Song, "The whole song");

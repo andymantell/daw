@@ -858,85 +858,83 @@ impl App {
         self.note_tools.learn_open = open;
     }
 
-    /// The note editor's second row: the key, scale mode and the tools.
+    /// The note editor's key and tools, drawn into the editor's one
+    /// toolbar row: the key, then menus for the scale, humanise, legato
+    /// and groove tools, each holding its settings and its button, and
+    /// Select…. True if notes changed.
     pub(crate) fn note_tools_bar(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         let mut run = None;
-        ui.horizontal_wrapped(|ui| {
-            // The clip's key, or the song's.
-            ui.label("Key");
-            let own = self.editing_clip().and_then(|c| c.scale);
-            let song = self.scale;
-            let shown = own.or(song);
-            let mut pick: Option<Option<Option<Scale>>> = None;
-            let text = match (own, song) {
-                (Some(s), _) => format!("{} (this clip)", s.label()),
-                (None, Some(s)) => format!("{} (the song's)", s.label()),
-                (None, None) => "None".into(),
-            };
-            egui::ComboBox::from_id_salt("notes-key")
-                .selected_text(text)
-                .width(170.0)
-                .show_ui(ui, |ui| {
-                    // ai: set_key.key
-                    if ui.selectable_label(shown.is_none(), "None").clicked() {
-                        pick = Some(None);
-                    }
-                    // ai: edit_clip.key
-                    if own.is_some() && song.is_some() && ui.button("Use the song's key").clicked()
-                    {
-                        pick = Some(Some(None));
-                    }
-                    for root in 0..12u8 {
-                        ui.menu_button(ROOTS[root as usize], |ui| {
-                            for kind in ScaleKind::ALL {
-                                let s = Scale::new(root, kind);
-                                // ai: set_key.key
-                                if ui.selectable_label(shown == Some(s), s.label()).clicked() {
-                                    pick = Some(Some(Some(s)));
-                                }
-                            }
-                        });
-                    }
-                })
-                .response
-                .accessible_name("Key and scale");
-            if let Some(p) = pick {
-                match p {
-                    // None: no key anywhere.
-                    None => {
-                        self.scale = None;
-                        if let Some(c) = self.editing_clip_mut() {
-                            c.scale = None;
-                        }
-                    }
-                    // The song's key again.
-                    Some(None) => {
-                        if let Some(c) = self.editing_clip_mut() {
-                            c.scale = None;
-                        }
-                    }
-                    // A key: the clip's, if it has its own, else the
-                    // song's.
-                    Some(Some(s)) => match self.editing_clip_mut() {
-                        Some(c) if c.scale.is_some() => c.scale = Some(s),
-                        _ => self.scale = Some(s),
-                    },
+        // The clip's key, or the song's.
+        ui.label("Key");
+        let own = self.editing_clip().and_then(|c| c.scale);
+        let song = self.scale;
+        let shown = own.or(song);
+        let mut pick: Option<Option<Option<Scale>>> = None;
+        let text = match (own, song) {
+            (Some(s), _) => format!("{} (this clip)", s.label()),
+            (None, Some(s)) => format!("{} (the song's)", s.label()),
+            (None, None) => "None".into(),
+        };
+        egui::ComboBox::from_id_salt("notes-key")
+            .selected_text(text)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                // ai: set_key.key
+                if ui.selectable_label(shown.is_none(), "None").clicked() {
+                    pick = Some(None);
                 }
-                changed = true;
+                // ai: edit_clip.key
+                if own.is_some() && song.is_some() && ui.button("Use the song's key").clicked() {
+                    pick = Some(Some(None));
+                }
+                for root in 0..12u8 {
+                    ui.menu_button(ROOTS[root as usize], |ui| {
+                        for kind in ScaleKind::ALL {
+                            let s = Scale::new(root, kind);
+                            // ai: set_key.key
+                            if ui.selectable_label(shown == Some(s), s.label()).clicked() {
+                                pick = Some(Some(Some(s)));
+                            }
+                        }
+                    });
+                }
+            })
+            .response
+            .accessible_name("Key and scale");
+        if let Some(p) = pick {
+            match p {
+                // None: no key anywhere.
+                None => {
+                    self.scale = None;
+                    if let Some(c) = self.editing_clip_mut() {
+                        c.scale = None;
+                    }
+                }
+                // The song's key again.
+                Some(None) => {
+                    if let Some(c) = self.editing_clip_mut() {
+                        c.scale = None;
+                    }
+                }
+                // A key: the clip's, if it has its own, else the
+                // song's.
+                Some(Some(s)) => match self.editing_clip_mut() {
+                    Some(c) if c.scale.is_some() => c.scale = Some(s),
+                    _ => self.scale = Some(s),
+                },
             }
-            if let Some(c) = self.editing_clip_mut()
-                && song.is_some()
-                && own.is_none()
-                && let Some(s) = shown
-                && ui
-                    // ai: edit_clip.key
-                    .small_button("Own key")
+            changed = true;
+        }
+        // The scale tools.
+        let mut own_key = false;
+        ui.menu_button("Scale", |ui| {
+            if song.is_some() && own.is_none() && shown.is_some() {
+                // ai: edit_clip.key
+                own_key = ui
+                    .button("Own key for this clip")
                     .on_hover_text("Give this clip a key of its own, over the song's")
-                    .clicked()
-            {
-                c.scale = Some(s);
-                changed = true;
+                    .clicked();
             }
             // ai: scale-mode
             ui.toggle_value(&mut self.note_tools.scale_mode, "Scale mode")
@@ -948,21 +946,26 @@ impl App {
                 .clicked()
             {
                 run = Some(crate::commands::Cmd::FitNotesToScale);
+                ui.close();
             }
-            ui.separator();
-            let h = &mut self.note_tools.humanise;
-            if ui
-                // ai: note_tool.tool
-                .button("Humanise")
-                .on_hover_text("Move notes a little, at random, in time, velocity and length")
-                .clicked()
-            {
-                run = Some(crate::commands::Cmd::HumaniseNotes);
-            }
+        })
+        .response
+        .on_hover_text("Scale mode, fit to scale, a key of the clip's own");
+        if own_key
+            && let Some(s) = shown
+            && let Some(c) = self.editing_clip_mut()
+        {
+            c.scale = Some(s);
+            changed = true;
+        }
+        // Humanise: its amounts and the button.
+        let h = &mut self.note_tools.humanise;
+        ui.menu_button("Humanise", |ui| {
             ui.add(
                 // ai: note_tool.timing_beats
                 egui::DragValue::new(&mut h.timing)
                     .range(0..=PPQ / 4)
+                    .prefix("timing ±")
                     .suffix(" ticks"),
             )
             .accessible_name("Humanise timing")
@@ -971,26 +974,31 @@ impl App {
                 // ai: note_tool.velocity
                 egui::DragValue::new(&mut h.velocity)
                     .range(0..=64)
-                    .prefix("vel ±"),
+                    .prefix("velocity ±"),
             )
             .accessible_name("Humanise velocity");
             ui.add(
                 // ai: note_tool.length_pct
                 egui::DragValue::new(&mut h.length_pct)
                     .range(0.0..=50.0)
-                    .prefix("len ±")
+                    .prefix("length ±")
                     .suffix("%"),
             )
             .accessible_name("Humanise length");
-            ui.separator();
             if ui
                 // ai: note_tool.tool
-                .button("Legato")
-                .on_hover_text("Make each note last until the next one starts")
+                .button("Humanise the notes")
+                .on_hover_text("Move notes a little, at random, in time, velocity and length")
                 .clicked()
             {
-                run = Some(crate::commands::Cmd::LegatoNotes);
+                run = Some(crate::commands::Cmd::HumaniseNotes);
+                ui.close();
             }
+        })
+        .response
+        .on_hover_text("Move notes a little, at random, in time, velocity and length");
+        // Legato: the gap and the button.
+        ui.menu_button("Legato", |ui| {
             ui.add(
                 // ai: note_tool.gap_beats
                 egui::DragValue::new(&mut self.note_tools.legato_gap)
@@ -1000,41 +1008,45 @@ impl App {
             )
             .accessible_name("Legato gap")
             .on_hover_text("Room left before the next note; below 0 overlaps them");
-            ui.separator();
             if ui
-                // ai: view
-                .button("Select…")
-                .on_hover_text("Choose notes by time, pitch, velocity, chance or length")
+                // ai: note_tool.tool
+                .button("Make the notes legato")
+                .on_hover_text("Make each note last until the next one starts")
                 .clicked()
             {
-                run = Some(crate::commands::Cmd::SelectNotes);
+                run = Some(crate::commands::Cmd::LegatoNotes);
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("Make each note last until the next one starts");
+        // Groove: which, how much, and apply.
+        let name = (self.note_tools.groove.as_ref())
+            .and_then(|id| self.grooves.iter().find(|g| &g.id == id))
+            .map_or("Groove".to_string(), |g| format!("Groove: {}", g.name));
+        let t = &mut self.note_tools;
+        ui.menu_button(name, |ui| {
+            for g in &self.grooves {
+                // ai: note_tool.groove
+                ui.selectable_value(&mut t.groove, Some(g.id.clone()), g.name.as_str());
+            }
+            if !self.grooves.is_empty() {
+                ui.separator();
+            }
+            // ai: note_tool.tool
+            if ui.button("New groove from these notes").clicked() {
+                run = Some(crate::commands::Cmd::GrooveFromNotes);
+                ui.close();
+            }
+            // ai: groove-from-audio
+            if ui
+                .button("New groove from the selected audio clip")
+                .clicked()
+            {
+                run = Some(crate::commands::Cmd::GrooveFromAudio);
+                ui.close();
             }
             ui.separator();
-            ui.label("Groove");
-            let name = (self.note_tools.groove.as_ref())
-                .and_then(|id| self.grooves.iter().find(|g| &g.id == id))
-                .map_or("none".to_string(), |g| g.name.clone());
-            let t = &mut self.note_tools;
-            egui::ComboBox::from_id_salt("notes-groove")
-                .selected_text(name)
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for g in &self.grooves {
-                        // ai: note_tool.groove
-                        ui.selectable_value(&mut t.groove, Some(g.id.clone()), g.name.as_str());
-                    }
-                    ui.separator();
-                    // ai: note_tool.tool
-                    if ui.button("From these notes").clicked() {
-                        run = Some(crate::commands::Cmd::GrooveFromNotes);
-                    }
-                    // ai: groove-from-audio
-                    if ui.button("From the selected audio clip").clicked() {
-                        run = Some(crate::commands::Cmd::GrooveFromAudio);
-                    }
-                })
-                .response
-                .accessible_name("Groove");
             ui.add(
                 // ai: note_tool.timing
                 egui::DragValue::new(&mut t.groove_timing)
@@ -1057,8 +1069,19 @@ impl App {
                 .clicked()
             {
                 run = Some(crate::commands::Cmd::ApplyGroove);
+                ui.close();
             }
-        });
+        })
+        .response
+        .on_hover_text("Give the notes the timing and accents of a groove");
+        if ui
+            // ai: view
+            .button("Select…")
+            .on_hover_text("Choose notes by time, pitch, velocity, chance or length")
+            .clicked()
+        {
+            run = Some(crate::commands::Cmd::SelectNotes);
+        }
         if changed {
             self.rebuild();
         }

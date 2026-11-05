@@ -720,6 +720,28 @@ impl crate::App {
         {
             self.pattern_editor.edit(&pat, Some(&key));
         }
+        // Nothing picked yet: the inspected track's pattern, the one
+        // playing at the playhead if there are several.
+        if self.pattern_editor.pattern.is_none()
+            && let Some(i) = self.inspected()
+        {
+            let at = self.ctl.status().position().0;
+            let clips: Vec<&daw_project::NoteClip> = (self.tracks[i].note_clips.iter())
+                .filter(|c| c.pattern.is_some())
+                .collect();
+            let playing = clips.iter().find(|c| {
+                let map = self.tempo_map();
+                let (a, b) = (
+                    map.frames_at(Ticks(c.start)).0,
+                    map.frames_at(Ticks(c.end())).0,
+                );
+                (a..b).contains(&at)
+            });
+            if let Some(c) = playing.or(clips.first()) {
+                let (pat, key) = (c.pattern.clone().expect("has one"), c.id.clone());
+                self.pattern_editor.edit(&pat, Some(&key));
+            }
+        }
         if self.patterns.is_empty() {
             ui.label(
                 "No patterns yet. Right click an instrument track on the timeline and choose \

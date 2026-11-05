@@ -611,10 +611,10 @@ pub(crate) fn paint_strip(ui: &Ui, rect: Rect) {
 pub(crate) const MIN_TRAVEL: f32 = 110.0;
 
 /// The fader's travel on a strip `height` tall whose other parts take
-/// `fixed`: what is left, within reason. Less than that, and the desk
-/// scrolls.
+/// `fixed`: what is left, so a full-size desk has long faders, within
+/// reason. Less than that, and the desk scrolls.
 pub(crate) fn travel(height: f32, fixed: f32) -> f32 {
-    (height - fixed).clamp(80.0, 420.0)
+    (height - fixed).clamp(80.0, 760.0)
 }
 
 #[cfg(test)]

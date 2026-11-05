@@ -342,7 +342,7 @@ impl App {
             // ai: set_instrument
             if ui
                 .add(crate::icons::IconButton::new(
-                    crate::icons::Icon::MoveUp,
+                    crate::icons::Icon::Previous,
                     "Previous sound",
                 ))
                 .clicked()
@@ -368,7 +368,7 @@ impl App {
             // ai: set_instrument
             if ui
                 .add(crate::icons::IconButton::new(
-                    crate::icons::Icon::MoveDown,
+                    crate::icons::Icon::Next,
                     "Next sound",
                 ))
                 .clicked()

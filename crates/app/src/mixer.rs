@@ -493,27 +493,36 @@ impl App {
             }
             Part::Source if t.kind.plays_notes() => {
                 let open = self.instrument_open == Some(i);
+                // The instrument's name; a short one where an input
+                // picker shares the row (an instrument that plays the
+                // track's input through itself).
+                let takes_input = t.instrument.as_ref().is_some_and(|i| i.takes_input());
                 let label = t.instrument.as_ref().map_or(
                     if t.layers.is_empty() {
                         "Instrument"
                     } else {
                         "Layers"
                     },
-                    |i| match i.kind() {
-                        None | Some(daw_instruments::Kind::Synth) => "Synth",
-                        Some(daw_instruments::Kind::Sampler) => "Sampler",
-                        Some(daw_instruments::Kind::DrumSampler) => "Drum",
-                        Some(daw_instruments::Kind::DrumMachine) => "Drums",
-                        Some(daw_instruments::Kind::Slicer) => "Slicer",
-                        Some(daw_instruments::Kind::PatchTwenty) => "Patch",
-                        Some(daw_instruments::Kind::OhOne) => "Oh-One",
-                        Some(daw_instruments::Kind::AcidThree) => "Acid",
-                        Some(daw_instruments::Kind::ModelMono) => "Mono",
-                        Some(daw_instruments::Kind::June) => "June",
-                        Some(daw_instruments::Kind::Eighty) => "Eighty",
-                        Some(daw_instruments::Kind::Oracle) => "Oracle",
-                        Some(daw_instruments::Kind::BlueWave) => "Wave",
-                        Some(daw_instruments::Kind::LuckySeven) => "Seven",
+                    |i| match (i.kind(), takes_input) {
+                        (None | Some(daw_instruments::Kind::Synth), _) => "Synth",
+                        (Some(daw_instruments::Kind::Sampler), _) => "Sampler",
+                        (Some(daw_instruments::Kind::DrumSampler), _) => "Drum sampler",
+                        (Some(daw_instruments::Kind::DrumMachine), _) => "Drum machine",
+                        (Some(daw_instruments::Kind::Slicer), _) => "Slicer",
+                        (Some(daw_instruments::Kind::PatchTwenty), true) => "Patch",
+                        (Some(daw_instruments::Kind::PatchTwenty), false) => "Patch Twenty",
+                        (Some(daw_instruments::Kind::OhOne), _) => "Oh-One",
+                        (Some(daw_instruments::Kind::AcidThree), true) => "Acid",
+                        (Some(daw_instruments::Kind::AcidThree), false) => "Acid Three",
+                        (Some(daw_instruments::Kind::ModelMono), true) => "Mono",
+                        (Some(daw_instruments::Kind::ModelMono), false) => "Model Mono",
+                        (Some(daw_instruments::Kind::June), _) => "June",
+                        (Some(daw_instruments::Kind::Eighty), _) => "Eighty",
+                        (Some(daw_instruments::Kind::Oracle), _) => "Oracle",
+                        (Some(daw_instruments::Kind::BlueWave), true) => "Wave",
+                        (Some(daw_instruments::Kind::BlueWave), false) => "Blue Wave",
+                        (Some(daw_instruments::Kind::LuckySeven), true) => "Seven",
+                        (Some(daw_instruments::Kind::LuckySeven), false) => "Lucky Seven",
                     },
                 );
                 // ai: view
@@ -530,7 +539,7 @@ impl App {
                 // An instrument that plays the track's input through
                 // itself (a guitar through a synth's filters) takes an
                 // input like an audio track; Monitor sends it in.
-                if t.instrument.as_ref().is_some_and(|i| i.takes_input()) {
+                if takes_input {
                     // ai: set_track_input
                     rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, r.inputs);
                 }
@@ -562,10 +571,18 @@ impl App {
                             "Arm for recording (R records)"
                         })
                         .changed();
+                    // Monitor as headphones, so it doesn't read as the
+                    // header's M for mute.
                     // ai: set_track_input
-                    let m = ui
-                        .add_enabled(!direct, egui::Button::selectable(t.monitor, "M"))
-                        .accessible_name(format!("Monitor {name}"));
+                    let m = ui.add_enabled(
+                        !direct,
+                        crate::icons::IconButton::new(
+                            crate::icons::Icon::Headphones,
+                            format!("Monitor {name}"),
+                        )
+                        .selected(t.monitor)
+                        .small(),
+                    );
                     if m.clicked() {
                         t.monitor = !t.monitor;
                         rebuild = true;

@@ -165,7 +165,12 @@ impl Comments {
                 {
                     self.target = None;
                 }
-            } else {
+            }
+        });
+        if self.target.is_none() {
+            // Where it goes, on a row of its own so neither choice wraps
+            // in a narrow panel.
+            ui.horizontal(|ui| {
                 // ai: add_comment
                 ui.radio_value(&mut self.on_loop, false, "At the playhead");
                 ui.add_enabled_ui(cx.loop_frames.is_some(), |ui| {
@@ -173,8 +178,8 @@ impl Comments {
                     ui.radio_value(&mut self.on_loop, true, "On the loop")
                         .on_disabled_hover_text("Turn the loop on to pin a comment to it");
                 });
-            }
-        });
+            });
+        }
         let field = ui.add(
             // ai: add_comment.text
             egui::TextEdit::multiline(&mut self.draft)

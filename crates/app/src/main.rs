@@ -51,6 +51,7 @@ mod export;
 mod freeze;
 mod fretboard;
 mod fx;
+mod fx_panel;
 mod groups;
 mod headless;
 mod history;

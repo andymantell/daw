@@ -579,6 +579,17 @@ impl Effect {
         }
     }
 
+    /// Its gain at `hz` with the settings now, in dB, for an EQ or a
+    /// filter (what their panels draw); `None` for other effects.
+    pub fn response_db(&self, hz: f64) -> Option<f64> {
+        let v: Vec<f64> = (0..self.kind.params().len()).map(|i| self.get(i)).collect();
+        match self.kind {
+            Kind::Eq => Some(eq::response_db(&v, hz)),
+            Kind::Filter => Some(filter::response_db(&v, hz)),
+            _ => None,
+        }
+    }
+
     /// How far it is turning the level down now, in dB (0 or below).
     pub fn reduction_db(&self) -> f32 {
         f32::from_bits(self.shared.reduction.load(Ordering::Relaxed))
@@ -927,6 +938,19 @@ fn flush(x: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_eq_and_a_filter_say_their_response_for_their_panels() {
+        let eq = Effect::new(Kind::Eq);
+        assert!(eq.response_db(1000.0).unwrap().abs() < 0.01, "flat");
+        eq.set(1, 6.0);
+        assert!((eq.response_db(30.0).unwrap() - 6.0).abs() < 0.5);
+        let f = Effect::new(Kind::Filter);
+        let low = f.response_db(100.0).unwrap();
+        let high = f.response_db(10_000.0).unwrap();
+        assert!(low.abs() < 1.0 && high < -40.0, "{low} {high}");
+        assert!(Effect::new(Kind::Reverb).response_db(1000.0).is_none());
+    }
     use super::*;
 
     #[test]

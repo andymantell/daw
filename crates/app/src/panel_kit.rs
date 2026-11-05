@@ -48,7 +48,7 @@ pub(crate) const STRIP: f32 = 34.0;
 /// Space between the rail and a plate, and between plates.
 const PLATE_GAP: f32 = 4.0;
 /// The ears at a plate's corners, where the screws go.
-const EAR: f32 = 14.0;
+pub(crate) const EAR: f32 = 14.0;
 
 // ----------------------------------------------------------------------
 // Knobs
@@ -690,14 +690,20 @@ pub(crate) fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (R
 pub(crate) fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) {
     let c = look.c();
     let p = ui.painter();
-    let mut fill = points.clone();
-    fill.push(pos2(rect.right() - 2.0, rect.bottom() - 2.0));
-    fill.push(pos2(rect.left() + 2.0, rect.bottom() - 2.0));
-    p.add(Shape::convex_polygon(
-        fill,
-        c.accent.gamma_multiply(0.12),
-        Stroke::NONE,
-    ));
+    // The fill under the trace, a strip down from each segment: the
+    // trace needn't be convex.
+    let bottom = rect.bottom() - 2.0;
+    let colour = c.accent.gamma_multiply(0.12);
+    let mut mesh = egui::Mesh::default();
+    for w in points.windows(2) {
+        let i = mesh.vertices.len() as u32;
+        for at in [w[0], w[1], pos2(w[1].x, bottom), pos2(w[0].x, bottom)] {
+            mesh.colored_vertex(at, colour);
+        }
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    }
+    p.add(Shape::mesh(mesh));
     p.add(Shape::line(points, Stroke::new(1.5, c.accent)));
 }
 
@@ -907,6 +913,38 @@ pub(crate) struct Rack {
     rails: Rect,
     inner: Rect,
     y: f32,
+    /// A half-width unit on the left of the row, its bottom: the next
+    /// half-width unit goes beside it.
+    left_half: Option<f32>,
+    rail_shape: egui::layers::ShapeIdx,
+}
+
+/// Paints the two rails down the sides of `rails` into `shape`.
+fn paint_rails(ui: &Ui, shape: egui::layers::ShapeIdx, rails: Rect) {
+    let look = theme::look(ui.ctx());
+    let c = look.c();
+    let radius = CornerRadius::same(look.rack_radius.min(4.0) as u8);
+    let mut shapes = Vec::new();
+    for side in [
+        Rect::from_min_size(rails.min, vec2(RAIL, rails.height())),
+        Rect::from_min_size(
+            pos2(rails.right() - RAIL, rails.top()),
+            vec2(RAIL, rails.height()),
+        ),
+    ] {
+        shapes.push(Shape::rect_filled(side, radius, c.rail));
+        // Mounting holes down the rail, three to a unit.
+        let mut y = side.top() + UNIT / 6.0;
+        while y < side.bottom() - 4.0 {
+            shapes.push(Shape::circle_filled(
+                pos2(side.center().x, y),
+                1.6,
+                theme::mix(c.rail, c.plate_shadow, 0.7),
+            ));
+            y += UNIT / 3.0;
+        }
+    }
+    ui.painter().set(shape, Shape::Vec(shapes));
 }
 
 impl Rack {
@@ -916,27 +954,8 @@ impl Rack {
         let look = theme::look(ui.ctx());
         let c = look.c();
         let rails = ui.available_rect_before_wrap();
-        let p = ui.painter();
-        let radius = CornerRadius::same(look.rack_radius.min(4.0) as u8);
-        for side in [
-            Rect::from_min_size(rails.min, vec2(RAIL, rails.height())),
-            Rect::from_min_size(
-                pos2(rails.right() - RAIL, rails.top()),
-                vec2(RAIL, rails.height()),
-            ),
-        ] {
-            p.rect_filled(side, radius, c.rail);
-            // Mounting holes down the rail, three to a unit.
-            let mut y = side.top() + UNIT / 6.0;
-            while y < side.bottom() - 4.0 {
-                p.circle_filled(
-                    pos2(side.center().x, y),
-                    1.6,
-                    theme::mix(c.rail, c.plate_shadow, 0.7),
-                );
-                y += UNIT / 3.0;
-            }
-        }
+        let rail_shape = ui.painter().add(Shape::Noop);
+        paint_rails(ui, rail_shape, rails);
         let inner = Rect::from_min_max(
             pos2(rails.left() + RAIL, rails.top()),
             pos2(rails.right() - RAIL, rails.bottom()),
@@ -997,6 +1016,8 @@ impl Rack {
                 rails,
                 inner,
                 y: rails.top() + PLATE_GAP,
+                left_half: None,
+                rail_shape,
             },
             changed,
         )
@@ -1011,10 +1032,44 @@ impl Rack {
         height: Height,
         add: impl FnOnce(&mut Ui) -> R,
     ) -> R {
+        self.unit_of(ui, id, height, false, add)
+    }
+
+    /// The width a half-width unit gets in this rack.
+    pub(crate) fn half_width(&self) -> f32 {
+        (self.inner.width() - 3.0 * PLATE_GAP) / 2.0
+    }
+
+    /// A unit as [`Rack::unit`], half the rack's width when `half`: two
+    /// half-width units share a row, left then right, as small outboard
+    /// does in a real rack.
+    pub(crate) fn unit_of<R>(
+        &mut self,
+        ui: &mut Ui,
+        id: Id,
+        height: Height,
+        half: bool,
+        add: impl FnOnce(&mut Ui) -> R,
+    ) -> R {
         let look = theme::look(ui.ctx());
         let c = look.c();
-        let top = self.y;
-        let width = self.inner.width() - 2.0 * PLATE_GAP;
+        // Beside a half-width unit, or under the row.
+        let (left, top, width) = match (half, self.left_half) {
+            (true, Some(_)) => (
+                self.inner.left() + 2.0 * PLATE_GAP + self.half_width(),
+                self.y,
+                self.half_width(),
+            ),
+            (true, None) => (self.inner.left() + PLATE_GAP, self.y, self.half_width()),
+            (false, _) => {
+                self.end_row();
+                (
+                    self.inner.left() + PLATE_GAP,
+                    self.y,
+                    self.inner.width() - 2.0 * PLATE_GAP,
+                )
+            }
+        };
         let fixed = match height {
             Height::Units(n) => Some(UNIT * f32::from(n.max(1))),
             Height::Fit => None,
@@ -1023,7 +1078,7 @@ impl Rack {
         let behind = ui.painter().add(Shape::Noop);
         let surface = ui.painter().add(Shape::Noop);
         let content = Rect::from_min_size(
-            pos2(self.inner.left() + PLATE_GAP + EAR, top + 6.0),
+            pos2(left + EAR, top + 6.0),
             vec2(width - 2.0 * EAR, fixed.map_or(f32::INFINITY, |h| h - 12.0)),
         );
         let mut child = ui.new_child(
@@ -1038,17 +1093,77 @@ impl Rack {
         }
         let out = add(&mut child);
         let h = fixed.unwrap_or_else(|| child.min_rect().height() + 12.0);
-        let plate = Rect::from_min_size(pos2(self.inner.left() + PLATE_GAP, top), vec2(width, h));
+        let plate = Rect::from_min_size(pos2(left, top), vec2(width, h));
         self.paint_plate(ui, plate, &look, behind, surface);
         // Keep the frame's layout in step: the space the plate took.
         ui.allocate_rect(plate, Sense::hover());
         let _ = c;
-        self.y = plate.bottom() + PLATE_GAP;
+        match (half, self.left_half) {
+            (true, None) => self.left_half = Some(plate.bottom()),
+            (true, Some(other)) => {
+                self.left_half = None;
+                self.y = plate.bottom().max(other) + PLATE_GAP;
+            }
+            (false, _) => self.y = plate.bottom() + PLATE_GAP,
+        }
         out
+    }
+
+    /// Ends a row a half-width unit started alone: what comes next goes
+    /// under it.
+    pub(crate) fn end_row(&mut self) {
+        if let Some(bottom) = self.left_half.take() {
+            self.y = bottom + PLATE_GAP;
+        }
+    }
+
+    /// Runs the rails down past the last unit, where the units went
+    /// lower than the area the rack started with (in a scroll area).
+    pub(crate) fn finish(&mut self, ui: &mut Ui) {
+        self.end_row();
+        if self.y > self.rails.bottom() {
+            let rails = Rect::from_min_max(self.rails.min, pos2(self.rails.right(), self.y));
+            paint_rails(ui, self.rail_shape, rails);
+            ui.allocate_rect(rails, Sense::hover());
+        }
+    }
+
+    /// A line of small text across the rack, between units: what the
+    /// units under it are part of (a layer's or a container's chain).
+    pub(crate) fn caption(
+        &mut self,
+        ui: &mut Ui,
+        text: &str,
+        indent: f32,
+        extra: impl FnOnce(&mut Ui),
+    ) {
+        self.end_row();
+        let look = theme::look(ui.ctx());
+        let at = Rect::from_min_size(
+            pos2(self.inner.left() + PLATE_GAP + indent, self.y),
+            vec2(self.inner.width() - 2.0 * PLATE_GAP - indent, 22.0),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(at)
+                .id_salt(("rack-caption", text, indent as i32))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        if !text.is_empty() {
+            child.label(
+                RichText::new(text.to_uppercase())
+                    .size(look.small)
+                    .color(look.c().text_dim),
+            );
+        }
+        extra(&mut child);
+        ui.allocate_rect(at, Sense::hover());
+        self.y = at.bottom() + PLATE_GAP;
     }
 
     /// A unit collapsed to a strip: its name plate, `extra` beside it.
     pub(crate) fn strip(&mut self, ui: &mut Ui, id: Id, name: &str, extra: impl FnOnce(&mut Ui)) {
+        self.end_row();
         let look = theme::look(ui.ctx());
         let c = look.c();
         let badge = c.badge;

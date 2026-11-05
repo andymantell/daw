@@ -122,6 +122,41 @@ fn q_of(resonance: f64) -> f64 {
     FLAT_Q * MOST_Q.powf((resonance / 100.0).clamp(0.0, 1.0))
 }
 
+/// The filter's gain at `hz` with settings `v`, in dB: what its panel
+/// draws (the analogue response the filter is made to follow).
+pub(crate) fn response_db(v: &[f64], hz: f64) -> f64 {
+    // Complex numbers as pairs.
+    fn mul(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0)
+    }
+    fn div(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+        let d = b.0 * b.0 + b.1 * b.1;
+        ((a.0 * b.0 + a.1 * b.1) / d, (a.1 * b.0 - a.0 * b.1) / d)
+    }
+    let mode = v[0].round() as i64;
+    let w = hz / v[1].max(1.0);
+    let stage = |q: f64| {
+        let k = 1.0 / q;
+        let den = (1.0 - w * w, k * w);
+        let num = match mode {
+            1 => (-w * w, 0.0),
+            2 => (0.0, k * w),
+            3 => (1.0 - w * w, 0.0),
+            _ => (1.0, 0.0),
+        };
+        div(num, den)
+    };
+    let q = q_of(v[2]);
+    let mut h = stage(q);
+    if v[3] >= 0.5 {
+        let q2 = if mode <= 1 { FLAT_Q } else { q };
+        h = mul(h, stage(q2));
+    }
+    let wet = v[4] / 100.0;
+    let y = (1.0 + (h.0 - 1.0) * wet, h.1 * wet);
+    20.0 * y.0.hypot(y.1).max(1e-6).log10()
+}
+
 impl Dsp for Filter {
     fn update(&mut self, v: &[f64]) {
         let mode = match v[0].round() as i64 {

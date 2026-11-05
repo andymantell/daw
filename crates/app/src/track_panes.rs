@@ -214,6 +214,8 @@ impl App {
                 None,
                 self.rate,
                 &[],
+                &mut self.master.rack,
+                None,
                 &mut self.message,
             );
             self.master.fx = fx;
@@ -233,6 +235,7 @@ impl App {
             .collect();
         let t = &mut self.tracks[i];
         let layers = layers::chains(&t.layers);
+        let instrument = t.instrument.as_ref().map(|s| s.name.clone());
         if self.effects.track_panel(
             ui,
             &t.name,
@@ -242,6 +245,8 @@ impl App {
             note.as_deref(),
             self.rate,
             &others,
+            &mut t.rack,
+            instrument.as_deref(),
             &mut self.message,
         ) {
             self.rebuild();

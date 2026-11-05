@@ -735,6 +735,12 @@ fn data_id() -> egui::Id {
     egui::Id::unique("daw theme")
 }
 
+/// The built-in themes, for tests of what is drawn from them.
+#[cfg(test)]
+pub(crate) fn built_in_themes() -> Vec<Arc<Theme>> {
+    BUILT_INS.clone()
+}
+
 /// The theme in use, and whether its dark colours are showing.
 pub(crate) fn look(ctx: &egui::Context) -> Look {
     let theme = ctx
@@ -1226,7 +1232,6 @@ pub(crate) fn hash(x: i32, y: i32) -> u32 {
 }
 
 /// WCAG contrast: the colours' relative luminance, and their ratio.
-#[cfg(test)]
 pub(crate) mod contrast {
     use eframe::egui::Color32;
 

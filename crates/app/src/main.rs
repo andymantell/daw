@@ -42,6 +42,7 @@ mod automation;
 mod beat_grid;
 mod blue_wave_panel;
 mod browser;
+mod character;
 mod commands;
 mod comments;
 mod comping;

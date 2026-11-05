@@ -1308,7 +1308,10 @@ fn unit_height(kind: Option<Kind>) -> Height {
             | Kind::Slicer
             | Kind::PatchTwenty
             | Kind::BlueWave
-            | Kind::LuckySeven,
+            | Kind::LuckySeven
+            | Kind::June
+            | Kind::Oracle
+            | Kind::Eighty,
         ) => Height::Units(3),
         Some(Kind::DrumMachine) => Height::Units(crate::drum_panel::UNITS),
         _ => Height::Fit,
@@ -1438,6 +1441,17 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
                         if crate::slicer_panel::panel(ui, slot, cx, shown, body) {
                             slot.renew(cx.rate, cx.pending);
                             shown.changed = true;
+                        }
+                    }
+                    Some(k @ (Kind::June | Kind::Oracle | Kind::Eighty)) if !slot.is_plugin() => {
+                        if let Some(b) = slot.builtin_ref() {
+                            let p = b.params().clone();
+                            let panel = match k {
+                                Kind::June => crate::poly_panels::june,
+                                Kind::Oracle => crate::poly_panels::oracle,
+                                _ => crate::poly_panels::eighty,
+                            };
+                            panel(ui, &p, slot.id, body);
                         }
                     }
                     _ => {

@@ -88,6 +88,7 @@ mod patterns;
 mod people;
 mod perf;
 mod pitch_edit;
+mod poly_panels;
 mod practice;
 mod presets;
 mod process;

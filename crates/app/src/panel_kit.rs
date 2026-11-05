@@ -315,6 +315,15 @@ impl<'a> Knob<'a> {
     }
 }
 
+/// A setting's value under its knob: as the setting gives it, but
+/// octaves to one place, so two side by side don't run together.
+fn readout(info: &daw_instruments::Param, v: f64) -> String {
+    match info.unit {
+        Unit::Octaves => format!("{v:+.1} oct"),
+        _ => info.text(v),
+    }
+}
+
 /// A knob for setting `i` of `p`, labelled `label` (the setting's name
 /// when `None`). True if it moved.
 pub(crate) fn param_knob(
@@ -336,7 +345,7 @@ pub(crate) fn param_knob(
         .stepped(info.stepped())
         .default(info.default)
         .label(label.unwrap_or(info.name.as_str()))
-        .readout(info.text(p.get(i)))
+        .readout(readout(info, p.get(i)))
         .size(size)
         .show(ui, (salt, i));
     let hear = match info.unit {
@@ -645,12 +654,13 @@ pub(crate) fn module<R>(
 }
 
 /// The response a filter display draws: a low-pass of so many poles, a
-/// band-pass or a high-pass.
+/// band-pass, a high-pass or a notch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FilterShape {
     Low { poles: u8 },
     Band,
     High,
+    Notch,
 }
 
 /// A screen `size` big, drawn with `draw` given its rect and painter,
@@ -735,6 +745,7 @@ pub(crate) fn filter_display(
                 }
                 FilterShape::Band => two_pole * k * w,
                 FilterShape::High => two_pole * w * w,
+                FilterShape::Notch => two_pole * (1.0 - w * w).abs(),
             };
             let db = (20.0 * gain.max(1e-6).log10()).clamp(-36.0, 18.0);
             let y = inner.bottom() - inner.height() * ((db + 36.0) / 54.0) as f32;

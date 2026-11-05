@@ -76,6 +76,7 @@ mod midi;
 mod midifile;
 mod mixer;
 mod monitor;
+mod mono_panels;
 mod notation;
 mod note_tools;
 mod notefx;

@@ -1314,6 +1314,9 @@ fn unit_height(kind: Option<Kind>) -> Height {
             | Kind::Eighty,
         ) => Height::Units(3),
         Some(Kind::DrumMachine) => Height::Units(crate::drum_panel::UNITS),
+        Some(Kind::ModelMono) => Height::Units(crate::mono_panels::MODEL_MONO_UNITS),
+        Some(Kind::AcidThree) => Height::Units(crate::mono_panels::ACID_THREE_UNITS),
+        Some(Kind::OhOne) => Height::Units(crate::mono_panels::OH_ONE_UNITS),
         _ => Height::Fit,
     }
 }
@@ -1452,6 +1455,19 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
                                 _ => crate::poly_panels::eighty,
                             };
                             panel(ui, &p, slot.id, body);
+                        }
+                    }
+                    Some(k @ (Kind::ModelMono | Kind::AcidThree | Kind::OhOne))
+                        if !slot.is_plugin() =>
+                    {
+                        if let Some(b) = slot.builtin_ref() {
+                            let p = b.params().clone();
+                            let draw = match k {
+                                Kind::ModelMono => crate::mono_panels::model_mono,
+                                Kind::AcidThree => crate::mono_panels::acid_three,
+                                _ => crate::mono_panels::oh_one,
+                            };
+                            draw(ui, &p, slot.id, body);
                         }
                     }
                     _ => {
@@ -3624,5 +3640,116 @@ mod kit_tests {
         .unwrap();
         d.h.run();
         assert!(d.h.query_by_label("Sensitivity").is_none());
+    }
+}
+
+/// The one-voice synths' panels on the kit (UI polish step 5), driven
+/// through the assistant interface and the controls themselves.
+#[cfg(test)]
+mod mono_panel_tests {
+    use egui_kittest::kittest::Queryable;
+    use serde_json::{Value, json};
+
+    use crate::agent::driver::Driver;
+    use crate::workspace::Pane;
+
+    fn value(d: &mut Driver, t: &str, param: &str) -> f64 {
+        let p = d.call("list_parameters", json!({"track": t})).unwrap();
+        (p[0]["params"].as_array().unwrap().iter())
+            .find(|p| p["param"] == param)
+            .and_then(|p| p["value"].as_f64())
+            .unwrap_or_else(|| panic!("no {param} in {p}"))
+    }
+
+    fn info(d: &mut Driver, t: &str) -> Value {
+        d.call("get_instrument", json!({"track": t})).unwrap()
+    }
+
+    /// Adds a track of `kind` and shows its instrument full size.
+    fn open(d: &mut Driver, kind: &str, index: usize) -> String {
+        let t = d
+            .call("add_track", json!({"kind": kind, "name": kind}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        d.app().instrument_open = Some(index);
+        d.app().workspace.full = Some(Pane::Instrument);
+        d.h.run();
+        d.h.run();
+        t
+    }
+
+    #[test]
+    fn the_mono_synths_panels_are_rack_units_an_assistant_sees_and_steers() {
+        let mut d = Driver::new();
+
+        // Model Mono: rotary switches for shape and footage, segments
+        // for the priority, and its sounds from the header.
+        let mono = open(&mut d, "model-mono", 0);
+        assert_eq!(info(&mut d, &mono)["rack"][0]["view"], "shown");
+        d.h.get_by_label("Osc 1 shape");
+        d.h.get_by_label("Osc 3 range");
+        d.h.get_by_label("Emphasis");
+        d.h.get_by_label("Note priority: Low").click();
+        d.h.run();
+        assert_eq!(value(&mut d, &mono, "instrument.priority"), 0.0);
+        d.h.get_by_label("Release takes the decay time: Short")
+            .click();
+        d.h.run();
+        assert_eq!(value(&mut d, &mono, "instrument.decay_release"), 0.0);
+        d.h.get_by_label("Next sound").click();
+        d.h.run();
+        assert_eq!(info(&mut d, &mono)["sound"], "Fat bass");
+        d.call(
+            "set_parameter",
+            json!({"track": mono, "param": "instrument.osc1_range", "value": 1.0}),
+        )
+        .unwrap();
+        d.h.run();
+        assert_eq!(info(&mut d, &mono)["sound"], json!(null), "edited");
+
+        // Acid Three: two units, its wave switch, its new sounds.
+        let acid = open(&mut d, "acid-three", 1);
+        d.h.get_by_label("Accent from velocity");
+        d.h.get_by_label("Waveform: Square").click();
+        d.h.run();
+        assert_eq!(value(&mut d, &acid, "instrument.wave"), 1.0);
+        d.command("next-sound");
+        d.h.run();
+        assert_eq!(info(&mut d, &acid)["sound"], "Squelch line");
+        assert!((value(&mut d, &acid, "instrument.resonance") - 0.8).abs() < 1e-6);
+        let sounds = info(&mut d, &acid)["instrument"]["sounds"].clone();
+        assert!(
+            sounds.to_string().contains("Squelch line"),
+            "the assistant sees the sounds: {sounds}"
+        );
+
+        // Oh-One: the footage and sub shape on short segments that a
+        // screen reader still hears by the setting's name.
+        let oh = open(&mut d, "oh-one", 2);
+        d.h.get_by_label("Range: 16'").click();
+        d.h.run();
+        assert_eq!(value(&mut d, &oh, "instrument.range"), 0.0);
+        d.h.get_by_label("Sub shape: 2 narrow").click();
+        d.h.run();
+        assert_eq!(value(&mut d, &oh, "instrument.sub_shape"), 2.0);
+        d.h.get_by_label("Amplifier follows: Gate").click();
+        d.h.run();
+        assert_eq!(value(&mut d, &oh, "instrument.amp"), 1.0);
+        d.h.get_by_label("LFO shape: Random");
+        d.h.get_by_label("Width moved by: Env");
+        d.command("previous-sound");
+        d.h.run();
+        assert_eq!(info(&mut d, &oh)["sound"], "Resonant sweep");
+
+        // Collapsed to a strip by tool, it has no knobs.
+        d.call(
+            "set_rack",
+            json!({"track": oh, "unit": "instrument", "view": "collapsed"}),
+        )
+        .unwrap();
+        d.h.run();
+        assert!(d.h.query_by_label("Range: 16'").is_none());
     }
 }

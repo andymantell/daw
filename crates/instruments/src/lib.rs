@@ -201,6 +201,8 @@ impl Kind {
         match self {
             Kind::Synth => synth::sounds(),
             Kind::ModelMono => model_mono::sounds(),
+            Kind::AcidThree => acid::sounds(),
+            Kind::OhOne => oh_one::sounds(),
             Kind::June => june::sounds(),
             Kind::Eighty => eighty::sounds(),
             Kind::Oracle => oracle::sounds(),

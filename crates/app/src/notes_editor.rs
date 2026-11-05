@@ -1604,6 +1604,13 @@ impl crate::App {
         {
             self.notes_editor.edit(&key.clone());
         }
+        if clips.is_empty() {
+            ui.label(
+                "No note clips yet. Add an instrument track, then double-click it on the \
+                 timeline to make one, or play a MIDI keyboard with Record on.",
+            );
+            return;
+        }
         // One toolbar row: the clip, the key and note tools, then the
         // editor's own tools. The rest is the notes.
         let map = self.tempo_map();
@@ -1658,13 +1665,6 @@ impl crate::App {
         });
         if changed {
             self.rebuild();
-            return;
-        }
-        if clips.is_empty() {
-            ui.label(
-                "No note clips yet. Add an instrument track, then double-click it on the \
-                 timeline to make one, or play a MIDI keyboard with Record on.",
-            );
             return;
         }
         self.notes_editor.scale = self.editing_scale();

@@ -527,7 +527,7 @@ impl App {
                 );
                 // ai: view
                 if ui
-                    .selectable_label(open, label)
+                    .add(egui::Button::selectable(open, label).truncate())
                     .accessible_name(format!("Instrument on {name}"))
                     .on_hover_text(
                         "The instrument that plays this track's notes, and its MIDI output",
@@ -615,7 +615,7 @@ impl App {
                 let open = self.effects.open_track == Some(i);
                 // ai: view
                 if ui
-                    .selectable_label(open, label)
+                    .add(egui::Button::selectable(open, label).truncate())
                     .accessible_name(format!("Effects on {name}"))
                     .on_hover_text(
                         t.fx.iter()
@@ -859,7 +859,7 @@ impl App {
                 let open = self.effects.open_master;
                 // ai: view
                 if ui
-                    .selectable_label(open, label)
+                    .add(egui::Button::selectable(open, label).truncate())
                     .accessible_name("Effects on the master")
                     .on_hover_text(if self.master.fx.is_empty() {
                         "Effects on the whole mix, after every track and bus".to_string()

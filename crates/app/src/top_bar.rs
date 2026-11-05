@@ -139,12 +139,16 @@ impl App {
                 {
                     self.run(&ctx, Cmd::Assistants);
                 }
-                self.status_pill(ui);
-                let keys = self.commands.keymap.text(Cmd::FindCommand);
                 // From the bar's whole width, which is the same every
                 // frame: what is left over moves as the clock counts, and
                 // the button would flip between its two forms.
                 let narrow = width < 1600.0;
+                // The pill gives way before the song's tempo and key do:
+                // in a wide-font theme at 1440 it shrinks to its icon.
+                let find_w = if narrow { 28.0 } else { 200.0 };
+                let room = ui.available_width() - find_w - 2.0 * ui.spacing().item_spacing.x;
+                self.status_pill(ui, room.clamp(ui.spacing().interact_size.y, PILL_WIDTH));
+                let keys = self.commands.keymap.text(Cmd::FindCommand);
                 let find = if narrow {
                     // ai: find-command
                     IconButton::new(Icon::Search, "Find a command")
@@ -959,7 +963,7 @@ impl App {
 
     /// One pill for the audio device, the DSP load and work going on:
     /// the most important line, and the rest when clicked.
-    fn status_pill(&mut self, ui: &mut egui::Ui) {
+    fn status_pill(&mut self, ui: &mut egui::Ui, width: f32) {
         let lines = self.status_lines(ui);
         let Some((level, first)) = lines.first().cloned() else {
             return;
@@ -975,7 +979,14 @@ impl App {
             Level::Busy => Icon::More,
             Level::Fine => Icon::Speaker,
         };
-        let text = RichText::new(&first).color(colour).small();
+        // Only the icon when there is no room for the words; they stay
+        // in the hover and the panel.
+        let tight = width < 90.0;
+        let text = if tight {
+            RichText::new("")
+        } else {
+            RichText::new(&first).color(colour).small()
+        };
         let spoken = if more > 0 {
             format!("Status: {first}, and {more} more")
         } else {
@@ -983,19 +994,30 @@ impl App {
         };
         let r = ui
             .add_sized(
-                [PILL_WIDTH, ui.spacing().interact_size.y],
+                [width, ui.spacing().interact_size.y],
                 // ai: view
                 egui::Button::new(text)
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected(self.top.open == Some(Options::Status))
                     .corner_radius(ui.spacing().interact_size.y / 2.0),
             )
-            .on_hover_text("Click for the audio device, DSP load and work going on")
+            .on_hover_text(if tight {
+                format!("{first}. Click for the audio device, DSP load and work going on")
+            } else {
+                "Click for the audio device, DSP load and work going on".to_string()
+            })
             .accessible_name(spoken);
         // Its icon, at the start, in the line's colour.
         let side = ui.text_style_height(&egui::TextStyle::Small);
         let at = egui::Rect::from_min_size(
-            egui::pos2(r.rect.left() + 6.0, r.rect.center().y - side / 2.0),
+            egui::pos2(
+                if tight {
+                    r.rect.center().x - side / 2.0
+                } else {
+                    r.rect.left() + 6.0
+                },
+                r.rect.center().y - side / 2.0,
+            ),
             egui::Vec2::splat(side),
         );
         if level == Level::Busy {

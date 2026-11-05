@@ -1410,9 +1410,20 @@ impl<H: Host> Draw<'_, H> {
                     })
                     .sum()
             });
-            let buttons = self.header_buttons_width(t, shown);
-            let room = hui.available_width() - buttons;
-            let each = (natural > room).then(|| ((room / t.panes.len() as f32) - gap).max(36.0));
+            // The buttons go first, from the right, so the tabs get
+            // exactly what they leave: their width differs by theme.
+            let whole = hui.max_rect();
+            let mut bui = hui.new_child(
+                UiBuilder::new()
+                    .max_rect(whole)
+                    .id_salt("buttons")
+                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            );
+            self.header_buttons(&mut bui, t, shown, here);
+            let buttons = whole.right() - bui.min_rect().left() + gap;
+            let room = whole.width() - buttons;
+            let each = (natural > room).then(|| ((room / t.panes.len() as f32) - gap).max(28.0));
+            hui.set_max_width(room);
             for (i, &p) in t.panes.iter().enumerate() {
                 let mut button = egui::Button::selectable(i == t.active, p.title())
                     .sense(Sense::click_and_drag());
@@ -1442,9 +1453,6 @@ impl<H: Host> Draw<'_, H> {
                     DragAndDrop::set_payload(ui.ctx(), p);
                 }
             }
-            hui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.header_buttons(ui, t, shown, here);
-            });
         }
         if !t.collapsed && body.height() > 1.0 {
             let mut bui = ui.new_child(
@@ -1491,23 +1499,6 @@ impl<H: Host> Draw<'_, H> {
         {
             self.acts.push(Act::Collapse(shown));
         }
-    }
-
-    /// How wide the header's buttons are, so the tabs know their room.
-    fn header_buttons_width(&self, t: &Tabs, shown: Pane) -> f32 {
-        let small = 22.0;
-        let mut n = 2.0; // full size, and the menu
-        if !shown.fixed() {
-            n += 1.0;
-            if self.windows {
-                n += 1.0;
-            }
-        }
-        if self.full.is_none() {
-            n += 1.0; // collapse
-        }
-        let _ = t;
-        n * small + 8.0
     }
 
     /// From the right: close, own window, full size, collapse, and the

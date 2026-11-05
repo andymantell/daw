@@ -2793,24 +2793,28 @@ impl Timeline {
                 let hi = placed.iter().map(|n| n.pitch).max().unwrap_or(60) as f32;
                 let span = (hi - lo).max(12.0);
                 let body = Rect::from_x_y_ranges(x0..=x1, full.top() + 14.0..=full.bottom() - 3.0);
-                let row = (body.height() / (span + 1.0)).max(1.0);
+                // The rows stay within the body however wide the range:
+                // a row thinner than a pixel still draws a pixel, so the
+                // highest notes can overlap, but never climb into the name.
+                let row = body.height() / (span + 1.0);
                 for n in &placed {
                     let nx0 = x_of(view.map.frames_at(Ticks(n.start)).0);
                     let nx1 = x_of(view.map.frames_at(Ticks(n.end())).0).max(nx0 + 1.0);
                     let y = body.bottom() - (n.pitch as f32 - lo + 1.0) * row;
                     clipped.rect_filled(
-                        Rect::from_x_y_ranges(nx0..=nx1, y..=(y + row.min(3.0))),
+                        Rect::from_x_y_ranges(nx0..=nx1, y..=(y + row.clamp(1.0, 3.0))),
                         0.0,
                         ink,
                     );
                 }
             }
-            // A looping clip: a notch where each time round begins.
+            // A looping clip: a notch along the bottom edge where each
+            // time round begins, clear of the name.
             for (_, _, shift) in c.spans().into_iter().skip(1) {
                 let t = c.start - c.offset + shift;
                 let x = x_of(view.map.frames_at(Ticks(t)).0);
                 clipped.line_segment(
-                    [pos2(x, full.top()), pos2(x, full.top() + 10.0)],
+                    [pos2(x, full.bottom() - 8.0), pos2(x, full.bottom())],
                     Stroke::new(1.5, ink),
                 );
             }

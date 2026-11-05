@@ -127,6 +127,73 @@ pub const GROUPS: &[(&str, usize, usize)] = &[
 /// Settings are read, and the filter set, this often: a third of a
 /// millisecond, so a 2 ms attack still sweeps the filter in steps too
 /// small to hear.
+/// Sounds made here, as settings over the defaults, so the panel's
+/// header and the assistant can step through them.
+pub fn sounds() -> Vec<crate::Sound> {
+    use crate::Sound;
+    vec![
+        Sound {
+            name: "Sub bass",
+            settings: &[
+                ("range", 0.0),
+                ("saw", 0.6),
+                ("sub", 0.9),
+                ("cutoff", 400.0),
+                ("resonance", 0.1),
+                ("filter_env", 1.5),
+                ("decay", 0.5),
+                ("sustain", 0.6),
+                ("release", 0.1),
+            ],
+        },
+        Sound {
+            name: "Plucked bass",
+            settings: &[
+                ("range", 0.0),
+                ("saw", 1.0),
+                ("sub", 0.5),
+                ("cutoff", 250.0),
+                ("resonance", 0.35),
+                ("filter_env", 3.5),
+                ("decay", 0.25),
+                ("sustain", 0.0),
+                ("release", 0.15),
+            ],
+        },
+        Sound {
+            name: "Wobbly pulse lead",
+            settings: &[
+                ("saw", 0.0),
+                ("pulse", 1.0),
+                ("pwm_source", 1.0),
+                ("pwm", 0.6),
+                ("sub", 0.0),
+                ("cutoff", 2_500.0),
+                ("resonance", 0.3),
+                ("filter_env", 1.0),
+                ("sustain", 0.7),
+                ("lfo_rate", 3.0),
+                ("portamento", 2.0),
+                ("glide", 0.08),
+            ],
+        },
+        Sound {
+            name: "Resonant sweep",
+            settings: &[
+                ("saw", 1.0),
+                ("sub", 0.3),
+                ("cutoff", 300.0),
+                ("resonance", 0.7),
+                ("filter_env", 4.0),
+                ("attack", 0.3),
+                ("decay", 1.5),
+                ("sustain", 0.3),
+                ("release", 0.6),
+            ],
+        },
+    ]
+}
+
 const CHUNK: usize = 8;
 
 /// The gate's amplifier shape: on and off in a few milliseconds, so it
@@ -726,5 +793,29 @@ mod tests {
         }
         let used = start.elapsed().as_secs_f64() / seconds;
         assert!(used < 0.05, "{:.2}% of one core", used * 100.0);
+    }
+
+    #[test]
+    fn every_sound_made_in_code_names_real_settings_and_plays() {
+        let keys: Vec<String> = params().into_iter().map(|p| p.key).collect();
+        assert!(sounds().len() >= 4);
+        for sound in sounds() {
+            let p = Arc::new(Params::new(params()));
+            for (k, v) in sound.settings {
+                let i = keys.iter().position(|key| key == k);
+                assert!(i.is_some(), "{}: no setting {k}", sound.name);
+                let param = &params()[i.unwrap()];
+                assert!(
+                    (param.min..=param.max).contains(v),
+                    "{}: {k} = {v} is out of range",
+                    sound.name
+                );
+                p.set(i.unwrap(), *v);
+            }
+            let mut s = OhOne::new(RATE as u32, p);
+            let x = render(&mut s, &[Event::note_on(0, 0, 45, 100, 0)], 48_000);
+            assert!(peak(&x) > 0.02, "{} is silent", sound.name);
+            assert!(peak(&x) <= 1.0, "{} clips", sound.name);
+        }
     }
 }

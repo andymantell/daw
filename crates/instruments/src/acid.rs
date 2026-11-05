@@ -85,6 +85,59 @@ pub const GROUPS: &[(&str, usize, usize)] = &[
     ("Character", at::DRIVE, at::LEVEL),
 ];
 
+/// Sounds made here, as settings over the defaults, so the panel's
+/// header and the assistant can step through them.
+pub fn sounds() -> Vec<crate::Sound> {
+    use crate::Sound;
+    vec![
+        Sound {
+            name: "Squelch line",
+            settings: &[
+                ("cutoff", 350.0),
+                ("resonance", 0.8),
+                ("env_mod", 0.7),
+                ("decay", 0.35),
+                ("accent", 0.7),
+            ],
+        },
+        Sound {
+            name: "Deep round bass",
+            settings: &[
+                ("wave", 1.0),
+                ("cutoff", 260.0),
+                ("resonance", 0.25),
+                ("env_mod", 0.3),
+                ("decay", 0.6),
+                ("accent", 0.4),
+            ],
+        },
+        Sound {
+            name: "Screaming lead",
+            settings: &[
+                ("cutoff", 900.0),
+                ("resonance", 0.9),
+                ("env_mod", 0.8),
+                ("decay", 0.25),
+                ("accent", 0.9),
+                ("drive", 0.6),
+                ("level", -6.0),
+            ],
+        },
+        Sound {
+            name: "Soft pluck",
+            settings: &[
+                ("wave", 1.0),
+                ("cutoff", 600.0),
+                ("resonance", 0.4),
+                ("env_mod", 0.55),
+                ("decay", 0.15),
+                ("accent", 0.3),
+                ("slide", 0.03),
+            ],
+        },
+    ]
+}
+
 /// Settings are read, and the filter set, this often.
 const CHUNK: usize = 16;
 /// The filter envelope's attack.
@@ -509,5 +562,29 @@ mod tests {
         let used = start.elapsed().as_secs_f64() / seconds;
         eprintln!("one voice: {:.2}% of one core", used * 100.0);
         assert!(used < 0.05, "{:.2}% of one core", used * 100.0);
+    }
+
+    #[test]
+    fn every_sound_made_in_code_names_real_settings_and_plays() {
+        let keys: Vec<String> = params().into_iter().map(|p| p.key).collect();
+        assert!(sounds().len() >= 4);
+        for sound in sounds() {
+            let p = Arc::new(Params::new(params()));
+            for (k, v) in sound.settings {
+                let i = keys.iter().position(|key| key == k);
+                assert!(i.is_some(), "{}: no setting {k}", sound.name);
+                let param = &params()[i.unwrap()];
+                assert!(
+                    (param.min..=param.max).contains(v),
+                    "{}: {k} = {v} is out of range",
+                    sound.name
+                );
+                p.set(i.unwrap(), *v);
+            }
+            let mut s = Acid::new(RATE as u32, p);
+            let x = render(&mut s, &[Event::note_on(0, 0, 45, 110, 0)], 1.0);
+            assert!(peak(&x) > 0.02, "{} is silent", sound.name);
+            assert!(peak(&x) <= 1.0, "{} clips", sound.name);
+        }
     }
 }

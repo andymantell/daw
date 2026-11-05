@@ -556,7 +556,7 @@ impl App {
                 // ai: set_track_input
                 rebuild |= crate::input_picker(ui, i, &t.name, &mut t.input, r.inputs);
             }
-            // Arm, monitor and practice mute; for a bus, what it is.
+            // Arm and monitor; for a bus, what it is.
             Part::Arm if t.kind.is_bus() => {
                 ui.label(
                     RichText::new(match t.kind {
@@ -569,10 +569,6 @@ impl App {
             Part::Arm => {
                 let record = theme::look(ui.ctx()).c().record;
                 let direct = r.direct;
-                // Three icons across the strip: close together, so they
-                // fit in a theme with roomy buttons.
-                ui.spacing_mut().button_padding.x = 2.0;
-                ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_enabled_ui(t.input.is_some() || t.kind.plays_notes(), |ui| {
                     // ai: set_track_input
                     let a = lit(ui, record, |ui| {
@@ -617,21 +613,6 @@ impl App {
                     })
                     .on_disabled_hover_text("Direct monitoring is on (Settings → Audio)");
                 });
-                if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
-                    // ai: set_practice.practice_mute
-                    let p = ui.add(
-                        crate::icons::IconButton::new(
-                            crate::icons::Icon::Pick,
-                            format!("Practice mute {name}"),
-                        )
-                        .selected(t.practice_mute)
-                        .small(),
-                    );
-                    if p.clicked() {
-                        t.practice_mute = !t.practice_mute;
-                    }
-                    p.on_hover_text("Practice mute: silence this part and play it yourself");
-                }
             }
             // The insert effects.
             Part::Fx => {

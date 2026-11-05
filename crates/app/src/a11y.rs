@@ -112,7 +112,6 @@ fn every_control_has_a_spoken_name() {
         "Arm Guitar for recording",
         "Bass volume",
         "Bass pan",
-        "Practice mute Guitar",
         "Effects on Bass",
         "Zoom in",
         "Undo",

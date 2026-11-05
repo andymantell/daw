@@ -99,6 +99,7 @@ mod sections;
 mod settings;
 mod share;
 mod simple_mode;
+mod slicer_panel;
 mod snapshots;
 mod spoken;
 mod start;

@@ -3,6 +3,14 @@
 Answers the owner gave to the open decisions in this folder, newest
 first. Each answer is also ticked in its feature's file.
 
+## 2026-11-05: recorded cabinets ship too
+
+The guitar amp also ships a few recorded cabinet impulse responses
+under licences that allow it, credited like the recorded rooms, beside
+the five made in code (`2.5-amp-and-cabinet.md`). Each file's licence is
+checked before it is added. This is the one exception to "no sample
+files". Not built yet: after the polish pass.
+
 ## 2026-11-05: sounds are made in code, and there are more of them
 
 No sample files ship with the built-in instruments
@@ -43,7 +51,7 @@ listening checks are not affected and stay open.
 Decisions 0012 (amp capture player), 0013 (CLAP hosting) and 0014
 (export encoders), built at risk, are confirmed.
 
-Still open and being asked one at a time: whether recorded cabinets ship, decision 0009 (notation formats), Windows signing, macOS
+Still open and being asked one at a time: decision 0009 (notation formats), Windows signing, macOS
 releases and Intel-only plugins on Apple Silicon, and public STUN
 servers. The speed and pitch choice (0.6) and decisions 0003 and 0007
 wait for listening and checks on the PC.

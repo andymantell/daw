@@ -313,11 +313,64 @@ const TO_JACKS: &[&str] = &[
     "Pit1", "Pit2", "Pit", "PW", "HP", "LP", "HP+LP", "Amp", "Rate",
 ];
 
+/// A jack on the patch-points diagram: a source the cords come from
+/// (index into [`FROM_JACKS`]) or a destination they go to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Jack {
+    From(usize),
+    To(usize),
+}
+
+/// A drag on the diagram: a new cord from a jack, or cord `n` picked up
+/// by its destination end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Drag {
+    New(Jack),
+    Move(usize),
+}
+
+/// Where jack `j` is on a diagram drawn in `rect`.
+fn jack_at(rect: egui::Rect, j: Jack) -> Pos2 {
+    let inner = rect.shrink2(vec2(6.0, 3.0));
+    let x = |n: usize, k: usize| inner.left() + inner.width() * (k as f32 + 0.5) / n as f32;
+    match j {
+        Jack::From(k) => pos2(x(FROM_JACKS.len(), k), inner.top() + 14.0),
+        Jack::To(k) => pos2(x(TO_JACKS.len(), k), inner.bottom() - 14.0),
+    }
+}
+
+/// Patches a cord from source jack `from` to destination jack `to`
+/// (both from 0): the first cord not in use, its amount set halfway up
+/// if it was at nothing. Which cord, or `None` when that pair is
+/// already patched or all four cords are in use.
+pub(crate) fn patch(p: &Params, from: usize, to: usize) -> Option<usize> {
+    let (from, to) = (from as f64 + 1.0, to as f64 + 1.0);
+    let used = |c: usize| p.get(cord_at(c, 0)) >= 1.0 && p.get(cord_at(c, 1)) >= 1.0;
+    if (0..CORDS).any(|c| used(c) && p.get(cord_at(c, 0)) == from && p.get(cord_at(c, 1)) == to) {
+        return None;
+    }
+    let c = (0..CORDS).find(|&c| !used(c))?;
+    p.set(cord_at(c, 0), from);
+    p.set(cord_at(c, 1), to);
+    if p.get(cord_at(c, 2)) == 0.0 {
+        p.set(cord_at(c, 2), 0.5);
+    }
+    Some(c)
+}
+
+/// Takes cord `c` out: from Off, to Nothing.
+pub(crate) fn unplug(p: &Params, c: usize) {
+    p.set(cord_at(c, 0), 0.0);
+    p.set(cord_at(c, 1), 0.0);
+}
+
 /// The patch points: a row of jacks the cords come from over a row they
 /// go to, with a line for each cord in use, brighter the more it
-/// carries and dashed when it turns things down. A diagram, not
-/// drawn cables.
-fn patch_display(ui: &mut Ui, size: egui::Vec2, p: &Params) {
+/// carries and dashed when it turns things down. A diagram, not drawn
+/// cables. Drag from a source jack to a destination to patch a cord;
+/// drag a cord's lower end to another destination to move it, or off
+/// the jacks to unplug it. True if a cord changed.
+fn patch_display(ui: &mut Ui, size: egui::Vec2, p: &Params, s: Salt) -> bool {
     let (rect, look) = screen(ui, size, 1, 1);
     let c = look.c();
     let font = look.font(look.small * 0.9);
@@ -326,31 +379,121 @@ fn patch_display(ui: &mut Ui, size: egui::Vec2, p: &Params) {
         |row: &[&str], k: usize| inner.left() + inner.width() * (k as f32 + 0.5) / row.len() as f32;
     let top = inner.top() + 14.0;
     let bottom = inner.bottom() - 14.0;
+    let at = |j: Jack| jack_at(rect, j);
+    // The jack nearest a point, if it is close enough to mean that one.
+    let near = |pos: Pos2| -> Option<Jack> {
+        let reach = (inner.width() / FROM_JACKS.len() as f32 * 0.5).min(14.0);
+        (0..FROM_JACKS.len())
+            .map(Jack::From)
+            .chain((0..TO_JACKS.len()).map(Jack::To))
+            .map(|j| (j, at(j).distance(pos)))
+            .filter(|(_, d)| *d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(j, _)| j)
+    };
+    let cords: Vec<(usize, usize, usize, f32)> = (0..CORDS)
+        .filter_map(|cord| {
+            let from = p.get(cord_at(cord, 0)) as usize;
+            let to = p.get(cord_at(cord, 1)) as usize;
+            (from > 0 && to > 0).then(|| (cord, from - 1, to - 1, p.get(cord_at(cord, 2)) as f32))
+        })
+        .collect();
+
+    // ai: set_parameter
+    let r = ui
+        .interact(
+            rect,
+            ui.scope_id().with((s, "patch-points")),
+            egui::Sense::drag(),
+        )
+        .on_hover_text(
+            "Drag from a jack on top to one below to patch a cord; drag a cord's lower \
+             end to another jack to move it, or off the jacks to unplug it",
+        );
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Group, true, "Patch points"));
+    let drag_id = ui.scope_id().with((s, "patch-drag"));
+    let mut changed = false;
+    if r.drag_started()
+        && let Some(start) = r.interact_pointer_pos().and_then(near)
+    {
+        // A destination with a cord in it picks the cord up (the last
+        // patched there); any other jack starts a new cord.
+        let drag = match start {
+            Jack::To(k) => cords
+                .iter()
+                .rev()
+                .find(|cd| cd.2 == k)
+                .map_or(Drag::New(start), |cd| Drag::Move(cd.0)),
+            Jack::From(_) => Drag::New(start),
+        };
+        ui.ctx().data_mut(|d| d.insert_temp(drag_id, drag));
+    }
+    let drag: Option<Drag> = ui.ctx().data(|d| d.get_temp(drag_id));
+    let pointer = r.interact_pointer_pos().or(r.hover_pos());
+    if r.drag_stopped() {
+        ui.ctx().data_mut(|d| d.remove::<Drag>(drag_id));
+        let end = pointer.and_then(near);
+        match (drag, end) {
+            (Some(Drag::New(Jack::From(f))), Some(Jack::To(t)))
+            | (Some(Drag::New(Jack::To(t))), Some(Jack::From(f))) => {
+                changed |= patch(p, f, t).is_some();
+            }
+            (Some(Drag::Move(cord)), Some(Jack::To(t))) => {
+                if p.get(cord_at(cord, 1)) as usize != t + 1 {
+                    p.set(cord_at(cord, 1), (t + 1) as f64);
+                    changed = true;
+                }
+            }
+            (Some(Drag::Move(cord)), Some(Jack::From(_)) | None) => {
+                unplug(p, cord);
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    if r.hovered() && pointer.and_then(near).is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+
     let painter = ui.painter();
-    for (row, y, label_y, align) in [
-        (FROM_JACKS, top, inner.top(), egui::Align2::CENTER_TOP),
+    let lit = drag.and(pointer).and_then(near);
+    for (row, y, label_y, align, side) in [
+        (
+            FROM_JACKS,
+            top,
+            inner.top(),
+            egui::Align2::CENTER_TOP,
+            Jack::From as fn(usize) -> Jack,
+        ),
         (
             TO_JACKS,
             bottom,
             inner.bottom(),
             egui::Align2::CENTER_BOTTOM,
+            Jack::To as fn(usize) -> Jack,
         ),
     ] {
         for (k, name) in row.iter().enumerate() {
             let x = jack(row, k);
-            painter.circle(pos2(x, y), 3.0, c.meter_bg, Stroke::new(1.0, c.text_dim));
+            let ring = if lit == Some(side(k)) {
+                Stroke::new(2.0, c.accent)
+            } else {
+                Stroke::new(1.0, c.text_dim)
+            };
+            painter.circle(pos2(x, y), 3.0, c.meter_bg, ring);
             painter.text(pos2(x, label_y), align, *name, font.clone(), c.text_dim);
         }
     }
-    for cord in 0..CORDS {
-        let from = p.get(cord_at(cord, 0)) as usize;
-        let to = p.get(cord_at(cord, 1)) as usize;
-        let amount = p.get(cord_at(cord, 2)) as f32;
-        if from == 0 || to == 0 {
-            continue;
-        }
-        let a = pos2(jack(FROM_JACKS, from - 1), top);
-        let b = pos2(jack(TO_JACKS, to - 1), bottom);
+    let moving = match drag {
+        Some(Drag::Move(cord)) => Some(cord),
+        _ => None,
+    };
+    for &(cord, from, to, amount) in &cords {
+        let a = at(Jack::From(from));
+        let b = match (moving == Some(cord), pointer) {
+            (true, Some(pos)) => pos,
+            _ => at(Jack::To(to)),
+        };
         let colour = theme::mix(c.accent, c.meter_bg, 0.75 - 0.75 * amount.abs().min(1.0));
         let stroke = Stroke::new(2.0, colour);
         if amount < 0.0 {
@@ -369,12 +512,19 @@ fn patch_display(ui: &mut Ui, size: egui::Vec2, p: &Params) {
             c.text,
         );
     }
+    // A new cord follows the pointer until it is dropped.
+    if let (Some(Drag::New(start)), Some(pos)) = (drag, pointer) {
+        let a = at(start);
+        painter.line_segment([a, pos], Stroke::new(2.0, c.accent));
+        painter.circle_filled(a, 2.5, c.accent);
+    }
+    changed
 }
 
 fn patch_points(ui: &mut Ui, p: &Params, s: Salt, height: f32) -> bool {
     let mut changed = false;
     module(ui, "Patch points", vec2(318.0, height), |ui| {
-        patch_display(ui, vec2(ui.available_width(), 58.0), p);
+        changed |= patch_display(ui, vec2(ui.available_width(), 58.0), p, s);
         for pair in [[0, 1], [2, 3]] {
             ui.horizontal(|ui| {
                 for cord in pair {
@@ -425,8 +575,26 @@ mod tests {
     use egui_kittest::kittest::Queryable;
     use serde_json::json;
 
+    use super::{Jack, jack_at, patch, unplug};
     use crate::agent::driver::Driver;
     use crate::workspace::Pane;
+    use daw_instruments::params::Params;
+    use daw_instruments::patch_twenty::{CORDS, cord_at, params};
+
+    #[test]
+    fn cords_patch_into_the_first_free_one_and_unplug() {
+        let p = Params::new(params());
+        // Cord 1 comes patched (keyboard to the low-pass).
+        assert_eq!(patch(&p, 6, 5), None, "already patched");
+        assert_eq!(patch(&p, 0, 0), Some(1));
+        assert_eq!(p.get(cord_at(1, 0)), 1.0);
+        assert_eq!(p.get(cord_at(1, 2)), 0.5);
+        assert_eq!(patch(&p, 1, 1), Some(2));
+        assert_eq!(patch(&p, 2, 2), Some(3));
+        assert_eq!(patch(&p, 3, 3), None, "all {CORDS} in use");
+        unplug(&p, 2);
+        assert_eq!(patch(&p, 3, 3), Some(2));
+    }
 
     fn value(d: &mut Driver, t: &str, param: &str) -> f64 {
         let p = d.call("list_parameters", json!({"track": t})).unwrap();
@@ -438,7 +606,16 @@ mod tests {
 
     #[test]
     fn patch_twenty_is_a_three_unit_panel_an_assistant_sees_and_steers() {
-        let mut d = Driver::new();
+        // As wide as the owner's screen, so the patch points are on it.
+        let mut h = egui_kittest::Harness::builder()
+            .with_size([1920.0, 1200.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| crate::App::new(Vec::new()));
+        h.run();
+        let mut d = Driver {
+            h,
+            access: crate::agent::Access::EditExport,
+        };
         let t = d
             .call("add_track", json!({"kind": "patch-twenty"}))
             .unwrap()["track"]
@@ -485,6 +662,37 @@ mod tests {
         .unwrap();
         d.h.run();
         d.h.get_by_label("Cord 2 to");
+
+        // Patching by dragging on the diagram: from the envelope 2 jack
+        // to the pulse width, then that cord's end moved to the
+        // amplifier, then pulled off to unplug it.
+        let drag = |d: &mut Driver, from: Jack, to: Jack| {
+            let rect = d.h.get_by_label("Patch points").rect();
+            let (a, b) = (jack_at(rect, from), jack_at(rect, to));
+            d.h.hover_at(a);
+            d.h.run_steps(2);
+            d.h.drag_at(a);
+            d.h.run_steps(2);
+            d.h.hover_at(a + (b - a) * 0.5);
+            d.h.run_steps(2);
+            d.h.hover_at(b);
+            d.h.run_steps(2);
+            d.h.drop_at(b);
+            d.h.run_steps(2);
+        };
+        drag(&mut d, Jack::From(3), Jack::To(3));
+        assert_eq!(
+            value(&mut d, &t, "patch2_from"),
+            4.0,
+            "envelope 2, on the first free cord"
+        );
+        assert_eq!(value(&mut d, &t, "patch2_to"), 4.0, "pulse width");
+        assert_eq!(value(&mut d, &t, "patch2_amount"), 0.5);
+        drag(&mut d, Jack::To(3), Jack::To(7));
+        assert_eq!(value(&mut d, &t, "patch2_to"), 8.0, "amplifier");
+        drag(&mut d, Jack::To(7), Jack::From(0));
+        assert_eq!(value(&mut d, &t, "patch2_from"), 0.0, "unplugged");
+        assert_eq!(value(&mut d, &t, "patch2_to"), 0.0);
         // The unit is the kit's three units high, in the rack the
         // assistant reads.
         let info = d.call("get_instrument", json!({"track": t})).unwrap();

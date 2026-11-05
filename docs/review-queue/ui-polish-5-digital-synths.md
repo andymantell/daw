@@ -20,8 +20,10 @@ hold-ADSR, both drawn); Amplifier and input (what the amplifier follows,
 drone, level, the external input and its trigger); **Patch points**, a
 small diagram of the jacks the four cords come from and go to, with a
 line for each cord in use (brighter the more it carries, dashed when it
-turns things down), and each cord's from, to and amount under it;
-Playing.
+turns things down), and each cord's from, to and amount under it.
+Drag from a jack on top to one below to patch a cord (the first free
+one of the four, at half amount); drag a cord's lower end to another
+jack to move it, or off the jacks to unplug it. Then Playing.
 
 **Blue Wave** (`crates/app/src/blue_wave_panel.rs`): **Wavetable**, the
 table and character, with the waves oscillators A and B read drawn from
@@ -74,8 +76,8 @@ to the rack), each in the dock at 1440 × 900, and one per theme
 `ui-polish/digital-synths/`.
 
 - [ ] The three panels read as three instruments, in the kit's grammar.
-- [ ] Patch points as a jack diagram (not drawn cables), with the cords'
-      drop-downs under it.
-- [ ] Lucky Seven: six operators side by side plus one in full, picked
-      with "Edit", rather than all 126 operator settings on show.
+- [x] Patch points as a jack diagram, patched by click and drag
+      (owner, 2026-11-05: "Click and drag").
+- [x] Lucky Seven: six operators side by side plus one in full, picked
+      with "Edit" (owner chose keep it as built, 2026-11-05).
 - [ ] Sideways scrolling at 1440 × 900 in the dock is acceptable.

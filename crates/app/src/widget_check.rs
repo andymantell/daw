@@ -75,7 +75,10 @@ fn before_tests(src: &str) -> &str {
 /// For one file: the controls without a mark, and the names marks give
 /// (with their line numbers).
 fn scan(src: &str) -> (usize, Vec<(usize, String)>) {
-    let lines: Vec<&str> = before_tests(src).lines().collect();
+    // A checkout on Windows may have CRLF line ends, which would hide
+    // the tests' start from `before_tests`.
+    let src = src.replace("\r\n", "\n");
+    let lines: Vec<&str> = before_tests(&src).lines().collect();
     let mut unmarked = 0;
     let mut names = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -205,6 +208,13 @@ mod tests {
         let tests =
             "ui.button(\"a\"); // ai: add-bus\n#[cfg(test)]\nmod tests {\n ui.button(\"b\");\n}";
         assert_eq!(scan(tests), (0, vec![(1, "add-bus".to_string())]));
+    }
+
+    #[test]
+    fn crlf_line_ends_still_find_where_the_tests_start() {
+        let src = "fn a(ui: &mut Ui) {\r\n    // ai: view\r\n    ui.button(\"x\");\r\n}\r\n\r\n#[cfg(test)]\r\nmod tests {\r\n    fn b(ui: &mut Ui) {\r\n        ui.button(\"y\");\r\n    }\r\n}\r\n";
+        let (unmarked, _) = scan(src);
+        assert_eq!(unmarked, 0);
     }
 
     #[test]

@@ -602,7 +602,7 @@ impl<'a> Switch<'a> {
                 }
                 SwitchStyle::Slide => {
                     if on {
-                        // The block, raised, with a line across it.
+                        // The block, raised.
                         let block = seg.shrink(2.0);
                         p.rect_filled(block.translate(vec2(0.0, 1.0)), radius, c.shadow);
                         p.rect(
@@ -611,13 +611,6 @@ impl<'a> Switch<'a> {
                             c.fader_cap,
                             Stroke::new(1.0, c.plate_shadow),
                             StrokeKind::Inside,
-                        );
-                        p.line_segment(
-                            [
-                                pos2(block.center().x, block.top() + 3.0),
-                                pos2(block.center().x, block.bottom() - 3.0),
-                            ],
-                            Stroke::new(1.0, c.fader_line),
                         );
                         c.fader_line
                     } else if r.hovered() {

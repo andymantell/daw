@@ -66,7 +66,9 @@ keeps its own types.
 - **Wiping deleted lesson notes and tab** (decided 2026-11-05): deleting
   a tab block wipes it from the saved file, its backup and bundles, as
   comments already are, and deleted or rewritten lesson-note text is
-  blanked from the document's history. After the polish pass. See
+  blanked from the document's history. A deleted take's audio file is
+  removed from the project folder, backups and bundles once nothing uses
+  it (not undo, not a snapshot). After the polish pass. See
   [owner-answers.md](../review-queue/owner-answers.md).
 - **Effects in the templates** (decided 2026-11-05): Empty and Guitar
   lesson ship (Band demo removed); the Guitar lesson tracks get a light

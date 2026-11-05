@@ -3,6 +3,14 @@
 Answers the owner gave to the open decisions in this folder, newest
 first. Each answer is also ticked in its feature's file.
 
+## 2026-11-05: deleted takes lose their audio
+
+When a recorded take is deleted, its audio file is removed from the
+project folder, backups and bundles once nothing uses it any more: after
+a save, when undo can no longer bring it back, and when no snapshot
+still refers to it (`1.8-privacy.md`). Not built yet: after the polish
+pass.
+
 ## 2026-11-05: a font with the sharp and flat signs
 
 Note names keep ♯ and ♭; an open-licence font that has them is bundled

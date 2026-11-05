@@ -48,6 +48,17 @@ and drift.
 
 ![A built-in synth's window over the arrangement](docs/screenshots/synth.png)
 
+## A demo project
+
+`examples/house-demo` is a layered house track (124 bpm, A minor) that
+shows the app off: drum machine patterns, every built-in synth, a sung
+phrase (a synthesised stand-in) with its pitch found, buses, sends,
+effects, automation, sections, a loop and comments. Open it with File →
+Open project… and pick the folder. It was built entirely through the
+assistant interface by `crates/app/src/demo_song.rs`, which doubles as
+a test that an assistant can make a whole song; running that test's
+`write_house_demo` rebuilds the folder.
+
 ## Running it on Windows
 
 **Ready-made build:** every push to `main` builds `daw.exe` in CI. Open

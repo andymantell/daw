@@ -35,7 +35,10 @@ pub(crate) const TOOLS: &[Tool] = &[
                       sound bank loaded (load-synth-bank), the bank's sounds with their \
                       settings; for a sampler playing an \
                       SFZ library, the library: its keys, articulations and controls \
-                      (mic levels and the like, each a setting); the sound the settings \
+                      (mic levels and the like, each a setting); for a sampler on its \
+                      own sound files, its zones (each with its sound, keys, velocities, \
+                      loop and round-robin turn, the settings instrument.zoneN.*) and the \
+                      one its panel shows; the sound the settings \
                       are at now, if one of the listed ones; and its rack: each unit \
                       (the instrument, then each effect) with how it shows (set_rack). \
                       Its settings are in list_parameters.",
@@ -393,6 +396,11 @@ impl App {
                     "problems": l.problems,
                 })
             });
+        let zones = (t.instrument.as_ref())
+            .filter(|s| s.kind() == Some(daw_instruments::Kind::Sampler) && !s.is_plugin())
+            .and_then(|s| s.builtin_ref().map(|b| (s, b)))
+            .filter(|(_, b)| b.library().is_none())
+            .map(|(s, b)| crate::sampler_panel::zones_value(b, s.zone));
         let bank = (t.instrument.as_ref())
             .and_then(|s| s.bank.as_ref())
             .map(|b| {
@@ -427,6 +435,7 @@ impl App {
             "stopped": stopped(t.instrument.as_ref()),
             "bank": bank,
             "library": library,
+            "zones": zones,
             "layers": layers,
             "outputs": outputs,
         }))

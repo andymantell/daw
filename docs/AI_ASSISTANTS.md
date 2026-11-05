@@ -137,7 +137,9 @@ assistant finds them for itself. In outline:
   sampler (`file_command` with `load-sfz`, or `set_sound` with the
   slot `sfz`; `get_instrument` then lists its keys, articulations and
   controls, and each control, such as a mic level, is a setting,
-  `instrument.ccN`), `edit_layer` (add, remove,
+  `instrument.ccN`; on its own sound files instead, `get_instrument`
+  lists its `zones`, each with its sound, keys, velocities, loop and
+  round-robin turn, and the zone its panel shows), `edit_layer` (add, remove,
   reorder, switch on or off, instrument, level, pan, note and velocity
   ranges, transpose, and its instrument's settings), `edit_pad_effect`
   (a drum machine pad's effects) and `set_instrument_output` (an

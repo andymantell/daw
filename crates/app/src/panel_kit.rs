@@ -598,7 +598,7 @@ pub(crate) enum FilterShape {
 
 /// A screen `size` big, drawn with `draw` given its rect and painter,
 /// over a faint grid of `columns` by `rows`.
-fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (Rect, theme::Look) {
+pub(crate) fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (Rect, theme::Look) {
     let look = theme::look(ui.ctx());
     let c = look.c();
     let (_, rect) = ui.allocate_space(size);

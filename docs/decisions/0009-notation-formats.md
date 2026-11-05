@@ -1,6 +1,6 @@
 # 0009 — Notation data model and tab/drum formats
 
-- **Status:** Proposed (implementation in Roadmap Phase 3.8)
+- **Status:** Accepted by the owner 2026-11-05 (built in Roadmap Phase 3.8)
 - **Date:** 2026-10-24
 
 ## Context
@@ -8,7 +8,7 @@ Guitar/bass tab and drum notation are first-class timeline items, used to
 recreate songs. They need a data model that stays in sync with playback and
 MIDI, and import/export formats people actually have.
 
-## Decision (proposed)
+## Decision
 - **Model:** notation is a view of a track's note data. Notes carry optional
   performance attributes (string, fret, techniques, drum articulation). The
   track holds a tuning (tab) or drum map (drums). No separate notation

@@ -1,6 +1,6 @@
 # 0014 — Encoders for FLAC, MP3 and Opus export
 
-- **Status:** Accepted (built at risk; the owner can still reverse it)
+- **Status:** Accepted (built at risk; confirmed by the owner 2026-11-05)
 - **Date:** 2026-10-30
 - **Deciders:** Built while the owner was away (roadmap 3.6, Phase 3 plan item A5); the plan asked for the encoders' licences to be checked against GPLv3 first
 

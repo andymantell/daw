@@ -33,20 +33,20 @@ its other instances are outlined in the group's colour).
 
 ## Decisions to accept
 
-- [ ] **What linked copies share.** Note clips: notes, controller
+- [x] **What linked copies share.** Note clips: notes, controller
       lanes, loop, key and name. Audio clips: the audio, name, gain,
       volume line, transpose and pitch edits. Each copy keeps its own
       place, length, trim, fades, stretch markers and mute, so a copy
       can be split, trimmed or faded without touching the others (a
       split would otherwise remove the fades of every copy).
-- [ ] **Copies are linked by default** everywhere a clip is copied
+- [x] **Copies are linked by default** everywhere a clip is copied
       (Duplicate, paste, `duplicate_clip`); `linked: false` and
       "Duplicate as a separate copy" make one of its own. Duplicating a
       section or a track version copies clips as they are (a linked
       clip stays in its group).
-- [ ] **Pattern clips** keep linking through their pattern, as before,
+- [x] **Pattern clips** keep linking through their pattern, as before,
       and are drawn as a group the same way.
-- [ ] **How a group is drawn:** a colour per group, picked from it, as a
+- [x] **How a group is drawn:** a colour per group, picked from it, as a
       band along the top of each instance, with a link mark and the
       number of instances where the clip is wide enough. The other
       instances of a picked clip are outlined in that colour.

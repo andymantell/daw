@@ -1294,7 +1294,9 @@ pub(crate) fn step_sound(ctx: &egui::Context, slot: &Slot, by: i32) -> Option<&'
 /// kit; `Fit` for one still on its settings grid.
 fn unit_height(kind: Option<Kind>) -> Height {
     match kind {
-        Some(Kind::Synth | Kind::Sampler) => Height::Units(3),
+        Some(
+            Kind::Synth | Kind::Sampler | Kind::PatchTwenty | Kind::BlueWave | Kind::LuckySeven,
+        ) => Height::Units(3),
         _ => Height::Fit,
     }
 }
@@ -1403,12 +1405,47 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
                             shown.changed = true;
                         }
                     }
+                    Some(Kind::PatchTwenty) if !slot.is_plugin() => {
+                        if let Some(b) = slot.builtin_ref() {
+                            let p = b.params().clone();
+                            crate::patch_twenty_panel::patch_twenty(ui, &p, slot.id, body);
+                        }
+                    }
+                    Some(Kind::BlueWave) if !slot.is_plugin() => {
+                        if let Some(b) = slot.builtin_ref() {
+                            let p = b.params().clone();
+                            crate::blue_wave_panel::blue_wave(ui, &p, slot.id, body);
+                        }
+                    }
+                    Some(Kind::LuckySeven) if !slot.is_plugin() => {
+                        lucky_seven_panel(ui, slot, body, shown);
+                    }
                     _ => {
                         slot_controls(ui, slot, instrument_outputs, cx, shown);
                     }
                 }
             });
         }
+    }
+}
+
+/// Lucky Seven on its panel, with the bank it has loaded.
+fn lucky_seven_panel(ui: &mut egui::Ui, slot: &mut Slot, body: f32, shown: &mut Shown) {
+    let bank = slot.bank.clone();
+    let Some(b) = slot.builtin_ref() else {
+        return;
+    };
+    let p = b.params().clone();
+    let mut choose = None;
+    let asked =
+        crate::lucky_seven_panel::lucky_seven(ui, &p, slot.id, body, bank.as_deref(), &mut choose);
+    if let (Some(k), Some(bank)) = (choose, &bank)
+        && let Some(v) = bank.voices.get(k)
+    {
+        b.set_bank_voice(v);
+    }
+    if asked.load_bank {
+        shown.cmd = Some(Cmd::LoadBank);
     }
 }
 

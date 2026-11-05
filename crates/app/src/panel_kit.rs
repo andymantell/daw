@@ -536,6 +536,63 @@ pub(crate) fn param_switch(
     changed.is_some()
 }
 
+/// A switch for choice (or on/off) setting `i` of `p` with shorter
+/// `labels` on its segments than the setting's own names, for a panel
+/// short of room; a screen reader still hears the setting's name. True
+/// if it changed.
+pub(crate) fn param_switch_as(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    p: &Params,
+    i: usize,
+    labels: &[&str],
+) -> bool {
+    let Some(info) = p.list().get(i) else {
+        return false;
+    };
+    let chosen = (p.get(i) - info.min).round().max(0.0) as usize;
+    // ai: set_parameter
+    let picked = Switch::new(info.name.as_str(), labels, chosen)
+        .small()
+        .show(ui, (salt, i));
+    if let Some(k) = picked {
+        p.set(i, info.min + k as f64);
+    }
+    picked.is_some()
+}
+
+/// A drop-down `width` wide for choice setting `i` of `p`, for a long
+/// list in a narrow module. True if it changed.
+pub(crate) fn param_combo(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug,
+    p: &Params,
+    i: usize,
+    width: f32,
+) -> bool {
+    let Some(info) = p.list().get(i) else {
+        return false;
+    };
+    let v = p.get(i);
+    let mut c = v as usize;
+    let mut moved = false;
+    egui::ComboBox::from_id_salt(ui.scope_id().with((salt, i)))
+        .width(width)
+        .selected_text(RichText::new(info.text(v)).size(theme::look(ui.ctx()).small))
+        .show_ui(ui, |ui| {
+            for (k, name) in info.choices.iter().enumerate() {
+                // ai: set_parameter
+                moved |= ui.selectable_value(&mut c, k, *name).changed();
+            }
+        })
+        .response
+        .accessible_name(info.name.as_str());
+    if moved {
+        p.set(i, c as f64);
+    }
+    moved
+}
+
 // ----------------------------------------------------------------------
 // Modules and displays
 
@@ -630,7 +687,7 @@ pub(crate) fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (R
 }
 
 /// Draws `points` (already in the rect) as a trace, filled beneath.
-fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) {
+pub(crate) fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) {
     let c = look.c();
     let p = ui.painter();
     let mut fill = points.clone();
@@ -765,7 +822,16 @@ pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Opt
                     .font(look.font(look.heading))
                     .color(c.badge),
             );
-            ui.label(RichText::new(h.about).size(look.small).color(c.text_dim));
+            // The line on what it is gives way to the buttons: cut short
+            // (the whole of it on hover) when the plate is narrow.
+            let reserve = 150.0 + if h.has_sounds { 240.0 } else { 0.0 } + 400.0;
+            let room = (ui.available_width() - reserve).max(60.0);
+            ui.allocate_ui(vec2(room, HEADER), |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(h.about).size(look.small).color(c.text_dim))
+                        .truncate(),
+                );
+            });
             if h.has_sounds {
                 ui.add_space(8.0);
                 ui.label(RichText::new("Sound").size(look.small).color(c.text_dim));

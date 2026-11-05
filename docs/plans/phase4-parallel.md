@@ -63,6 +63,11 @@ keeps its own types.
   owner's network test (0.5).
 - **Connectivity hardening** (Phase 4): better connection setup,
   diagnostics and fallbacks. Waits on the same test.
+- **Wiping deleted lesson notes and tab** (decided 2026-11-05): deleting
+  a tab block wipes it from the saved file, its backup and bundles, as
+  comments already are, and deleted or rewritten lesson-note text is
+  blanked from the document's history. After the polish pass. See
+  [owner-answers.md](../review-queue/owner-answers.md).
 - **Small items**, for any thread with room: keeping recent notes played
   without Record on (3.1); chaining several commands into one key
   (macros); finding and removing audio no longer used; turning a track off

@@ -115,30 +115,6 @@ pub fn built_in_templates() -> Vec<Template> {
         notes: "# This week\n- \n\n# To practise\n- \n".into(),
         ..Project::default()
     };
-    let band = Project {
-        tracks: vec![
-            track("Drums"),
-            track("Bass"),
-            track("Rhythm guitar"),
-            track("Lead guitar"),
-            track("Vocals"),
-        ],
-        markers: [
-            (1, "Intro"),
-            (5, "Verse 1"),
-            (13, "Chorus 1"),
-            (21, "Verse 2"),
-            (29, "Chorus 2"),
-            (37, "Solo"),
-            (45, "Chorus 3"),
-            (53, "Outro"),
-        ]
-        .iter()
-        .map(|&(bar, name)| marker(bar, name))
-        .collect(),
-        loop_bars: (13, 21),
-        ..Project::default()
-    };
     vec![
         Template {
             name: "Empty".into(),
@@ -151,11 +127,6 @@ pub fn built_in_templates() -> Vec<Template> {
                     and notes to fill in."
                 .into(),
             project: lesson,
-        },
-        Template {
-            name: "Band demo".into(),
-            about: "Drums, bass, two guitars and vocals, with verse and chorus sections.".into(),
-            project: band,
         },
     ]
 }
@@ -293,7 +264,7 @@ mod tests {
         let all = built_in_templates();
         assert_eq!(all[0].project, Project::default());
         let names: Vec<_> = all.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["Empty", "Guitar lesson", "Band demo"]);
+        assert_eq!(names, ["Empty", "Guitar lesson"]);
         for t in &all {
             let p = t.project.from_template(48_000);
             assert!(p.markers.windows(2).all(|w| w[0].bar < w[1].bar));

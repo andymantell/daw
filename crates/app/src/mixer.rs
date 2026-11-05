@@ -660,17 +660,10 @@ impl App {
                     actions.push(Action::Parent(i, p));
                 }
             }
-            // The take that plays, or for a bus, removing it.
+            // The take that plays; a bus has none (removing it is on
+            // its name plate's right-click menu).
             Part::Take if t.kind.is_bus() => {
-                // ai: delete_track
-                if ui
-                    .button("Remove")
-                    .accessible_name(format!("Remove {name}"))
-                    .on_hover_text("Remove this bus; tracks on it go to the master")
-                    .clicked()
-                {
-                    actions.push(Action::Remove(i));
-                }
+                ui.label("");
             }
             Part::Take => {
                 if let Some(k) = crate::take_picker(ui, i, t) {
@@ -832,6 +825,21 @@ impl App {
             if tag.clicked() {
                 let add = ui.input(|i| i.modifiers.command || i.modifiers.shift);
                 actions.push(Action::Select(key.clone(), add));
+            }
+            // Rare actions on the name plate's right-click menu.
+            if t.kind.is_bus() {
+                tag.context_menu(|ui| {
+                    // ai: delete_track
+                    if ui
+                        .button("Remove")
+                        .accessible_name(format!("Remove {name}"))
+                        .on_hover_text("Remove this bus; tracks on it go to the master")
+                        .clicked()
+                    {
+                        actions.push(Action::Remove(i));
+                        ui.close();
+                    }
+                });
             }
             if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
                 tag.on_hover_text(c.path.display().to_string());
@@ -1638,6 +1646,8 @@ mod tests {
         app.tracks[0].output = Some(bus.clone());
         app.tracks[0].sends.push(daw_project::Send::to(bus.clone()));
         app.rebuild();
+        settle(&mut h);
+        h.get_by_label("Select Bus 1").click_secondary();
         settle(&mut h);
         h.get_by_label("Remove Bus 1").click();
         settle(&mut h);

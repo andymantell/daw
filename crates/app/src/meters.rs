@@ -120,8 +120,9 @@ impl Meters {
     /// changes. `tracks` is each track's key and name, in order.
     pub fn window(&mut self, ctx: &egui::Context, tracks: &[(&str, &str)]) -> Option<Command> {
         let mut open = self.open;
-        egui::Window::new("Meters")
+        crate::workspace::centred(egui::Window::new("Meters"), ctx)
             .open(&mut open)
+            .collapsible(false)
             .default_width(560.0)
             .show(ctx, |ui| self.contents(ui, tracks));
         self.open = open;

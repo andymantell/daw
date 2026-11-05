@@ -135,6 +135,9 @@ pub(crate) struct Character {
     pub pointer: Color32,
     /// Side cheeks at the plate's ends, where the hardware had wood.
     pub cheeks: Option<Color32>,
+    /// The plate's and modules' corner radius, where the character has
+    /// its own: sharp on a digital unit, rounder on an older one.
+    pub corners: Option<f32>,
     pub knob: KnobStyle,
     pub switch: SwitchStyle,
     pub module: ModuleStyle,
@@ -161,6 +164,7 @@ impl Character {
         cap: Color32::TRANSPARENT,
         pointer: Color32::TRANSPARENT,
         cheeks: None,
+        corners: None,
         knob: KnobStyle::Cap,
         switch: SwitchStyle::Segments,
         module: ModuleStyle::Framed,
@@ -191,6 +195,7 @@ impl Character {
                 cap: rgb(0xef, 0xe6, 0xd2),
                 pointer: rgb(0x1b, 0x1a, 0x1d),
                 cheeks: Some(rgb(0x6e, 0x44, 0x28)),
+                corners: Some(2.0),
                 knob: KnobStyle::Skirted,
                 switch: SwitchStyle::Slide,
                 module: ModuleStyle::Lines,
@@ -212,6 +217,7 @@ impl Character {
                 screen_ink: rgb(0xff, 0x6b, 0x4a),
                 cap: rgb(0x22, 0x22, 0x26),
                 pointer: rgb(0xf2, 0xf2, 0xf2),
+                corners: Some(3.0),
                 knob: KnobStyle::Dot,
                 switch: SwitchStyle::Lit,
                 module: ModuleStyle::Band,
@@ -232,6 +238,7 @@ impl Character {
                 screen_ink: rgb(0x7f, 0xd1, 0xff),
                 cap: rgb(0xe9, 0xec, 0xef),
                 pointer: rgb(0xe8, 0x50, 0x3a),
+                corners: Some(5.0),
                 knob: KnobStyle::Dot,
                 switch: SwitchStyle::Slide,
                 module: ModuleStyle::Framed,
@@ -252,6 +259,7 @@ impl Character {
                 screen_ink: rgb(0xff, 0xb3, 0x47),
                 cap: rgb(0xe6, 0xe6, 0xe6),
                 pointer: rgb(0x37, 0x39, 0x3f),
+                corners: Some(3.0),
                 knob: KnobStyle::Cap,
                 switch: SwitchStyle::Lit,
                 module: ModuleStyle::Lines,
@@ -274,6 +282,7 @@ impl Character {
                 cap: rgb(0xf6, 0xe9, 0xc9),
                 pointer: rgb(0x24, 0x33, 0x52),
                 cheeks: Some(rgb(0x5a, 0x3a, 0x22)),
+                corners: Some(2.0),
                 knob: KnobStyle::Pointer,
                 switch: SwitchStyle::Slide,
                 module: ModuleStyle::Band,
@@ -294,6 +303,7 @@ impl Character {
                 screen_ink: rgb(0xff, 0x4d, 0x4d),
                 cap: rgb(0x2d, 0x24, 0x20),
                 pointer: rgb(0xe8, 0xdf, 0xc6),
+                corners: Some(4.0),
                 knob: KnobStyle::Skirted,
                 switch: SwitchStyle::Lit,
                 module: ModuleStyle::Framed,
@@ -315,6 +325,7 @@ impl Character {
                 screen_ink: rgb(0x8c, 0xff, 0x7a),
                 cap: rgb(0xe8, 0xe3, 0xcf),
                 pointer: rgb(0x2b, 0x2f, 0x27),
+                corners: Some(1.0),
                 knob: KnobStyle::Pointer,
                 switch: SwitchStyle::Slide,
                 module: ModuleStyle::Lines,
@@ -336,6 +347,7 @@ impl Character {
                 screen_ink: rgb(0x1b, 0x2a, 0x1a),
                 cap: rgb(0xdf, 0xe6, 0xf5),
                 pointer: rgb(0x2b, 0x4c, 0x8e),
+                corners: Some(1.0),
                 knob: KnobStyle::Flat,
                 switch: SwitchStyle::Lit,
                 module: ModuleStyle::Boxed,
@@ -356,6 +368,7 @@ impl Character {
                 screen_ink: rgb(0x1b, 0x23, 0x1a),
                 cap: rgb(0x2c, 0x2b, 0x30),
                 pointer: rgb(0xe9, 0xec, 0xef),
+                corners: Some(0.0),
                 knob: KnobStyle::Flat,
                 switch: SwitchStyle::Lit,
                 module: ModuleStyle::Boxed,
@@ -487,6 +500,7 @@ pub(crate) fn set(ctx: &egui::Context, ch: Character) {
     };
     ctx.data_mut(|d| {
         d.insert_temp(id(), ch);
+        d.insert_temp(section_id(), 0usize);
         match own {
             Some(c) => {
                 d.insert_temp(colours_id(), c);
@@ -507,6 +521,30 @@ pub(crate) fn clear(ctx: &egui::Context) {
 pub(crate) fn current(ctx: &egui::Context) -> Character {
     ctx.data(|d| d.get_temp::<Character>(id()))
         .unwrap_or(Character::PLAIN)
+}
+
+/// The plate's corner radius in force: the character's, or the theme's.
+pub(crate) fn current_radius(look: &Look) -> f32 {
+    look.own_radius.unwrap_or(look.rack_radius)
+}
+
+fn section_id() -> egui::Id {
+    egui::Id::unique("panel character section")
+}
+
+/// On a colour-coded panel ([`Band::Sections`]), the next section colour
+/// for a module heading, each unit starting from the first.
+pub(crate) fn next_section(ctx: &egui::Context, ch: &Character) -> Option<Color32> {
+    if ch.band != Band::Sections {
+        return None;
+    }
+    let n = ctx.data_mut(|d| {
+        let n = d.get_temp::<usize>(section_id()).unwrap_or(0);
+        d.insert_temp(section_id(), n + 1);
+        n
+    });
+    let colours = ch.sections();
+    Some(colours[n % colours.len()])
 }
 
 /// The colours in force, if a character with its own is set.

@@ -717,8 +717,10 @@ pub(crate) struct Look {
     pub(crate) theme: Arc<Theme>,
     pub(crate) dark: bool,
     /// The colours in force instead of the theme's, while a rack unit
-    /// with its own character draws (`character.rs`).
+    /// with its own character draws (`character.rs`), and the unit's
+    /// own corner radius.
     pub(crate) own: Option<Arc<Colours>>,
+    pub(crate) own_radius: Option<f32>,
 }
 
 impl Look {
@@ -756,6 +758,7 @@ pub(crate) fn look(ctx: &egui::Context) -> Look {
         theme,
         dark: ctx.theme() == egui::Theme::Dark,
         own: crate::character::colours(ctx),
+        own_radius: crate::character::current(ctx).corners,
     }
 }
 
@@ -1228,6 +1231,11 @@ fn swatches(ui: &mut egui::Ui, c: &Colours) {
 pub(crate) fn mix(a: Color32, b: Color32, k: f32) -> Color32 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k).round() as u8;
     Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+}
+
+/// Whether a colour reads as dark (its lightness under the middle).
+pub(crate) fn is_dark(c: Color32) -> bool {
+    0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b()) < 128.0
 }
 
 /// A cheap repeatable hash, for scattering texture specks.

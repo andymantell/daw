@@ -282,7 +282,13 @@ impl<'a> Knob<'a> {
             KnobStyle::Skirted => {
                 // The skirt, with a tick at each tenth of the turn, under
                 // a smaller cap.
-                p.circle_filled(centre, radius + 3.0, theme::mix(plate, c.plate_shadow, 0.6));
+                let dark = theme::is_dark(plate);
+                let skirt = if dark {
+                    theme::mix(plate, c.text_dim, 0.22)
+                } else {
+                    theme::mix(plate, c.plate_shadow, 0.6)
+                };
+                p.circle_filled(centre, radius + 3.0, skirt);
                 for i in 0..=10 {
                     let a = angle(i as f32 / 10.0);
                     let long = i % 5 == 0;
@@ -291,14 +297,14 @@ impl<'a> Knob<'a> {
                             at(a, radius - 1.0),
                             at(a, radius + if long { 3.0 } else { 1.5 }),
                         ],
-                        Stroke::new(1.0, theme::mix(c.text_dim, plate, 0.3)),
+                        Stroke::new(1.0, theme::mix(c.text_dim, plate, 0.15)),
                     );
                 }
             }
             KnobStyle::Flat => {
                 p.add(Shape::line(
                     arc(angle(0.0), angle(1.0)),
-                    Stroke::new(1.0, theme::mix(c.fader_slot, plate, 0.4)),
+                    Stroke::new(1.5, theme::mix(c.text_dim, plate, 0.5)),
                 ));
             }
             _ => {
@@ -376,7 +382,8 @@ impl<'a> Knob<'a> {
                 );
             }
             KnobStyle::Flat => {
-                p.circle_stroke(centre, radius - 1.0, Stroke::new(1.0, edge));
+                p.circle_filled(centre, radius - 1.0, theme::mix(plate, c.fader_cap, 0.12));
+                p.circle_stroke(centre, radius - 1.0, Stroke::new(1.5, edge));
                 p.line_segment(
                     [at(angle(k), radius * 0.45), at(angle(k), radius - 2.0)],
                     Stroke::new(weight, if lit { accent } else { c.fader_line }),
@@ -786,11 +793,14 @@ pub(crate) fn module<R>(
     let c = look.c();
     let ch = character::current(ui.ctx());
     let (_, rect) = ui.allocate_space(size);
-    let radius = CornerRadius::same(look.rack_radius.min(8.0) as u8);
+    let radius = CornerRadius::same(plate_radius(&look).min(8.0) as u8);
     let p = ui.painter();
     let head = Rect::from_min_size(rect.min + vec2(8.0, 5.0), vec2(rect.width() - 16.0, 16.0));
     let rule = Stroke::new(1.0, theme::mix(c.line, c.plate, 0.3));
     let font = look.font(look.small);
+    // On a colour-coded panel each module's heading takes the next
+    // section colour.
+    let badge = character::next_section(ui.ctx(), &ch).unwrap_or(c.badge);
     match ch.module {
         ModuleStyle::Framed => {
             p.rect(
@@ -805,7 +815,7 @@ pub(crate) fn module<R>(
                 egui::Align2::LEFT_CENTER,
                 heading.to_uppercase(),
                 font,
-                c.badge,
+                badge,
             );
             p.line_segment(
                 [
@@ -823,9 +833,9 @@ pub(crate) fn module<R>(
                 egui::Align2::LEFT_CENTER,
                 heading.to_uppercase(),
                 font,
-                c.badge,
+                badge,
             );
-            let line = Stroke::new(1.0, theme::mix(c.text_dim, c.plate, 0.4));
+            let line = Stroke::new(1.0, theme::mix(badge, c.plate, 0.45));
             p.line_segment(
                 [
                     pos2(head.left(), head.bottom() + 1.0),
@@ -851,6 +861,14 @@ pub(crate) fn module<R>(
                 StrokeKind::Inside,
             );
             let band = Rect::from_min_max(rect.min, pos2(rect.right(), head.bottom() + 4.0));
+            // The band is lettering-on-accent's ground on a light plate
+            // (white on silver), a darker shade on a dark one.
+            let dark = theme::is_dark(c.plate);
+            let fill = if dark {
+                theme::mix(c.plate, c.plate_shadow, 0.7)
+            } else {
+                c.on_accent
+            };
             p.rect_filled(
                 band,
                 CornerRadius {
@@ -859,7 +877,7 @@ pub(crate) fn module<R>(
                     sw: 0,
                     se: 0,
                 },
-                c.on_accent,
+                fill,
             );
             p.text(
                 head.left_center(),
@@ -928,7 +946,7 @@ pub(crate) fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (R
     let c = look.c();
     let ch = character::current(ui.ctx());
     let (_, rect) = ui.allocate_space(size);
-    let radius = CornerRadius::same(look.rack_radius.min(4.0) as u8);
+    let radius = CornerRadius::same(plate_radius(&look).min(4.0) as u8);
     let p = ui.painter();
     let ink = screen_ink(&ch, c);
     match ch.screen {
@@ -1168,7 +1186,7 @@ pub(crate) fn name_plate(ui: &mut Ui, name: &str, look: &theme::Look, size: f32)
     if ch.lettering == Lettering::Badge {
         p.rect_filled(
             rect,
-            CornerRadius::same(look.rack_radius.min(3.0) as u8),
+            CornerRadius::same(plate_radius(look).min(3.0) as u8),
             colour,
         );
         ink = ch.plate(look);
@@ -1304,7 +1322,7 @@ pub(crate) struct Rack {
 fn paint_rails(ui: &Ui, shape: egui::layers::ShapeIdx, rails: Rect) {
     let look = theme::look(ui.ctx());
     let c = look.c();
-    let radius = CornerRadius::same(look.rack_radius.min(4.0) as u8);
+    let radius = CornerRadius::same(plate_radius(&look).min(4.0) as u8);
     let mut shapes = Vec::new();
     for side in [
         Rect::from_min_size(rails.min, vec2(RAIL, rails.height())),
@@ -1586,7 +1604,7 @@ impl Rack {
     ) {
         let c = look.c();
         let ch = character::current(ui.ctx());
-        let radius = CornerRadius::same(look.rack_radius as u8);
+        let radius = CornerRadius::same(plate_radius(look) as u8);
         let mut shapes = Vec::new();
         // The shade under the plate, then the plate.
         shapes.push(Shape::rect_filled(
@@ -1693,6 +1711,13 @@ impl Rack {
         ui.painter().set(surface, Shape::Vec(top));
         let _ = self.rails;
     }
+}
+
+/// The corner radius of a plate and its modules: the character's own
+/// where it has one (sharp on a digital unit, rounder on an older one),
+/// else the theme's.
+fn plate_radius(look: &theme::Look) -> f32 {
+    character::current_radius(look)
 }
 
 /// The character's band along the top of `plate`, under the edge light,

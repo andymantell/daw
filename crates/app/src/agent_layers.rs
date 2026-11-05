@@ -329,7 +329,7 @@ impl App {
             // The look the unit's panel is drawn in: its own character
             // on the shared kit, or the kit's plain look.
             let ch = crate::character::Character::of(daw_instruments::Kind::from_id(&e.builtin));
-            if ch != crate::character::Character::PLAIN {
+            if !ch.plain {
                 v["character"] = ch.describe();
             }
             v

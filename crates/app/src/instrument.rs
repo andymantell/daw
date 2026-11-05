@@ -3442,7 +3442,9 @@ mod kit_tests {
         let info = d.call("get_instrument", json!({"track": t})).unwrap();
         assert_eq!(
             info["instrument"]["character"],
-            json!({"knob": "flat", "lettering": "readout", "band": "stripe", "tinted": true}),
+            json!({"knob": "flat", "switch": "lit", "module": "boxed", "screen": "lcd",
+                   "lettering": "readout", "band": "stripe", "plate": "#2b4c8e",
+                   "accent": "#7fe0ff", "cheeks": false}),
             "{info}"
         );
         // The name plate is still read by its name, whatever its

@@ -317,3 +317,8 @@ Asked one at a time in the project thread; answers are recorded here.
 4. Is 1440 × 900 the right screen to design for?
    **Answer (2026-11-02): the baseline is the owner's laptop, 1920 × 1200;
    threads also check 1440 × 900.**
+5. Note names show the sharp sign (C♯) as a box, because no bundled text
+   font has it. Write C# instead, or bundle a font with ♯ and ♭?
+   **Answer (2026-11-05): bundle a font with ♯ and ♭** (open licence,
+   as a fallback behind each theme's own font), so note names read like
+   printed music everywhere, not only in the pitch editor.

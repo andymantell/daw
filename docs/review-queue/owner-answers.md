@@ -3,6 +3,12 @@
 Answers the owner gave to the open decisions in this folder, newest
 first. Each answer is also ticked in its feature's file.
 
+## 2026-11-05: a font with the sharp and flat signs
+
+Note names keep ♯ and ♭; an open-licence font that has them is bundled
+as a fallback behind each theme's font (`ui-polish-icons.md`, question
+3). Recorded in `docs/plans/ui-polish.md` for the polish threads.
+
 ## 2026-11-05: live sessions may use free public STUN servers
 
 Accepted (`0.5-live-sessions.md`): asking free public STUN servers, run

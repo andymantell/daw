@@ -354,7 +354,6 @@ impl App {
     /// The MIDI part of the device window: the ports, and whether
     /// anything is coming in.
     pub(crate) fn midi_controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("MIDI");
         if self.midi.ports.inputs.is_empty() && self.midi.ports.outputs.is_empty() {
             ui.label("No MIDI devices were found. They are looked for every few seconds.");
         }

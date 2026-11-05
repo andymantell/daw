@@ -177,7 +177,7 @@ impl App {
             .map(|t| t.key.clone())
             .collect();
         let groups = &mut self.edit_groups;
-        egui::Window::new("Edit groups")
+        crate::workspace::centred(egui::Window::new("Edit groups"), ctx)
             .open(&mut open)
             .resizable(true)
             .default_width(340.0)

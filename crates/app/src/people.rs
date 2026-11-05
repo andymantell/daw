@@ -288,7 +288,7 @@ impl App {
         let owner = self.proj.doc.my_role() == Some(Role::Owner);
         let mut change = None;
         let mut rename = false;
-        egui::Window::new("People")
+        crate::workspace::centred(egui::Window::new("People"), ctx)
             .open(&mut open)
             .default_width(360.0)
             .show(ctx, |ui| {

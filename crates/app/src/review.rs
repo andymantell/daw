@@ -297,9 +297,8 @@ impl App {
         let mut open = self.review.open;
         let mut action = None;
         let review = &mut self.review;
-        egui::Window::new("Suggested edits")
+        crate::workspace::centred(egui::Window::new("Suggested edits"), ctx)
             .open(&mut open)
-            .default_pos([320.0, 120.0])
             .default_size([460.0, 520.0])
             .show(ctx, |ui| {
                 ui.label(

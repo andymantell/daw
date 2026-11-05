@@ -157,7 +157,7 @@ impl Perf {
             }
             ui.separator();
             ui.label(format!(
-                "Phase 1's bar: {TRACKS} stereo tracks and {PLUGINS} plugins play with no \
+                "The target: {TRACKS} stereo tracks and {PLUGINS} plugins play with no \
                      dropouts at 128 frames. Set the buffer in Settings → Audio, then:"
             ));
             ui.horizontal(|ui| {

@@ -35,6 +35,7 @@ use eframe::egui::{
     StrokeKind, Ui, Vec2, pos2, vec2,
 };
 
+use crate::character::{self, Band, Character, KnobStyle, Lettering};
 use crate::desk::{asked_value, key_steps, wheel_steps};
 use crate::icons::{Icon, IconButton};
 use crate::{spoken, theme};
@@ -258,6 +259,8 @@ impl<'a> Knob<'a> {
     fn paint(&self, ui: &Ui, cell: Rect, knob: Rect, lit: bool) {
         let look = theme::look(ui.ctx());
         let c = look.c();
+        let ch = character::current(ui.ctx());
+        let accent = ch.accent(&look);
         let p = ui.painter();
         let centre = knob.center();
         let radius = knob.width() / 2.0 - 3.0;
@@ -272,25 +275,112 @@ impl<'a> Knob<'a> {
         };
         let k = self.norm(*self.value) as f32;
         let weight = if self.size == Size::Large { 2.5 } else { 2.0 };
-        p.add(Shape::line(
-            arc(angle(0.0), angle(1.0)),
-            Stroke::new(weight, c.fader_slot),
-        ));
+        let plate = ch.plate(&look);
+        match ch.knob {
+            KnobStyle::Skirted => {
+                // The skirt, with a tick at each tenth of the turn, under
+                // a smaller cap.
+                p.circle_filled(centre, radius + 3.0, theme::mix(plate, c.plate_shadow, 0.6));
+                for i in 0..=10 {
+                    let a = angle(i as f32 / 10.0);
+                    let long = i % 5 == 0;
+                    p.line_segment(
+                        [
+                            at(a, radius - 1.0),
+                            at(a, radius + if long { 3.0 } else { 1.5 }),
+                        ],
+                        Stroke::new(1.0, theme::mix(c.text_dim, plate, 0.3)),
+                    );
+                }
+            }
+            KnobStyle::Flat => {
+                p.add(Shape::line(
+                    arc(angle(0.0), angle(1.0)),
+                    Stroke::new(1.0, theme::mix(c.fader_slot, plate, 0.4)),
+                ));
+            }
+            _ => {
+                p.add(Shape::line(
+                    arc(angle(0.0), angle(1.0)),
+                    Stroke::new(weight, c.fader_slot),
+                ));
+            }
+        }
         let from = if self.bipolar { 0.5 } else { 0.0 };
-        if (k - from).abs() > 0.002 {
+        if (k - from).abs() > 0.002 && ch.knob != KnobStyle::Skirted {
             p.add(Shape::line(
                 arc(angle(from), angle(k)),
-                Stroke::new(weight, c.accent),
+                Stroke::new(
+                    if ch.knob == KnobStyle::Flat {
+                        1.5
+                    } else {
+                        weight
+                    },
+                    accent,
+                ),
             ));
         }
-        p.circle_filled(centre + vec2(0.0, 1.5), radius - 1.0, c.shadow);
-        p.circle_filled(centre, radius - 1.0, c.fader_cap);
-        let edge = if lit { c.accent } else { c.text_dim };
-        p.circle_stroke(centre, radius - 1.0, Stroke::new(1.0, edge));
-        p.line_segment(
-            [at(angle(k), 3.0), at(angle(k), radius - 2.5)],
-            Stroke::new(weight, c.fader_line),
-        );
+        let edge = if lit { accent } else { c.text_dim };
+        match ch.knob {
+            KnobStyle::Cap => {
+                p.circle_filled(centre + vec2(0.0, 1.5), radius - 1.0, c.shadow);
+                p.circle_filled(centre, radius - 1.0, c.fader_cap);
+                p.circle_stroke(centre, radius - 1.0, Stroke::new(1.0, edge));
+                p.line_segment(
+                    [at(angle(k), 3.0), at(angle(k), radius - 2.5)],
+                    Stroke::new(weight, c.fader_line),
+                );
+            }
+            KnobStyle::Skirted => {
+                let r = radius - 4.0;
+                p.circle_filled(centre + vec2(0.0, 1.0), r, c.shadow);
+                p.circle_filled(centre, r, theme::mix(c.fader_cap, accent, 0.35));
+                p.circle_stroke(centre, r, Stroke::new(1.0, edge));
+                p.line_segment(
+                    [at(angle(k), 1.0), at(angle(k), radius + 1.0)],
+                    Stroke::new(weight, if lit { accent } else { c.fader_line }),
+                );
+            }
+            KnobStyle::Pointer => {
+                p.circle_filled(centre + vec2(0.0, 1.5), radius - 1.0, c.shadow);
+                p.circle_filled(centre, radius - 1.0, c.fader_cap);
+                p.circle_stroke(centre, radius - 1.0, Stroke::new(1.0, edge));
+                // A wedge from the back of the cap to its rim.
+                let a = angle(k);
+                let tip = at(a, radius - 1.5);
+                let side = 2.4;
+                let left = at(a + std::f32::consts::FRAC_PI_2, side)
+                    - (radius - 5.0) * Vec2::angled(a) * 0.55;
+                let right = at(a - std::f32::consts::FRAC_PI_2, side)
+                    - (radius - 5.0) * Vec2::angled(a) * 0.55;
+                p.add(Shape::convex_polygon(
+                    vec![tip, left, right],
+                    c.fader_line,
+                    Stroke::NONE,
+                ));
+            }
+            KnobStyle::Dot => {
+                p.circle_filled(centre + vec2(0.0, 1.0), radius - 1.0, c.shadow);
+                p.circle_filled(
+                    centre,
+                    radius - 1.0,
+                    theme::mix(c.fader_cap, c.plate_shadow, 0.3),
+                );
+                p.circle_stroke(centre, radius - 1.0, Stroke::new(1.0, edge));
+                p.circle_filled(
+                    at(angle(k), radius - 4.5),
+                    2.2,
+                    if lit { accent } else { c.fader_line },
+                );
+            }
+            KnobStyle::Flat => {
+                p.circle_stroke(centre, radius - 1.0, Stroke::new(1.0, edge));
+                p.line_segment(
+                    [at(angle(k), radius * 0.45), at(angle(k), radius - 2.0)],
+                    Stroke::new(weight, if lit { accent } else { c.fader_line }),
+                );
+            }
+        }
         if self.bipolar {
             p.circle_filled(at(angle(0.5), radius + 5.5), 1.2, c.text_dim);
         }
@@ -614,13 +704,14 @@ pub(crate) fn module<R>(
 ) -> R {
     let look = theme::look(ui.ctx());
     let c = look.c();
+    let ch = character::current(ui.ctx());
     let (_, rect) = ui.allocate_space(size);
     let radius = CornerRadius::same(look.rack_radius.min(8.0) as u8);
     let p = ui.painter();
     p.rect(
         rect,
         radius,
-        theme::mix(c.plate, c.plate_shadow, 0.22),
+        theme::mix(ch.plate(&look), c.plate_shadow, 0.22),
         Stroke::new(look.rack_line, theme::mix(c.line, c.plate, 0.3)),
         StrokeKind::Inside,
     );
@@ -630,7 +721,7 @@ pub(crate) fn module<R>(
         egui::Align2::LEFT_CENTER,
         heading.to_uppercase(),
         look.font(look.small),
-        c.badge,
+        ch.badge(&look),
     );
     p.line_segment(
         [
@@ -698,12 +789,12 @@ pub(crate) fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (R
 
 /// Draws `points` (already in the rect) as a trace, filled beneath.
 pub(crate) fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) {
-    let c = look.c();
+    let accent = character::current(ui.ctx()).accent(look);
     let p = ui.painter();
     // The fill under the trace, a strip down from each segment: the
     // trace needn't be convex.
     let bottom = rect.bottom() - 2.0;
-    let colour = c.accent.gamma_multiply(0.12);
+    let colour = accent.gamma_multiply(0.12);
     let mut mesh = egui::Mesh::default();
     for w in points.windows(2) {
         let i = mesh.vertices.len() as u32;
@@ -714,7 +805,7 @@ pub(crate) fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) 
         mesh.add_triangle(i, i + 2, i + 3);
     }
     p.add(Shape::mesh(mesh));
-    p.add(Shape::line(points, Stroke::new(1.5, c.accent)));
+    p.add(Shape::line(points, Stroke::new(1.5, accent)));
 }
 
 /// A filter's response, 20 Hz to 20 kHz across, −36 to +18 dB up.
@@ -822,6 +913,73 @@ pub(crate) enum HeaderAction {
 /// The header's height.
 pub(crate) const HEADER: f32 = 36.0;
 
+/// The unit's name as its maker's badge, lettered in the character in
+/// force, `size` high.
+pub(crate) fn name_plate(ui: &mut Ui, name: &str, look: &theme::Look, size: f32) {
+    let ch = character::current(ui.ctx());
+    let colour = ch.badge(look);
+    let (text, font, spacing) = match ch.lettering {
+        Lettering::Caps | Lettering::Badge => (name.to_uppercase(), look.font(size), 0.0),
+        Lettering::Wide => (name.to_uppercase(), look.font(size * 0.9), size * 0.18),
+        Lettering::Lower => (name.to_lowercase(), look.font(size * 1.05), 0.0),
+        Lettering::Readout => (
+            name.to_uppercase(),
+            look.numerals_font_at(size * 0.9),
+            size * 0.08,
+        ),
+    };
+    let glyphs: Vec<(String, f32)> = text
+        .chars()
+        .map(|g| {
+            let g = g.to_string();
+            let w = ui.fonts_mut(|f| f.layout_no_wrap(g.clone(), font.clone(), colour).size().x);
+            (g, w)
+        })
+        .collect();
+    let width: f32 = glyphs.iter().map(|(_, w)| w).sum::<f32>()
+        + spacing * glyphs.len().saturating_sub(1) as f32;
+    let pad = if ch.lettering == Lettering::Badge {
+        7.0
+    } else {
+        0.0
+    };
+    let (rect, r) = ui.allocate_exact_size(vec2(width + 2.0 * pad, size + 6.0), Sense::hover());
+    // Read as the kit's plain capitals, whatever the lettering, so the
+    // plate is told apart from the unit's name in the rack menu.
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, name.to_uppercase()));
+    let p = ui.painter();
+    let mut ink = colour;
+    if ch.lettering == Lettering::Badge {
+        p.rect_filled(
+            rect,
+            CornerRadius::same(look.rack_radius.min(3.0) as u8),
+            colour,
+        );
+        ink = ch.plate(look);
+    }
+    let mut x = rect.left() + pad;
+    for (g, w) in &glyphs {
+        p.text(
+            pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            g,
+            font.clone(),
+            ink,
+        );
+        x += w + spacing;
+    }
+    if ch.lettering == Lettering::Lower {
+        // A rule under the wordmark.
+        p.line_segment(
+            [
+                pos2(rect.left(), rect.bottom() - 1.0),
+                pos2(rect.right(), rect.bottom() - 1.0),
+            ],
+            Stroke::new(1.5, colour),
+        );
+    }
+}
+
 /// A unit's header: the name plate, what it is, the sound buttons, and
 /// `right`'s buttons at the right edge.
 pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Option<HeaderAction> {
@@ -834,11 +992,7 @@ pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Opt
         |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.add_space(4.0);
-            ui.label(
-                RichText::new(h.name.to_uppercase())
-                    .font(look.font(look.heading))
-                    .color(c.badge),
-            );
+            name_plate(ui, h.name, &look, look.heading);
             // The line on what it is gives way to the buttons: cut short
             // (the whole of it on hover) when the plate is narrow.
             let reserve = 150.0 + if h.has_sounds { 240.0 } else { 0.0 } + 400.0;
@@ -1176,9 +1330,6 @@ impl Rack {
     pub(crate) fn strip(&mut self, ui: &mut Ui, id: Id, name: &str, extra: impl FnOnce(&mut Ui)) {
         self.end_row();
         let look = theme::look(ui.ctx());
-        let c = look.c();
-        let badge = c.badge;
-        let font = look.font(look.heading * 0.8);
         let top = self.y;
         let width = self.inner.width() - 2.0 * PLATE_GAP;
         let behind = ui.painter().add(Shape::Noop);
@@ -1195,7 +1346,7 @@ impl Rack {
         );
         child.spacing_mut().item_spacing.x = 8.0;
         child.add_space(4.0);
-        child.label(RichText::new(name.to_uppercase()).font(font).color(badge));
+        name_plate(&mut child, name, &look, look.heading * 0.8);
         extra(&mut child);
         let plate =
             Rect::from_min_size(pos2(self.inner.left() + PLATE_GAP, top), vec2(width, STRIP));
@@ -1216,6 +1367,7 @@ impl Rack {
         surface: egui::layers::ShapeIdx,
     ) {
         let c = look.c();
+        let ch = character::current(ui.ctx());
         let radius = CornerRadius::same(look.rack_radius as u8);
         let mut shapes = Vec::new();
         // The shade under the plate, then the plate.
@@ -1224,7 +1376,7 @@ impl Rack {
             radius,
             c.plate_shadow.gamma_multiply(0.6),
         ));
-        shapes.push(Shape::rect_filled(plate, radius, c.plate));
+        shapes.push(Shape::rect_filled(plate, radius, ch.plate(look)));
         shapes.push(Shape::rect_stroke(
             plate,
             radius,
@@ -1276,6 +1428,7 @@ impl Rack {
                 }
             }
         }
+        band(&mut top, plate, inset, &ch, look);
         // Ears and screws.
         for (x, y) in [
             (plate.left() + EAR / 2.0, plate.top() + EAR / 2.0),
@@ -1297,6 +1450,59 @@ impl Rack {
         }
         ui.painter().set(surface, Shape::Vec(top));
         let _ = self.rails;
+    }
+}
+
+/// The character's band along the top of `plate`, under the edge light,
+/// between the ears.
+fn band(top: &mut Vec<Shape>, plate: Rect, inset: f32, ch: &Character, look: &theme::Look) {
+    let accent = ch.accent(look);
+    let left = plate.left() + EAR + 2.0;
+    let right = plate.right() - EAR - 2.0;
+    let y = plate.top() + inset + 2.0;
+    match ch.band {
+        Band::None => {}
+        Band::Stripe => {
+            top.push(Shape::rect_filled(
+                Rect::from_min_max(pos2(left, y), pos2(right, y + 3.0)),
+                CornerRadius::same(1),
+                accent.gamma_multiply(0.85),
+            ));
+        }
+        Band::Sections => {
+            let n = 4;
+            let w = (right - left) / n as f32;
+            for (i, colour) in ch.sections(look).iter().enumerate() {
+                let x = left + w * i as f32;
+                top.push(Shape::rect_filled(
+                    Rect::from_min_max(pos2(x + 1.0, y), pos2(x + w - 1.0, y + 3.0)),
+                    CornerRadius::same(1),
+                    *colour,
+                ));
+            }
+        }
+        Band::Pinstripe => {
+            for dy in [0.0, 3.0] {
+                top.push(Shape::line_segment(
+                    [pos2(left, y + dy), pos2(right, y + dy)],
+                    Stroke::new(1.0, accent.gamma_multiply(0.7)),
+                ));
+            }
+        }
+        Band::Jacks => {
+            let c = look.c();
+            let mut x = left + 6.0;
+            while x < right - 4.0 {
+                let at = pos2(x, y + 1.5);
+                top.push(Shape::circle_filled(
+                    at,
+                    3.0,
+                    theme::mix(accent, ch.plate(look), 0.5),
+                ));
+                top.push(Shape::circle_filled(at, 1.6, c.plate_shadow));
+                x += 16.0;
+            }
+        }
     }
 }
 

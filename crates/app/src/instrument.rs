@@ -1352,6 +1352,11 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
         (false, Some(k)) => k.about().to_string(),
     };
     let ctx = ui.ctx().clone();
+    // The unit's own character, for the kit to draw with.
+    crate::character::set(
+        &ctx,
+        crate::character::Character::of(if slot.is_plugin() { None } else { kind }),
+    );
     match view {
         RackView::Hidden => {
             ui.add_space(8.0);
@@ -1477,6 +1482,7 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
             });
         }
     }
+    crate::character::clear(&ctx);
 }
 
 /// Lucky Seven on its panel, with the bank it has loaded.
@@ -3416,6 +3422,44 @@ mod kit_tests {
             .find(|p| p["param"] == "instrument.cutoff")
             .map(|p| p["value"].as_f64().unwrap())
             .unwrap()
+    }
+
+    /// Each classic synth's own character is drawn on its unit and
+    /// reported to an assistant; the house synth has none.
+    #[test]
+    fn a_synths_character_draws_on_its_unit_and_an_assistant_reads_it() {
+        let mut d = Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "blue-wave", "name": "Keys"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        d.app().instrument_open = Some(0);
+        d.app().workspace.full = Some(Pane::Instrument);
+        d.h.run();
+        d.h.run();
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(
+            info["instrument"]["character"],
+            json!({"knob": "flat", "lettering": "readout", "band": "stripe", "tinted": true}),
+            "{info}"
+        );
+        // The name plate is still read by its name, whatever its
+        // lettering, and the character is cleared once the unit is drawn.
+        d.h.get_by_label("BLUE WAVE");
+        assert_eq!(
+            crate::character::current(&d.h.ctx),
+            crate::character::Character::PLAIN
+        );
+        let s = d
+            .call("add_track", json!({"kind": "poly-synth", "name": "House"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let info = d.call("get_instrument", json!({"track": s})).unwrap();
+        assert_eq!(info["instrument"]["character"], json!(null), "{info}");
     }
 
     #[test]

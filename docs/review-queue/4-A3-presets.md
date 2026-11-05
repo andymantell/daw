@@ -34,29 +34,29 @@ boxes, as the renderer there lacks those glyphs.)
 
 ## Decisions to accept
 
-- [ ] **Which tones ship as presets.** Built as placeholders, all from
+- [x] **Which tones ship as presets.** Built as placeholders, all from
       the built-in effects: *Clean guitar*, *Crunch guitar*, *High gain
       rhythm* (effect chains on the amp), *Bass DI*, *Vocal*, and a
       *Reverb bus* track preset. Say which to keep, drop or add, and how
       each should be set; your own once you have dialled them in can be
       exported and put in the app as they are.
-- [ ] **What a track preset keeps.** Its instrument (or layers), effects,
+- [x] **What a track preset keeps.** Its instrument (or layers), effects,
       amp, sends, output bus, instrument outputs, volume, pan and
       notation settings; not its clips, notes, takes, comps, automation,
       frozen audio, mute or solo. Sends, the output and sidechains are
       kept by the other track's name, and found by name where it is
       added (left out, with a message, where there is none). Say if mute
       and solo, or the automation, should be kept too.
-- [ ] **Putting a track preset on an existing track.** It replaces the
+- [x] **Putting a track preset on an existing track.** It replaces the
       instrument, effects, sends and settings and keeps the track's name,
       clips and notes. A bus preset only goes on a bus (or as a new
       track). The alternative is for presets only ever to add new tracks.
-- [ ] **How presets travel.** A preset file is a bundle, like a project
+- [x] **How presets travel.** A preset file is a bundle, like a project
       bundle: a plain tar holding the one-track document, a short text
       with its kind, tags and description, and the sound files its
       effects and instruments use. So "presets travel in bundles" here
       means a preset is its own small bundle. A project bundle doesn't
       carry the presets in your library (the tracks in it already have
       their settings). Say if it should.
-- [ ] **Importing a preset with a name you already have** keeps both,
+- [x] **Importing a preset with a name you already have** keeps both,
       the new one as "Name 2", rather than replacing yours.

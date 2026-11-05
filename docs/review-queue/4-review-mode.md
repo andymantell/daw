@@ -40,7 +40,7 @@ the person the song belongs to accepts or rejects each change.
 
 ## Decisions to accept
 
-- [ ] **What counts as one change.** A song setting (tempo, time
+- [x] **What counts as one change.** A song setting (tempo, time
       signature, key, loop, tuning reference, timecode, the order
       sections play in, the master channel, lesson notes); one marker,
       tempo change, pattern, tab block, group, video or similar item; a
@@ -49,9 +49,9 @@ the person the song belongs to accepts or rejects each change.
       and note clip as one change each. So a moved clip can be taken
       without the teacher's volume change on the same track, but two
       effect tweaks on one track come as one change.
-- [ ] **Comments and assignments are never suggested.** They go to the
+- [x] **Comments and assignments are never suggested.** They go to the
       song while suggesting, as they always do.
-- [ ] **Commenters may suggest.** A teacher let in only to comment can
+- [x] **Commenters may suggest.** A teacher let in only to comment can
       make suggestions (their own only), but not accept them.
 
 ## Known gaps

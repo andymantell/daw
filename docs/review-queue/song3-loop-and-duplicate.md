@@ -19,14 +19,14 @@ of a list of bars, or one every few bars.
 
 ## Decisions to accept
 
-- [ ] **Turning the loop on loops what the clip holds now**, from its
+- [x] **Turning the loop on loops what the clip holds now**, from its
       start to its end, so a 1-bar clip loops 1 bar. An assistant can
       give another length (`loop_beats`). The alternative is to always
       loop a whole number of bars.
-- [ ] **Each time round rolls afresh.** Notes with a chance, or a pick
+- [x] **Each time round rolls afresh.** Notes with a chance, or a pick
       of one, are rolled again each time round the loop rather than
       playing the same way every time.
-- [ ] **Controller lanes loop with the notes** (a filter move in a
+- [x] **Controller lanes loop with the notes** (a filter move in a
       4-bar loop happens every 4 bars). Rendering note effects into a
       looping clip writes its notes out in full and switches its loop
       off; its controller lanes then play once.

@@ -27,10 +27,10 @@
 
 ## Decisions to accept
 
-- [ ] **Only your own steps are on the undo list.** Undo never takes
+- [x] **Only your own steps are on the undo list.** Undo never takes
       back someone else's change (as before); their changes are on the
       Activity tab, not the undo list.
-- [ ] **Times start now.** Changes are timed from this version on; an
+- [x] **Times start now.** Changes are timed from this version on; an
       older project's history shows "time not recorded" for what came
       before. Who made a change is known for anything since that
       person's copy first signed in; older changes say "Someone".

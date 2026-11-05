@@ -41,17 +41,17 @@ until one is made; the one it had becomes "Version 1".
 
 ## Decisions to accept
 
-- [ ] **What a version holds.** Volume, pan, effects and instrument are
+- [x] **What a version holds.** Volume, pan, effects and instrument are
       in each version, as well as clips; name, mute, solo, routing, sends
       and the notation lane are shared. Say if the fader or effects should
       be shared instead.
-- [ ] **Commands act on one track.** Next, Previous, Duplicate, New empty
+- [x] **Commands act on one track.** Next, Previous, Duplicate, New empty
       and Delete act on the Track versions window's track while it is
       open, else the track of the selected clip or note clip, else the
       instrument window's track. There is no "switch every track to
       version 2" yet. Say if a song-wide switch is wanted.
-- [ ] **Deleting down to one version leaves none.** The track then plays
+- [x] **Deleting down to one version leaves none.** The track then plays
       the one left, as a track that never had versions.
-- [ ] **Not built yet:** showing two versions at once to copy clips
+- [x] **Not built yet:** showing two versions at once to copy clips
       between them, and versions on buses and folders (they have no clips,
       so the menu leaves them out).

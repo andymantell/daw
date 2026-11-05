@@ -1,6 +1,6 @@
 # 0013 — Hosting CLAP plugins: raw bindings, and ids made from plugin ids
 
-- **Status:** Accepted (built at risk; the owner can still reverse it)
+- **Status:** Accepted (built at risk; confirmed by the owner 2026-11-05)
 - **Date:** 2026-10-30
 - **Deciders:** Built while the owner was away (roadmap 3.2, Phase 3 plan item A2); the roadmap already asked for CLAP hosting
 

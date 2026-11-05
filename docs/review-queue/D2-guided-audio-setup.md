@@ -68,10 +68,10 @@ dropout warning shown), `app-audio-setup-input-quiet.png`,
 
 ## Decisions
 
-- [ ] **Thresholds.** Quiet below −24 dBFS peak, nearly too loud above
+- [x] **Thresholds.** Quiet below −24 dBFS peak, nearly too loud above
       −3 dBFS, clipping at −0.1 dBFS, silent below −60 dBFS, and "feels
       late" above 10 ms. These are rules of thumb chosen here, not taken
       from a standard: accept or give your own.
-- [ ] **Default way of listening.** The guide starts on "through the
+- [x] **Default way of listening.** The guide starts on "through the
       app" (so the amp is heard while playing). Accept, or start on
       direct monitoring.

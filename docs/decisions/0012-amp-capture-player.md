@@ -1,6 +1,6 @@
 # 0012 — Amp capture player and its inference library
 
-- **Status:** Accepted (built at risk; the owner can still reverse it)
+- **Status:** Accepted (built at risk; confirmed by the owner 2026-11-05)
 - **Date:** 2026-10-30
 - **Deciders:** Built while the owner was away (roadmap 2.5, plan item B4); the roadmap already asked for an open-format capture player on a licence-compatible library
 

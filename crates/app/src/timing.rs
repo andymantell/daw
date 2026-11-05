@@ -458,7 +458,7 @@ impl App {
         let mut open = true;
         let mut fix = false;
         let t = &mut self.timing;
-        egui::Window::new("Fix timing")
+        crate::workspace::centred(egui::Window::new("Fix timing"), ctx)
             .open(&mut open)
             .resizable(true)
             .default_width(420.0)

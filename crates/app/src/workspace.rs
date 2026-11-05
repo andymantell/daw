@@ -1201,6 +1201,14 @@ struct Draw<'a, H> {
 }
 
 /// Where the regions go in `rect`: left, right, dock, and the timeline.
+/// A dialog that opens in the middle of the window the first time, and
+/// stays where the user drags it after that. Without this a window with
+/// no position opens at the top-left corner, over the menu bar.
+pub(crate) fn centred<'a>(w: egui::Window<'a>, ctx: &egui::Context) -> egui::Window<'a> {
+    w.pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+}
+
 pub(crate) fn places(l: &Layout, rect: Rect) -> ([Option<Rect>; 3], Rect) {
     let w = rect.width();
     let h = rect.height();

@@ -78,10 +78,16 @@ fn family(name: &str) -> FontFamily {
 }
 
 /// Egui's fonts with the bundled faces added, each falling back to
-/// egui's own for symbols it lacks.
+/// egui's own for symbols it lacks: its text face, then its monospace
+/// face, which has the arrows ("Settings → Audio") the text face lacks.
 fn font_definitions() -> egui::FontDefinitions {
     let mut defs = egui::FontDefinitions::default();
-    let fallback = defs.families[&FontFamily::Proportional].clone();
+    let mut fallback = defs.families[&FontFamily::Proportional].clone();
+    for f in &defs.families[&FontFamily::Monospace] {
+        if !fallback.contains(f) {
+            fallback.push(f.clone());
+        }
+    }
     for f in &FACES {
         let mut tweak = egui::FontTweak::default();
         if let Some(w) = f.weight {
@@ -1282,6 +1288,17 @@ pub(crate) mod contrast {
 
 #[cfg(test)]
 mod tests {
+    /// Labels say "Settings → Audio": the arrow is not in the theme
+    /// faces nor in egui's text face, so each falls back to a face
+    /// that has it.
+    #[test]
+    fn every_face_falls_back_to_one_with_an_arrow() {
+        let mut fonts = egui::text::Fonts::new(Default::default(), super::font_definitions());
+        for f in &super::FACES {
+            let id = FontId::new(14.0, FontFamily::Name(f.id.into()));
+            assert!(fonts.has_glyph(&id, '→'), "{} has no arrow", f.id);
+        }
+    }
     use super::contrast::ratio;
     use super::*;
 

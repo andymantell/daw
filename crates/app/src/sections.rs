@@ -154,7 +154,7 @@ impl App {
         let mut open = true;
         let mut act = None;
         let w = &mut self.time_ui;
-        egui::Window::new("Insert or delete bars")
+        crate::workspace::centred(egui::Window::new("Insert or delete bars"), ctx)
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
@@ -456,7 +456,7 @@ impl App {
         let mut act: Option<(Section, &str)> = None;
         let mut order = self.arrangement.clone();
         let (mut play, mut write) = (false, false);
-        egui::Window::new("Sections")
+        crate::workspace::centred(egui::Window::new("Sections"), ctx)
             .open(&mut open)
             .resizable(true)
             .default_width(460.0)

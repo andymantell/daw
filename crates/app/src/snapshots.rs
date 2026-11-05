@@ -73,9 +73,8 @@ impl Snapshots {
         let mut open = self.open;
         let changes = self.found.as_ref().map(|f| f.changes.clone());
         let mut action = None;
-        egui::Window::new("Snapshots")
+        crate::workspace::centred(egui::Window::new("Snapshots"), ctx)
             .open(&mut open)
-            .default_pos([300.0, 140.0])
             .default_size([420.0, 480.0])
             .show(ctx, |ui| {
                 ui.label("Name the project as it is now, to come back to it later.");

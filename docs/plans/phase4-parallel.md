@@ -68,6 +68,13 @@ keeps its own types.
   comments already are, and deleted or rewritten lesson-note text is
   blanked from the document's history. After the polish pass. See
   [owner-answers.md](../review-queue/owner-answers.md).
+- **Effects in the templates** (decided 2026-11-05): Empty and Guitar
+  lesson ship (Band demo removed); the Guitar lesson tracks get a light
+  EQ and a little reverb from the built-in effects. After the polish pass.
+- **More sounds made in code** (decided 2026-11-05): no sample files
+  ship; widen the code-made sounds so every built-in instrument has a
+  useful starting set (drum kits, keys, basses, pads, each synth's own
+  sounds). After the polish pass.
 - **Small items**, for any thread with room: keeping recent notes played
   without Record on (3.1); chaining several commands into one key
   (macros); finding and removing audio no longer used; turning a track off

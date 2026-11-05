@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Project templates (roadmap 2.8): File → New from template… starts a
-//! project from one that comes with the app ("Guitar lesson", "Band
-//! demo") or one of the user's own, and File → Save as template… keeps
+//! project from one that comes with the app ("Guitar lesson") or one of
+//! the user's own, and File → Save as template… keeps
 //! the project open now as one: its tracks, effects, sections and notes,
 //! but not its audio or comments (see `daw_project::Project::as_template`).
 //!

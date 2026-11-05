@@ -424,7 +424,7 @@ pub(crate) const COMMANDS: &[Info] = &[
         &[],
     )
     .hint("Start a project with tracks, sections and notes laid out")
-    .words("start lesson band demo")
+    .words("start lesson")
     .everyday(),
     info(
         Cmd::OpenProject,

@@ -2652,8 +2652,40 @@ impl Shortcut {
         }
     }
 
-    /// Such as `Ctrl+Shift+Z`, as shown and as kept in `keys.txt`.
+    /// Such as `Ctrl+Shift+Z`, as kept in `keys.txt` and typed in the
+    /// key editor: every key by its name.
     pub(crate) fn text(self) -> String {
+        self.with_key(self.key.name())
+    }
+
+    /// As shown beside a command: a punctuation key as its symbol
+    /// (`Ctrl+,`, `=`, `]`), every other key by its name.
+    pub(crate) fn label(self) -> String {
+        let key = match self.key {
+            Key::Comma => ",",
+            Key::Period => ".",
+            Key::Minus => "-",
+            Key::Plus => "+",
+            Key::Equals => "=",
+            Key::Semicolon => ";",
+            Key::Colon => ":",
+            Key::Slash => "/",
+            Key::Backslash => "\\",
+            Key::Pipe => "|",
+            Key::Questionmark => "?",
+            Key::Exclamationmark => "!",
+            Key::OpenBracket => "[",
+            Key::CloseBracket => "]",
+            Key::OpenCurlyBracket => "{",
+            Key::CloseCurlyBracket => "}",
+            Key::Backtick => "`",
+            Key::Quote => "'",
+            k => k.name(),
+        };
+        self.with_key(key)
+    }
+
+    fn with_key(self, key: &str) -> String {
         let mut t = String::new();
         if self.mods.command {
             t.push_str(if cfg!(target_os = "macos") {
@@ -2668,7 +2700,7 @@ impl Shortcut {
         if self.mods.shift {
             t.push_str("Shift+");
         }
-        t.push_str(self.key.name());
+        t.push_str(key);
         t
     }
 
@@ -2746,9 +2778,15 @@ impl Keymap {
         self.keys.get(&cmd).map_or(&[], Vec::as_slice)
     }
 
-    /// Its keys, as shown beside it.
+    /// Its keys by name, as kept in `keys.txt` and edited.
     pub(crate) fn text(&self, cmd: Cmd) -> String {
         let keys: Vec<String> = self.of(cmd).iter().map(|s| s.text()).collect();
+        keys.join(", ")
+    }
+
+    /// Its keys as shown beside it, punctuation as symbols.
+    pub(crate) fn label(&self, cmd: Cmd) -> String {
+        let keys: Vec<String> = self.of(cmd).iter().map(|s| s.label()).collect();
         keys.join(", ")
     }
 
@@ -2981,7 +3019,7 @@ impl Commands {
     pub(crate) fn hover(&self, cmd: Cmd) -> String {
         let i = cmd.info();
         let what = if i.hint.is_empty() { i.name } else { i.hint };
-        match self.keymap.text(cmd) {
+        match self.keymap.label(cmd) {
             k if k.is_empty() => what.to_string(),
             k => format!("{what} ({k})"),
         }
@@ -3169,7 +3207,7 @@ impl Commands {
                                     RichText::new(format!("  {}", i.group)).weak().small(),
                                 ),
                             )
-                            .right_text(RichText::new(self.keymap.text(cmd)).strong())
+                            .right_text(RichText::new(self.keymap.label(cmd)).strong())
                             .min_size(egui::vec2(ui.available_width(), 0.0));
                             let r = ui.add_enabled(enabled, row).accessible_name(&name);
                             if chosen && (up || down) {
@@ -3523,17 +3561,38 @@ impl App {
         }
     }
 
+    /// A command in a menu, with its keys beside it. A switch (Snap,
+    /// Loop, Metronome…) is lit while it is on, and named without the
+    /// "on or off" its command keeps for the search and the key editor.
     pub(crate) fn menu_entry(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
         self.menu_mark(ui);
         let i = cmd.info();
-        let keys = self.commands.keymap.text(cmd);
-        let mut r = ui.add_enabled(
-            self.can_run(cmd),
+        let keys = self.commands.keymap.label(cmd);
+        let on = self.switch_on(cmd);
+        let name = self.commands.name(cmd);
+        let name = match on {
+            Some(_) => name.strip_suffix(" on or off").unwrap_or(name),
+            None => name,
+        }
+        .to_string();
+        let button = match on {
             // ai: run_command.id
-            egui::Button::new(self.commands.name(cmd)).shortcut_text(keys),
-        );
-        if !i.hint.is_empty() {
-            r = r.on_hover_text(i.hint);
+            Some(on) => egui::Button::selectable(on, name),
+            // ai: run_command.id
+            None => egui::Button::new(name),
+        };
+        let mut r = ui.add_enabled(self.can_run(cmd), button.shortcut_text(keys));
+        match on {
+            Some(on) => {
+                let state = if on { "On" } else { "Off" };
+                r = r.on_hover_text(if i.hint.is_empty() {
+                    state.to_string()
+                } else {
+                    format!("{state}. {}", i.hint)
+                });
+            }
+            None if !i.hint.is_empty() => r = r.on_hover_text(i.hint),
+            None => {}
         }
         if r.clicked() {
             ui.close();

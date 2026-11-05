@@ -1795,7 +1795,7 @@ impl crate::App {
             _ => self.tuner.open,
         };
         let name = c.info().name.trim_end_matches('…');
-        let keys = self.commands.keymap.text(c);
+        let keys = self.commands.keymap.label(c);
         let r = ui
             .add(egui::Button::selectable(open, name).shortcut_text(keys))
             .on_hover_text(if open { "Close it" } else { "Open it" });
@@ -1886,7 +1886,7 @@ impl crate::App {
                             if ui.link(saved).on_hover_text("Use this name").clicked() {
                                 name = saved.clone();
                             }
-                            ui.weak(self.commands.keymap.text(Cmd::Layout(n as u8)));
+                            ui.weak(self.commands.keymap.label(Cmd::Layout(n as u8)));
                             // ai: layouts.remove
                             if ui
                                 .add(

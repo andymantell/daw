@@ -148,7 +148,7 @@ impl App {
                 let find_w = if narrow { 28.0 } else { 200.0 };
                 let room = ui.available_width() - find_w - 2.0 * ui.spacing().item_spacing.x;
                 self.status_pill(ui, room.clamp(ui.spacing().interact_size.y, PILL_WIDTH));
-                let keys = self.commands.keymap.text(Cmd::FindCommand);
+                let keys = self.commands.keymap.label(Cmd::FindCommand);
                 let find = if narrow {
                     // ai: find-command
                     IconButton::new(Icon::Search, "Find a command")

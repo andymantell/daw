@@ -11,3 +11,8 @@
 
 # Brainstorming mockups
 .superpowers/
+
+# The demo project (crates/app/src/demo_song.rs writes it): each computer's own copy and the backup are not kept
+/examples/*/Devices/
+/examples/*/project.daw.bak
+/examples/*/project.daw.tmp

@@ -47,6 +47,7 @@ mod commands;
 mod comments;
 mod comping;
 mod crash;
+mod demo_song;
 mod desk;
 mod drum_panel;
 mod export;

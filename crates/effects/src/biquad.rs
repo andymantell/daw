@@ -114,8 +114,8 @@ impl Coefs {
         )
     }
 
-    /// The gain at `hz`, as a factor, for tests.
-    #[cfg(test)]
+    /// The gain at `hz`, as a factor: for tests, and the EQ's drawn
+    /// curve.
     pub fn magnitude(&self, hz: f64, rate: f64) -> f64 {
         let w = 2.0 * PI * hz / rate;
         let z1 = (w.cos(), -w.sin());

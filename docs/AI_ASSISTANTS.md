@@ -153,6 +153,13 @@ assistant finds them for itself. In outline:
   sound). The panel's sound buttons are the commands `next-sound`,
   `previous-sound` and `compare-sound` (hears the sound as it was when
   the panel opened or a sound was chosen; again for the edits).
+- **Effect panels:** every built-in effect in the Effects tab is a unit
+  in the same rack, its front panel drawn from the kit; each knob and
+  switch is one of its settings (`fx:<effect>:<key>` for
+  `set_parameter`). `get_effects` gives each effect's `rack` view, which
+  `set_rack` changes with the effect's id as the unit, and for the
+  compressor, gate, limiter, de-esser and multiband `turning_down_db`,
+  what its meter shows.
 - **Arranging:** `import_audio`, `edit_clip`, `delete_clip`,
   `add_note_clip`, `edit_notes`, `edit_markers`, `set_tempo`, `set_key`,
   `set_loop`, `seek`, `select_clips`, `select_track`, `undo_steps`, `add_comment`,

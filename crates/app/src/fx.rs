@@ -14,6 +14,8 @@
 //! of effects, shown nested under the container in the effects window.
 
 use crate::icons::{Icon, IconButton};
+use crate::panel_kit::{EAR, Height, Rack, RackEntry};
+use daw_project::RackView;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1445,6 +1447,8 @@ impl Effects {
         frozen: Option<&str>,
         rate: u32,
         others: &[(String, String)],
+        rack: &mut Vec<daw_project::RackUnit>,
+        instrument: Option<&str>,
         message: &mut Option<String>,
     ) -> bool {
         let mut changed = false;
@@ -1457,20 +1461,62 @@ impl Effects {
         // Plugins whose side buses changed, to make again.
         let mut relayout = Vec::new();
         let mut picks = Vec::new();
+        let effects: Vec<Available> = self
+            .list
+            .plugins()
+            .into_iter()
+            .filter(|p| p.enabled && !p.class.is_instrument())
+            .collect();
+        // The toolbar: the track, adding effects, the chain's presets.
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(track).strong());
+            egui::ComboBox::from_id_salt("add-fx")
+                .selected_text("Add effect…")
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    if let Some(p) = add_list(ui, &mut self.filter, &effects) {
+                        add = Some((p, None));
+                    }
+                })
+                .response
+                .accessible_name("Add effect");
+            // ai: plugins
+            if ui.button("Plugins…").clicked() {
+                self.show_manager = true;
+            }
+            if ui
+                // ai: save_preset
+                .button("Save as preset…")
+                .on_hover_text("Keep this chain to put on other tracks and projects")
+                .clicked()
+            {
+                self.chain_ask = Some(ChainAsk::Save);
+            }
+            if ui
+                // ai: add_preset
+                .button("Presets…")
+                .on_hover_text("Put a saved chain or track preset on this track")
+                .clicked()
+            {
+                self.chain_ask = Some(ChainAsk::Load);
+            }
+            if let Some(line) = frozen {
+                ui.label(RichText::new(line).weak());
+            }
+        });
+        for name in missing {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(name).strong().weak());
+                ui.label(RichText::new("not installed here, kept as it is").weak());
+            });
+        }
         egui::ScrollArea::vertical()
             .id_salt("effects-pane")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.label(RichText::new(track).strong());
-                if slots.is_empty() && missing.is_empty() && layers.is_empty() {
+                if slots.is_empty() && layers.is_empty() {
                     ui.label("No effects on this track.");
-                }
-                for name in missing {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(name).strong().weak());
-                        ui.label(RichText::new("not installed here, kept as it is").weak());
-                    });
-                    ui.separator();
+                    return;
                 }
                 // Every layer and container's chains, to move an effect
                 // into.
@@ -1486,18 +1532,59 @@ impl Effects {
                         })
                     }))
                     .collect();
-                let effects: Vec<Available> = self
-                    .list
-                    .plugins()
-                    .into_iter()
-                    .filter(|p| p.enabled && !p.class.is_instrument())
-                    .collect();
-                for row in tree(slots, layers) {
+                // The rack: the track's units, and the menu of which show.
+                let mut entries = Vec::new();
+                if let Some(name) = instrument {
+                    entries.push(RackEntry {
+                        id: crate::instrument::INSTRUMENT_UNIT.into(),
+                        name: name.to_string(),
+                        view: crate::instrument::rack_view(
+                            rack,
+                            crate::instrument::INSTRUMENT_UNIT,
+                        ),
+                    });
+                }
+                entries.extend(slots.iter().map(|s| RackEntry {
+                    id: s.key.clone(),
+                    name: s.name.clone(),
+                    view: crate::instrument::rack_view(rack, &s.key),
+                }));
+                let (mut frame, change) = Rack::new(ui, &entries);
+                if let Some((unit, view)) = change {
+                    crate::instrument::set_rack_view(rack, &unit, view);
+                }
+                // Effects that fit half the rack's width go two to a row;
+                // one with no such neighbour takes the full width.
+                let rows = tree(slots, layers);
+                let half_width = frame.half_width() - 2.0 * EAR - 8.0;
+                let mut halves = Vec::new();
+                let mut alone = None;
+                for row in &rows {
+                    let Row::Fx { i, .. } = *row else {
+                        alone = None;
+                        continue;
+                    };
+                    let s = &slots[i];
+                    let view = crate::instrument::rack_view(rack, &s.key);
+                    if view == RackView::Hidden {
+                        continue;
+                    }
+                    let fits = view == RackView::Shown
+                        && s.crashed.is_none()
+                        && (s.builtin())
+                            .is_some_and(|b| crate::fx_panel::width(ui, b.kind()) <= half_width);
+                    match (fits, alone.take()) {
+                        (true, Some(j)) => halves.extend([j, i]),
+                        (true, None) => alone = Some(i),
+                        (false, _) => {}
+                    }
+                }
+                let mut hidden = 0;
+                for row in rows {
                     let (i, depth, idle) = match row {
                         Row::Layer { n } => {
                             let (key, name) = &layers[n];
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(name).italics().strong());
+                            frame.caption(ui, name, 0.0, |ui| {
                                 ui.menu_button("Add…", |ui| {
                                     if let Some(p) = add_list(ui, &mut self.filter, &effects) {
                                         add = Some((p, Some((key.clone(), 0))));
@@ -1510,18 +1597,20 @@ impl Effects {
                             continue;
                         }
                         Row::Own => {
-                            ui.label(
-                                RichText::new("The track's own chain, after the layers").italics(),
+                            frame.caption(
+                                ui,
+                                "The track's own chain, after the layers",
+                                0.0,
+                                |_| {},
                             );
                             continue;
                         }
                         Row::Chain { of, branch, depth } => {
-                            let name = slots[of].chain_name(branch);
+                            let chain = slots[of].chain_name(branch);
+                            let name = format!("{}: {chain}", slots[of].name);
                             let key = slots[of].key.clone();
                             let heard = slots[of].builtin().and_then(|b| b.heard());
-                            ui.horizontal(|ui| {
-                                ui.add_space(depth as f32 * 16.0);
-                                ui.label(RichText::new(&name).italics());
+                            frame.caption(ui, &name, depth as f32 * 16.0, |ui| {
                                 match heard {
                                     Some(h) if h == branch => {
                                         ui.label(RichText::new("heard").strong());
@@ -1538,12 +1627,18 @@ impl Effects {
                                     }
                                 })
                                 .response
-                                .accessible_name(format!("Add an effect to {name}"));
+                                .accessible_name(format!("Add an effect to {chain}"));
                             });
                             continue;
                         }
                         Row::Fx { i, depth, idle } => (i, depth, idle),
                     };
+                    let _ = depth;
+                    let view = crate::instrument::rack_view(rack, &slots[i].key);
+                    if view == RackView::Hidden {
+                        hidden += 1;
+                        continue;
+                    }
                     let sib = siblings(slots, layers, i);
                     let at = sib.iter().position(|&j| j == i).unwrap_or(0);
                     let up = at.checked_sub(1).map(|p| sib[p]);
@@ -1553,220 +1648,258 @@ impl Effects {
                         .map(|j| slots[j].key.clone())
                         .collect();
                     let s = &mut slots[i];
-                    ui.horizontal(|ui| {
-                        ui.add_space(depth as f32 * 16.0);
-                        let mut on = !s.bypass;
-                        if ui
-                            // ai: edit_effect
-                            .toggle_value(&mut on, "On")
-                            .on_hover_text("Switch off to bypass this effect")
-                            .changed()
-                        {
-                            s.bypass = !on;
-                            changed = true;
-                        }
-                        ui.label(RichText::new(&s.name).strong())
-                            .on_hover_text(format!("Runs {}", s.runs()));
-                        // A switching container: which chain is heard.
-                        if let Some(b) = s.builtin()
-                            && let Some(heard) = b.heard()
-                        {
-                            for c in 0..b.chains() {
-                                let name = s.chain_name(c);
-                                if ui
-                                    // ai: set_parameter
-                                    .selectable_label(heard == c, &name)
-                                    .on_hover_text(format!("Hear {name}"))
-                                    .clicked()
-                                {
-                                    b.set_heard(c);
-                                }
-                            }
-                        }
-                        if idle {
-                            ui.label(RichText::new("not playing").weak()).on_hover_text(
-                                "Its container has no chain of this number now; move it \
-                                 or add the chain back",
-                            );
-                        }
-                        if s.latency > 0 {
-                            ui.label(RichText::new(format!("{} smp", s.latency)).weak())
-                                .on_hover_text(
-                                    "Delay this effect adds (counting its helper process, \
-                                     if any); other tracks are kept in time",
-                                );
-                        }
-                        let late = s.late();
-                        if late > 0 {
-                            ui.label(RichText::new(format!("late ×{late}")).weak())
-                                .on_hover_text(
-                                    "Blocks its helper process was late with, played as \
-                                     silence. A bigger audio buffer gives it more time.",
-                                );
-                        }
-                        if s.is_plugin()
-                            && ui
-                                // ai: view
-                                .button("Edit")
-                                .on_hover_text("Open the plugin's own window")
-                                .clicked()
-                            && let Err(e) = s.open_editor()
-                        {
-                            *message = Some(format!("{}: {e}", s.name));
-                        }
-                        // ai: view
-                        ui.toggle_value(&mut s.show_params, "Controls")
-                            .on_hover_text("Show the effect's settings here");
-                        if s.takes_key() {
-                            let had = s.sidechain.is_some();
-                            if sidechain_picker(ui, s, others) {
-                                changed = true;
-                                if s.is_plugin() && had != s.sidechain.is_some() {
-                                    relayout.push(i);
-                                }
-                            }
-                        }
-                        if s.is_plugin() {
-                            ui.menu_button("Presets", |ui| {
-                                if let Some(e) = presets_menu(ui, s, &self.presets_dir) {
-                                    *message = Some(format!("{}: {e}", s.name));
-                                }
-                            })
-                            .response
-                            .accessible_name(format!("Presets for {}", s.name));
-                        }
-                        ui.menu_button("Move", |ui| {
-                            if ui
-                                .add_enabled(
-                                    s.place.is_some(),
-                                    // ai: edit_effect
-                                    egui::Button::new("To the track's own chain"),
-                                )
-                                .clicked()
+                    let id = egui::Id::unique(("fx-unit", s.id));
+                    if view == RackView::Collapsed {
+                        frame.strip(ui, id, &s.name.clone(), |ui| {
+                            changed |= power(ui, s);
+                            if let Some(b) = s.builtin()
+                                && b.kind().has_meter()
                             {
-                                moved = Some((i, None));
-                                ui.close();
-                            }
-                            for (key, branch, label) in &targets {
-                                if mine.contains(key) {
-                                    continue;
-                                }
-                                let here = s.place.as_ref() == Some(&(key.clone(), *branch));
-                                if ui
-                                    // ai: edit_effect
-                                    .add_enabled(!here, egui::Button::new(format!("Into {label}")))
-                                    .clicked()
-                                {
-                                    moved = Some((i, Some((key.clone(), *branch))));
-                                    ui.close();
-                                }
-                            }
-                        })
-                        .response
-                        .accessible_name(format!("Move {}", s.name));
-                        if ui
-                            // ai: edit_effect
-                            .add_enabled(
-                                up.is_some(),
-                                IconButton::new(Icon::MoveUp, format!("Move {} up", s.name))
-                                    .tip("Earlier in the chain"),
-                            )
-                            .clicked()
-                        {
-                            swap = up.map(|u| (u, i));
-                        }
-                        if ui
-                            // ai: edit_effect
-                            .add_enabled(
-                                down.is_some(),
-                                IconButton::new(Icon::MoveDown, format!("Move {} down", s.name))
-                                    .tip("Later in the chain"),
-                            )
-                            .clicked()
-                        {
-                            swap = down.map(|d| (i, d));
-                        }
-                        // ai: remove_effect
-                        if ui
-                            .add(
-                                IconButton::new(Icon::Close, format!("Remove {}", s.name))
-                                    .tip("Remove"),
-                            )
-                            .clicked()
-                        {
-                            remove = Some(i);
-                        }
-                    });
-                    if outputs_picker(ui, s) {
-                        relayout.push(i);
-                    }
-                    if let Some(note) = &s.note {
-                        ui.label(RichText::new(note).small().weak());
-                    }
-                    if let Some(why) = &s.crashed {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!("Stopped: {why}. Its audio passes through."))
-                                    .color(ui.visuals().error_fg_color),
-                            );
-                            // ai: edit_effect.restart
-                            if ui
-                                .button("Restart")
-                                .on_hover_text(
-                                    "Start the plugin again with its last saved settings",
-                                )
-                                .clicked()
-                            {
-                                restart = Some(i);
+                                let db = (-b.reduction_db()).max(0.0);
+                                let text = if db < 0.05 {
+                                    "0 dB".to_string()
+                                } else {
+                                    format!("−{db:.1} dB")
+                                };
+                                ui.label(RichText::new(text).weak())
+                                    .on_hover_text("How far it is turning the level down now");
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_millis(50));
                             }
                         });
+                        continue;
                     }
-                    if s.show_params
-                        && s.crashed.is_none()
-                        && let Some(pick) = params(ui, s)
-                    {
-                        picks.push((i, pick));
-                    }
-                    ui.separator();
-                }
-                ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt("add-fx")
-                        .selected_text("Add effect…")
-                        .width(220.0)
-                        .show_ui(ui, |ui| {
-                            if let Some(p) = add_list(ui, &mut self.filter, &effects) {
-                                add = Some((p, None));
+                    let kind = s.builtin().map(daw_effects::Effect::kind);
+                    let height = match kind {
+                        Some(k) if s.crashed.is_none() => {
+                            Height::Units(crate::fx_panel::face(k).units)
+                        }
+                        _ => Height::Fit,
+                    };
+                    let half = halves.contains(&i);
+                    frame.unit_of(ui, id, height, half, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.set_height(26.0);
+                            changed |= power(ui, s);
+                            let look = crate::theme::look(ui.ctx());
+                            ui.label(
+                                RichText::new(s.name.to_uppercase())
+                                    .font(look.font(look.heading * 0.8))
+                                    .color(look.c().badge),
+                            )
+                            .on_hover_text(match kind {
+                                Some(k) => format!("{}. Runs {}", k.about(), s.runs()),
+                                None => format!("Runs {}", s.runs()),
+                            });
+                            // A switching container: which chain is heard.
+                            if let Some(b) = s.builtin()
+                                && let Some(heard) = b.heard()
+                            {
+                                for c in 0..b.chains() {
+                                    let name = s.chain_name(c);
+                                    if ui
+                                        // ai: set_parameter
+                                        .selectable_label(heard == c, &name)
+                                        .on_hover_text(format!("Hear {name}"))
+                                        .clicked()
+                                    {
+                                        b.set_heard(c);
+                                    }
+                                }
                             }
-                        })
-                        .response
-                        .accessible_name("Add effect");
-                    // ai: plugins
-                    if ui.button("Plugins…").clicked() {
-                        self.show_manager = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui
-                        // ai: save_preset
-                        .button("Save as preset…")
-                        .on_hover_text("Keep this chain to put on other tracks and projects")
-                        .clicked()
-                    {
-                        self.chain_ask = Some(ChainAsk::Save);
-                    }
-                    if ui
-                        // ai: add_preset
-                        .button("Presets…")
-                        .on_hover_text("Put a saved chain or track preset on this track")
-                        .clicked()
-                    {
-                        self.chain_ask = Some(ChainAsk::Load);
-                    }
-                });
-                if let Some(line) = frozen {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(line).weak());
+                            if idle {
+                                ui.label(RichText::new("not playing").weak()).on_hover_text(
+                                    "Its container has no chain of this number now; move it \
+                                     or add the chain back",
+                                );
+                            }
+                            if s.latency > 0 {
+                                ui.label(RichText::new(format!("{} smp", s.latency)).weak())
+                                    .on_hover_text(
+                                        "Delay this effect adds (counting its helper process, \
+                                         if any); other tracks are kept in time",
+                                    );
+                            }
+                            let late = s.late();
+                            if late > 0 {
+                                ui.label(RichText::new(format!("late ×{late}")).weak())
+                                    .on_hover_text(
+                                        "Blocks its helper process was late with, played as \
+                                         silence. A bigger audio buffer gives it more time.",
+                                    );
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // ai: remove_effect
+                                    if ui
+                                        .add(
+                                            IconButton::new(
+                                                Icon::Close,
+                                                format!("Remove {}", s.name),
+                                            )
+                                            .small()
+                                            .tip("Remove"),
+                                        )
+                                        .clicked()
+                                    {
+                                        remove = Some(i);
+                                    }
+                                    if ui
+                                        // ai: edit_effect
+                                        .add_enabled(
+                                            down.is_some(),
+                                            IconButton::new(
+                                                Icon::MoveDown,
+                                                format!("Move {} down", s.name),
+                                            )
+                                            .small()
+                                            .tip("Later in the chain"),
+                                        )
+                                        .clicked()
+                                    {
+                                        swap = down.map(|d| (i, d));
+                                    }
+                                    if ui
+                                        // ai: edit_effect
+                                        .add_enabled(
+                                            up.is_some(),
+                                            IconButton::new(
+                                                Icon::MoveUp,
+                                                format!("Move {} up", s.name),
+                                            )
+                                            .small()
+                                            .tip("Earlier in the chain"),
+                                        )
+                                        .clicked()
+                                    {
+                                        swap = up.map(|u| (u, i));
+                                    }
+                                    ui.menu_button("Move", |ui| {
+                                        if ui
+                                            .add_enabled(
+                                                s.place.is_some(),
+                                                // ai: edit_effect
+                                                egui::Button::new("To the track's own chain"),
+                                            )
+                                            .clicked()
+                                        {
+                                            moved = Some((i, None));
+                                            ui.close();
+                                        }
+                                        for (key, branch, label) in &targets {
+                                            if mine.contains(key) {
+                                                continue;
+                                            }
+                                            let here =
+                                                s.place.as_ref() == Some(&(key.clone(), *branch));
+                                            if ui
+                                                // ai: edit_effect
+                                                .add_enabled(
+                                                    !here,
+                                                    egui::Button::new(format!("Into {label}")),
+                                                )
+                                                .clicked()
+                                            {
+                                                moved = Some((i, Some((key.clone(), *branch))));
+                                                ui.close();
+                                            }
+                                        }
+                                    })
+                                    .response
+                                    .accessible_name(format!("Move {}", s.name));
+                                    if s.is_plugin() {
+                                        ui.menu_button("Presets", |ui| {
+                                            if let Some(e) = presets_menu(ui, s, &self.presets_dir)
+                                            {
+                                                *message = Some(format!("{}: {e}", s.name));
+                                            }
+                                        })
+                                        .response
+                                        .accessible_name(format!("Presets for {}", s.name));
+                                    }
+                                    if s.takes_key() {
+                                        let had = s.sidechain.is_some();
+                                        if sidechain_picker(ui, s, others) {
+                                            changed = true;
+                                            if s.is_plugin() && had != s.sidechain.is_some() {
+                                                relayout.push(i);
+                                            }
+                                        }
+                                    }
+                                    if s.is_plugin() {
+                                        // ai: view
+                                        ui.toggle_value(&mut s.show_params, "Controls")
+                                            .on_hover_text("Show the plugin's settings here");
+                                        if ui
+                                            // ai: view
+                                            .button("Edit")
+                                            .on_hover_text("Open the plugin's own window")
+                                            .clicked()
+                                            && let Err(e) = s.open_editor()
+                                        {
+                                            *message = Some(format!("{}: {e}", s.name));
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                        if outputs_picker(ui, s) {
+                            relayout.push(i);
+                        }
+                        if let Some(note) = &s.note {
+                            ui.label(RichText::new(note).small().weak());
+                        }
+                        if let Some(why) = &s.crashed {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Stopped: {why}. Its audio passes through."
+                                    ))
+                                    .color(ui.visuals().error_fg_color),
+                                );
+                                // ai: edit_effect.restart
+                                if ui
+                                    .button("Restart")
+                                    .on_hover_text(
+                                        "Start the plugin again with its last saved settings",
+                                    )
+                                    .clicked()
+                                {
+                                    restart = Some(i);
+                                }
+                            });
+                            return;
+                        }
+                        let pick = match &s.kind {
+                            SlotKind::Builtin(b) => {
+                                let body = ui.available_height() - 4.0;
+                                crate::fx_panel::panel(ui, s.id, b, body)
+                            }
+                            SlotKind::Plugin { .. } if s.show_params => params(ui, s),
+                            SlotKind::Plugin { .. } => None,
+                        };
+                        if let Some(pick) = pick {
+                            picks.push((i, pick));
+                        }
+                    });
                 }
+                if hidden > 0 {
+                    let line = if hidden == 1 {
+                        "One effect is hidden from the rack; it still plays. Show in rack is the \
+                         menu at the top of the rail."
+                            .to_string()
+                    } else {
+                        format!(
+                            "{hidden} effects are hidden from the rack; they still play. Show in \
+                             rack is the menu at the top of the rail."
+                        )
+                    };
+                    frame.caption(ui, "", 0.0, |ui| {
+                        ui.label(RichText::new(line).weak());
+                    });
+                }
+                frame.finish(ui);
             });
         for (i, pick) in picks {
             let reference = match pick {
@@ -1847,6 +1980,20 @@ impl Effects {
         }
         changed
     }
+}
+
+/// An effect's on/off button. True if it changed.
+fn power(ui: &mut egui::Ui, s: &mut FxSlot) -> bool {
+    let mut on = !s.bypass;
+    let changed = ui
+        // ai: edit_effect
+        .toggle_value(&mut on, "On")
+        .on_hover_text("Switch off to bypass this effect")
+        .changed();
+    if changed {
+        s.bypass = !on;
+    }
+    changed
 }
 
 /// Where a saved effect sits.
@@ -2260,7 +2407,11 @@ fn file_name(reference: &str) -> String {
 
 /// The cabinet list of a speaker cabinet: those made here and a file of
 /// the user's own.
-fn cabinet_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<RoomPick> {
+pub(crate) fn cabinet_picker(
+    ui: &mut egui::Ui,
+    id: u64,
+    b: &daw_effects::Effect,
+) -> Option<RoomPick> {
     let reference = b.response_ref();
     let made = daw_effects::Kind::Cabinet.params()[0];
     let now = if reference.is_empty() {
@@ -2300,7 +2451,7 @@ fn cabinet_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option
 }
 
 /// The capture file a capture player plays, and a button to choose one.
-fn capture_picker(ui: &mut egui::Ui, b: &daw_effects::Effect) -> Option<RoomPick> {
+pub(crate) fn capture_picker(ui: &mut egui::Ui, b: &daw_effects::Effect) -> Option<RoomPick> {
     let reference = b.response_ref();
     let now = match b.capture() {
         Some(c) => c.name.clone().unwrap_or_else(|| file_name(&reference)),
@@ -2333,7 +2484,7 @@ fn capture_picker(ui: &mut egui::Ui, b: &daw_effects::Effect) -> Option<RoomPick
 
 /// The room list of a convolution reverb: the rooms made here, the
 /// recorded rooms that come with the app, and a file of the user's own.
-fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<RoomPick> {
+pub(crate) fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<RoomPick> {
     use daw_effects::library;
     let reference = b.response_ref();
     let made = daw_effects::Kind::Convolution.params()[0];
@@ -2394,7 +2545,7 @@ fn room_picker(ui: &mut egui::Ui, id: u64, b: &daw_effects::Effect) -> Option<Ro
 
 /// The line under a convolution reverb's room, a cabinet or a capture:
 /// who recorded it, or which file it is.
-fn room_note(ui: &egui::Ui, b: &daw_effects::Effect) -> Option<RichText> {
+pub(crate) fn room_note(ui: &egui::Ui, b: &daw_effects::Effect) -> Option<RichText> {
     use daw_effects::Kind;
     let reference = b.response_ref();
     if reference.is_empty() {

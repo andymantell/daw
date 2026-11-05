@@ -30,7 +30,11 @@ pub(crate) const TOOLS: &[Tool] = &[
                       the track it listens to (sidechain) if it can, a \
                       plugin's extra outputs and which are heard, the file a reverb, \
                       cabinet or amp capture player uses, and a plugin's presets and \
-                      programs. Also the recorded rooms a reverb can use.",
+                      programs; how each shows in the Effects tab's rack (rack: shown, \
+                      collapsed or hidden; set it with set_rack), and for a compressor, \
+                      gate, limiter, de-esser or multiband how far it is turning the level \
+                      down now (turning_down_db), as its meter shows. Also the recorded \
+                      rooms a reverb can use.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -246,6 +250,11 @@ impl App {
                 };
                 if let Some(why) = &s.crashed {
                     v["stopped"] = json!(why);
+                }
+                // How it shows in the Effects tab's rack.
+                v["rack"] = json!(crate::instrument::rack_view(&t.rack, &e.id).name());
+                if let Some(b) = s.builtin().filter(|b| b.kind().has_meter()) {
+                    v["turning_down_db"] = json!((-b.reduction_db()).max(0.0));
                 }
                 if s.chains() > 0 {
                     v["chains"] = json!(s.chains());

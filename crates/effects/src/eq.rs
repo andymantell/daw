@@ -95,6 +95,15 @@ impl Eq {
     }
 }
 
+/// The EQ's gain at `hz` with settings `v`, in dB: what its panel draws.
+pub(crate) fn response_db(v: &[f64], hz: f64) -> f64 {
+    const RATE: f64 = 48_000.0;
+    let bands: f64 = (Eq::design(v, RATE).iter().flatten())
+        .map(|c| c.magnitude(hz, RATE))
+        .product();
+    20.0 * bands.max(1e-6).log10() + v[12]
+}
+
 impl Dsp for Eq {
     fn update(&mut self, v: &[f64]) {
         for (b, c) in Eq::design(v, self.rate).into_iter().enumerate() {

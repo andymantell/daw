@@ -142,6 +142,15 @@ assistant finds them for itself. In outline:
   ranges, transpose, and its instrument's settings), `edit_pad_effect`
   (a drum machine pad's effects) and `set_instrument_output` (an
   instrument's extra outputs to buses).
+- **Instrument panels:** every built-in instrument's panel is drawn
+  from one kit (knobs, switches, modules, displays) in a rack; each
+  control is a setting, so `set_parameter` moves it. `get_instrument`
+  gives `sound` (the sound the settings are at, if one of its sounds)
+  and `rack` (each unit on the track with its view); `set_rack` shows a
+  unit in full, collapsed to a strip, or hidden (the view only, not the
+  sound). The panel's sound buttons are the commands `next-sound`,
+  `previous-sound` and `compare-sound` (hears the sound as it was when
+  the panel opened or a sound was chosen; again for the edits).
 - **Arranging:** `import_audio`, `edit_clip`, `delete_clip`,
   `add_note_clip`, `edit_notes`, `edit_markers`, `set_tempo`, `set_key`,
   `set_loop`, `seek`, `select_clips`, `select_track`, `undo_steps`, `add_comment`,

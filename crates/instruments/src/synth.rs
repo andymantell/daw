@@ -31,7 +31,7 @@ const FILTERS: &[&str] = &[
 const PLAY: &[&str] = &["Chords", "One note, gliding"];
 
 /// Settings by index; the order of [`params`].
-mod at {
+pub mod at {
     pub const OSC1: usize = 0;
     pub const OSC2: usize = 1;
     pub const OSC2_SEMIS: usize = 2;
@@ -123,6 +123,138 @@ pub const GROUPS: &[(&str, usize, usize)] = &[
     ("Playing", at::PLAY, at::LEVEL),
     ("Character", at::DRIVE, at::VINTAGE),
 ];
+
+/// Sounds made from the settings, for the panel's sound buttons and
+/// for assistants (`get_instrument` lists them).
+pub fn sounds() -> Vec<crate::Sound> {
+    use crate::Sound;
+    vec![
+        Sound {
+            name: "Warm pad",
+            settings: &[
+                ("osc2_cents", 12.0),
+                ("unison", 3.0),
+                ("detune", 18.0),
+                ("spread", 0.8),
+                ("cutoff", 1200.0),
+                ("resonance", 0.15),
+                ("filter_env", 1.0),
+                ("f_attack", 0.8),
+                ("f_decay", 2.0),
+                ("f_sustain", 0.5),
+                ("attack", 0.6),
+                ("decay", 1.0),
+                ("sustain", 0.8),
+                ("release", 1.2),
+                ("lfo_rate", 0.3),
+                ("lfo_cutoff", 0.3),
+                ("level", -12.0),
+            ],
+        },
+        Sound {
+            name: "Bright lead",
+            settings: &[
+                ("osc2", 3.0),
+                ("osc2_cents", 9.0),
+                ("unison", 2.0),
+                ("cutoff", 6000.0),
+                ("resonance", 0.3),
+                ("filter_env", 2.0),
+                ("f_decay", 0.3),
+                ("f_sustain", 0.2),
+                ("decay", 0.3),
+                ("sustain", 0.6),
+                ("release", 0.2),
+                ("play", 1.0),
+                ("glide", 0.05),
+                ("drive", 0.3),
+                ("level", -8.0),
+            ],
+        },
+        Sound {
+            name: "Round bass",
+            settings: &[
+                ("osc2", 1.0),
+                ("osc2_semis", -12.0),
+                ("osc2_cents", 0.0),
+                ("osc_mix", 0.4),
+                ("sub", 0.5),
+                ("filter", 3.0),
+                ("cutoff", 300.0),
+                ("resonance", 0.25),
+                ("filter_env", 2.0),
+                ("f_decay", 0.25),
+                ("f_sustain", 0.1),
+                ("attack", 0.003),
+                ("decay", 0.4),
+                ("release", 0.15),
+                ("play", 1.0),
+                ("glide", 0.03),
+                ("vintage", 0.3),
+                ("level", -8.0),
+            ],
+        },
+        Sound {
+            name: "Pluck",
+            settings: &[
+                ("osc1", 4.0),
+                ("width", 0.3),
+                ("osc2_cents", -7.0),
+                ("cutoff", 800.0),
+                ("filter_env", 3.0),
+                ("f_decay", 0.2),
+                ("f_sustain", 0.0),
+                ("attack", 0.002),
+                ("decay", 0.5),
+                ("sustain", 0.0),
+                ("release", 0.3),
+                ("level", -9.0),
+            ],
+        },
+        Sound {
+            name: "Strings",
+            settings: &[
+                ("osc2_cents", 15.0),
+                ("unison", 4.0),
+                ("detune", 20.0),
+                ("spread", 1.0),
+                ("cutoff", 3500.0),
+                ("resonance", 0.1),
+                ("filter_env", 0.5),
+                ("f_attack", 0.4),
+                ("f_sustain", 0.6),
+                ("attack", 0.35),
+                ("decay", 0.5),
+                ("sustain", 1.0),
+                ("release", 0.8),
+                ("lfo_rate", 5.5),
+                ("lfo_pitch", 0.08),
+                ("vintage", 0.2),
+                ("level", -12.0),
+            ],
+        },
+        Sound {
+            name: "Hollow keys",
+            settings: &[
+                ("osc1", 3.0),
+                ("osc2", 0.0),
+                ("osc2_semis", 12.0),
+                ("osc2_cents", 0.0),
+                ("osc_mix", 0.35),
+                ("cutoff", 2200.0),
+                ("resonance", 0.15),
+                ("filter_env", 1.2),
+                ("f_decay", 0.8),
+                ("f_sustain", 0.2),
+                ("attack", 0.003),
+                ("decay", 1.2),
+                ("sustain", 0.3),
+                ("release", 0.4),
+                ("level", -10.0),
+            ],
+        },
+    ]
+}
 
 /// One of the vintage toolkit's filters, by the filter choice.
 #[derive(Clone, Copy)]

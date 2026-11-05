@@ -139,6 +139,17 @@ pub(crate) enum Texture {
     Grain,
 }
 
+/// A surface drawn by code on a rack unit's front plate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Plate {
+    /// A flat plate.
+    Plain,
+    /// Faint hairlines across it, like brushed metal.
+    Brushed,
+    /// Faint rules down it, like a ruled card.
+    Ruled,
+}
+
 /// How the loop range is filled on the ruler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LoopFill {
@@ -219,6 +230,17 @@ pub(crate) struct Colours {
     pub(crate) error: Color32,
     pub(crate) texture: Color32,
     pub(crate) shadow: Color32,
+    /// The rack the built-in instruments and effects sit in (the panel
+    /// kit's frame): the rails at each side, a unit's front plate, the
+    /// light along the plate's top edge and the shade under its bottom
+    /// edge, the screw marks at its corners, and the lettering of its
+    /// name plate.
+    pub(crate) rail: Color32,
+    pub(crate) plate: Color32,
+    pub(crate) plate_edge: Color32,
+    pub(crate) plate_shadow: Color32,
+    pub(crate) screw: Color32,
+    pub(crate) badge: Color32,
     /// Track colours, used in turn.
     pub(crate) tracks: Vec<Color32>,
 }
@@ -262,6 +284,10 @@ pub(crate) struct Theme {
     pub(crate) wave: WaveStyle,
     pub(crate) wave_weight: f32,
     pub(crate) texture: Texture,
+    /// The rack frame's corner radius, line weight and plate surface.
+    pub(crate) rack_radius: f32,
+    pub(crate) rack_line: f32,
+    pub(crate) plate_surface: Plate,
     /// Glow around the playhead and traced waveforms, if on.
     pub(crate) glow: Option<f32>,
     pub(crate) dark: Colours,
@@ -490,6 +516,12 @@ impl Reader<'_> {
             error: c("error")?,
             texture: c("texture")?,
             shadow: c("shadow")?,
+            rail: c("rail")?,
+            plate: c("plate")?,
+            plate_edge: c("plate_edge")?,
+            plate_shadow: c("plate_shadow")?,
+            screw: c("screw")?,
+            badge: c("badge")?,
             tracks,
         })
     }
@@ -533,6 +565,16 @@ impl Theme {
             texture: r.choice(
                 "texture.kind",
                 &[("none", Texture::None), ("grain", Texture::Grain)],
+            )?,
+            rack_radius: r.num("rack.radius", 0.0..=24.0)?,
+            rack_line: r.num("rack.line", 0.5..=4.0)?,
+            plate_surface: r.choice(
+                "rack.plate",
+                &[
+                    ("plain", Plate::Plain),
+                    ("brushed", Plate::Brushed),
+                    ("ruled", Plate::Ruled),
+                ],
             )?,
             glow: if r.yes("glow.on")? {
                 Some(r.num("glow.radius", 0.0..=40.0)?)
@@ -646,6 +688,11 @@ impl Theme {
     /// The font for readouts such as the position counter.
     pub(crate) fn numerals_font(&self) -> FontId {
         FontId::new(self.numerals, family(&self.numerals_font))
+    }
+
+    /// The readout font at `size`.
+    pub(crate) fn numerals_font_at(&self, size: f32) -> FontId {
+        FontId::new(size, family(&self.numerals_font))
     }
 
     /// The theme's text font at `size`.

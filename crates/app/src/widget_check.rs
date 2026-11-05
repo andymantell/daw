@@ -41,6 +41,8 @@ const CONTROLS: &[&str] = &[
     "DragValue::new(",
     "Button::new(",
     "IconButton::labelled(",
+    "Knob::new(",
+    "Switch::new(",
     "TextEdit::singleline(",
     "TextEdit::multiline(",
     ".text_edit_singleline(",

@@ -1062,7 +1062,10 @@ mod tests {
                 .collect();
             assert_eq!(kinds, ["arpeggiator", "velocity"]);
             assert_eq!(app.instrument_open, Some(0), "the window shows them");
-            // In the window, with their settings.
+            // In the panel's "Notes in" button, which opens them with
+            // their settings.
+            h.get_by_label("Note effects (2)").click();
+            h.run();
             h.get_by_label("Arpeggiator");
             assert!(h.query_all_by_label("Octaves").next().is_some());
             // Saved with the project.

@@ -29,7 +29,9 @@ use eframe::egui;
 
 use crate::commands::Cmd;
 use crate::fx::{Effects, FxSlot};
+use crate::panel_kit::{Header, HeaderAction, Height, RAIL, Rack, RackEntry, header};
 use crate::spoken;
+use daw_project::RackView;
 
 /// The simple synth, as a project names it.
 pub const SYNTH: &str = "synth";
@@ -1051,74 +1053,7 @@ pub fn panel(ui: &mut egui::Ui, t: &mut crate::Track, mut cx: Ctx) -> Shown {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&t.name).strong());
                 ui.label("Instrument");
-                let current = match &t.instrument {
-                    _ if layered => "Layered instruments",
-                    Some(i) => i.name.as_str(),
-                    None => "None",
-                };
-                let now = (t.instrument.as_ref())
-                    .filter(|i| !layered && !i.is_plugin())
-                    .map(|i| i.kind());
-                egui::ComboBox::from_id_salt("instrument-choice")
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        let none = t.instrument.is_none() && !layered;
-                        if ui
-                            // ai: set_instrument.instrument
-                            .selectable_label(none, "None")
-                            .on_hover_text("Notes go only to the MIDI output, if one is chosen")
-                            .clicked()
-                            && !none
-                        {
-                            crate::layers::drop_layers(t);
-                            t.instrument = None;
-                            shown.changed = true;
-                        }
-                        for (kind, name) in choices() {
-                            let hint = kind.map_or(
-                                "The synth from the first version: one oscillator and a filter",
-                                |k| k.about(),
-                            );
-                            if ui
-                                // ai: set_instrument.instrument
-                                .selectable_label(now == Some(kind), name)
-                                .on_hover_text(hint)
-                                .clicked()
-                                && now != Some(kind)
-                            {
-                                let s = kind.map_or_else(Slot::synth, Slot::new);
-                                s.make_into(cx.rate, cx.pending);
-                                crate::layers::drop_layers(t);
-                                t.instrument = Some(s);
-                                shown.changed = true;
-                            }
-                        }
-                        let slot = t.instrument.as_ref().filter(|_| !layered);
-                        if let Some(s) = plugin_choices(ui, slot, &mut cx, &mut shown) {
-                            crate::layers::drop_layers(t);
-                            // Where another instrument's outputs went
-                            // means nothing to this one.
-                            t.instrument_outputs.clear();
-                            t.instrument = Some(s);
-                            shown.changed = true;
-                        }
-                        ui.separator();
-                        if ui
-                            // ai: add-layer
-                            .selectable_label(layered, "Layered instruments")
-                            .on_hover_text(
-                                "Several instruments playing the same notes, each with its own \
-                                 range of notes, level and effects: for a keyboard split or a \
-                                 doubled sound. The instrument now becomes the first layer",
-                            )
-                            .clicked()
-                            && !layered
-                        {
-                            shown.layer = Some(Edit::Add);
-                        }
-                    })
-                    .response
-                    .accessible_name("Instrument");
+                instrument_chooser(ui, t, &mut cx, &mut shown, layered);
             });
             if layered {
                 ui.separator();
@@ -1129,26 +1064,433 @@ pub fn panel(ui: &mut egui::Ui, t: &mut crate::Track, mut cx: Ctx) -> Shown {
                         shown.layer = edit.or(shown.layer);
                     });
                 ui.separator();
-                note_fx_section(ui, t, cx.scale, &mut shown);
-                note_repeat_picker(ui, t, &mut shown.changed);
-                midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
+                let edited = crate::notefx::controls(ui, &t.key, &mut t.note_fx, cx.scale);
+                shown.changed |= edited.changed;
+                shown.cmd = edited.cmd.or(shown.cmd);
+                ui.separator();
+                note_repeat_picker(ui, &t.key, &mut t.note_repeat, &mut shown.changed);
+                midi_out_picker(ui, &mut t.midi_out, cx.outputs, &mut shown.changed);
                 return;
             }
-            let Some(slot) = &mut t.instrument else {
+            if t.instrument.is_none() {
                 return;
-            };
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(520.0)
-                .show(ui, |ui| {
-                    slot_controls(ui, slot, &mut t.instrument_outputs, &mut cx, &mut shown);
-                });
-            ui.separator();
-            note_fx_section(ui, t, cx.scale, &mut shown);
-            note_repeat_picker(ui, t, &mut shown.changed);
-            midi_out_picker(ui, t, cx.outputs, &mut shown.changed);
+            }
+            ui.add_space(2.0);
+            rack_panel(ui, t, &mut cx, &mut shown);
         });
+    let _ = Edit::Add;
     shown
+}
+
+/// The drop-down choosing the track's instrument.
+fn instrument_chooser(
+    ui: &mut egui::Ui,
+    t: &mut crate::Track,
+    cx: &mut Ctx,
+    shown: &mut Shown,
+    layered: bool,
+) {
+    use crate::layers::Edit;
+    let current = match &t.instrument {
+        _ if layered => "Layered instruments",
+        Some(i) => i.name.as_str(),
+        None => "None",
+    };
+    let now = (t.instrument.as_ref())
+        .filter(|i| !layered && !i.is_plugin())
+        .map(|i| i.kind());
+    egui::ComboBox::from_id_salt("instrument-choice")
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            let none = t.instrument.is_none() && !layered;
+            if ui
+                // ai: set_instrument.instrument
+                .selectable_label(none, "None")
+                .on_hover_text("Notes go only to the MIDI output, if one is chosen")
+                .clicked()
+                && !none
+            {
+                crate::layers::drop_layers(t);
+                t.instrument = None;
+                shown.changed = true;
+            }
+            for (kind, name) in choices() {
+                let hint = kind.map_or(
+                    "The synth from the first version: one oscillator and a filter",
+                    |k| k.about(),
+                );
+                if ui
+                    // ai: set_instrument.instrument
+                    .selectable_label(now == Some(kind), name)
+                    .on_hover_text(hint)
+                    .clicked()
+                    && now != Some(kind)
+                {
+                    let s = kind.map_or_else(Slot::synth, Slot::new);
+                    s.make_into(cx.rate, cx.pending);
+                    crate::layers::drop_layers(t);
+                    t.instrument = Some(s);
+                    shown.changed = true;
+                }
+            }
+            let slot = t.instrument.as_ref().filter(|_| !layered);
+            if let Some(s) = plugin_choices(ui, slot, cx, shown) {
+                crate::layers::drop_layers(t);
+                // Where another instrument's outputs went
+                // means nothing to this one.
+                t.instrument_outputs.clear();
+                t.instrument = Some(s);
+                shown.changed = true;
+            }
+            ui.separator();
+            if ui
+                // ai: add-layer
+                .selectable_label(layered, "Layered instruments")
+                .on_hover_text(
+                    "Several instruments playing the same notes, each with its own \
+                     range of notes, level and effects: for a keyboard split or a \
+                     doubled sound. The instrument now becomes the first layer",
+                )
+                .clicked()
+                && !layered
+            {
+                shown.layer = Some(Edit::Add);
+            }
+        })
+        .response
+        .accessible_name("Instrument");
+}
+
+/// The unit id of a track's instrument in its rack.
+pub(crate) const INSTRUMENT_UNIT: &str = "instrument";
+
+/// Shows `unit` of `rack` as `view`; `all` shows every unit.
+pub(crate) fn set_rack_view(rack: &mut Vec<daw_project::RackUnit>, unit: &str, view: RackView) {
+    if unit == "all" {
+        rack.clear();
+        return;
+    }
+    rack.retain(|u| u.unit != unit);
+    if view != RackView::Shown {
+        rack.push(daw_project::RackUnit {
+            unit: unit.to_string(),
+            view,
+        });
+        rack.sort_by(|a, b| a.unit.cmp(&b.unit));
+    }
+}
+
+/// How `unit` shows in `rack`.
+pub(crate) fn rack_view(rack: &[daw_project::RackUnit], unit: &str) -> RackView {
+    (rack.iter())
+        .find(|u| u.unit == unit)
+        .map_or(RackView::Shown, |u| u.view)
+}
+
+/// The units a track's rack lists: its instrument, then its effects.
+pub(crate) fn rack_entries(t: &crate::Track) -> Vec<RackEntry> {
+    let mut v = Vec::new();
+    if let Some(i) = &t.instrument {
+        v.push(RackEntry {
+            id: INSTRUMENT_UNIT.into(),
+            name: i.name.clone(),
+            view: rack_view(&t.rack, INSTRUMENT_UNIT),
+        });
+    }
+    for f in &t.fx {
+        v.push(RackEntry {
+            id: f.key.clone(),
+            name: f.name.clone(),
+            view: rack_view(&t.rack, &f.key),
+        });
+    }
+    v
+}
+
+/// The settings kept for Compare: the sound as it was when the panel
+/// first showed it or a sound was chosen, and, while comparing, the
+/// edits put aside.
+#[derive(Clone, Default)]
+struct Compare {
+    kept: Vec<(String, f64)>,
+    edited: Option<Vec<(String, f64)>>,
+}
+
+fn compare_id(slot: u64) -> egui::Id {
+    egui::Id::unique(("compare-sound", slot))
+}
+
+/// What Compare holds for `slot`, started from its settings now.
+fn compare_state(ctx: &egui::Context, slot: &Slot) -> Compare {
+    let id = compare_id(slot.id);
+    ctx.data_mut(|d| {
+        d.get_temp::<Compare>(id).unwrap_or_else(|| {
+            let kept = slot
+                .builtin_ref()
+                .map(|b| b.params().values())
+                .unwrap_or_default();
+            let c = Compare { kept, edited: None };
+            d.insert_temp(id, c.clone());
+            c
+        })
+    })
+}
+
+/// Keeps the settings now as the sound to compare against.
+fn keep_for_compare(ctx: &egui::Context, slot: &Slot) {
+    let kept = slot
+        .builtin_ref()
+        .map(|b| b.params().values())
+        .unwrap_or_default();
+    ctx.data_mut(|d| d.insert_temp(compare_id(slot.id), Compare { kept, edited: None }));
+}
+
+/// Compare: swaps the settings with those kept, and back.
+pub(crate) fn compare_sound(ctx: &egui::Context, slot: &Slot) {
+    let Some(b) = slot.builtin_ref() else {
+        return;
+    };
+    let mut c = compare_state(ctx, slot);
+    match c.edited.take() {
+        Some(edited) => b.params().load(&edited),
+        None => {
+            c.edited = Some(b.params().values());
+            b.params().load(&c.kept);
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(compare_id(slot.id), c));
+}
+
+/// Whether Compare is showing the kept sound.
+pub(crate) fn comparing(ctx: &egui::Context, slot: &Slot) -> bool {
+    ctx.data(|d| d.get_temp::<Compare>(compare_id(slot.id)))
+        .is_some_and(|c| c.edited.is_some())
+}
+
+/// Steps to the next (`by` 1) or previous (-1) of the instrument's
+/// sounds, from the one playing, or the first. The sound chosen.
+pub(crate) fn step_sound(ctx: &egui::Context, slot: &Slot, by: i32) -> Option<&'static str> {
+    let b = slot.builtin_ref()?;
+    let sounds = b.kind().sounds();
+    if sounds.is_empty() {
+        return None;
+    }
+    let n = sounds.len() as i32;
+    let now = b
+        .current_sound()
+        .and_then(|s| sounds.iter().position(|x| x.name == s));
+    let next = match now {
+        Some(i) => (i as i32 + by).rem_euclid(n),
+        None if by < 0 => n - 1,
+        None => 0,
+    };
+    let name = sounds[next as usize].name;
+    b.set_sound(name);
+    keep_for_compare(ctx, slot);
+    Some(name)
+}
+
+/// The height, in rack units, of a built-in instrument's panel on the
+/// kit; `Fit` for one still on its settings grid.
+fn unit_height(kind: Option<Kind>) -> Height {
+    match kind {
+        Some(Kind::Synth) => Height::Units(3),
+        _ => Height::Fit,
+    }
+}
+
+/// The track's instrument as a unit in the rack: the rails, the "Show in
+/// rack" menu, and the unit in full, as a strip, or hidden.
+fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut Shown) {
+    let entries = rack_entries(t);
+    let (mut rack, change) = Rack::new(ui, &entries);
+    if let Some((unit, view)) = change {
+        set_rack_view(&mut t.rack, &unit, view);
+    }
+    let view = rack_view(&t.rack, INSTRUMENT_UNIT);
+    let crate::Track {
+        key,
+        instrument,
+        instrument_outputs,
+        note_fx,
+        note_repeat,
+        midi_out,
+        meter,
+        ..
+    } = t;
+    let Some(slot) = instrument else {
+        return;
+    };
+    let id = egui::Id::unique(("instrument-unit", slot.id));
+    let name = slot.name.clone();
+    let kind = slot.kind();
+    let about = match (slot.is_plugin(), kind) {
+        (true, _) => "Plugin instrument".to_string(),
+        (false, None) => "The synth from the first version: one oscillator and a filter".into(),
+        (false, Some(k)) => k.about().to_string(),
+    };
+    let ctx = ui.ctx().clone();
+    match view {
+        RackView::Hidden => {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(RAIL + 8.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{name} is hidden from the rack; it still plays. Show in rack is the menu at the top of the rail."
+                    ))
+                    .weak(),
+                );
+            });
+        }
+        RackView::Collapsed => {
+            let sound = slot.builtin_ref().and_then(|b| b.current_sound());
+            let level = meter.0.max(meter.1);
+            rack.strip(ui, id, &name, |ui| {
+                if let Some(s) = sound {
+                    ui.label(egui::RichText::new(s).weak());
+                }
+                strip_meter(ui, level);
+            });
+        }
+        RackView::Shown => {
+            let height = unit_height(if slot.is_plugin() { None } else { kind }).max_fit(kind);
+            rack.unit(ui, id, height, |ui| {
+                let sound = slot
+                    .builtin_ref()
+                    .and_then(|b| b.current_sound())
+                    .map(String::from);
+                let has_sounds = kind.is_some_and(|k| !k.sounds().is_empty()) && !slot.is_plugin();
+                let comparing = comparing(&ctx, slot);
+                let mut cmd = None;
+                let action = header(
+                    ui,
+                    Header {
+                        name: &name,
+                        about: &about,
+                        sound,
+                        has_sounds,
+                        comparing,
+                    },
+                    |ui| {
+                        notes_in(ui, key, note_fx, note_repeat, midi_out, cx, shown, &mut cmd);
+                    },
+                );
+                shown.cmd = cmd.or(shown.cmd);
+                match action {
+                    Some(HeaderAction::Previous) => {
+                        step_sound(&ctx, slot, -1);
+                    }
+                    Some(HeaderAction::Next) => {
+                        step_sound(&ctx, slot, 1);
+                    }
+                    Some(HeaderAction::Save) => shown.cmd = Some(Cmd::SaveTrackPreset),
+                    Some(HeaderAction::Compare) => compare_sound(&ctx, slot),
+                    None => {}
+                }
+                ui.add_space(2.0);
+                let body = ui.available_height();
+                match kind {
+                    Some(Kind::Synth) if !slot.is_plugin() => {
+                        if let Some(b) = slot.builtin_ref() {
+                            let p = b.params().clone();
+                            crate::synth_panel::poly_synth(ui, &p, slot.id, body);
+                        }
+                    }
+                    _ => {
+                        slot_controls(ui, slot, instrument_outputs, cx, shown);
+                    }
+                }
+            });
+        }
+    }
+}
+
+impl Height {
+    /// A unit on the kit keeps its height; one on its settings grid fits
+    /// its contents, whatever its kind.
+    fn max_fit(self, _kind: Option<Kind>) -> Height {
+        self
+    }
+}
+
+/// A small level meter on a collapsed unit's strip.
+fn strip_meter(ui: &mut egui::Ui, level: f32) {
+    let look = crate::theme::look(ui.ctx());
+    let c = look.c();
+    let (_, rect) = ui.allocate_space(egui::vec2(60.0, 8.0));
+    let p = ui.painter();
+    p.rect_filled(rect, 2.0, c.meter_bg);
+    let db = 20.0 * level.max(1e-5).log10();
+    let k = ((db + 48.0) / 48.0).clamp(0.0, 1.0);
+    if k > 0.0 {
+        let lit = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * k, rect.height()));
+        let colour = if db > 0.0 {
+            c.meter_high
+        } else if db > -12.0 {
+            c.meter_mid
+        } else {
+            c.meter_low
+        };
+        p.rect_filled(lit, 2.0, colour);
+    }
+}
+
+/// The "Notes in" buttons at the right of the header: the note effects,
+/// note repeat and MIDI output, each opening its controls.
+#[allow(clippy::too_many_arguments)]
+fn notes_in(
+    ui: &mut egui::Ui,
+    key: &str,
+    note_fx: &mut Vec<daw_project::NoteFx>,
+    note_repeat: &mut Option<daw_project::StepRate>,
+    midi_out: &mut Option<usize>,
+    cx: &Ctx,
+    shown: &mut Shown,
+    cmd: &mut Option<Cmd>,
+) {
+    use egui::{Popup, PopupCloseBehavior};
+    let look = crate::theme::look(ui.ctx());
+    // Right to left: the last first.
+    let out = (midi_out.and_then(|p| cx.outputs.get(p))).map_or("none", |s| s.as_str());
+    // ai: set_track_input.midi_out
+    let r = ui
+        .small_button(format!("MIDI out: {out}"))
+        .on_hover_text("A MIDI device or program this track's notes also go to");
+    Popup::menu(&r)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(220.0);
+            midi_out_picker(ui, midi_out, cx.outputs, &mut shown.changed);
+        });
+    let rep = note_repeat.map_or("off", |r| r.label());
+    // ai: edit_instrument.note_repeat
+    let r = ui
+        .small_button(format!("Repeat: {rep}"))
+        .on_hover_text("Keys and pads held down play again at this rate");
+    Popup::menu(&r)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(200.0);
+            note_repeat_picker(ui, key, note_repeat, &mut shown.changed);
+        });
+    // ai: run_command.id
+    let r = ui
+        .small_button(format!("Note effects ({})", note_fx.len()))
+        .on_hover_text("Effects on the notes before the instrument: an arpeggiator, chords…");
+    Popup::menu(&r)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(360.0);
+            let edited = crate::notefx::controls(ui, key, note_fx, cx.scale);
+            shown.changed |= edited.changed;
+            *cmd = edited.cmd.or(cmd.take());
+        });
+    ui.label(
+        egui::RichText::new("Notes in")
+            .size(look.small)
+            .color(look.c().text_dim),
+    );
 }
 
 /// The controls of the instrument in `slot`, with where its extra
@@ -1208,26 +1550,18 @@ pub(crate) fn slot_controls(
     }
 }
 
-/// The track's note effects (Phase 4, A6), at the head of its chain.
-fn note_fx_section(
-    ui: &mut egui::Ui,
-    t: &mut crate::Track,
-    scale: Option<daw_project::Scale>,
-    shown: &mut Shown,
-) {
-    let edited = crate::notefx::controls(ui, &t.key, &mut t.note_fx, scale);
-    shown.changed |= edited.changed;
-    shown.cmd = edited.cmd.or(shown.cmd);
-    ui.separator();
-}
-
 /// Note-repeat: off, or how often held keys and pads play again.
-fn note_repeat_picker(ui: &mut egui::Ui, t: &mut crate::Track, changed: &mut bool) {
+fn note_repeat_picker(
+    ui: &mut egui::Ui,
+    key: &str,
+    note_repeat: &mut Option<daw_project::StepRate>,
+    changed: &mut bool,
+) {
     ui.horizontal(|ui| {
         ui.label("Note repeat");
         let text = |r: Option<daw_project::StepRate>| r.map_or("Off", |r| r.label());
-        let mut now = t.note_repeat;
-        egui::ComboBox::from_id_salt(("note-repeat", &t.key))
+        let mut now = *note_repeat;
+        egui::ComboBox::from_id_salt(("note-repeat", key))
             .selected_text(text(now))
             .show_ui(ui, |ui| {
                 // ai: edit_instrument.note_repeat
@@ -1242,8 +1576,8 @@ fn note_repeat_picker(ui: &mut egui::Ui, t: &mut crate::Track, changed: &mut boo
             .on_hover_text(
                 "Keys and pads held down play again at this rate, for rolls and hi-hat runs",
             );
-        if now != t.note_repeat {
-            t.note_repeat = now;
+        if now != *note_repeat {
+            *note_repeat = now;
             *changed = true;
         }
     });
@@ -1251,32 +1585,29 @@ fn note_repeat_picker(ui: &mut egui::Ui, t: &mut crate::Track, changed: &mut boo
 
 fn midi_out_picker(
     ui: &mut egui::Ui,
-    t: &mut crate::Track,
+    midi_out: &mut Option<usize>,
     outputs: &[String],
     changed: &mut bool,
 ) {
     ui.horizontal(|ui| {
         ui.label("MIDI output");
-        let current = t
-            .midi_out
+        let current = midi_out
             .and_then(|p| outputs.get(p))
             .map_or("None", |s| s.as_str());
         egui::ComboBox::from_id_salt("midi-out")
             .selected_text(current)
             .show_ui(ui, |ui| {
                 // ai: set_track_input.midi_out
-                if ui.selectable_label(t.midi_out.is_none(), "None").clicked()
-                    && t.midi_out.is_some()
-                {
-                    t.midi_out = None;
+                if ui.selectable_label(midi_out.is_none(), "None").clicked() && midi_out.is_some() {
+                    *midi_out = None;
                     *changed = true;
                 }
                 for (p, name) in outputs.iter().enumerate() {
                     // ai: set_track_input.midi_out
-                    if ui.selectable_label(t.midi_out == Some(p), name).clicked()
-                        && t.midi_out != Some(p)
+                    if ui.selectable_label(*midi_out == Some(p), name).clicked()
+                        && *midi_out != Some(p)
                     {
-                        t.midi_out = Some(p);
+                        *midi_out = Some(p);
                         *changed = true;
                     }
                 }
@@ -3326,5 +3657,146 @@ mod plugin_tests {
             )
             .is_err()
         );
+    }
+}
+
+/// The panel kit on the poly-synth, driven through the assistant
+/// interface and the controls themselves.
+#[cfg(test)]
+mod kit_tests {
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    use crate::agent::driver::Driver;
+    use crate::workspace::Pane;
+
+    fn cutoff(d: &mut Driver, t: &str) -> f64 {
+        let p = d.call("list_parameters", json!({"track": t})).unwrap();
+        (p[0]["params"].as_array().unwrap().iter())
+            .find(|p| p["param"] == "instrument.cutoff")
+            .map(|p| p["value"].as_f64().unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn the_poly_synth_panel_is_a_rack_unit_an_assistant_sees_and_steers() {
+        let mut d = Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "poly-synth", "name": "Keys"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        d.app().instrument_open = Some(0);
+        d.app().workspace.full = Some(Pane::Instrument);
+        d.h.run();
+        d.h.run();
+
+        // The header, the modules' knobs and switches, and the rack.
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(info["sound"], json!(null), "{info}");
+        assert_eq!(
+            info["rack"],
+            json!([{"unit": "instrument", "name": "Synth", "view": "shown"}])
+        );
+        d.h.get_by_label("Cutoff");
+        d.h.get_by_label("Oscillator 1: Saw");
+        d.h.get_by_label("Show in rack");
+
+        // A switch sets the setting an assistant reads.
+        d.h.get_by_label("Oscillator 1: Sine").click();
+        d.h.run();
+        let p = d.call("list_parameters", json!({"track": t})).unwrap();
+        let osc1 = (p[0]["params"].as_array().unwrap().iter())
+            .find(|p| p["param"] == "instrument.osc1")
+            .unwrap();
+        assert_eq!(osc1["value"], json!(0.0), "{osc1}");
+
+        // The sound buttons step through the synth's sounds, by click
+        // and by command, and get_instrument says which is playing.
+        d.h.get_by_label("Next sound").click();
+        d.h.run();
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(info["sound"], "Warm pad", "{info}");
+        d.command("next-sound");
+        d.h.run();
+        assert_eq!(
+            d.call("get_instrument", json!({"track": t})).unwrap()["sound"],
+            "Bright lead"
+        );
+        d.command("previous-sound");
+        d.h.run();
+        assert_eq!(
+            d.call("get_instrument", json!({"track": t})).unwrap()["sound"],
+            "Warm pad"
+        );
+        let kept = cutoff(&mut d, &t);
+
+        // Compare: an edit, then the sound as it was, then the edit.
+        d.call(
+            "set_parameter",
+            json!({"track": t, "param": "instrument.cutoff", "value": 500.0}),
+        )
+        .unwrap();
+        d.h.run();
+        assert_eq!(
+            d.call("get_instrument", json!({"track": t})).unwrap()["sound"],
+            json!(null),
+            "edited, so no longer the sound"
+        );
+        d.h.get_by_label("Compare").click();
+        d.h.run();
+        assert_eq!(cutoff(&mut d, &t), kept);
+        d.command("compare-sound");
+        d.h.run();
+        assert_eq!(cutoff(&mut d, &t), 500.0);
+
+        // The rack view: collapsed to a strip, hidden, and shown again,
+        // by tool and from the rail's menu; kept in the project.
+        d.call(
+            "set_rack",
+            json!({"track": t, "unit": "instrument", "view": "collapsed"}),
+        )
+        .unwrap();
+        d.h.run();
+        assert!(
+            d.h.query_by_label("Cutoff").is_none(),
+            "a strip has no knobs"
+        );
+        assert_eq!(
+            d.call("get_instrument", json!({"track": t})).unwrap()["rack"][0]["view"],
+            "collapsed"
+        );
+        assert_eq!(
+            d.app().project().tracks[0].rack,
+            vec![daw_project::RackUnit {
+                unit: "instrument".into(),
+                view: daw_project::RackView::Collapsed
+            }],
+            "kept in the project"
+        );
+        d.call(
+            "set_rack",
+            json!({"track": t, "unit": "all", "view": "shown"}),
+        )
+        .unwrap();
+        d.h.run();
+        d.h.get_by_label("Cutoff");
+        d.h.get_by_label("Show in rack").click();
+        d.h.run();
+        d.h.get_by_label("Synth").click();
+        d.h.run();
+        assert_eq!(
+            d.call("get_instrument", json!({"track": t})).unwrap()["rack"][0]["view"],
+            "hidden"
+        );
+        assert!(d.h.query_by_label("Cutoff").is_none());
+        let e = d
+            .call(
+                "set_rack",
+                json!({"track": t, "unit": "nothing", "view": "shown"}),
+            )
+            .unwrap_err();
+        assert!(e.contains("no unit"), "{e}");
     }
 }

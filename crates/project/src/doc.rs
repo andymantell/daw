@@ -48,9 +48,9 @@ use crate::{
     Articulation, Assignment, AutoPoint, Clip, Comment, Comp, CompPart, ControlGroup, CueLevel,
     CueMix, Curve, EditGroup, Effect, EffectState, Fade, Frozen, FrozenClip, GainPoint, Groove,
     GrooveStep, HitPoint, InstrumentOutput, Lane, Layer, Marker, Master, MeterChange, MidiMap,
-    Notation, NotationView, Note, NoteClip, NoteFx, Practice, Project, Scale, Send, StretchMarker,
-    TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind, TrackVersion,
-    TrainerSettings, VideoClip, differences, is_asset_name,
+    Notation, NotationView, Note, NoteClip, NoteFx, Practice, Project, RackUnit, RackView, Scale,
+    Send, StretchMarker, TabBlock, Technique, TempoChange, TimecodeSetup, Track, TrackKind,
+    TrackVersion, TrainerSettings, VideoClip, differences, is_asset_name,
 };
 
 /// Commits with this origin (plugin state written at save time) are left
@@ -1158,7 +1158,45 @@ fn write_track(w: &mut Writer, m: &LoroMap, t: &Track) {
         None => {}
     }
     write_note_fx(w, m, t);
+    write_rack(w, m, t);
     write_versions(w, m, t);
+}
+
+/// A track's rack views: a `rack` map from unit id to `collapsed` or
+/// `hidden`, kept only while a unit is one of those.
+fn write_rack(w: &mut Writer, m: &LoroMap, t: &Track) {
+    if t.rack.is_empty() && m.get("rack").is_none() {
+        return;
+    }
+    let rm = w.fixed(m, "rack");
+    let keep: HashSet<&str> = t.rack.iter().map(|u| u.unit.as_str()).collect();
+    for id in keys(&rm) {
+        if !keep.contains(id.as_str()) {
+            w.delete(&rm, &id);
+        }
+    }
+    for u in &t.rack {
+        w.put(&rm, &u.unit, u.view.name());
+    }
+}
+
+/// A track's rack views, by unit id.
+fn read_rack(t: &LoroMapValue) -> Vec<RackUnit> {
+    let Some(LoroValue::Map(rm)) = t.get("rack") else {
+        return Vec::new();
+    };
+    let mut out: Vec<RackUnit> = (rm.keys())
+        .filter_map(|k| {
+            let view = RackView::from_name(&string(rm, k)?)?;
+            Some(RackUnit {
+                unit: k.to_string(),
+                view,
+            })
+        })
+        .filter(|u| u.view != RackView::Shown)
+        .collect();
+    out.sort_by(|a, b| a.unit.cmp(&b.unit));
+    out
 }
 
 /// A track's versions: a `versions` map from id to its name and place,
@@ -2094,6 +2132,7 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         versions: Vec::new(),
         version: None,
         note_fx: read_note_fx(t),
+        rack: read_rack(t),
     };
     if let Some(LoroValue::Map(nm)) = t.get("notation") {
         let tuning = match nm.get("tuning") {

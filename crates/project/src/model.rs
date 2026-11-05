@@ -235,6 +235,65 @@ pub struct Track {
     /// notes go through before its instrument, in order. Shared by every
     /// version of the track, like its notation lane.
     pub note_fx: Vec<NoteFx>,
+    /// How the track's units (its instrument and each effect) show in
+    /// the rack panel: only those collapsed or hidden are listed; the
+    /// rest show in full. Changes the view, not the sound.
+    pub rack: Vec<RackUnit>,
+}
+
+/// How one unit shows in a track's rack panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RackUnit {
+    /// `instrument`, or an effect's id.
+    pub unit: String,
+    pub view: RackView,
+}
+
+/// How a unit shows in the rack: in full, as a slim strip (its name
+/// plate and little else), or not at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RackView {
+    #[default]
+    Shown,
+    Collapsed,
+    Hidden,
+}
+
+impl RackView {
+    pub const ALL: [RackView; 3] = [RackView::Shown, RackView::Collapsed, RackView::Hidden];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RackView::Shown => "shown",
+            RackView::Collapsed => "collapsed",
+            RackView::Hidden => "hidden",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<RackView> {
+        RackView::ALL.into_iter().find(|v| v.name() == s)
+    }
+}
+
+impl Track {
+    /// How `unit` shows in the rack.
+    pub fn rack_view(&self, unit: &str) -> RackView {
+        (self.rack.iter())
+            .find(|u| u.unit == unit)
+            .map_or(RackView::Shown, |u| u.view)
+    }
+
+    /// Shows `unit` in the rack as `view`.
+    pub fn set_rack_view(&mut self, unit: &str, view: RackView) {
+        self.rack.retain(|u| u.unit != unit);
+        if view != RackView::Shown {
+            self.rack.push(RackUnit {
+                unit: unit.to_string(),
+                view,
+            });
+            self.rack.sort_by(|a, b| a.unit.cmp(&b.unit));
+        }
+    }
 }
 
 /// A version of a track: its clips, note clips, comps, effects,
@@ -391,6 +450,7 @@ impl Track {
             versions: Vec::new(),
             version: None,
             note_fx: Vec::new(),
+            rack: Vec::new(),
         }
     }
 

@@ -35,8 +35,10 @@ pub(crate) const TOOLS: &[Tool] = &[
                       sound bank loaded (load-synth-bank), the bank's sounds with their \
                       settings; for a sampler playing an \
                       SFZ library, the library: its keys, articulations and controls \
-                      (mic levels and the like, each a setting). Its settings are in \
-                      list_parameters.",
+                      (mic levels and the like, each a setting); the sound the settings \
+                      are at now, if one of the listed ones; and its rack: each unit \
+                      (the instrument, then each effect) with how it shows (set_rack). \
+                      Its settings are in list_parameters.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -63,6 +65,22 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "settings": {"type": "object", "additionalProperties": {"type": "number"},
                              "description": "The instrument's settings by key (the part after instrument. in list_parameters, or as get_instrument with settings lists a layer's); each kept in its range."}
             }, "required": ["track"]})
+        },
+    },
+    Tool {
+        name: "set_rack",
+        description: "How a unit of a track's rack panel shows: shown in full, collapsed \
+                      to a slim strip, or hidden from the rack. A unit is the track's \
+                      instrument (\"instrument\") or one of its effects by id; \"all\" \
+                      with shown shows every unit. Changes the view only, not the sound. \
+                      get_instrument lists the rack with each unit's view.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string"},
+                "unit": {"type": "string", "description": "\"instrument\", an effect's id, or \"all\"."},
+                "view": {"type": "string", "enum": ["shown", "collapsed", "hidden"]}
+            }, "required": ["track", "unit", "view"]})
         },
     },
     Tool {
@@ -199,6 +217,7 @@ impl App {
     pub(crate) fn layers_tool(&mut self, name: &str, args: &Value) -> Option<Done> {
         Some(match name {
             "set_instrument" => self.set_instrument_tool(args),
+            "set_rack" => self.set_rack_tool(args),
             "edit_layer" => self.edit_layer_tool(args),
             "edit_pad_effect" => self.edit_pad_effect_tool(args),
             "set_instrument_output" => self.set_instrument_output_tool(args),
@@ -394,9 +413,17 @@ impl App {
         for (v, live) in layers.iter_mut().zip(&t.layers) {
             v["stopped"] = json!(stopped(Some(&live.slot)));
         }
+        let rack: Vec<Value> = (crate::instrument::rack_entries(t).iter())
+            .map(|u| json!({"unit": u.id, "name": u.name, "view": u.view.name()}))
+            .collect();
+        let sound = (t.instrument.as_ref())
+            .and_then(Slot::builtin_ref)
+            .and_then(daw_instruments::Builtin::current_sound);
         Ok(json!({
             "track": key,
             "instrument": pt.instrument.as_ref().map(instrument),
+            "sound": sound,
+            "rack": rack,
             "stopped": stopped(t.instrument.as_ref()),
             "bank": bank,
             "library": library,
@@ -519,6 +546,41 @@ impl App {
         Ok((
             json!({"track": key, "layer": layer, "instrument": id, "name": name, "settings_set": count}),
             Some(label),
+        ))
+    }
+
+    fn set_rack_tool(&mut self, args: &Value) -> Done {
+        use daw_project::RackView;
+        let key = text(args, "track", "the track's id")?.to_string();
+        let unit = text(
+            args,
+            "unit",
+            "the unit: \"instrument\", an effect's id, or \"all\"",
+        )?;
+        let view = text(args, "view", "the view: shown, collapsed or hidden")?;
+        let view = RackView::from_name(view)
+            .ok_or_else(|| format!("{view}: the view is shown, collapsed or hidden."))?;
+        let i = self
+            .track_index(&key)
+            .ok_or_else(|| format!("There is no track {key}."))?;
+        let t = &mut self.tracks[i];
+        let known =
+            unit == "all" || (crate::instrument::rack_entries(t).iter()).any(|u| u.id == unit);
+        if !known {
+            return Err(format!(
+                "The track has no unit {unit}: get_instrument lists its rack."
+            ));
+        }
+        if unit == "all" && view != RackView::Shown {
+            return Err("All the units can only be shown together.".into());
+        }
+        crate::instrument::set_rack_view(&mut t.rack, unit, view);
+        let rack: Vec<Value> = (crate::instrument::rack_entries(t).iter())
+            .map(|u| json!({"unit": u.id, "name": u.name, "view": u.view.name()}))
+            .collect();
+        Ok((
+            json!({"track": key, "rack": rack}),
+            Some(format!("Rack: {unit} {}", view.name())),
         ))
     }
 

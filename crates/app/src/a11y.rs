@@ -634,7 +634,7 @@ fn menus_show_each_commands_keys() {
     h.get_by_label("Song").click();
     h.run();
     assert!(h.query_by_label_contains("Ctrl+K").is_none());
-    h.get_by_label_contains("Metronome on or off").click();
+    h.get_by_label("Metronome").click();
     h.run();
     assert!(h.state().metronome.enabled);
 }

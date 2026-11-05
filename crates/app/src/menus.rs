@@ -22,7 +22,7 @@ pub(crate) enum Item {
     Gap,
     /// A pane or panel: ticked while it is open, and clicking closes it.
     Pane(Cmd),
-    /// A switch drawn as a checkbox.
+    /// A switch, lit while it is on.
     Check(Cmd),
     /// A submenu of commands.
     Sub(&'static str, &'static [Cmd]),
@@ -467,32 +467,37 @@ impl App {
         });
     }
 
-    /// A switch in a menu, ticked while it is on.
+    /// A switch in a menu: drawn by `menu_entry`, lit while it is on.
     fn check_entry(&mut self, ui: &mut egui::Ui, cmd: Cmd) {
-        if self.menu_hold(cmd) {
-            return;
-        }
-        self.menu_mark(ui);
-        let mut on = match cmd {
-            Cmd::SimpleMode => self.simple.on,
+        self.menu_item(ui, cmd);
+    }
+
+    /// Whether a switch is on, for the commands a menu shows lit while
+    /// they are; `None` for a command that is not a switch.
+    pub(crate) fn switch_on(&self, cmd: Cmd) -> Option<bool> {
+        Some(match cmd {
+            Cmd::Snap => self.timeline.snap,
+            Cmd::Ripple => self.timeline.ripple,
+            Cmd::VolumeLines => self.timeline.show_volume,
+            Cmd::GroupEdit => self.timeline.group_edit,
+            Cmd::Record => self.recording,
+            Cmd::Loop => self.looping,
+            Cmd::Metronome => self.metronome.enabled,
+            Cmd::CountIn => self.count_in,
+            Cmd::NoteRepeat => self
+                .instrument_track(None)
+                .is_some_and(|i| self.tracks[i].note_repeat.is_some()),
+            Cmd::Talkback => self.cues.talk,
+            Cmd::Dim => self.cues.dim,
+            Cmd::Mono => self.cues.mono,
+            Cmd::ContinuousScroll => self.timeline.continuous,
+            Cmd::MixerNarrow => self.desk.narrow,
+            Cmd::VideoTimecode => !self.video.hide_timecode,
             Cmd::Timecode => self.timecode.shown,
-            _ => self.workspace.windows_allowed,
-        };
-        let hint = match cmd {
-            Cmd::PaneWindows => "Off: every pane stays in this window".to_string(),
-            _ => self.commands.hover(cmd),
-        };
-        // ai: simpler-mode
-        let r = ui
-            .checkbox(&mut on, self.commands.name(cmd).to_string())
-            .on_hover_text(hint);
-        if r.changed() {
-            match cmd {
-                Cmd::SimpleMode => self.toggle_simple(),
-                Cmd::Timecode => self.timecode.shown = on,
-                _ => self.workspace.allow_windows(on),
-            }
-        }
+            Cmd::PaneWindows => self.workspace.windows_allowed,
+            Cmd::SimpleMode => self.simple.on,
+            _ => return None,
+        })
     }
 }
 

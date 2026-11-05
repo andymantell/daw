@@ -265,7 +265,7 @@ impl App {
         let mut turn = None;
         let mut new_token = false;
         let mut stop = false;
-        let stop_keys = self.commands.keymap.text(Cmd::StopAssistants);
+        let stop_keys = self.commands.keymap.label(Cmd::StopAssistants);
         {
             ui.label(
                 "Let an AI assistant on this computer read the project and use the app's \

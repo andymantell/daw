@@ -3,6 +3,12 @@
 Answers the owner gave to the open decisions in this folder, newest
 first. Each answer is also ticked in its feature's file.
 
+## 2026-11-05: Windows builds stay unsigned for now
+
+No code signing, and no application to a signing service, until the
+owner asks (`0.7-platform.md`). Windows shows its unknown-publisher
+warning on the downloaded app meanwhile.
+
 ## 2026-11-05: decision 0009 (notation formats) accepted
 
 Accepted as built: MusicXML, standard MIDI files, plain-text tab and
@@ -57,7 +63,7 @@ listening checks are not affected and stay open.
 Decisions 0012 (amp capture player), 0013 (CLAP hosting) and 0014
 (export encoders), built at risk, are confirmed.
 
-Still open and being asked one at a time: Windows signing, macOS
+Still open and being asked one at a time: macOS
 releases and Intel-only plugins on Apple Silicon, and public STUN
 servers. The speed and pitch choice (0.6) and decisions 0003 and 0007
 wait for listening and checks on the PC.

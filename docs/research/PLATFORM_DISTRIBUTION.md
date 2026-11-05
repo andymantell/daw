@@ -96,7 +96,8 @@ apps entirely.
 **Proposal:** ship unsigned builds for testers now. Apply to the free
 open-source signing service after the first public release. Fall back to
 an OV certificate with a cloud HSM if the application is refused.
-**Owner decision.**
+**Owner decision (2026-11-05):** stay unsigned for now; no signing work
+until the owner asks for it.
 
 ### macOS
 

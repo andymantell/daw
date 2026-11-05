@@ -75,6 +75,10 @@ keeps its own types.
   ship; widen the code-made sounds so every built-in instrument has a
   useful starting set (drum kits, keys, basses, pads, each synth's own
   sounds). After the polish pass.
+- **Recorded cabinets** (decided 2026-11-05): ship a few recorded
+  cabinet impulse responses under licences that allow it, credited like
+  the recorded rooms, beside the five made in code. After the polish
+  pass.
 - **Small items**, for any thread with room: keeping recent notes played
   without Record on (3.1); chaining several commands into one key
   (macros); finding and removing audio no longer used; turning a track off

@@ -716,11 +716,17 @@ impl Theme {
 pub(crate) struct Look {
     pub(crate) theme: Arc<Theme>,
     pub(crate) dark: bool,
+    /// The colours in force instead of the theme's, while a rack unit
+    /// with its own character draws (`character.rs`).
+    pub(crate) own: Option<Arc<Colours>>,
 }
 
 impl Look {
     pub(crate) fn c(&self) -> &Colours {
-        self.theme.colours(self.dark)
+        match &self.own {
+            Some(c) => c,
+            None => self.theme.colours(self.dark),
+        }
     }
 }
 
@@ -749,6 +755,7 @@ pub(crate) fn look(ctx: &egui::Context) -> Look {
     Look {
         theme,
         dark: ctx.theme() == egui::Theme::Dark,
+        own: crate::character::colours(ctx),
     }
 }
 
@@ -1232,6 +1239,7 @@ pub(crate) fn hash(x: i32, y: i32) -> u32 {
 }
 
 /// WCAG contrast: the colours' relative luminance, and their ratio.
+#[cfg(test)]
 pub(crate) mod contrast {
     use eframe::egui::Color32;
 

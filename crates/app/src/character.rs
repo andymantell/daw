@@ -1,33 +1,39 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Each built-in synth's own visual character (UI polish step 5,
 //! `docs/plans/ui-polish.md` section 5: "the nine read as nine
-//! instruments"), laid over the panel kit's shared frame.
+//! instruments"), laid over the panel kit's shared frame so each reads
+//! as its own piece of hardware in the one rack.
 //!
-//! A character is a handful of choices, each drawn by the kit from the
-//! theme's tokens, so it fits every theme and stays a hint:
+//! A character is:
 //!
-//! - a **tint** on the front plate: the theme's plate colour moved a
-//!   little toward the instrument's own, so a silver box, a navy desk and
-//!   a cream panel sit in one rack and still look like the theme's gear;
-//! - an **accent** for the knob arcs, the lettering and the module
-//!   headings, one colour for dark plates and one for light;
+//! - its own **palette**: the front plate, its lettering and dim
+//!   lettering, an accent, a screen's glass and ink, the knob caps and
+//!   their pointers, and side cheeks where the hardware would have them;
+//!   the theme still draws the rack around it;
 //! - a **knob style**: the cap the kit draws, a skirted knob with a
 //!   pointer, a wedge pointer, a dot on a flat cap, or a flat ring;
-//! - the **lettering** of the name plate: plain capitals, wide-spaced
-//!   capitals, lower-case, a readout face, or a filled badge;
-//! - a **band** across the top of the plate: none, a stripe in the
-//!   accent, a row of section colours, a pinstripe pair, or a row of
-//!   patch points.
+//! - a **switch style**: the kit's segments, lit buttons with a lamp, or
+//!   a slide switch;
+//! - a **module style**: the kit's framed block, bare lines on the
+//!   plate, a filled heading band, or a thin boxed frame;
+//! - a **screen style**: a scope, a lamp display with a glow, or a
+//!   liquid-crystal panel;
+//! - the **lettering** of the name plate, and a **band** across the top
+//!   of the plate.
 //!
 //! The choices evoke each synth's era and type; none copies a real
 //! product's livery, badge or lettering. The character in force is kept
-//! in egui's frame data while a unit draws, so the kit's widgets pick
-//! it up without the panels naming it.
+//! in egui's frame data while a unit draws, and the theme's colours are
+//! swapped for the character's for everything drawn inside it, so the
+//! kit's widgets and the panels' own drawings pick it up without naming
+//! it.
+
+use std::sync::Arc;
 
 use daw_instruments::Kind;
 use eframe::egui::{self, Color32};
 
-use crate::theme::{self, Look};
+use crate::theme::{self, Colours, Look};
 
 /// How a knob is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +50,41 @@ pub(crate) enum KnobStyle {
     Dot,
     /// A thin ring and a line, no cap: a digital unit's data knob.
     Flat,
+}
+
+/// How a switch is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SwitchStyle {
+    /// The kit's own: a row of segments, one chosen.
+    Segments,
+    /// A button per choice with a lamp that lights when chosen.
+    Lit,
+    /// A slide switch: a slot with a block at the chosen position.
+    Slide,
+}
+
+/// How a module is framed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModuleStyle {
+    /// The kit's own: a filled block with a heading and a rule.
+    Framed,
+    /// No block: the heading and a rule straight on the plate.
+    Lines,
+    /// The heading in a filled band across the top of the block.
+    Band,
+    /// A thin frame in the accent, the heading set into its top edge.
+    Boxed,
+}
+
+/// How a screen is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScreenStyle {
+    /// The kit's own: dark glass, a faint grid, a traced line.
+    Scope,
+    /// Dark glass with the trace glowing like lamps.
+    Lamp,
+    /// A liquid-crystal panel: pale glass, dark ink, a dot grid.
+    Lcd,
 }
 
 /// How the name plate is lettered.
@@ -78,26 +119,52 @@ pub(crate) enum Band {
 /// A synth's character.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Character {
-    /// The plate's own colour, and how far the theme's plate moves
-    /// toward it (0 keeps the theme's plate).
-    pub tint: Color32,
-    pub tint_strength: f32,
-    /// The accent on a dark plate, and on a light one.
-    pub accent_dark: Color32,
-    pub accent_light: Color32,
+    /// The plain kit look: the theme's own colours and widgets.
+    pub plain: bool,
+    pub plate: Color32,
+    pub text: Color32,
+    pub text_dim: Color32,
+    pub accent: Color32,
+    /// Lettering on the accent.
+    pub on_accent: Color32,
+    /// A screen's glass and its ink.
+    pub screen_bg: Color32,
+    pub screen_ink: Color32,
+    /// A knob's cap and its pointer.
+    pub cap: Color32,
+    pub pointer: Color32,
+    /// Side cheeks at the plate's ends, where the hardware had wood.
+    pub cheeks: Option<Color32>,
     pub knob: KnobStyle,
+    pub switch: SwitchStyle,
+    pub module: ModuleStyle,
+    pub screen: ScreenStyle,
     pub lettering: Lettering,
     pub band: Band,
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
+    Color32::from_rgb(r, g, b)
 }
 
 impl Character {
     /// The kit's plain look: the theme as it is.
     pub(crate) const PLAIN: Character = Character {
-        tint: Color32::TRANSPARENT,
-        tint_strength: 0.0,
-        accent_dark: Color32::TRANSPARENT,
-        accent_light: Color32::TRANSPARENT,
+        plain: true,
+        plate: Color32::TRANSPARENT,
+        text: Color32::TRANSPARENT,
+        text_dim: Color32::TRANSPARENT,
+        accent: Color32::TRANSPARENT,
+        on_accent: Color32::TRANSPARENT,
+        screen_bg: Color32::TRANSPARENT,
+        screen_ink: Color32::TRANSPARENT,
+        cap: Color32::TRANSPARENT,
+        pointer: Color32::TRANSPARENT,
+        cheeks: None,
         knob: KnobStyle::Cap,
+        switch: SwitchStyle::Segments,
+        module: ModuleStyle::Framed,
+        screen: ScreenStyle::Scope,
         lettering: Lettering::Caps,
         band: Band::None,
     };
@@ -105,216 +172,335 @@ impl Character {
     /// The character of a built-in instrument; the plain look for one
     /// without its own.
     pub(crate) fn of(kind: Option<Kind>) -> Character {
-        let rgb = Color32::from_rgb;
+        let own = Character {
+            plain: false,
+            ..Character::PLAIN
+        };
         match kind {
             // The three-oscillator ladder monosynth: a black desk with
-            // cream skirted knobs and wide lettering, a warm walnut
-            // stripe standing in for its end cheeks.
+            // walnut cheeks, cream skirted knobs, brass lettering spaced
+            // wide, slide switches and amber lamps.
             Some(Kind::ModelMono) => Character {
-                tint: rgb(0x1c, 0x1a, 0x18),
-                tint_strength: 0.35,
-                accent_dark: rgb(0xe8, 0xdc, 0xc0),
-                accent_light: rgb(0x5a, 0x4a, 0x30),
+                plate: rgb(0x1b, 0x1a, 0x1d),
+                text: rgb(0xef, 0xe6, 0xd2),
+                text_dim: rgb(0xb7, 0xad, 0x98),
+                accent: rgb(0xe4, 0xc9, 0x8b),
+                on_accent: rgb(0x1b, 0x1a, 0x1d),
+                screen_bg: rgb(0x0d, 0x0c, 0x0e),
+                screen_ink: rgb(0xf0, 0xb4, 0x57),
+                cap: rgb(0xef, 0xe6, 0xd2),
+                pointer: rgb(0x1b, 0x1a, 0x1d),
+                cheeks: Some(rgb(0x6e, 0x44, 0x28)),
                 knob: KnobStyle::Skirted,
+                switch: SwitchStyle::Slide,
+                module: ModuleStyle::Lines,
+                screen: ScreenStyle::Lamp,
                 lettering: Lettering::Wide,
-                band: Band::Stripe,
+                band: Band::None,
+                ..own
             },
-            // The bass line box: silver, small black knobs with a dot,
-            // a pinstripe, and a red-orange accent.
+            // The bass line box: silver, black knobs with a white dot,
+            // red lettering on black heading bands, lamp buttons, a
+            // pinstripe.
             Some(Kind::AcidThree) => Character {
-                tint: rgb(0xb9, 0xbc, 0xc0),
-                tint_strength: 0.3,
-                accent_dark: rgb(0xe0, 0x52, 0x3c),
-                accent_light: rgb(0xb5, 0x3a, 0x26),
+                plate: rgb(0xc8, 0xcb, 0xcf),
+                text: rgb(0x15, 0x16, 0x1a),
+                text_dim: rgb(0x4d, 0x51, 0x58),
+                accent: rgb(0xb8, 0x34, 0x20),
+                on_accent: rgb(0xff, 0xff, 0xff),
+                screen_bg: rgb(0x1a, 0x1b, 0x1e),
+                screen_ink: rgb(0xff, 0x6b, 0x4a),
+                cap: rgb(0x22, 0x22, 0x26),
+                pointer: rgb(0xf2, 0xf2, 0xf2),
                 knob: KnobStyle::Dot,
+                switch: SwitchStyle::Lit,
+                module: ModuleStyle::Band,
+                screen: ScreenStyle::Lamp,
                 lettering: Lettering::Caps,
                 band: Band::Pinstripe,
+                ..own
             },
-            // The one-oscillator monosynth: cool grey, coral accent,
-            // a lower-case wordmark.
+            // The one-oscillator monosynth: grey-blue plastic, coral
+            // accent, white knobs, slide switches, a lower-case wordmark.
             Some(Kind::OhOne) => Character {
-                tint: rgb(0x6d, 0x75, 0x80),
-                tint_strength: 0.25,
-                accent_dark: rgb(0xe4, 0x65, 0x4a),
-                accent_light: rgb(0xb4, 0x43, 0x2c),
+                plate: rgb(0x4e, 0x58, 0x66),
+                text: rgb(0xf1, 0xf4, 0xf7),
+                text_dim: rgb(0xc2, 0xc9, 0xd1),
+                accent: rgb(0xff, 0xa3, 0x85),
+                on_accent: rgb(0x2a, 0x12, 0x0a),
+                screen_bg: rgb(0x11, 0x16, 0x1c),
+                screen_ink: rgb(0x7f, 0xd1, 0xff),
+                cap: rgb(0xe9, 0xec, 0xef),
+                pointer: rgb(0xe8, 0x50, 0x3a),
                 knob: KnobStyle::Dot,
+                switch: SwitchStyle::Slide,
+                module: ModuleStyle::Framed,
+                screen: ScreenStyle::Scope,
                 lettering: Lettering::Lower,
                 band: Band::Stripe,
+                ..own
             },
-            // The six-voice polysynth: dark grey, with a row of section
-            // colours as on a colour-coded panel.
+            // The six-voice polysynth: dark grey, a row of section
+            // colours, white caps, lamp buttons, bare module lines.
             Some(Kind::June) => Character {
-                tint: rgb(0x3b, 0x3b, 0x3f),
-                tint_strength: 0.3,
-                accent_dark: rgb(0x6f, 0xb3, 0xe8),
-                accent_light: rgb(0x2a, 0x5f, 0xa0),
+                plate: rgb(0x37, 0x39, 0x3f),
+                text: rgb(0xf2, 0xf2, 0xf2),
+                text_dim: rgb(0xb9, 0xbc, 0xc4),
+                accent: rgb(0x5a, 0xa9, 0xe6),
+                on_accent: rgb(0x0e, 0x11, 0x16),
+                screen_bg: rgb(0x14, 0x15, 0x19),
+                screen_ink: rgb(0xff, 0xb3, 0x47),
+                cap: rgb(0xe6, 0xe6, 0xe6),
+                pointer: rgb(0x37, 0x39, 0x3f),
                 knob: KnobStyle::Cap,
+                switch: SwitchStyle::Lit,
+                module: ModuleStyle::Lines,
+                screen: ScreenStyle::Scope,
                 lettering: Lettering::Caps,
                 band: Band::Sections,
+                ..own
             },
-            // The eight-voice two-channel polysynth: navy, gold
-            // lettering spaced wide, wedge pointers.
+            // The eight-voice two-channel polysynth: navy with dark wood
+            // cheeks, gold lettering spaced wide, cream wedge pointers,
+            // heading bands, amber lamps.
             Some(Kind::Eighty) => Character {
-                tint: rgb(0x1f, 0x2f, 0x4f),
-                tint_strength: 0.35,
-                accent_dark: rgb(0xf2, 0xb8, 0x4b),
-                accent_light: rgb(0x8a, 0x5a, 0x10),
+                plate: rgb(0x24, 0x33, 0x52),
+                text: rgb(0xf6, 0xe9, 0xc9),
+                text_dim: rgb(0xb9, 0xad, 0x90),
+                accent: rgb(0xf0, 0xb6, 0x4a),
+                on_accent: rgb(0x24, 0x33, 0x52),
+                screen_bg: rgb(0x0f, 0x15, 0x22),
+                screen_ink: rgb(0xff, 0xd2, 0x7a),
+                cap: rgb(0xf6, 0xe9, 0xc9),
+                pointer: rgb(0x24, 0x33, 0x52),
+                cheeks: Some(rgb(0x5a, 0x3a, 0x22)),
                 knob: KnobStyle::Pointer,
+                switch: SwitchStyle::Slide,
+                module: ModuleStyle::Band,
+                screen: ScreenStyle::Lamp,
                 lettering: Lettering::Wide,
                 band: Band::Stripe,
+                ..own
             },
-            // The two-filter polysynth: cream, maroon, a skirted knob,
-            // its name on a badge.
+            // The two-filter polysynth: cream, maroon, black skirted
+            // knobs, red lamps, its name on a badge.
             Some(Kind::Oracle) => Character {
-                tint: rgb(0xd8, 0xc9, 0xa8),
-                tint_strength: 0.3,
-                accent_dark: rgb(0xd8, 0x6a, 0x84),
-                accent_light: rgb(0x7a, 0x25, 0x38),
+                plate: rgb(0xe8, 0xdf, 0xc6),
+                text: rgb(0x2d, 0x24, 0x20),
+                text_dim: rgb(0x6b, 0x5d, 0x53),
+                accent: rgb(0x8b, 0x27, 0x40),
+                on_accent: rgb(0xff, 0xf7, 0xea),
+                screen_bg: rgb(0x1f, 0x1a, 0x18),
+                screen_ink: rgb(0xff, 0x4d, 0x4d),
+                cap: rgb(0x2d, 0x24, 0x20),
+                pointer: rgb(0xe8, 0xdf, 0xc6),
                 knob: KnobStyle::Skirted,
+                switch: SwitchStyle::Lit,
+                module: ModuleStyle::Framed,
+                screen: ScreenStyle::Lamp,
                 lettering: Lettering::Badge,
                 band: Band::Pinstripe,
+                ..own
             },
             // The semi-modular: olive, pale yellow stencilled lettering,
-            // pointers, and patch points along the top.
+            // cream pointers, slide switches, a green scope, patch points
+            // along the top.
             Some(Kind::PatchTwenty) => Character {
-                tint: rgb(0x5f, 0x6b, 0x5a),
-                tint_strength: 0.35,
-                accent_dark: rgb(0xe8, 0xd2, 0x7a),
-                accent_light: rgb(0x6a, 0x5a, 0x10),
+                plate: rgb(0x5f, 0x6a, 0x5c),
+                text: rgb(0xf1, 0xe9, 0xc6),
+                text_dim: rgb(0xcc, 0xc6, 0xa6),
+                accent: rgb(0xe8, 0xd2, 0x7a),
+                on_accent: rgb(0x2b, 0x2f, 0x27),
+                screen_bg: rgb(0x0c, 0x11, 0x0c),
+                screen_ink: rgb(0x8c, 0xff, 0x7a),
+                cap: rgb(0xe8, 0xe3, 0xcf),
+                pointer: rgb(0x2b, 0x2f, 0x27),
                 knob: KnobStyle::Pointer,
+                switch: SwitchStyle::Slide,
+                module: ModuleStyle::Lines,
+                screen: ScreenStyle::Scope,
                 lettering: Lettering::Readout,
                 band: Band::Jacks,
+                ..own
             },
-            // The eight-bit wavetable synth: blue, pale cyan readout
-            // lettering, flat data knobs.
+            // The eight-bit wavetable synth: blue, cyan readout
+            // lettering, flat data knobs, a liquid-crystal panel, boxed
+            // modules.
             Some(Kind::BlueWave) => Character {
-                tint: rgb(0x2a, 0x4a, 0x8a),
-                tint_strength: 0.35,
-                accent_dark: rgb(0x8f, 0xd8, 0xff),
-                accent_light: rgb(0x0b, 0x5f, 0x8a),
+                plate: rgb(0x2b, 0x4c, 0x8e),
+                text: rgb(0xee, 0xf3, 0xff),
+                text_dim: rgb(0xb6, 0xc4, 0xe6),
+                accent: rgb(0x7f, 0xe0, 0xff),
+                on_accent: rgb(0x0e, 0x1f, 0x3f),
+                screen_bg: rgb(0x9f, 0xb5, 0x9a),
+                screen_ink: rgb(0x1b, 0x2a, 0x1a),
+                cap: rgb(0xdf, 0xe6, 0xf5),
+                pointer: rgb(0x2b, 0x4c, 0x8e),
                 knob: KnobStyle::Flat,
+                switch: SwitchStyle::Lit,
+                module: ModuleStyle::Boxed,
+                screen: ScreenStyle::Lcd,
                 lettering: Lettering::Readout,
                 band: Band::Stripe,
+                ..own
             },
-            // The six-operator FM synth: near-black, teal, membrane-panel
-            // badge, flat knobs.
+            // The six-operator FM synth: near-black, teal lines, a
+            // membrane-panel badge, flat knobs, a liquid-crystal panel.
             Some(Kind::LuckySeven) => Character {
-                tint: rgb(0x1a, 0x16, 0x14),
-                tint_strength: 0.35,
-                accent_dark: rgb(0x4f, 0xd1, 0xc5),
-                accent_light: rgb(0x0e, 0x6f, 0x66),
+                plate: rgb(0x1c, 0x1b, 0x1e),
+                text: rgb(0xe9, 0xec, 0xef),
+                text_dim: rgb(0x9a, 0xa0, 0xa8),
+                accent: rgb(0x3f, 0xd3, 0xc4),
+                on_accent: rgb(0x0b, 0x15, 0x14),
+                screen_bg: rgb(0xa6, 0xb4, 0xa0),
+                screen_ink: rgb(0x1b, 0x23, 0x1a),
+                cap: rgb(0x2c, 0x2b, 0x30),
+                pointer: rgb(0xe9, 0xec, 0xef),
                 knob: KnobStyle::Flat,
+                switch: SwitchStyle::Lit,
+                module: ModuleStyle::Boxed,
+                screen: ScreenStyle::Lcd,
                 lettering: Lettering::Badge,
                 band: Band::Pinstripe,
+                ..own
             },
             _ => Character::PLAIN,
         }
     }
 
-    /// The plate's colour in `look`: the theme's, moved toward the tint.
-    /// The tint is first brought to the theme plate's lightness (with a
-    /// little drift toward its own), so a silver box in a dark theme is a
-    /// lighter grey, not a grey slab, and a navy desk in a light theme
-    /// is a pale blue: the hue changes, the theme's contrast stays.
-    pub(crate) fn plate(&self, look: &Look) -> Color32 {
-        if self.tint_strength == 0.0 {
-            return look.c().plate;
+    /// Whether the plate is dark, for the shades drawn on it.
+    fn dark(&self) -> bool {
+        let p = self.plate;
+        0.2126 * f32::from(p.r()) + 0.7152 * f32::from(p.g()) + 0.0722 * f32::from(p.b()) < 128.0
+    }
+
+    /// The theme's colours with the character's own in place of those
+    /// drawn inside a unit: the plate and its edges, lettering, accent,
+    /// screens, knob caps, buttons and lines.
+    pub(crate) fn colours(&self, base: &Colours) -> Colours {
+        if self.plain {
+            return base.clone();
         }
-        let plate = look.c().plate;
-        let y = |c: Color32| {
-            0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b())
+        let dark = self.dark();
+        let plate = self.plate;
+        let lum = 0.2126 * f32::from(plate.r())
+            + 0.7152 * f32::from(plate.g())
+            + 0.0722 * f32::from(plate.b());
+        // Buttons stand a shade off the plate: lighter on a black one,
+        // darker on a mid or light one.
+        let raised = if lum < 70.0 {
+            theme::mix(plate, Color32::WHITE, 0.1)
+        } else if dark {
+            theme::mix(plate, Color32::BLACK, 0.22)
+        } else {
+            theme::mix(plate, Color32::WHITE, 0.5)
         };
-        let (yp, yt) = (y(plate), y(self.tint).max(1.0));
-        let target = yp + (yt - yp) * 0.15;
-        let k = target / yt;
-        let ch = |v: u8| (f32::from(v) * k).round().clamp(0.0, 255.0) as u8;
-        let tint = Color32::from_rgb(ch(self.tint.r()), ch(self.tint.g()), ch(self.tint.b()));
-        theme::mix(plate, tint, self.tint_strength)
+        Colours {
+            panel: plate,
+            raised,
+            line: theme::mix(self.text_dim, plate, 0.55),
+            text: self.text,
+            text_dim: self.text_dim,
+            accent: self.accent,
+            on_accent: self.on_accent,
+            selection: theme::mix(self.accent, plate, 0.45),
+            meter_bg: self.screen_bg,
+            desk: plate,
+            fader_slot: theme::mix(plate, Color32::BLACK, 0.45),
+            fader_cap: self.cap,
+            fader_line: self.pointer,
+            shadow: Color32::from_black_alpha(if dark { 160 } else { 70 }),
+            plate,
+            plate_edge: theme::mix(plate, Color32::WHITE, if dark { 0.18 } else { 0.6 }),
+            plate_shadow: theme::mix(plate, Color32::BLACK, if dark { 0.5 } else { 0.35 }),
+            screw: theme::mix(self.text_dim, plate, 0.3),
+            badge: self.accent,
+            ..base.clone()
+        }
     }
 
-    /// Whether the plate reads as dark, so the accent for a dark plate
-    /// is the one to use.
-    fn plate_is_dark(&self, look: &Look) -> bool {
-        let p = self.plate(look);
-        let lum = 0.2126 * f32::from(p.r()) + 0.7152 * f32::from(p.g()) + 0.0722 * f32::from(p.b());
-        lum < 128.0
-    }
-
-    /// The accent in `look`: the theme's, for the plain character; else
-    /// the one for a dark or a light plate, moved toward the theme's
-    /// text colour until it reads on the plate.
+    /// The accent in `look`: the character's own while it is in force,
+    /// the theme's for the plain character.
     pub(crate) fn accent(&self, look: &Look) -> Color32 {
-        if self.tint_strength == 0.0 {
-            return look.c().accent;
-        }
-        let plate = self.plate(look);
-        let mut a = if self.plate_is_dark(look) {
-            self.accent_dark
-        } else {
-            self.accent_light
-        };
-        for _ in 0..8 {
-            if theme::contrast::ratio(a, plate, plate) >= 3.0 {
-                break;
-            }
-            a = theme::mix(a, look.c().text, 0.2);
-        }
-        a
+        look.c().accent
     }
 
-    /// The name plate's lettering colour: the theme's badge colour for
-    /// the plain character, the accent otherwise.
+    /// The name plate's lettering colour.
     pub(crate) fn badge(&self, look: &Look) -> Color32 {
-        if self.tint_strength == 0.0 {
-            look.c().badge
-        } else {
-            self.accent(look)
-        }
+        look.c().badge
+    }
+
+    /// The plate's colour in `look`.
+    pub(crate) fn plate(&self, look: &Look) -> Color32 {
+        look.c().plate
     }
 
     /// The section colours a [`Band::Sections`] band shows.
-    pub(crate) fn sections(&self, look: &Look) -> [Color32; 4] {
-        let rgb = Color32::from_rgb;
-        let dark = self.plate_is_dark(look);
-        if dark {
-            [
-                rgb(0xe0, 0x52, 0x3c),
-                rgb(0xf2, 0xc0, 0x4b),
-                rgb(0x7f, 0xc8, 0x6a),
-                rgb(0x6f, 0xb3, 0xe8),
-            ]
-        } else {
-            [
-                rgb(0xb5, 0x3a, 0x26),
-                rgb(0xa0, 0x78, 0x10),
-                rgb(0x3f, 0x7d, 0x30),
-                rgb(0x2a, 0x5f, 0xa0),
-            ]
-        }
+    pub(crate) fn sections(&self) -> [Color32; 4] {
+        [
+            rgb(0xe0, 0x52, 0x3c),
+            rgb(0xf2, 0xc0, 0x4b),
+            rgb(0x7f, 0xc8, 0x6a),
+            rgb(0x6f, 0xb3, 0xe8),
+        ]
     }
 
-    /// The character's name, as an assistant reads it.
+    /// The character, as an assistant reads it.
     pub(crate) fn describe(&self) -> serde_json::Value {
+        let lower = |d: &dyn std::fmt::Debug| format!("{d:?}").to_lowercase();
         serde_json::json!({
-            "knob": format!("{:?}", self.knob).to_lowercase(),
-            "lettering": format!("{:?}", self.lettering).to_lowercase(),
-            "band": format!("{:?}", self.band).to_lowercase(),
-            "tinted": self.tint_strength > 0.0,
+            "knob": lower(&self.knob),
+            "switch": lower(&self.switch),
+            "module": lower(&self.module),
+            "screen": lower(&self.screen),
+            "lettering": lower(&self.lettering),
+            "band": lower(&self.band),
+            "plate": hex(self.plate),
+            "accent": hex(self.accent),
+            "cheeks": self.cheeks.is_some(),
         })
     }
+}
+
+/// A colour as `#rrggbb`.
+fn hex(c: Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
 }
 
 fn id() -> egui::Id {
     egui::Id::unique("panel character")
 }
 
-/// Sets the character the kit draws with until [`clear`].
+fn colours_id() -> egui::Id {
+    egui::Id::unique("panel character colours")
+}
+
+/// Sets the character the kit draws with until [`clear`]: the character
+/// itself, and the theme's colours with its own swapped in, which
+/// [`theme::look`] returns while it is in force.
 pub(crate) fn set(ctx: &egui::Context, ch: Character) {
-    ctx.data_mut(|d| d.insert_temp(id(), ch));
+    let own = if ch.plain {
+        None
+    } else {
+        let look = theme::look(ctx);
+        Some(Arc::new(ch.colours(look.theme.colours(look.dark))))
+    };
+    ctx.data_mut(|d| {
+        d.insert_temp(id(), ch);
+        match own {
+            Some(c) => {
+                d.insert_temp(colours_id(), c);
+            }
+            None => d.remove::<Arc<Colours>>(colours_id()),
+        }
+    });
 }
 
 pub(crate) fn clear(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<Character>(id()));
+    ctx.data_mut(|d| {
+        d.remove::<Character>(id());
+        d.remove::<Arc<Colours>>(colours_id());
+    });
 }
 
 /// The character in force: the plain look outside a unit.
@@ -323,37 +509,85 @@ pub(crate) fn current(ctx: &egui::Context) -> Character {
         .unwrap_or(Character::PLAIN)
 }
 
+/// The colours in force, if a character with its own is set.
+pub(crate) fn colours(ctx: &egui::Context) -> Option<Arc<Colours>> {
+    ctx.data(|d| d.get_temp::<Arc<Colours>>(colours_id()))
+}
+
+/// Egui's widgets inside the unit in the character's colours: its text,
+/// its buttons raised from its plate, its accent on hover.
+pub(crate) fn style(ui: &mut egui::Ui) {
+    let Some(c) = colours(ui.ctx()) else {
+        return;
+    };
+    let v = ui.visuals_mut();
+    v.override_text_color = Some(c.text);
+    let line = egui::Stroke::new(1.0, c.line);
+    let hover = theme::mix(c.raised, c.accent, 0.25);
+    let press = theme::mix(c.raised, c.accent, 0.4);
+    let w = &mut v.widgets;
+    for (wv, bg, stroke) in [
+        (&mut w.noninteractive, c.panel, line),
+        (&mut w.inactive, c.raised, line),
+        (&mut w.hovered, hover, egui::Stroke::new(1.0, c.accent)),
+        (&mut w.active, press, egui::Stroke::new(1.0, c.accent)),
+        (&mut w.open, c.raised, line),
+    ] {
+        wv.bg_fill = bg;
+        wv.weak_bg_fill = bg;
+        wv.bg_stroke = stroke;
+        wv.fg_stroke.color = c.text;
+    }
+    v.selection.bg_fill = c.selection;
+    v.selection.stroke = egui::Stroke::new(1.0, c.text);
+    v.weak_text_color = Some(c.text_dim);
+    v.faint_bg_color = c.raised;
+    v.extreme_bg_color = c.meter_bg;
+    v.panel_fill = c.panel;
+    v.window_fill = c.panel;
+    v.hyperlink_color = c.accent;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::theme::contrast;
 
-    /// Every character's lettering and accent read on its plate, in
-    /// every theme, dark and light.
+    /// Every character's lettering, dim lettering, accent and screen ink
+    /// read on what they are drawn on, whatever the theme around them.
     #[test]
-    fn every_character_reads_on_its_plate_in_every_theme() {
+    fn every_character_reads_on_its_own_plate() {
         let mut problems = Vec::new();
-        for t in theme::built_in_themes() {
-            for dark in [true, false] {
-                let look = Look {
-                    theme: t.clone(),
-                    dark,
-                };
-                for k in Kind::ALL {
-                    let ch = Character::of(Some(k));
-                    let plate = ch.plate(&look);
-                    let mut check = |what: &str, fg: Color32, least: f32| {
-                        let r = contrast::ratio(fg, plate, plate);
-                        if r < least {
-                            problems.push(format!("{} {dark} {k:?}: {what} on plate {r:.2}", t.id));
-                        }
-                    };
-                    check("text", look.c().text, 4.5);
-                    check("dim text", look.c().text_dim, 3.0);
-                    check("accent", ch.accent(&look), 3.0);
-                }
+        for k in Kind::ALL {
+            let ch = Character::of(Some(k));
+            if ch.plain {
+                continue;
             }
+            let mut check = |what: &str, fg: Color32, bg: Color32, least: f32| {
+                let r = contrast::ratio(fg, bg, bg);
+                if r < least {
+                    problems.push(format!("{k:?}: {what} {r:.2}"));
+                }
+            };
+            check("text on plate", ch.text, ch.plate, 4.5);
+            check("dim text on plate", ch.text_dim, ch.plate, 3.0);
+            check("accent on plate", ch.accent, ch.plate, 3.0);
+            check("lettering on accent", ch.on_accent, ch.accent, 3.0);
+            check("ink on screen", ch.screen_ink, ch.screen_bg, 3.0);
+            check("pointer on cap", ch.pointer, ch.cap, 3.0);
+            let theme = theme::built_in_themes()[0].clone();
+            let c = ch.colours(theme.colours(true));
+            check("text on button", c.text, c.raised, 4.5);
         }
         assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    #[test]
+    fn the_plain_character_keeps_the_themes_colours() {
+        let theme = theme::built_in_themes()[0].clone();
+        let base = theme.colours(true);
+        let c = Character::PLAIN.colours(base);
+        assert_eq!(c.plate, base.plate);
+        assert_eq!(c.text, base.text);
     }
 }

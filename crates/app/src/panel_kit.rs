@@ -35,7 +35,9 @@ use eframe::egui::{
     StrokeKind, Ui, Vec2, pos2, vec2,
 };
 
-use crate::character::{self, Band, Character, KnobStyle, Lettering};
+use crate::character::{
+    self, Band, Character, KnobStyle, Lettering, ModuleStyle, ScreenStyle, SwitchStyle,
+};
 use crate::desk::{asked_value, key_steps, wheel_steps};
 use crate::icons::{Icon, IconButton};
 use crate::{spoken, theme};
@@ -334,7 +336,7 @@ impl<'a> Knob<'a> {
             KnobStyle::Skirted => {
                 let r = radius - 4.0;
                 p.circle_filled(centre + vec2(0.0, 1.0), r, c.shadow);
-                p.circle_filled(centre, r, theme::mix(c.fader_cap, accent, 0.35));
+                p.circle_filled(centre, r, c.fader_cap);
                 p.circle_stroke(centre, r, Stroke::new(1.0, edge));
                 p.line_segment(
                     [at(angle(k), 1.0), at(angle(k), radius + 1.0)],
@@ -513,24 +515,47 @@ impl<'a> Switch<'a> {
                 }) + 2.0 * pad
             })
             .collect();
-        let total: f32 = widths.iter().sum();
+        let style = character::current(ui.ctx()).switch;
+        let gap = match style {
+            SwitchStyle::Segments => 0.0,
+            SwitchStyle::Lit => 4.0,
+            SwitchStyle::Slide => 2.0,
+        };
+        let lamp = if style == SwitchStyle::Lit { 10.0 } else { 0.0 };
+        let total: f32 = widths.iter().sum::<f32>() + (gap + lamp) * self.choices.len() as f32;
         let (_, rect) = ui.allocate_space(vec2(total, h));
         let id = ui.scope_id().with(salt);
         let radius = CornerRadius::same(look.radius.min(6.0) as u8);
         let visuals = ui.visuals().clone();
         let p = ui.painter();
-        p.rect(
-            rect,
-            radius,
-            visuals.widgets.inactive.bg_fill,
-            Stroke::new(1.0, c.line),
-            StrokeKind::Inside,
-        );
+        match style {
+            SwitchStyle::Segments => {
+                p.rect(
+                    rect,
+                    radius,
+                    visuals.widgets.inactive.bg_fill,
+                    Stroke::new(1.0, c.line),
+                    StrokeKind::Inside,
+                );
+            }
+            SwitchStyle::Lit => {}
+            SwitchStyle::Slide => {
+                // The slot the block slides in.
+                p.rect(
+                    rect,
+                    radius,
+                    c.fader_slot,
+                    Stroke::new(1.0, c.plate_shadow),
+                    StrokeKind::Inside,
+                );
+            }
+        }
         let mut picked = None;
         let mut x = rect.left();
         for (k, (text, w)) in self.choices.iter().zip(&widths).enumerate() {
-            let seg = Rect::from_min_size(pos2(x, rect.top()), vec2(*w, h));
-            x += w;
+            let w = w + lamp;
+            let seg = Rect::from_min_size(pos2(x, rect.top()), vec2(w, h));
+            x += w + gap;
             let r = ui.interact(seg, id.with(k), Sense::click());
             let on = k == self.chosen;
             let label = format!("{}: {text}", self.name);
@@ -540,23 +565,85 @@ impl<'a> Switch<'a> {
                 picked = Some(k);
             }
             let p = ui.painter();
-            let colour = if on {
-                p.rect_filled(seg.shrink(1.5), radius, visuals.selection.bg_fill);
-                visuals.selection.stroke.color
-            } else if r.hovered() {
-                p.rect_filled(seg.shrink(1.5), radius, visuals.widgets.hovered.bg_fill);
-                c.text
+            let colour = match style {
+                SwitchStyle::Segments => {
+                    if on {
+                        p.rect_filled(seg.shrink(1.5), radius, visuals.selection.bg_fill);
+                        visuals.selection.stroke.color
+                    } else if r.hovered() {
+                        p.rect_filled(seg.shrink(1.5), radius, visuals.widgets.hovered.bg_fill);
+                        c.text
+                    } else {
+                        c.text_dim
+                    }
+                }
+                SwitchStyle::Lit => {
+                    // A button with a lamp at its left end.
+                    let fill = if r.hovered() {
+                        visuals.widgets.hovered.bg_fill
+                    } else {
+                        visuals.widgets.inactive.bg_fill
+                    };
+                    p.rect(
+                        seg,
+                        radius,
+                        fill,
+                        Stroke::new(1.0, c.line),
+                        StrokeKind::Inside,
+                    );
+                    let at = pos2(seg.left() + 7.0, seg.center().y);
+                    if on {
+                        p.circle_filled(at, 3.5, c.accent.gamma_multiply(0.35));
+                        p.circle_filled(at, 2.2, c.accent);
+                    } else {
+                        p.circle_filled(at, 2.2, c.fader_slot);
+                    }
+                    if on { c.text } else { c.text_dim }
+                }
+                SwitchStyle::Slide => {
+                    if on {
+                        // The block, raised, with a line across it.
+                        let block = seg.shrink(2.0);
+                        p.rect_filled(block.translate(vec2(0.0, 1.0)), radius, c.shadow);
+                        p.rect(
+                            block,
+                            radius,
+                            c.fader_cap,
+                            Stroke::new(1.0, c.plate_shadow),
+                            StrokeKind::Inside,
+                        );
+                        p.line_segment(
+                            [
+                                pos2(block.center().x, block.top() + 3.0),
+                                pos2(block.center().x, block.bottom() - 3.0),
+                            ],
+                            Stroke::new(1.0, c.fader_line),
+                        );
+                        c.fader_line
+                    } else if r.hovered() {
+                        c.text
+                    } else {
+                        c.text_dim
+                    }
+                }
+            };
+            let centre = if style == SwitchStyle::Lit {
+                pos2(seg.center().x + lamp / 2.0, seg.center().y)
             } else {
-                c.text_dim
+                seg.center()
             };
             p.text(
-                seg.center(),
+                centre,
                 egui::Align2::CENTER_CENTER,
                 *text,
                 font.clone(),
                 colour,
             );
-            if k + 1 < self.choices.len() && !on && k + 1 != self.chosen {
+            if style == SwitchStyle::Segments
+                && k + 1 < self.choices.len()
+                && !on
+                && k + 1 != self.chosen
+            {
                 p.line_segment(
                     [
                         pos2(seg.right(), seg.top() + 4.0),
@@ -708,28 +795,115 @@ pub(crate) fn module<R>(
     let (_, rect) = ui.allocate_space(size);
     let radius = CornerRadius::same(look.rack_radius.min(8.0) as u8);
     let p = ui.painter();
-    p.rect(
-        rect,
-        radius,
-        theme::mix(ch.plate(&look), c.plate_shadow, 0.22),
-        Stroke::new(look.rack_line, theme::mix(c.line, c.plate, 0.3)),
-        StrokeKind::Inside,
-    );
     let head = Rect::from_min_size(rect.min + vec2(8.0, 5.0), vec2(rect.width() - 16.0, 16.0));
-    p.text(
-        head.left_center(),
-        egui::Align2::LEFT_CENTER,
-        heading.to_uppercase(),
-        look.font(look.small),
-        ch.badge(&look),
-    );
-    p.line_segment(
-        [
-            pos2(head.left(), head.bottom() + 1.0),
-            pos2(head.right(), head.bottom() + 1.0),
-        ],
-        Stroke::new(1.0, theme::mix(c.line, c.plate, 0.3)),
-    );
+    let rule = Stroke::new(1.0, theme::mix(c.line, c.plate, 0.3));
+    let font = look.font(look.small);
+    match ch.module {
+        ModuleStyle::Framed => {
+            p.rect(
+                rect,
+                radius,
+                theme::mix(c.plate, c.plate_shadow, 0.22),
+                Stroke::new(look.rack_line, theme::mix(c.line, c.plate, 0.3)),
+                StrokeKind::Inside,
+            );
+            p.text(
+                head.left_center(),
+                egui::Align2::LEFT_CENTER,
+                heading.to_uppercase(),
+                font,
+                c.badge,
+            );
+            p.line_segment(
+                [
+                    pos2(head.left(), head.bottom() + 1.0),
+                    pos2(head.right(), head.bottom() + 1.0),
+                ],
+                rule,
+            );
+        }
+        ModuleStyle::Lines => {
+            // Straight on the plate: the heading, a rule under it, and
+            // a thin divider down the right-hand side.
+            p.text(
+                head.left_center(),
+                egui::Align2::LEFT_CENTER,
+                heading.to_uppercase(),
+                font,
+                c.badge,
+            );
+            let line = Stroke::new(1.0, theme::mix(c.text_dim, c.plate, 0.4));
+            p.line_segment(
+                [
+                    pos2(head.left(), head.bottom() + 1.0),
+                    pos2(head.right(), head.bottom() + 1.0),
+                ],
+                line,
+            );
+            p.line_segment(
+                [
+                    pos2(rect.right() - 1.0, rect.top() + 6.0),
+                    pos2(rect.right() - 1.0, rect.bottom() - 6.0),
+                ],
+                line,
+            );
+        }
+        ModuleStyle::Band => {
+            // The heading on a filled band across the top of the block.
+            p.rect(
+                rect,
+                radius,
+                theme::mix(c.plate, c.plate_edge, 0.25),
+                Stroke::new(look.rack_line, theme::mix(c.text_dim, c.plate, 0.5)),
+                StrokeKind::Inside,
+            );
+            let band = Rect::from_min_max(rect.min, pos2(rect.right(), head.bottom() + 4.0));
+            p.rect_filled(
+                band,
+                CornerRadius {
+                    nw: radius.nw,
+                    ne: radius.ne,
+                    sw: 0,
+                    se: 0,
+                },
+                c.on_accent,
+            );
+            p.text(
+                head.left_center(),
+                egui::Align2::LEFT_CENTER,
+                heading.to_uppercase(),
+                font,
+                c.accent,
+            );
+        }
+        ModuleStyle::Boxed => {
+            // A thin frame in the accent, the heading set into its top
+            // edge on a knock-out of the plate.
+            let frame = Rect::from_min_max(pos2(rect.left(), rect.top() + 8.0), rect.max);
+            p.rect_stroke(
+                frame,
+                radius,
+                Stroke::new(1.0, c.accent),
+                StrokeKind::Inside,
+            );
+            let text = heading.to_uppercase();
+            let w = ui.fonts_mut(|f| {
+                f.layout_no_wrap(text.clone(), font.clone(), c.accent)
+                    .size()
+                    .x
+            });
+            let knock =
+                Rect::from_min_size(pos2(rect.left() + 8.0, rect.top()), vec2(w + 8.0, 16.0));
+            p.rect_filled(knock, 0, c.plate);
+            p.text(
+                pos2(knock.left() + 4.0, knock.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                font,
+                c.accent,
+            );
+        }
+    }
     let inner = Rect::from_min_max(
         pos2(rect.left() + 8.0, head.bottom() + 6.0),
         rect.max - vec2(8.0, 6.0),
@@ -759,42 +933,73 @@ pub(crate) enum FilterShape {
 pub(crate) fn screen(ui: &mut Ui, size: Vec2, columns: usize, rows: usize) -> (Rect, theme::Look) {
     let look = theme::look(ui.ctx());
     let c = look.c();
+    let ch = character::current(ui.ctx());
     let (_, rect) = ui.allocate_space(size);
     let radius = CornerRadius::same(look.rack_radius.min(4.0) as u8);
     let p = ui.painter();
-    p.rect(
-        rect,
-        radius,
-        c.meter_bg,
-        Stroke::new(1.0, c.line),
-        StrokeKind::Inside,
-    );
-    let grid = Stroke::new(1.0, theme::mix(c.line, c.meter_bg, 0.5));
-    for i in 1..columns {
-        let x = rect.left() + rect.width() * i as f32 / columns as f32;
-        p.line_segment(
-            [pos2(x, rect.top() + 2.0), pos2(x, rect.bottom() - 2.0)],
-            grid,
-        );
-    }
-    for i in 1..rows {
-        let y = rect.top() + rect.height() * i as f32 / rows as f32;
-        p.line_segment(
-            [pos2(rect.left() + 2.0, y), pos2(rect.right() - 2.0, y)],
-            grid,
-        );
+    let ink = screen_ink(&ch, c);
+    match ch.screen {
+        ScreenStyle::Scope | ScreenStyle::Lamp => {
+            p.rect(
+                rect,
+                radius,
+                c.meter_bg,
+                Stroke::new(1.0, c.line),
+                StrokeKind::Inside,
+            );
+            let grid = Stroke::new(1.0, theme::mix(c.line, c.meter_bg, 0.5));
+            for i in 1..columns {
+                let x = rect.left() + rect.width() * i as f32 / columns as f32;
+                p.line_segment(
+                    [pos2(x, rect.top() + 2.0), pos2(x, rect.bottom() - 2.0)],
+                    grid,
+                );
+            }
+            for i in 1..rows {
+                let y = rect.top() + rect.height() * i as f32 / rows as f32;
+                p.line_segment(
+                    [pos2(rect.left() + 2.0, y), pos2(rect.right() - 2.0, y)],
+                    grid,
+                );
+            }
+        }
+        ScreenStyle::Lcd => {
+            // A bezel, pale glass, and a dot grid like unlit pixels.
+            p.rect(
+                rect,
+                radius,
+                c.meter_bg,
+                Stroke::new(2.0, c.plate_shadow),
+                StrokeKind::Inside,
+            );
+            let dot = theme::mix(ink, c.meter_bg, 0.85);
+            let mut y = rect.top() + 4.0;
+            while y < rect.bottom() - 2.0 {
+                let mut x = rect.left() + 4.0;
+                while x < rect.right() - 2.0 {
+                    p.rect_filled(Rect::from_min_size(pos2(x, y), vec2(1.0, 1.0)), 0, dot);
+                    x += 3.0;
+                }
+                y += 3.0;
+            }
+        }
     }
     (rect, look)
 }
 
 /// Draws `points` (already in the rect) as a trace, filled beneath.
 pub(crate) fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) {
-    let accent = character::current(ui.ctx()).accent(look);
+    let ch = character::current(ui.ctx());
+    let ink = screen_ink(&ch, look.c());
     let p = ui.painter();
     // The fill under the trace, a strip down from each segment: the
     // trace needn't be convex.
     let bottom = rect.bottom() - 2.0;
-    let colour = accent.gamma_multiply(0.12);
+    let colour = ink.gamma_multiply(if ch.screen == ScreenStyle::Lcd {
+        0.25
+    } else {
+        0.12
+    });
     let mut mesh = egui::Mesh::default();
     for w in points.windows(2) {
         let i = mesh.vertices.len() as u32;
@@ -805,7 +1010,25 @@ pub(crate) fn trace(ui: &Ui, rect: Rect, points: Vec<Pos2>, look: &theme::Look) 
         mesh.add_triangle(i, i + 2, i + 3);
     }
     p.add(Shape::mesh(mesh));
-    p.add(Shape::line(points, Stroke::new(1.5, accent)));
+    if ch.screen == ScreenStyle::Lamp {
+        // A glow around the trace.
+        p.add(Shape::line(
+            points.clone(),
+            Stroke::new(5.0, ink.gamma_multiply(0.18)),
+        ));
+    }
+    let weight = if ch.screen == ScreenStyle::Lcd {
+        2.0
+    } else {
+        1.5
+    };
+    p.add(Shape::line(points, Stroke::new(weight, ink)));
+}
+
+/// What a screen draws its trace in: the character's ink, or the
+/// theme's accent.
+fn screen_ink(ch: &Character, c: &theme::Colours) -> egui::Color32 {
+    if ch.plain { c.accent } else { ch.screen_ink }
 }
 
 /// A filter's response, 20 Hz to 20 kHz across, −36 to +18 dB up.
@@ -1256,6 +1479,7 @@ impl Rack {
             child.set_min_height(h - 12.0);
             child.set_clip_rect(content.intersect(ui.clip_rect()));
         }
+        character::style(&mut child);
         let out = add(&mut child);
         let h = fixed.unwrap_or_else(|| child.min_rect().height() + 12.0);
         let plate = Rect::from_min_size(pos2(left, top), vec2(width, h));
@@ -1345,6 +1569,7 @@ impl Rack {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         child.spacing_mut().item_spacing.x = 8.0;
+        character::style(&mut child);
         child.add_space(4.0);
         name_plate(&mut child, name, &look, look.heading * 0.8);
         extra(&mut child);
@@ -1428,6 +1653,30 @@ impl Rack {
                 }
             }
         }
+        if let Some(wood) = ch.cheeks {
+            // Side cheeks the full height of the plate, at each end.
+            for side in [
+                Rect::from_min_size(plate.min, vec2(EAR, plate.height())),
+                Rect::from_min_size(
+                    pos2(plate.right() - EAR, plate.top()),
+                    vec2(EAR, plate.height()),
+                ),
+            ] {
+                top.push(Shape::rect_filled(side, radius, wood));
+                top.push(Shape::rect_filled(side.shrink2(vec2(0.0, 1.0)), 0, wood));
+                // The grain, as a few darker lines down the cheek.
+                let line = Stroke::new(1.0, theme::mix(wood, egui::Color32::BLACK, 0.25));
+                for dx in [4.0, 7.5, 10.5] {
+                    top.push(Shape::line_segment(
+                        [
+                            pos2(side.left() + dx, side.top() + 2.0),
+                            pos2(side.left() + dx, side.bottom() - 2.0),
+                        ],
+                        line,
+                    ));
+                }
+            }
+        }
         band(&mut top, plate, inset, &ch, look);
         // Ears and screws.
         for (x, y) in [
@@ -1472,7 +1721,7 @@ fn band(top: &mut Vec<Shape>, plate: Rect, inset: f32, ch: &Character, look: &th
         Band::Sections => {
             let n = 4;
             let w = (right - left) / n as f32;
-            for (i, colour) in ch.sections(look).iter().enumerate() {
+            for (i, colour) in ch.sections().iter().enumerate() {
                 let x = left + w * i as f32;
                 top.push(Shape::rect_filled(
                     Rect::from_min_max(pos2(x + 1.0, y), pos2(x + w - 1.0, y + 3.0)),

@@ -63,9 +63,9 @@ impl History {
     ) -> Option<Action> {
         let mut open = self.open;
         let mut action = None;
-        egui::Window::new("Change history")
+        crate::workspace::centred(egui::Window::new("Change history"), ctx)
             .open(&mut open)
-            .default_pos([320.0, 120.0])
+            .collapsible(false)
             .default_size([440.0, 520.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

@@ -162,12 +162,15 @@ impl Editor {
         let mut changed = false;
         let look = theme::look(ui.ctx());
         let tc = look.c().clone();
-        let px_per_tick = SIXTEENTH / StepRate::Sixteenth.ticks() as f32;
         let longest = (p.lanes.iter())
             .map(|l| l.steps.len() as i64 * l.rate.ticks())
             .max()
             .unwrap_or(0)
             .max(p.len);
+        // The steps grow to fill the pane, up to twice their size.
+        let least = SIXTEENTH / StepRate::Sixteenth.ticks() as f32;
+        let px_per_tick = ((ui.available_width() - NAMES - 8.0) / longest.max(1) as f32)
+            .clamp(least, least * 2.0);
         let width = NAMES + longest as f32 * px_per_tick + 8.0;
         let height = ROW * p.lanes.len() as f32 + 4.0;
         egui::ScrollArea::horizontal()

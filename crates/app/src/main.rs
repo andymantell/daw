@@ -91,6 +91,7 @@ mod recording;
 mod remote;
 mod render;
 mod review;
+mod sampler_panel;
 mod sections;
 mod settings;
 mod share;

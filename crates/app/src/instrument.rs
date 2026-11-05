@@ -115,7 +115,7 @@ pub struct Slot {
     /// The drum machine's pad shown, and the sampler's zone or the
     /// slicer's slice.
     pad: usize,
-    zone: usize,
+    pub(crate) zone: usize,
     /// The drum machine's part shown: sounds, effects, or outputs.
     tab: usize,
     /// The slicer's settings for cutting: how keen to find hits, and
@@ -910,7 +910,7 @@ fn params_grid(ui: &mut egui::Ui, salt: &str, id: u64, p: &Params, from: usize, 
 /// Sound files the samplers read.
 const SOUND_FILES: &[&str] = &["wav", "flac", "mp3", "ogg", "opus", "aif", "aiff", "m4a"];
 
-fn pick_sounds(title: &str, many: bool) -> Vec<PathBuf> {
+pub(crate) fn pick_sounds(title: &str, many: bool) -> Vec<PathBuf> {
     let d = rfd::FileDialog::new()
         .set_title(title)
         .add_filter("Sound file", SOUND_FILES);
@@ -923,7 +923,7 @@ fn pick_sounds(title: &str, many: bool) -> Vec<PathBuf> {
 
 /// A menu choosing a sound for a slot: a file, or one made here. The
 /// reference chosen, if one was.
-fn sound_menu(
+pub(crate) fn sound_menu(
     ui: &mut egui::Ui,
     salt: impl std::hash::Hash + std::fmt::Debug,
     current: &str,
@@ -1294,7 +1294,7 @@ pub(crate) fn step_sound(ctx: &egui::Context, slot: &Slot, by: i32) -> Option<&'
 /// kit; `Fit` for one still on its settings grid.
 fn unit_height(kind: Option<Kind>) -> Height {
     match kind {
-        Some(Kind::Synth) => Height::Units(3),
+        Some(Kind::Synth | Kind::Sampler) => Height::Units(3),
         _ => Height::Fit,
     }
 }
@@ -1395,6 +1395,12 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
                         if let Some(b) = slot.builtin_ref() {
                             let p = b.params().clone();
                             crate::synth_panel::poly_synth(ui, &p, slot.id, body);
+                        }
+                    }
+                    Some(Kind::Sampler) if !slot.is_plugin() => {
+                        if crate::sampler_panel::sampler(ui, slot, cx, shown, body) {
+                            slot.renew(cx.rate, cx.pending);
+                            shown.changed = true;
                         }
                     }
                     _ => {
@@ -1821,7 +1827,7 @@ fn june_controls(ui: &mut egui::Ui, slot: &mut Slot) -> bool {
 }
 
 /// Reads `reference` into a sound, telling the user if it couldn't be.
-fn read_sound(reference: &str, cx: &Ctx, shown: &mut Shown) -> Option<Loaded> {
+pub(crate) fn read_sound(reference: &str, cx: &Ctx, shown: &mut Shown) -> Option<Loaded> {
     match daw_instruments::load(reference, cx.read) {
         Ok(l) => Some(l),
         Err(e) => {

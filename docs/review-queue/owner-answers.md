@@ -3,6 +3,12 @@
 Answers the owner gave to the open decisions in this folder, newest
 first. Each answer is also ticked in its feature's file.
 
+## 2026-11-05: live sessions may use free public STUN servers
+
+Accepted (`0.5-live-sessions.md`): asking free public STUN servers, run
+by others, for each machine's outside address fits "no server we
+operate". They see addresses only, never project data.
+
 ## 2026-11-05: unsigned macOS builds
 
 No paid developer program for now. macOS builds go on the release page
@@ -72,5 +78,5 @@ Decisions 0012 (amp capture player), 0013 (CLAP hosting) and 0014
 (export encoders), built at risk, are confirmed.
 
 Still open and being asked one at a time: Intel-only plugins on Apple Silicon (waits for a Mac
-build), and public STUN servers. The speed and pitch choice (0.6) and decisions 0003 and 0007
+build). The speed and pitch choice (0.6) and decisions 0003 and 0007
 wait for listening and checks on the PC.

@@ -120,8 +120,8 @@ pub struct Slot {
     tab: usize,
     /// The slicer's settings for cutting: how keen to find hits, and
     /// how many equal parts.
-    sensitivity: f32,
-    parts: usize,
+    pub(crate) sensitivity: f32,
+    pub(crate) parts: usize,
     /// The Lucky Seven's loaded sound bank, for choosing from; the
     /// settings chosen are the project's, the bank isn't.
     pub bank: Option<Arc<daw_instruments::lucky_seven::bank::Bank>>,
@@ -1295,7 +1295,12 @@ pub(crate) fn step_sound(ctx: &egui::Context, slot: &Slot, by: i32) -> Option<&'
 fn unit_height(kind: Option<Kind>) -> Height {
     match kind {
         Some(
-            Kind::Synth | Kind::Sampler | Kind::PatchTwenty | Kind::BlueWave | Kind::LuckySeven,
+            Kind::Synth
+            | Kind::Sampler
+            | Kind::Slicer
+            | Kind::PatchTwenty
+            | Kind::BlueWave
+            | Kind::LuckySeven,
         ) => Height::Units(3),
         _ => Height::Fit,
     }
@@ -1419,6 +1424,12 @@ fn rack_panel(ui: &mut egui::Ui, t: &mut crate::Track, cx: &mut Ctx, shown: &mut
                     }
                     Some(Kind::LuckySeven) if !slot.is_plugin() => {
                         lucky_seven_panel(ui, slot, body, shown);
+                    }
+                    Some(Kind::Slicer) if !slot.is_plugin() => {
+                        if crate::slicer_panel::panel(ui, slot, cx, shown, body) {
+                            slot.renew(cx.rate, cx.pending);
+                            shown.changed = true;
+                        }
                     }
                     _ => {
                         slot_controls(ui, slot, instrument_outputs, cx, shown);
@@ -1559,7 +1570,9 @@ pub(crate) fn slot_controls(
         Some(Kind::Sampler) => sampler_controls(ui, slot, cx, shown),
         Some(Kind::DrumSampler) => drum_sampler_controls(ui, slot, cx, shown),
         Some(Kind::DrumMachine) => drum_machine_controls(ui, slot, outputs, cx, shown),
-        Some(Kind::Slicer) => slicer_controls(ui, slot, cx, shown),
+        Some(Kind::Slicer) => {
+            crate::slicer_panel::panel(ui, slot, cx, shown, crate::slicer_panel::BODY)
+        }
         Some(Kind::PatchTwenty) => patch_twenty_controls(ui, slot),
         Some(Kind::AcidThree) => acid_controls(ui, slot),
         Some(Kind::June) => june_controls(ui, slot),
@@ -2470,146 +2483,6 @@ fn plugin_controls(
         }
     });
     route_rows(ui, id, &in_use, routes, cx, shown);
-}
-
-fn slicer_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Shown) -> bool {
-    let id = slot.id;
-    let (mut sensitivity, mut parts) = (slot.sensitivity, slot.parts);
-    let mut chosen = slot.zone;
-    let Some(b) = slot.builtin_mut() else {
-        return false;
-    };
-    let mut renew = false;
-    ui.horizontal(|ui| {
-        ui.label("Loop");
-        let current = b
-            .sample("loop")
-            .map(|s| s.reference.clone())
-            .unwrap_or_default();
-        if let Some(r) = sound_menu(ui, ("slicer-loop", id), &current)
-            && let Some(l) = read_sound(&r, cx, shown)
-        {
-            b.set_loop(Arc::new(l), sensitivity);
-            renew = true;
-        }
-    });
-    // The loop's shape, with a line where each slice starts.
-    if let Some(s) = b.loop_sample() {
-        let slices = b.slices();
-        let (rect, r) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 72.0), egui::Sense::click());
-        // Clicking shows the slice clicked in.
-        if r.clicked()
-            && let Some(at) = r.interact_pointer_pos()
-        {
-            let f = ((at.x - rect.left()) / rect.width().max(1.0) * s.len() as f32) as usize;
-            chosen = slices.iter().rposition(|&x| x <= f).unwrap_or(0);
-        }
-        let painter = ui.painter_at(rect);
-        let visuals = ui.visuals();
-        painter.rect_filled(rect, 4.0, visuals.extreme_bg_color);
-        let w = rect.width().max(1.0) as usize;
-        let n = s.len().max(1);
-        for x in 0..w {
-            let a = x * n / w;
-            let z = ((x + 1) * n / w).max(a + 1).min(n);
-            let peak = (a..z).fold(0.0f32, |m, i| m.max(s.left[i].abs()).max(s.right[i].abs()));
-            let h = peak.min(1.0) * rect.height() * 0.48;
-            let cx_ = rect.left() + x as f32;
-            painter.line_segment(
-                [
-                    egui::pos2(cx_, rect.center().y - h),
-                    egui::pos2(cx_, rect.center().y + h),
-                ],
-                egui::Stroke::new(1.0, visuals.text_color().gamma_multiply(0.6)),
-            );
-        }
-        for (k, &f) in slices.iter().enumerate() {
-            let x = rect.left() + f as f32 / n as f32 * rect.width();
-            painter.line_segment(
-                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                egui::Stroke::new(
-                    if k == chosen { 3.0 } else { 1.5 },
-                    visuals.selection.bg_fill,
-                ),
-            );
-            painter.text(
-                egui::pos2(x + 3.0, rect.top() + 2.0),
-                egui::Align2::LEFT_TOP,
-                daw_instruments::params::note_name(slicer::FIRST_NOTE as i32 + k as i32),
-                egui::FontId::proportional(10.0),
-                visuals.text_color(),
-            );
-        }
-        ui.label(format!(
-            "{} slices, on the keys from {} up.",
-            slices.len(),
-            daw_instruments::params::note_name(slicer::FIRST_NOTE as i32)
-        ));
-    }
-    ui.horizontal(|ui| {
-        // ai: edit_instrument.slice.at_hits
-        if ui
-            .button("Cut at the hits")
-            .on_hover_text("A slice where each hit starts")
-            .clicked()
-        {
-            b.slice_at_hits(sensitivity);
-            renew = true;
-        }
-        // ai: edit_instrument.slice.at_hits
-        ui.add(egui::Slider::new(&mut sensitivity, 0.0..=1.0).text("Sensitivity"))
-            .accessible_name("Sensitivity")
-            .on_hover_text("Higher finds quieter hits too");
-    });
-    ui.horizontal(|ui| {
-        // ai: edit_instrument.slice.parts
-        if ui.button("Cut into equal parts").clicked() {
-            b.slice_equally(parts);
-            renew = true;
-        }
-        // ai: edit_instrument.slice.parts
-        ui.add(
-            egui::DragValue::new(&mut parts)
-                .range(1..=slicer::MAX_SLICES)
-                .suffix(" parts"),
-        )
-        .accessible_name("Parts");
-    });
-    let p = b.params().clone();
-    params_grid(ui, "slicer", id, &p, 0, slicer::at::SLICES);
-    let n = b.slices().len();
-    if n > 0 {
-        chosen = chosen.min(n - 1);
-        ui.separator();
-        let key =
-            |k: usize| daw_instruments::params::note_name(slicer::FIRST_NOTE as i32 + k as i32);
-        egui::ComboBox::from_label("Slice")
-            .selected_text(format!("Slice {} ({})", chosen + 1, key(chosen)))
-            .show_ui(ui, |ui| {
-                for k in 0..n {
-                    // ai: view
-                    ui.selectable_value(&mut chosen, k, format!("Slice {} ({})", k + 1, key(k)));
-                }
-            });
-        let from = slicer::slice_at(chosen, slicer::slice::TUNE);
-        params_grid(ui, "slice", id, &p, from, slicer::slice_at(chosen + 1, 0));
-    }
-    if ui
-        // ai: slice-notes
-        .button("Make notes that play the loop")
-        .on_hover_text(
-            "A note clip playing the slices in order on their beats, so the loop follows \
-             the song's tempo",
-        )
-        .clicked()
-    {
-        shown.cmd = Some(Cmd::SliceNotes);
-    }
-    slot.sensitivity = sensitivity;
-    slot.parts = parts;
-    slot.zone = chosen;
-    renew
 }
 
 /// The name of instrument kind `k`'s track command, as numbered in
@@ -3841,5 +3714,107 @@ mod kit_tests {
             )
             .unwrap_err();
         assert!(e.contains("no unit"), "{e}");
+    }
+
+    fn param(d: &mut Driver, t: &str, name: &str) -> f64 {
+        let p = d.call("list_parameters", json!({"track": t})).unwrap();
+        (p[0]["params"].as_array().unwrap().iter())
+            .find(|p| p["param"] == name)
+            .map(|p| p["value"].as_f64().unwrap())
+            .unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    #[test]
+    fn the_loop_slicer_panel_is_a_rack_unit_an_assistant_sees_and_steers() {
+        let mut d = Driver::new();
+        let t = d
+            .call("add_track", json!({"kind": "slicer", "name": "Beat"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        d.app().instrument_open = Some(0);
+        d.app().workspace.full = Some(Pane::Instrument);
+        d.h.run();
+        d.h.run();
+
+        // The loop, the slice and playing modules, in the rack.
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(info["rack"][0]["view"], "shown", "{info}");
+        for label in [
+            "Sensitivity",
+            "Parts",
+            "Cut at the hits",
+            "Cut into equal parts",
+            "Slice",
+            "Next slice",
+            "Low-pass",
+            "Backwards: Off",
+            "Notes: Play the slice",
+            "Attack",
+            "Loop length in beats",
+            "Make notes that play the loop",
+        ] {
+            assert!(
+                d.h.query_all_by_label(label).next().is_some(),
+                "no {label} on the panel"
+            );
+        }
+
+        // An assistant cuts the loop again; the panel says so.
+        d.call(
+            "edit_instrument",
+            json!({"track": t, "slice": {"parts": 4}}),
+        )
+        .unwrap();
+        d.h.run();
+        assert!(d.h.query_by_label_contains("4 slices").is_some());
+
+        // The slice module shows the slice picked, whose settings an
+        // assistant reads: next slice, then its Backwards switch.
+        d.h.get_by_label("Next slice").click();
+        d.h.run();
+        d.h.get_by_label("Backwards: On").click();
+        d.h.run();
+        assert_eq!(param(&mut d, &t, "instrument.slice01.reverse"), 1.0);
+        assert_eq!(param(&mut d, &t, "instrument.slice00.reverse"), 0.0);
+
+        // A playing switch sets what an assistant reads, and the other
+        // way about.
+        d.h.get_by_label("Notes: Stop with the note").click();
+        d.h.run();
+        assert_eq!(param(&mut d, &t, "instrument.mode"), 1.0);
+        d.call(
+            "set_parameter",
+            json!({"track": t, "param": "instrument.mode", "value": 0.0}),
+        )
+        .unwrap();
+        d.h.run();
+        d.h.get_by_label("Notes: Play the slice");
+
+        // Cutting from the panel: at the loop's eight hits, then into
+        // the four parts the assistant asked for, which the panel keeps.
+        d.h.get_by_label("Cut at the hits").click();
+        d.h.run();
+        assert!(d.h.query_by_label_contains("8 slices").is_some());
+        d.h.get_by_label("Cut into equal parts").click();
+        d.h.run();
+        assert!(d.h.query_by_label_contains("4 slices").is_some());
+
+        // The notes that play the loop, by button and by command.
+        d.h.get_by_label("Make notes that play the loop").click();
+        d.h.run();
+        d.command("slice-notes");
+        d.h.run();
+        assert_eq!(d.app().tracks[0].note_clips.len(), 2);
+
+        // Collapsed to a strip by the assistant: no knobs.
+        d.call(
+            "set_rack",
+            json!({"track": t, "unit": "instrument", "view": "collapsed"}),
+        )
+        .unwrap();
+        d.h.run();
+        assert!(d.h.query_by_label("Sensitivity").is_none());
     }
 }

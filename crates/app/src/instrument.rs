@@ -114,10 +114,10 @@ pub struct Slot {
     inner: Inner,
     /// The drum machine's pad shown, and the sampler's zone or the
     /// slicer's slice.
-    pad: usize,
+    pub(crate) pad: usize,
     pub(crate) zone: usize,
-    /// The drum machine's part shown: sounds, effects, or outputs.
-    tab: usize,
+    /// The drum machine's part shown: layers, effects, or outputs.
+    pub(crate) tab: usize,
     /// The slicer's settings for cutting: how keen to find hits, and
     /// how many equal parts.
     pub(crate) sensitivity: f32,
@@ -610,6 +610,14 @@ impl Slot {
         if let Some(b) = self.builtin_mut() {
             b.rename_sample(old, new);
         }
+    }
+
+    /// Shows what `old`'s panel showed: the pad, zone or slice, and the
+    /// drum machine's part.
+    pub(crate) fn keep_view(&mut self, old: &Slot) {
+        self.pad = old.pad;
+        self.zone = old.zone;
+        self.tab = old.tab;
     }
 
     /// The drum machine's pads in use (with a sound on any layer).
@@ -1302,6 +1310,7 @@ fn unit_height(kind: Option<Kind>) -> Height {
             | Kind::BlueWave
             | Kind::LuckySeven,
         ) => Height::Units(3),
+        Some(Kind::DrumMachine) => Height::Units(crate::drum_panel::UNITS),
         _ => Height::Fit,
     }
 }
@@ -2143,7 +2152,7 @@ fn drum_sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &m
 
 /// The built-in effects a pad can have: not containers, and none that
 /// read a file of their own.
-fn pad_effects() -> impl Iterator<Item = daw_effects::Kind> {
+pub(crate) fn pad_effects() -> impl Iterator<Item = daw_effects::Kind> {
     daw_effects::Kind::ALL
         .into_iter()
         .filter(|k| !k.is_container() && k.uses() == daw_effects::Uses::Nothing)
@@ -2156,227 +2165,12 @@ fn drum_machine_controls(
     cx: &Ctx,
     shown: &mut Shown,
 ) -> bool {
-    let id = slot.id;
-    let names: Vec<String> = (0..dm::PADS).map(|p| slot.pad_name(p)).collect();
-    let in_use = slot.outputs_in_use();
-    let mut pad = slot.pad.min(dm::PADS - 1);
-    let mut tab = slot.tab;
-    let mut renew = false;
-    let Some(b) = slot.builtin_mut() else {
-        return false;
-    };
-    let p = b.params().clone();
-    params_grid(ui, "drum-machine", id, &p, 0, dm::at::PADS);
-    ui.separator();
-    // The pads, four by four, the lowest at the bottom left.
-    egui::Grid::new(("pads", id))
-        .spacing([4.0, 4.0])
-        .show(ui, |ui| {
-            for row in (0..4).rev() {
-                for col in 0..4 {
-                    let k = row * 4 + col;
-                    let note = daw_instruments::params::note_name(dm::FIRST_NOTE as i32 + k as i32);
-                    let text = format!("{}\n{note}", names[k]);
-                    let r = ui
-                        .add_sized([100.0, 40.0], egui::Button::selectable(pad == k, text))
-                        .on_hover_text("Choose the pad to change. It plays on the key shown");
-                    if r.clicked() {
-                        pad = k;
-                    }
-                }
-                ui.end_row();
-            }
-        });
-    ui.separator();
-    ui.horizontal(|ui| {
-        for (k, name) in ["Sounds", "Pad effects", "Outputs and sends"]
-            .into_iter()
-            .enumerate()
-        {
-            // ai: view
-            if ui.selectable_label(tab == k, name).clicked() {
-                tab = k;
-            }
-        }
-    });
-    ui.separator();
-    if tab == 0 {
-        ui.strong(format!("Pad {}: {}", pad + 1, names[pad]));
-        // The pad's own settings, with its output and sends.
-        egui::Grid::new(("pad", id, pad))
-            .num_columns(2)
-            .show(ui, |ui| {
-                for k in 0..dm::pad::LAYERS {
-                    let i = dm::pad_at(pad, k);
-                    if k == dm::pad::OUTPUT {
-                        ui.label("Output");
-                        let mut o = p.get(i) as usize;
-                        let text = |o: usize| {
-                            if o == 0 {
-                                "The track".to_string()
-                            } else {
-                                format!("Output {o}")
-                            }
-                        };
-                        egui::ComboBox::from_id_salt(("pad-output", id, pad))
-                            .selected_text(text(o))
-                            .show_ui(ui, |ui| {
-                                for n in 0..=dm::OUTPUTS {
-                                    // ai: set_parameter
-                                    ui.selectable_value(&mut o, n, text(n));
-                                }
-                            })
-                            .response
-                            .accessible_name("Output")
-                            .on_hover_text(
-                                "An output of its own can go to a bus in the mixer, below. One \
-                             that goes nowhere plays through the track",
-                            );
-                        if o != p.get(i) as usize {
-                            p.set(i, o as f64);
-                        }
-                        ui.end_row();
-                        continue;
-                    }
-                    param(ui, ("pad", id, pad), &p, i);
-                }
-            });
-        // Its layers.
-        for l in 0..dm::LAYERS {
-            let src = dm::layer_at(pad, l, dm::layer::SOURCE);
-            let on = p.get(src) > 0.0;
-            let title = if on {
-                format!("Layer {}: {}", l + 1, dm::SOURCES[p.get(src) as usize])
-            } else {
-                format!("Layer {}: off", l + 1)
-            };
-            egui::CollapsingHeader::new(title)
-                .id_salt(("layer", id, pad, l))
-                .default_open(l == 0)
-                .show(ui, |ui| {
-                    let sample = p.get(src) as usize == dm::SAMPLE as usize;
-                    egui::Grid::new(("layer-grid", id, pad, l))
-                        .num_columns(2)
-                        .show(ui, |ui| {
-                            param(ui, ("layer", id, pad, l), &p, src);
-                            if sample {
-                                ui.label("Sound");
-                                let key = dm::sample_key(pad, l);
-                                let current = b
-                                    .sample(&key)
-                                    .map(|s| s.reference.clone())
-                                    .unwrap_or_default();
-                                if let Some(r) =
-                                    sound_menu(ui, ("layer-sound", id, pad, l), &current)
-                                    && let Some(s) = read_sound(&r, cx, shown)
-                                {
-                                    b.set_sample(&key, Some(s));
-                                    renew = true;
-                                }
-                                ui.end_row();
-                            }
-                            for k in 1..dm::LAYER {
-                                // Tone means nothing to a sample, start nothing
-                                // to a drum made here.
-                                if (sample && k == dm::layer::TONE)
-                                    || (!sample && k == dm::layer::START)
-                                {
-                                    continue;
-                                }
-                                param(ui, ("layer", id, pad, l), &p, dm::layer_at(pad, l, k));
-                            }
-                        });
-                });
-        }
-    }
-    if tab == 1 {
-        // Its effects.
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.strong("Effects on this pad");
-            egui::ComboBox::from_id_salt(("pad-fx-add", id, pad))
-                .selected_text("Add…")
-                .show_ui(ui, |ui| {
-                    for k in pad_effects() {
-                        if ui
-                            // ai: edit_pad_effect.add
-                            .selectable_label(false, k.name())
-                            .on_hover_text(k.about())
-                            .clicked()
-                        {
-                            b.fx.push(PadFx {
-                                id: daw_project::new_id(),
-                                pad,
-                                effect: Arc::new(daw_effects::Effect::new(k)),
-                                bypass: false,
-                            });
-                            renew = true;
-                        }
-                    }
-                })
-                .response
-                .accessible_name("Add an effect to the pad");
-        });
-        let mut remove = None;
-        for (fi, f) in b.fx.iter_mut().enumerate().filter(|(_, f)| f.pad == pad) {
-            egui::CollapsingHeader::new(f.effect.kind().name())
-                .id_salt(("pad-fx", &f.id))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let mut on = !f.bypass;
-                        // ai: edit_pad_effect.on
-                        if ui.checkbox(&mut on, "On").changed() {
-                            f.bypass = !on;
-                            renew = true;
-                        }
-                        // ai: edit_pad_effect.remove
-                        if ui.button("Remove").clicked() {
-                            remove = Some(fi);
-                        }
-                    });
-                    crate::fx::builtin_params(ui, id ^ (fi as u64) << 32, &f.effect);
-                });
-        }
-        if let Some(fi) = remove {
-            b.fx.remove(fi);
-            renew = true;
-        }
-        if !b.fx.iter().any(|f| f.pad == pad) {
-            ui.label(egui::RichText::new("None.").weak());
-        }
-    }
-    if tab == 2 {
-        // Where the outputs go.
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui
-                // ai: pad-buses
-                .button("Put each pad on a bus")
-                .on_hover_text("Gives every pad with a sound an output of its own and a bus in the mixer for it")
-                .clicked()
-            {
-                shown.cmd = Some(Cmd::PadBuses);
-            }
-        });
-        if in_use.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "Every pad plays through the track. Give a pad an output, or turn up a send, to route it.",
-                )
-                .weak(),
-            );
-        }
-        route_rows(ui, id, &in_use, routes, cx, shown);
-    }
-    slot.tab = tab;
-    slot.pad = pad;
-    renew
+    crate::drum_panel::drum_machine(ui, slot, routes, cx, shown)
 }
 
 /// Where each of an instrument's outputs in use goes: a bus, or
 /// nowhere, so it plays through the track.
-fn route_rows(
+pub(crate) fn route_rows(
     ui: &mut egui::Ui,
     id: u64,
     in_use: &[(u32, String)],
@@ -3182,7 +2976,7 @@ mod tests {
         h.run();
         h.state_mut().workspace.full = Some(crate::workspace::Pane::Instrument);
         h.run();
-        h.get_by_label("Outputs and sends").click();
+        h.get_by_label("Show: Outputs").click();
         h.run();
         h.get_by_label("Put each pad on a bus").click();
         h.run();

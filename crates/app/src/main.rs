@@ -47,6 +47,7 @@ mod comments;
 mod comping;
 mod crash;
 mod desk;
+mod drum_panel;
 mod export;
 mod freeze;
 mod fretboard;

@@ -153,6 +153,10 @@ assistant finds them for itself. In outline:
   sound). The panel's sound buttons are the commands `next-sound`,
   `previous-sound` and `compare-sound` (hears the sound as it was when
   the panel opened or a sound was chosen; again for the edits).
+  For a drum machine, `get_instrument` also gives `pads`: each pad's
+  key, name, layers playing, output and number of effects, and the pad
+  and part (layers, effects or outputs) the panel shows; `show_pad`
+  chooses them (the view only).
 - **Effect panels:** every built-in effect in the Effects tab is a unit
   in the same rack, its front panel drawn from the kit; each knob and
   switch is one of its settings (`fx:<effect>:<key>` for

@@ -87,6 +87,21 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "show_pad",
+        description: "Which pad of a drum machine (the track's instrument) its panel \
+                      shows, and which of the pad's parts beside it: its layers, its \
+                      effects, or its outputs and sends. Changes the view only, not the \
+                      sound. get_instrument gives the pads, with the one shown.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "track": {"type": "string"},
+                "pad": {"type": "integer", "description": "The pad, 0 to 15 (from note 36), as set_sound counts them."},
+                "part": {"type": "string", "enum": ["layers", "effects", "outputs"]}
+            }, "required": ["track"]})
+        },
+    },
+    Tool {
         name: "edit_layer",
         description: "Adds, changes, moves or removes a layer of an instrument track's \
                       layered instrument: several instruments playing the same notes, each \
@@ -221,6 +236,7 @@ impl App {
         Some(match name {
             "set_instrument" => self.set_instrument_tool(args),
             "set_rack" => self.set_rack_tool(args),
+            "show_pad" => self.show_pad_tool(args),
             "edit_layer" => self.edit_layer_tool(args),
             "edit_pad_effect" => self.edit_pad_effect_tool(args),
             "set_instrument_output" => self.set_instrument_output_tool(args),
@@ -427,6 +443,7 @@ impl App {
         let sound = (t.instrument.as_ref())
             .and_then(Slot::builtin_ref)
             .and_then(daw_instruments::Builtin::current_sound);
+        let pads = (t.instrument.as_ref()).and_then(crate::drum_panel::pads_value);
         Ok(json!({
             "track": key,
             "instrument": pt.instrument.as_ref().map(instrument),
@@ -438,6 +455,7 @@ impl App {
             "zones": zones,
             "layers": layers,
             "outputs": outputs,
+            "pads": pads,
         }))
     }
 
@@ -590,6 +608,44 @@ impl App {
         Ok((
             json!({"track": key, "rack": rack}),
             Some(format!("Rack: {unit} {}", view.name())),
+        ))
+    }
+
+    fn show_pad_tool(&mut self, args: &Value) -> Done {
+        let key = text(args, "track", "the track's id")?.to_string();
+        let i = self.note_track(&key)?;
+        let pad = match args.get("pad") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .map(|p| p as usize)
+                    .filter(|&p| p < daw_instruments::drum_machine::PADS)
+                    .ok_or("The pad is 0 to 15.")?,
+            ),
+        };
+        let part = match args["part"].as_str() {
+            None => None,
+            Some(p) => Some(
+                (crate::drum_panel::PART_IDS.iter())
+                    .position(|x| *x == p)
+                    .ok_or_else(|| format!("{p}: the part is layers, effects or outputs."))?,
+            ),
+        };
+        let t = &mut self.tracks[i];
+        let slot = (t.instrument.as_mut())
+            .filter(|s| !s.is_plugin() && s.kind() == Some(Kind::DrumMachine))
+            .ok_or_else(|| format!("{} doesn't play a drum machine.", t.name))?;
+        if let Some(p) = pad {
+            slot.pad = p;
+        }
+        if let Some(p) = part {
+            slot.tab = p;
+        }
+        let shown = crate::drum_panel::shown(slot);
+        let name = slot.pad_name(slot.pad);
+        Ok((
+            json!({"track": key, "shown": shown}),
+            Some(format!("Show pad {}: {name}", slot.pad + 1)),
         ))
     }
 

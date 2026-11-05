@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use crate::commands::Cmd;
 use eframe::egui::{
-    self, CursorIcon, DragAndDrop, Id, Pos2, Rect, Sense, Stroke, UiBuilder, ViewportBuilder,
-    ViewportCommand, ViewportId, pos2, vec2,
+    self, Color32, CursorIcon, DragAndDrop, Id, Pos2, Rect, Sense, Stroke, UiBuilder,
+    ViewportBuilder, ViewportCommand, ViewportId, pos2, vec2,
 };
 
 /// A part of the main window.
@@ -1393,14 +1393,45 @@ impl<H: Host> Draw<'_, H> {
             // A narrow collapsed panel: only the button to open it.
             self.collapse_button(&mut hui, t, shown, here);
         } else {
+            // Tabs that don't all fit beside the header's buttons share
+            // the room equally and truncate, rather than the last one
+            // losing its end.
+            let pad = 2.0 * hui.spacing().button_padding.x;
+            let gap = hui.spacing().item_spacing.x;
+            let font = egui::TextStyle::Button.resolve(hui.style());
+            let natural: f32 = hui.fonts_mut(|f| {
+                (t.panes.iter())
+                    .map(|p| {
+                        f.layout_no_wrap(p.title().into(), font.clone(), Color32::WHITE)
+                            .size()
+                            .x
+                            + pad
+                            + gap
+                    })
+                    .sum()
+            });
+            let buttons = self.header_buttons_width(t, shown);
+            let room = hui.available_width() - buttons;
+            let each = (natural > room).then(|| ((room / t.panes.len() as f32) - gap).max(36.0));
             for (i, &p) in t.panes.iter().enumerate() {
-                let tab = hui
-                    .add(
-                        egui::Button::selectable(i == t.active, p.title())
-                            .sense(Sense::click_and_drag()),
-                    )
-                    .accessible_name(format!("{} tab", p.title()))
-                    .on_hover_text("Drag to move it to another panel");
+                let mut button = egui::Button::selectable(i == t.active, p.title())
+                    .sense(Sense::click_and_drag());
+                if let Some(w) = each {
+                    button = button.min_size(vec2(w, 0.0)).truncate();
+                }
+                let tab = match each {
+                    Some(w) => {
+                        hui.allocate_ui_with_layout(
+                            vec2(w, hui.available_height()),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.add(button),
+                        )
+                        .inner
+                    }
+                    None => hui.add(button),
+                }
+                .accessible_name(format!("{} tab", p.title()))
+                .on_hover_text("Drag to move it to another panel");
                 if tab.clicked() {
                     self.acts.push(Act::Show(p));
                 }
@@ -1460,6 +1491,23 @@ impl<H: Host> Draw<'_, H> {
         {
             self.acts.push(Act::Collapse(shown));
         }
+    }
+
+    /// How wide the header's buttons are, so the tabs know their room.
+    fn header_buttons_width(&self, t: &Tabs, shown: Pane) -> f32 {
+        let small = 22.0;
+        let mut n = 2.0; // full size, and the menu
+        if !shown.fixed() {
+            n += 1.0;
+            if self.windows {
+                n += 1.0;
+            }
+        }
+        if self.full.is_none() {
+            n += 1.0; // collapse
+        }
+        let _ = t;
+        n * small + 8.0
     }
 
     /// From the right: close, own window, full size, collapse, and the

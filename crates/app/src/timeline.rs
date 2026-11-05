@@ -2778,10 +2778,12 @@ impl Timeline {
                 lanes.rect_filled(r, corner, tc.lane);
                 lanes.rect_filled(r, corner, tc.clip_fill.of(colour));
             }
+            // A theme that puts the name on a paper label draws the notes
+            // in the label's colour, so they show on the clip's own fill.
             let ink = if c.muted {
                 tc.text_dim
             } else {
-                tc.clip_text.of(colour)
+                tc.clip_label.unwrap_or_else(|| tc.clip_text.of(colour))
             };
             let clipped = lanes.with_clip_rect(r.intersect(lanes.clip_rect()));
             // The notes, placed by pitch over the range the clip uses.
@@ -2830,7 +2832,16 @@ impl Timeline {
             if c.looped().is_some() {
                 name.push_str(" (loops)");
             }
-            clipped.text(at, Align2::LEFT_TOP, name, font, ink);
+            if c.muted {
+                clipped.text(at, Align2::LEFT_TOP, name, font, ink);
+            } else {
+                let g = clipped.layout_no_wrap(name, font, tc.clip_text.of(colour));
+                if let Some(label) = tc.clip_label {
+                    let back = Rect::from_min_size(at - vec2(3.0, 1.0), g.size() + vec2(6.0, 2.0));
+                    clipped.rect_filled(back, 3.0, label);
+                }
+                clipped.galley(at, g, tc.clip_text.of(colour));
+            }
             if selected {
                 lanes.rect_stroke(r, corner, Stroke::new(2.0, tc.text), StrokeKind::Inside);
             }

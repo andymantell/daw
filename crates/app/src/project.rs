@@ -617,6 +617,12 @@ impl App {
                     );
                     problems.extend(missing);
                     new.make_into(self.rate, &mut self.pending_instruments);
+                    let mut new = new;
+                    // The same instrument with a new shape (a pad effect
+                    // added, say) keeps the pad and part its panel shows.
+                    if let Some(old) = slot.as_ref().filter(|o| o.builtin == new.builtin) {
+                        new.keep_view(old);
+                    }
                     *slot = Some(new);
                 }
                 (slot, None) => *slot = None,

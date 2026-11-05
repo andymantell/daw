@@ -3,6 +3,14 @@
 Answers the owner gave to the open decisions in this folder, newest
 first. Each answer is also ticked in its feature's file.
 
+## 2026-11-05: unsigned macOS builds
+
+No paid developer program for now. macOS builds go on the release page
+unsigned, as Windows ones do, with steps for allowing the app on first
+launch (System Settings → Privacy & Security → Open Anyway). Not built
+yet: the release workflow has no macOS job. The Intel-only plugins
+question waits until a Mac build is actually tested.
+
 ## 2026-11-05: Windows builds stay unsigned for now
 
 No code signing, and no application to a signing service, until the
@@ -63,7 +71,6 @@ listening checks are not affected and stay open.
 Decisions 0012 (amp capture player), 0013 (CLAP hosting) and 0014
 (export encoders), built at risk, are confirmed.
 
-Still open and being asked one at a time: macOS
-releases and Intel-only plugins on Apple Silicon, and public STUN
-servers. The speed and pitch choice (0.6) and decisions 0003 and 0007
+Still open and being asked one at a time: Intel-only plugins on Apple Silicon (waits for a Mac
+build), and public STUN servers. The speed and pitch choice (0.6) and decisions 0003 and 0007
 wait for listening and checks on the PC.

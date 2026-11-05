@@ -127,6 +127,10 @@ until the owner asks for it.
   release, and notarise every release in CI. No macOS release goes out
   until then. **Owner decision** (it is a yearly cost in Andy's name, or a
   legal entity's).
+- **Owner decision (2026-11-05):** no paid program for now. Release
+  unsigned macOS builds on the release page, as for Windows, with
+  instructions for allowing the app in System Settings → Privacy &
+  Security on first launch.
 
 ### Linux
 

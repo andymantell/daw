@@ -166,6 +166,14 @@ struct Geometry {
     compact: bool,
 }
 
+impl Geometry {
+    /// The unit after a level readout: a narrow strip has no room for
+    /// it (the hover and spoken names still say dB).
+    fn unit(&self) -> &'static str {
+        if self.narrow { "" } else { " dB" }
+    }
+}
+
 /// A part of a strip's routing section.
 #[derive(Clone, Copy, PartialEq)]
 enum Part {
@@ -561,16 +569,31 @@ impl App {
             Part::Arm => {
                 let record = theme::look(ui.ctx()).c().record;
                 let direct = r.direct;
+                // Three icons across the strip: close together, so they
+                // fit in a theme with roomy buttons.
+                ui.spacing_mut().button_padding.x = 2.0;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_enabled_ui(t.input.is_some() || t.kind.plays_notes(), |ui| {
                     // ai: set_track_input
-                    rebuild |= lit(ui, record, |ui| ui.toggle_value(&mut t.arm, "R"))
-                        .accessible_name(format!("Arm {name} for recording"))
-                        .on_hover_text(if t.kind.plays_notes() {
-                            "Arm: record notes from MIDI devices (R records)"
-                        } else {
-                            "Arm for recording (R records)"
-                        })
-                        .changed();
+                    let a = lit(ui, record, |ui| {
+                        ui.add(
+                            crate::icons::IconButton::new(
+                                crate::icons::Icon::Arm,
+                                format!("Arm {name} for recording"),
+                            )
+                            .selected(t.arm)
+                            .small(),
+                        )
+                    });
+                    if a.clicked() {
+                        t.arm = !t.arm;
+                        rebuild = true;
+                    }
+                    a.on_hover_text(if t.kind.plays_notes() {
+                        "Arm: record notes from MIDI devices (R records)"
+                    } else {
+                        "Arm for recording (R records)"
+                    });
                     // Monitor as headphones, so it doesn't read as the
                     // header's M for mute.
                     // ai: set_track_input
@@ -596,11 +619,18 @@ impl App {
                 });
                 if matches!(t.kind, TrackKind::Audio | TrackKind::Instrument) {
                     // ai: set_practice.practice_mute
-                    ui.toggle_value(&mut t.practice_mute, "P")
-                        .accessible_name(format!("Practice mute {name}"))
-                        .on_hover_text(
-                            "P: practice mute, to silence this part and play it yourself",
-                        );
+                    let p = ui.add(
+                        crate::icons::IconButton::new(
+                            crate::icons::Icon::Pick,
+                            format!("Practice mute {name}"),
+                        )
+                        .selected(t.practice_mute)
+                        .small(),
+                    );
+                    if p.clicked() {
+                        t.practice_mute = !t.practice_mute;
+                    }
+                    p.on_hover_text("Practice mute: silence this part and play it yourself");
                 }
             }
             // The insert effects.
@@ -777,7 +807,7 @@ impl App {
                                 if v <= desk::MIN_DB {
                                     "off".into()
                                 } else {
-                                    format!("{v:.1} dB")
+                                    format!("{v:.1}{}", g.unit())
                                 }
                             }),
                     )
@@ -920,7 +950,7 @@ impl App {
                         .range(desk::MIN_DB..=desk::MAX_DB)
                         .speed(0.1)
                         .max_decimals(1)
-                        .suffix(" dB"),
+                        .suffix(g.unit()),
                 )
             });
             spoken::level(ui, first, db);
@@ -1007,7 +1037,7 @@ impl App {
                         .range(desk::MIN_DB..=desk::MAX_DB)
                         .speed(0.1)
                         .max_decimals(1)
-                        .suffix(" dB"),
+                        .suffix(g.unit()),
                 )
             });
             spoken::level(ui, first, grp.gain_db);

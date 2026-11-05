@@ -1420,15 +1420,35 @@ impl<H: Host> Draw<'_, H> {
             });
             // The buttons go first, from the right, so the tabs get
             // exactly what they leave: their width differs by theme.
+            // When the names won't fit beside them (judged by the
+            // buttons' width last frame), the buttons draw tight, with
+            // no padding round their icons, to give the names the room.
             let whole = hui.max_rect();
+            let last = hui.data(|d| d.get_temp::<f32>(id.with("buttons")));
+            let tight = last.is_some_and(|b| natural > whole.width() - b);
             let mut bui = hui.new_child(
                 UiBuilder::new()
                     .max_rect(whole)
                     .id_salt("buttons")
                     .layout(egui::Layout::right_to_left(egui::Align::Center)),
             );
+            if tight {
+                bui.spacing_mut().button_padding.x = 1.0;
+                bui.spacing_mut().item_spacing.x = 2.0;
+            }
             self.header_buttons(&mut bui, t, shown, here);
             let buttons = whole.right() - bui.min_rect().left() + gap;
+            // What they take at their natural size, for next frame.
+            let natural_buttons = if tight {
+                hui.data(|d| d.get_temp::<f32>(id.with("buttons_wide")))
+                    .unwrap_or(buttons)
+            } else {
+                buttons
+            };
+            hui.data_mut(|d| {
+                d.insert_temp(id.with("buttons"), natural_buttons);
+                d.insert_temp(id.with("buttons_wide"), natural_buttons);
+            });
             let room = whole.width() - buttons;
             let each = (natural > room).then(|| ((room / t.panes.len() as f32) - gap).max(28.0));
             hui.set_max_width(room);

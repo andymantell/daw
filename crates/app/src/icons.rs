@@ -87,11 +87,13 @@ pub(crate) enum Icon {
     Arm,
     Wave,
     Keys,
+    /// A plectrum: practising a part yourself.
+    Pick,
 }
 
 #[allow(dead_code, reason = "for the icon sheet and tests")]
 impl Icon {
-    pub(crate) const ALL: [Icon; 54] = [
+    pub(crate) const ALL: [Icon; 55] = [
         Icon::Play,
         Icon::Stop,
         Icon::Pause,
@@ -146,6 +148,7 @@ impl Icon {
         Icon::Arm,
         Icon::Wave,
         Icon::Keys,
+        Icon::Pick,
     ];
 
     /// What the icon shows, in words (for the icon sheet and tests).
@@ -205,6 +208,7 @@ impl Icon {
             Icon::Arm => "Arm",
             Icon::Wave => "Audio",
             Icon::Keys => "Instrument",
+            Icon::Pick => "Practice",
         }
     }
 }
@@ -556,6 +560,21 @@ pub(crate) fn paint(painter: &Painter, rect: Rect, icon: Icon, colour: Color32) 
         Icon::Arm => {
             pen.ring(0.5, 0.5, 0.32);
             pen.dot(0.5, 0.5, 0.16);
+        }
+        Icon::Pick => {
+            // A plectrum: wide shoulders, a rounded point at the foot.
+            pen.fill(&[
+                (0.2, 0.26),
+                (0.3, 0.16),
+                (0.5, 0.12),
+                (0.7, 0.16),
+                (0.8, 0.26),
+                (0.78, 0.44),
+                (0.66, 0.68),
+                (0.5, 0.88),
+                (0.34, 0.68),
+                (0.22, 0.44),
+            ]);
         }
         Icon::Wave => pen.line(&[
             (0.08, 0.5),

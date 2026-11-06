@@ -299,6 +299,66 @@ fn mark_seen(dir: &Path) {
     }
 }
 
+/// Says the app is running, from start until it closes properly. One
+/// left behind at start means the last run stopped without closing: a
+/// crash in the app or in a plugin running inside it (which the panic
+/// hook can't see), or the computer losing power. A file lock tells a
+/// second copy of the app, still running, from one that stopped.
+pub(crate) struct Running {
+    path: PathBuf,
+    /// Held, locked, while this copy runs; none if another copy has it.
+    file: Option<std::fs::File>,
+}
+
+impl Running {
+    /// The file: `%LOCALAPPDATA%\DAW\Running` on Windows.
+    pub(crate) fn path() -> PathBuf {
+        reports_dir().with_file_name("Running")
+    }
+
+    /// Marks this run as started, and says whether the last one stopped
+    /// without closing.
+    pub(crate) fn start(path: PathBuf) -> (Running, bool) {
+        let left = path.exists();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .ok()
+            .filter(|f| f.try_lock().is_ok());
+        // Another copy holds it: that one is running, not stopped.
+        let stopped = left && file.is_some();
+        if let Some(f) = &file {
+            use std::io::Write;
+            let _ = f.set_len(0);
+            let _ = writeln!(&*f, "{} started {}", APP_NAME, utc(now_secs()));
+        }
+        (Running { path, file }, stopped)
+    }
+
+    /// The app closed properly: the mark goes.
+    pub(crate) fn closed(&mut self) {
+        if let Some(f) = self.file.take() {
+            drop(f);
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        // Unwinding from an internal error is a crash too: the mark
+        // stays for the next start.
+        if !std::thread::panicking() {
+            self.closed();
+        }
+    }
+}
+
 /// The note at start-up and the Help → Crash reports window.
 pub(crate) struct Crashes {
     dir: PathBuf,
@@ -527,6 +587,34 @@ mod tests {
         report(300).write(&dir, &p).unwrap();
         assert_eq!(Crashes::new(dir.clone()).new, 1);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_run_that_stopped_without_closing_is_noticed_once() {
+        let dir = temp("running");
+        let path = dir.join("Running");
+        let (mut first, stopped) = Running::start(path.clone());
+        assert!(!stopped, "nothing ran before");
+        // A second copy while the first runs: not a crash.
+        let (second, stopped) = Running::start(path.clone());
+        assert!(!stopped, "the first is still running");
+        drop(second);
+        assert!(path.exists(), "the second copy leaves the first's mark");
+        first.closed();
+        assert!(!path.exists());
+        let (_, stopped) = Running::start(path.clone());
+        assert!(!stopped, "closed properly last time");
+
+        // A run that stops without closing: its lock goes with it, but
+        // the mark stays.
+        let (mut crashed, _) = Running::start(path.clone());
+        drop(crashed.file.take());
+        drop(crashed);
+        assert!(path.exists());
+        let (mut next, stopped) = Running::start(path.clone());
+        assert!(stopped, "the mark was left behind");
+        next.closed();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

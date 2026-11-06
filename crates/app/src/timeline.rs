@@ -1112,6 +1112,10 @@ pub struct View<'a> {
 pub struct Head {
     pub mute: bool,
     pub solo: bool,
+    /// Soloing others leaves it heard.
+    pub solo_safe: bool,
+    /// Turned off: drawn faded.
+    pub off: bool,
     /// Armed for recording; `None` for a track that can't record (a
     /// bus, a folder, or an audio track with no input).
     pub arm: Option<bool>,
@@ -1138,6 +1142,10 @@ pub enum TrackAsk {
     Effects,
     /// Freeze it, or unfreeze it.
     Freeze,
+    /// Turn it off, or on again.
+    Off,
+    /// Make it solo-safe, or not.
+    SoloSafe,
     RenderInPlace,
     /// Save it as a track preset.
     SavePreset,
@@ -2161,11 +2169,18 @@ impl Timeline {
                 Align2::LEFT_CENTER,
                 lane.name,
                 look.font(look.body),
-                tc.text,
+                if head.off { tc.text_dim } else { tc.text },
             );
-        // Under the name, after the buttons: its edit group, faint while
-        // group editing is off, and the version playing if it has others.
+        // Under the name, after the buttons: whether it is off or
+        // solo-safe, its edit group, faint while group editing is off,
+        // and the version playing if it has others.
         let mut notes = Vec::new();
+        if head.off {
+            notes.push(("Off".to_string(), tc.warn));
+        }
+        if head.solo_safe {
+            notes.push(("Solo-safe".to_string(), tc.text_dim));
+        }
         if let Some(g) = groups::group_of(&self.groups, i) {
             notes.push((
                 g.name.clone(),
@@ -4977,6 +4992,31 @@ fn track_entries(
         .clicked()
     {
         out.track = Some((l, TrackAsk::Freeze));
+        ui.close();
+    }
+    let head = view.heads.get(l).copied().unwrap_or_default();
+    if ui
+        // ai: track-off
+        .button(if head.off { "Turn on" } else { "Turn off" })
+        .on_hover_text(if head.off {
+            "Play it again, with its instrument and effects"
+        } else {
+            "Keep it in the project but play nothing, so its instrument and effects \
+             use no computer power"
+        })
+        .clicked()
+    {
+        out.track = Some((l, TrackAsk::Off));
+        ui.close();
+    }
+    let mut safe = head.solo_safe;
+    if ui
+        // ai: solo-safe
+        .checkbox(&mut safe, "Solo-safe")
+        .on_hover_text("Stay heard when other tracks are soloed, as a reverb bus or a click should")
+        .clicked()
+    {
+        out.track = Some((l, TrackAsk::SoloSafe));
         ui.close();
     }
     if ui

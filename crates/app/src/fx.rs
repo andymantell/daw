@@ -467,7 +467,20 @@ pub struct Effects {
     pub(crate) check_status: Option<Result<String, String>>,
     /// Asked for from the effects window, for the app to act on.
     pub(crate) chain_ask: Option<ChainAsk>,
+    /// The app closed without closing properly last time (a crash, in
+    /// it or a plugin it ran), so plugins saved in projects are kept as
+    /// they are but not started, until turned back on.
+    pub(crate) plugins_off: bool,
+    /// Plugins turned back on one at a time meanwhile, by effect id.
+    pub(crate) turned_on: std::collections::HashSet<String>,
+    /// A plugin to turn back on, asked for from the effects window.
+    pub(crate) turn_on: Option<String>,
+    /// The note about plugins switched off was put away.
+    pub(crate) off_note_hidden: bool,
 }
+
+/// Why a plugin wasn't started: see [`Effects::plugins_off`].
+pub(crate) const SWITCHED_OFF: &str = "switched off after a crash";
 
 /// What the effects window asks the app for about presets.
 pub(crate) enum ChainAsk {
@@ -517,7 +530,17 @@ impl Effects {
             check: None,
             check_status: None,
             chain_ask: None,
+            plugins_off: false,
+            turned_on: Default::default(),
+            turn_on: None,
+            off_note_hidden: false,
         }
+    }
+
+    /// Whether the plugin effect or instrument saved with this id is
+    /// kept switched off after a crash.
+    pub(crate) fn holds(&self, id: &str) -> bool {
+        self.plugins_off && !self.turned_on.contains(id)
     }
 
     /// Scans the standard folders on a background thread; each bundle
@@ -950,6 +973,10 @@ impl Effects {
         rate: u32,
         instrument: bool,
     ) -> Result<FxSlot, String> {
+        // Not even loaded: a plugin that crashed the app can't again.
+        if self.holds(&e.id) {
+            return Err(SWITCHED_OFF.into());
+        }
         let mut cid: vst3::Steinberg::TUID = Default::default();
         if e.class.len() != cid.len() {
             return Err("its plugin id is damaged".into());
@@ -1466,7 +1493,7 @@ impl Effects {
         track: &str,
         slots: &mut Vec<FxSlot>,
         layers: &[(String, String)],
-        missing: &[String],
+        missing: &[(String, String)],
         frozen: Option<&str>,
         rate: u32,
         others: &[(String, String)],
@@ -1527,10 +1554,22 @@ impl Effects {
                 ui.label(RichText::new(line).weak());
             }
         });
-        for name in missing {
+        for (name, id) in missing {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(name).strong().weak());
-                ui.label(RichText::new("not installed here, kept as it is").weak());
+                if !self.holds(id) {
+                    ui.label(RichText::new("not installed here, kept as it is").weak());
+                    return;
+                }
+                ui.label(RichText::new("switched off after a crash").weak());
+                if ui
+                    // ai: turn_plugins_on.effect
+                    .button("Turn on")
+                    .on_hover_text("Start this plugin again, with its settings")
+                    .clicked()
+                {
+                    self.turn_on = Some(id.clone());
+                }
             });
         }
         egui::ScrollArea::vertical()

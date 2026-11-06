@@ -530,6 +530,19 @@ fn track_changes(before: &Track, after: &Track, k: f64) -> Vec<String> {
             .into(),
         );
     }
+    if before.solo_safe != after.solo_safe {
+        out.push(
+            if after.solo_safe {
+                "Made solo-safe"
+            } else {
+                "No longer solo-safe"
+            }
+            .into(),
+        );
+    }
+    if before.off != after.off {
+        out.push(if after.off { "Turned off" } else { "Turned on" }.into());
+    }
     if before.kind != after.kind {
         out.push(format!("Now a {}", after.kind.name()));
     }

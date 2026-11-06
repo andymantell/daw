@@ -87,8 +87,9 @@ keeps its own types.
 - **Small items**, for any thread with room: keeping recent notes played
   without Record on (3.1); chaining several commands into one key
   (macros); finding and removing audio no longer used; turning a track off
-  to save processing; solo-safe and a listen bus; starting with every
-  plugin off after a crash; plugin window improvements from the wish-list.
+  to save processing (built); solo-safe (built) and a listen bus; starting
+  with every plugin off after a crash (built); plugin window improvements
+  from the wish-list.
 
 ## Set D: from the user wish-list research
 

@@ -47,6 +47,20 @@ pub(crate) const TOOLS: &[Tool] = &[
             }})
         },
     },
+    Tool {
+        name: "turn_plugins_on",
+        description: "When the app didn't close properly last time, plugins in the \
+                      projects it opens start switched off (get_plugins and get_project \
+                      list them under plugins_off), so one that crashed it can't stop the \
+                      project opening. This starts them again with their settings: the \
+                      one given, by its effect id, or all of them.",
+        access: Access::Edit,
+        schema: || {
+            json!({"type": "object", "properties": {
+                "effect": {"type": "string", "description": "One plugin's effect id, as plugins_off.held lists it; all of them if left out."}
+            }})
+        },
+    },
 ];
 
 impl App {
@@ -55,10 +69,20 @@ impl App {
     }
 
     pub(crate) fn plugins_tool(&mut self, name: &str, args: &Value) -> Option<Done> {
-        (name == "manage_plugins").then(|| self.manage_plugins(args))
+        match name {
+            "manage_plugins" => Some(self.manage_plugins(args)),
+            "turn_plugins_on" => Some(self.turn_plugins_on(args["effect"].as_str()).map(|done| {
+                (
+                    json!({"done": done, "plugins_off": self.plugins_off_value()}),
+                    None,
+                )
+            })),
+            _ => None,
+        }
     }
 
     fn plugins_value(&mut self) -> Value {
+        let off = self.plugins_off_value();
         let fx = &mut self.effects;
         let checking = fx.poll_check();
         let plugins: Vec<Value> = (fx.list.plugins().iter())
@@ -76,6 +100,7 @@ impl App {
             .collect();
         json!({
             "plugins": plugins,
+            "plugins_off": off,
             "could_not_load": failed,
             "scanning": fx.scanning(),
             "checking": checking,

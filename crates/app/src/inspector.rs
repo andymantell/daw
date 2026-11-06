@@ -52,6 +52,8 @@ impl App {
             .map(|t| Head {
                 mute: t.mix.mute,
                 solo: t.mix.solo,
+                solo_safe: t.mix.solo_safe,
+                off: t.off,
                 arm: (!t.kind.is_bus() && (t.input.is_some() || t.kind.plays_notes()))
                     .then_some(t.arm),
                 meter: t.meter,

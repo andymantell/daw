@@ -205,6 +205,44 @@ fn effects_carry_over_when_the_graph_changes() {
     assert_eq!(Arc::strong_count(&processed), 1, "the effect was dropped");
 }
 
+#[test]
+fn a_track_turned_off_runs_nothing_and_keeps_its_effect_for_later() {
+    let mut s = session();
+    let mut t = hard_left(vec![ClipSpec::new(Ticks(0), counting(10_000))]);
+    t.inserts = vec![InsertSpec {
+        id: 4,
+        ..Default::default()
+    }];
+    t.off = true;
+    s.tracks.push(t);
+    s.tracks
+        .push(hard_left(vec![ClipSpec::new(Ticks(0), counting(10_000))]));
+    let (fx, processed) = DelayGain::make(0, 1.0);
+    let (mut ctl, mut eng) = engine::new(128);
+    ctl.set_graph(s.compile_with(128, &mut vec![(4, fx)]).unwrap())
+        .ok()
+        .unwrap();
+    ctl.send(Command::Play).ok().unwrap();
+    let mut buf = [vec![0.0; 128], vec![0.0; 128]];
+    let [l, r] = &mut buf;
+    eng.process(l, r);
+    assert_eq!(processed.load(Ordering::Relaxed), 0, "its effect isn't run");
+    // Only the other track plays.
+    for (i, x) in l.iter().enumerate() {
+        let want = (i + 1) as f32 / 1e6;
+        assert!((x - want).abs() < 1e-9, "frame {i}: {x} vs {want}");
+    }
+
+    // Turned on again: the same effect, taken over from the graph.
+    s.tracks[0].off = false;
+    ctl.set_graph(s.compile(128).unwrap()).ok().unwrap();
+    eng.process(l, r);
+    assert_eq!(processed.load(Ordering::Relaxed), 128);
+    // It fades in over the block, so as not to click.
+    let want = 2.0 * 256.0 / 1e6;
+    assert!((l[127] - want).abs() < 1e-9, "both play: {}", l[127]);
+}
+
 /// Plays `counting(10_000)` through a `delay`-frame effect, looping
 /// `[a, b)` from `from`, in blocks of 97 frames. Returns the timeline
 /// frame each output frame played, or -1 for silence.

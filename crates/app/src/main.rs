@@ -103,6 +103,7 @@ mod recording;
 mod remote;
 mod render;
 mod review;
+mod safe;
 mod sampler_panel;
 mod sections;
 mod settings;
@@ -163,6 +164,9 @@ struct Track {
     /// draw on top).
     clips: Vec<Clip>,
     mix: Mix,
+    /// Turned off: kept with everything on it, but it plays nothing
+    /// and its instrument and effects do no processing.
+    off: bool,
     input: Option<Input>,
     arm: bool,
     monitor: bool,
@@ -272,6 +276,7 @@ impl Track {
             name,
             clips: Vec::new(),
             mix: Mix::default(),
+            off: false,
             input: None,
             arm: false,
             monitor: false,
@@ -360,6 +365,22 @@ struct Import {
 /// How the engine plays a clip under the song's tempo map: through the
 /// stretcher along its warp when it follows tempo or has markers, or
 /// when it is transposed.
+/// A track turned off, as the engine plays it: nothing to read from
+/// disk or play, no input or MIDI out, and its instrument and effects
+/// kept in the graph, not run, for when it is turned on again.
+fn turn_off(spec: &mut TrackSpec) {
+    let blank = TrackSpec::new(Vec::new());
+    spec.clips = blank.clips;
+    spec.notes = blank.notes;
+    spec.expression = blank.expression;
+    spec.controls = blank.controls;
+    spec.notes_live = false;
+    spec.midi_out = None;
+    spec.monitor = false;
+    spec.arm = false;
+    spec.off = true;
+}
+
 fn clip_spec(c: &Clip, map: &TempoMap) -> ClipSpec {
     let mut warp = c.warp(map).map(Arc::new);
     // Notes moved in time by pitch editing: a warp inside the clip's own.
@@ -573,6 +594,8 @@ struct App {
     inspector: inspector::Inspector,
     track_panes: track_panes::Follow,
     proj: project::Proj,
+    /// Marks this run as going until the app closes properly.
+    running: Option<crash::Running>,
     latency: latency::Latency,
     /// A simulated loopback cable's delay for measuring in tests.
     #[cfg(test)]
@@ -754,6 +777,7 @@ impl App {
             inspector: inspector::Inspector::default(),
             track_panes: track_panes::Follow::default(),
             proj: project::Proj::new(),
+            running: None,
             latency: latency::Latency::default(),
             #[cfg(test)]
             loopback_for_tests: None,
@@ -786,6 +810,13 @@ impl App {
             assistants: assistants::Assistants::load(),
             listening: listen::Listening::default(),
         };
+        if !cfg!(test) && !headless::on() {
+            // Stopped without closing last time: plugins stay off until
+            // turned on, so one that crashed the app can't again.
+            let (running, stopped) = crash::Running::start(crash::Running::path());
+            app.running = Some(running);
+            app.effects.plugins_off = stopped;
+        }
         if !cfg!(test) {
             app.effects.start_scan();
         }
@@ -1144,7 +1175,7 @@ impl App {
             })
             .collect();
         for t in &self.tracks {
-            if let Some(clip) = self.frozen_playing(t) {
+            if let Some(clip) = self.frozen_playing(t).filter(|_| !t.off) {
                 // Its clips and effects as rendered where it has every
                 // plugin.
                 let mut spec = TrackSpec::new(vec![clip]);
@@ -1193,6 +1224,9 @@ impl App {
             spec.midi_out = t.midi_out.filter(|_| t.kind.plays_notes());
             self.route(t, &mut spec);
             spec.automation = self.lane_specs(t);
+            if t.off {
+                turn_off(&mut spec);
+            }
             s.tracks.push(spec);
         }
         s.master_db = self.master.mix.gain_db;
@@ -1889,6 +1923,14 @@ impl App {
             Some((i, timeline::TrackAsk::Instrument)) => self.instrument_open = Some(i),
             Some((i, timeline::TrackAsk::Effects)) => self.effects.open_track = Some(i),
             Some((i, timeline::TrackAsk::Freeze)) => self.toggle_freeze(ui.ctx(), i),
+            Some((i, timeline::TrackAsk::Off)) => {
+                let off = !self.tracks[i].off;
+                self.set_track_off(i, off);
+            }
+            Some((i, timeline::TrackAsk::SoloSafe)) => {
+                let on = !self.tracks[i].mix.solo_safe;
+                self.set_solo_safe(i, on);
+            }
             Some((i, timeline::TrackAsk::RenderInPlace)) => self.render_in_place(i),
             Some((i, timeline::TrackAsk::SavePreset)) => {
                 self.ask_save_preset(Some(i), daw_project::PresetKind::Track)
@@ -2643,6 +2685,14 @@ impl eframe::App for App {
         }
         if self.crashes.new > 0 {
             egui::Panel::bottom("crash note").show(ui, |ui| self.crashes.note(ui));
+        }
+        if self.effects.plugins_off && !self.effects.off_note_hidden {
+            egui::Panel::bottom("plugins off note").show(ui, |ui| self.plugins_off_note(ui));
+        }
+        if let Some(id) = self.effects.turn_on.take()
+            && let Err(e) = self.turn_plugins_on(Some(&id))
+        {
+            self.message = Some(e);
         }
         if self.updates.newer().is_some() {
             egui::Panel::bottom("update note").show(ui, |ui| self.updates.note(ui));

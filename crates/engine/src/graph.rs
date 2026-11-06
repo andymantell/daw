@@ -548,6 +548,10 @@ pub struct TrackSpec {
     pub cues: [CueSend; MAX_CUES],
     /// Automation lanes: settings that follow a line as the song plays.
     pub automation: Vec<LaneSpec>,
+    /// Turned off: it is silent, and its instrument and effects aren't
+    /// run, but they stay in the graph, as they are, for when it is
+    /// turned on again.
+    pub off: bool,
 }
 
 impl TrackSpec {
@@ -575,6 +579,7 @@ impl TrackSpec {
             group: None,
             cues: [CueSend::default(); MAX_CUES],
             automation: Vec::new(),
+            off: false,
         }
     }
 }
@@ -637,6 +642,8 @@ pub struct Mix {
     pub pan: f32,
     pub mute: bool,
     pub solo: bool,
+    /// Soloing other tracks leaves it heard: a reverb bus, a click.
+    pub solo_safe: bool,
 }
 
 impl Default for Mix {
@@ -646,6 +653,7 @@ impl Default for Mix {
             pan: 0.0,
             mute: false,
             solo: false,
+            solo_safe: false,
         }
     }
 }
@@ -1142,6 +1150,8 @@ pub(crate) struct TrackNode {
     /// The source is mono but the effects are stereo: copy left to right
     /// before them.
     pub widen: bool,
+    /// Turned off: nothing on it runs, and it is silent.
+    pub off: bool,
     pub group: Option<usize>,
     /// Edges into this track (outputs and sends routed here, and the
     /// sidechains its effects listen to), as indices into `Graph::edges`.
@@ -2078,6 +2088,7 @@ impl Session {
                 chain: built.steps,
                 latency,
                 widen,
+                off: t.off,
                 stretch: Box::new(Stretcher::new(max_block)),
                 group: t.group,
                 incoming: Vec::new(),
@@ -2349,13 +2360,14 @@ impl Graph {
     }
 
     /// Works out which tracks soloing leaves audible: the soloed ones,
-    /// and every bus they are routed into, so soloing a track through a
-    /// bus still sounds.
+    /// the solo-safe ones, and every bus they are routed into, so
+    /// soloing a track through a bus still sounds.
     fn refresh_solo(&mut self) {
         self.any_solo = self.tracks.iter().any(|t| t.mix.solo);
         for k in 0..self.order.len() {
             let i = self.order[k];
-            let mut heard = self.tracks[i].mix.solo;
+            let mix = self.tracks[i].mix;
+            let mut heard = mix.solo || mix.solo_safe;
             for &e in &self.tracks[i].incoming {
                 let e = &self.edges[e];
                 if !matches!(e.carry, Carry::Sidechain(_)) && self.tracks[e.from].heard {
@@ -2438,6 +2450,29 @@ impl Graph {
                 // callback's side: silent until they arrive.
                 for b in self.pre[ti].iter_mut().chain(&mut self.post[ti]) {
                     b[..n].fill(0.0);
+                }
+                continue;
+            }
+            if self.tracks[ti].off {
+                // Turned off: nothing runs, and everything it feeds hears
+                // silence from it.
+                for b in self.pre[ti].iter_mut().chain(&mut self.post[ti]) {
+                    b[..n].fill(0.0);
+                }
+                for [l, r] in self.aux[ti].iter_mut() {
+                    l[..n].fill(0.0);
+                    r[..n].fill(0.0);
+                }
+                if mode == Mode::Feed
+                    && let Some(p) = part.as_deref_mut()
+                {
+                    let [fl, fr] = &mut p.feed[ti];
+                    fl[..n].fill(0.0);
+                    fr[..n].fill(0.0);
+                }
+                self.tracks[ti].last = (0.0, 0.0);
+                if let Some(l) = levels.get_mut(ti) {
+                    *l = Level::default();
                 }
                 continue;
             }

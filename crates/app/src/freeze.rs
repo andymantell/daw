@@ -305,13 +305,26 @@ impl App {
     }
 
     /// A line about a track's frozen audio, for its effects window, and
-    /// the effects missing here, by name.
-    pub(crate) fn frozen_note(&self, t: &Track) -> (Option<String>, Vec<String>) {
-        let missing: Vec<String> = (self.proj.missing_fx.get(&t.key).into_iter().flatten())
-            .map(|(_, e)| e.name.clone())
+    /// the effects missing here (not installed, or switched off after a
+    /// crash), by name and id.
+    pub(crate) fn frozen_note(&self, t: &Track) -> (Option<String>, Vec<(String, String)>) {
+        let missing: Vec<(String, String)> =
+            (self.proj.missing_fx.get(&t.key).into_iter().flatten())
+                .map(|(_, e)| (e.name.clone(), e.id.clone()))
+                .collect();
+        let absent: Vec<&str> = (missing.iter())
+            .filter(|(_, id)| !self.effects.holds(id))
+            .map(|(n, _)| n.as_str())
             .collect();
+        if !missing.is_empty() && absent.is_empty() {
+            let line = match self.frozen_playing(t) {
+                Some(_) => "Playing its frozen audio while its plugins are switched off.",
+                None => "It plays without the plugins switched off.",
+            };
+            return (Some(line.into()), missing);
+        }
         if !missing.is_empty() {
-            let names = missing.join(", ");
+            let names = absent.join(", ");
             let line = if self.frozen_playing(t).is_some() {
                 format!(
                     "Playing its frozen audio, as {names} isn't installed here. Your copy keeps \
@@ -599,7 +612,7 @@ mod tests {
         let app = h.state();
         assert!(app.frozen_playing(&app.tracks[0]).is_none());
         let (line, missing) = app.frozen_note(&app.tracks[0]);
-        assert_eq!(missing, vec![effect.name.clone()]);
+        assert_eq!(missing, vec![(effect.name.clone(), effect.id.clone())]);
         assert!(line.unwrap().contains("no longer fits"));
         drop(h);
         let _ = std::fs::remove_dir_all(&dir);

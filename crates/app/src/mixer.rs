@@ -74,6 +74,10 @@ enum Action {
     Follow(String, f32),
     /// Select this strip: alone, or added to (or taken from) the rest.
     Select(String, bool),
+    /// Turn the track off (true) or on.
+    Off(usize, bool),
+    /// Make the track solo-safe (true) or not.
+    SoloSafe(usize, bool),
 }
 
 /// How the mixer desk is shown.
@@ -808,7 +812,12 @@ impl App {
                     .accessible_name(format!("Mute {name}"));
                 // ai: set_parameter
                 lit(ui, c.good, |ui| ui.toggle_value(&mut t.mix.solo, solo))
-                    .accessible_name(format!("Solo {name}"));
+                    .accessible_name(format!("Solo {name}"))
+                    .on_hover_text(if t.mix.solo_safe {
+                        "Solo. Solo-safe: it stays heard when others are soloed"
+                    } else {
+                        "Solo"
+                    });
             });
             // The name tag: click to select.
             let tag = rows.row(ui, TAG_ROW, |ui| {
@@ -827,19 +836,55 @@ impl App {
                 actions.push(Action::Select(key.clone(), add));
             }
             // Rare actions on the name plate's right-click menu.
-            if t.kind.is_bus() {
-                tag.context_menu(|ui| {
-                    // ai: delete_track
-                    if ui
+            let (off, safe, bus) = (t.off, t.mix.solo_safe, t.kind.is_bus());
+            tag.context_menu(|ui| {
+                if ui
+                    // ai: track-off
+                    .button(if off { "Turn on" } else { "Turn off" })
+                    .accessible_name(format!("Turn {name} {}", if off { "on" } else { "off" }))
+                    .on_hover_text(
+                        "Off, it stays in the project but plays nothing, so its instrument \
+                         and effects use no computer power",
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::Off(i, !off));
+                    ui.close();
+                }
+                let mut on = safe;
+                if ui
+                    // ai: solo-safe
+                    .checkbox(&mut on, "Solo-safe")
+                    .on_hover_text("Stays heard when other tracks are soloed")
+                    .clicked()
+                {
+                    actions.push(Action::SoloSafe(i, on));
+                    ui.close();
+                }
+                // ai: delete_track
+                if bus
+                    && ui
                         .button("Remove")
                         .accessible_name(format!("Remove {name}"))
                         .on_hover_text("Remove this bus; tracks on it go to the master")
                         .clicked()
-                    {
-                        actions.push(Action::Remove(i));
-                        ui.close();
-                    }
-                });
+                {
+                    actions.push(Action::Remove(i));
+                    ui.close();
+                }
+            });
+            if off {
+                // Faded, with a word to say why it is silent.
+                let c = theme::look(ui.ctx()).c().clone();
+                ui.painter()
+                    .rect_filled(rect, 0.0, c.bg.gamma_multiply(0.55));
+                ui.painter().text(
+                    egui::pos2(rect.center().x, rect.top() + 10.0),
+                    egui::Align2::CENTER_TOP,
+                    "OFF",
+                    egui::FontId::proportional(13.0),
+                    c.warn,
+                );
             }
             if let Some(c) = t.clips.iter().find(|c| c.take.is_none()) {
                 tag.on_hover_text(c.path.display().to_string());
@@ -1153,6 +1198,12 @@ impl App {
                     rebuild = true;
                 }
                 Action::Follow(key, by) => self.follow_fader(&key, by),
+                Action::Off(i, off) => {
+                    self.set_track_off(i, off);
+                }
+                Action::SoloSafe(i, on) => {
+                    self.set_solo_safe(i, on);
+                }
                 Action::Select(key, add) => {
                     let sel = &mut self.desk.selected;
                     if !add {

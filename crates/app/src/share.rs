@@ -124,7 +124,7 @@ impl App {
             return;
         }
         let outside = |r: String| {
-            !r.is_empty() && !r.starts_with(daw_effects::library::PREFIX) && !folder.has_asset(&r)
+            !r.is_empty() && !daw_effects::library::is_recorded(&r) && !folder.has_asset(&r)
         };
         if (self.tracks.iter().flat_map(|t| &t.fx)).any(|s| outside(s.response_ref())) {
             return;

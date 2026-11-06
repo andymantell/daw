@@ -937,7 +937,7 @@ impl App {
         for s in self.tracks.iter().flat_map(|t| &t.fx) {
             let r = s.response_ref();
             if r.is_empty()
-                || r.starts_with(daw_effects::library::PREFIX)
+                || daw_effects::library::is_recorded(&r)
                 || folder.has_asset(&r)
                 || !Path::new(&r).is_file()
             {

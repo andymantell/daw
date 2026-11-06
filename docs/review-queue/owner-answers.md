@@ -49,7 +49,8 @@ The guitar amp also ships a few recorded cabinet impulse responses
 under licences that allow it, credited like the recorded rooms, beside
 the five made in code (`2.5-amp-and-cabinet.md`). Each file's licence is
 checked before it is added. This is the one exception to "no sample
-files". Not built yet: after the polish pass.
+files". Built 2026-11-06: seven cabinets, all CC BY 4.0, recorded in
+[decision 0016](../decisions/0016-bundled-recorded-cabinets.md).
 
 ## 2026-11-05: sounds are made in code, and there are more of them
 

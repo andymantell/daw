@@ -1393,8 +1393,8 @@ pub struct Effect {
     pub params: Vec<(String, f64)>,
     /// The file a built-in effect uses. For a convolution reverb or a
     /// speaker cabinet, its response: empty for its own rooms or
-    /// cabinets, `room:` and an id for a recorded room that comes with
-    /// the app, or else a sound file. For an amp capture player, its
+    /// cabinets, `room:` or `cabinet:` and an id for a recorded room or
+    /// cabinet that comes with the app, or else a sound file. For an amp capture player, its
     /// capture file (empty for none). A file is an asset name, or a full
     /// path until the project is saved.
     pub response: String,
@@ -1428,7 +1428,8 @@ impl Effect {
 
     /// The sound file it uses, if it uses one: an asset, like a clip's.
     pub fn asset(&self) -> Option<&str> {
-        (!self.response.is_empty() && !self.response.starts_with("room:"))
+        let recorded = ["room:", "cabinet:"];
+        (!self.response.is_empty() && !recorded.iter().any(|p| self.response.starts_with(p)))
             .then_some(self.response.as_str())
     }
 

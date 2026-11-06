@@ -454,7 +454,8 @@ pub struct Effect {
 #[derive(Clone, Debug, Default)]
 struct Source {
     /// As the project saves it: empty for the rooms or cabinets made
-    /// here (or no capture), a recorded room's [`library::reference`],
+    /// here (or no capture), a recorded room's or cabinet's
+    /// [`library::reference`],
     /// or a file (an asset name, or a full path until the project is
     /// saved).
     reference: String,

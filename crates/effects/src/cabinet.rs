@@ -240,6 +240,25 @@ mod tests {
         }
     }
 
+    /// The recorded cabinets that come with the app also cut the fizz,
+    /// and are brought to the level of the ones made here.
+    #[test]
+    fn recorded_cabinets_cut_the_top_at_a_like_level() {
+        let rate = 48_000.0;
+        for c in crate::library::CABINETS {
+            let mut h = c.response().unwrap().at_rate(rate as u32);
+            level(&mut h, rate);
+            let mid = gain_at(&h[0], 1200.0, rate);
+            assert!(gain_at(&h[0], 12_000.0, rate) < mid - 12.0, "{}", c.id);
+            let mut avg = 0.0;
+            for k in 0..24 {
+                let hz = 150.0 * (4000.0f64 / 150.0).powf(k as f64 / 23.0);
+                avg += gain_at(&h[0], hz, rate) / 24.0;
+            }
+            assert!(avg.abs() < 0.5, "{}: {avg}", c.id);
+        }
+    }
+
     #[test]
     fn cabinets_differ() {
         let hs: Vec<_> = (0..CABINETS.len()).map(|c| response(c, 48_000.0)).collect();

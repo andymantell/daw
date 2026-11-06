@@ -3444,12 +3444,21 @@ mod kit_tests {
             info["instrument"]["character"],
             json!({"knob": "flat", "switch": "lit", "module": "boxed", "screen": "lcd",
                    "lettering": "readout", "band": "stripe", "plate": "#2b4c8e",
-                   "accent": "#7fe0ff", "cheeks": false}),
+                   "accent": "#7fe0ff", "cheeks": false, "cheek_width": 0.0,
+                   "header": "membrane", "readouts": "lcd"}),
             "{info}"
         );
         // The name plate is still read by its name, whatever its
         // lettering, and the character is cleared once the unit is drawn.
         d.h.get_by_label("BLUE WAVE");
+        // The header's lettering is the unit's own, but it reads as
+        // before: the label, and the sound in its window.
+        d.h.get_by_label("Sound");
+        d.call("run_command", json!({"id": "next-sound"})).unwrap();
+        d.h.run();
+        let info = d.call("get_instrument", json!({"track": t})).unwrap();
+        let sound = info["sound"].as_str().expect("a sound").to_string();
+        d.h.get_by_label(&sound);
         assert_eq!(
             crate::character::current(&d.h.ctx),
             crate::character::Character::PLAIN
@@ -3462,6 +3471,20 @@ mod kit_tests {
             .to_string();
         let info = d.call("get_instrument", json!({"track": s})).unwrap();
         assert_eq!(info["instrument"]["character"], json!(null), "{info}");
+        // A unit with wood has wide cheeks inside its ears, an engraved
+        // header and plain readouts.
+        let m = d
+            .call("add_track", json!({"kind": "model-mono", "name": "Bass"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let info = d.call("get_instrument", json!({"track": m})).unwrap();
+        let ch = &info["instrument"]["character"];
+        assert_eq!(ch["cheeks"], json!(true), "{info}");
+        assert_eq!(ch["cheek_width"], json!(crate::character::CHEEK), "{info}");
+        assert_eq!(ch["header"], json!("engraved"), "{info}");
+        assert_eq!(ch["readouts"], json!("plain"), "{info}");
     }
 
     #[test]

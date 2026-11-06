@@ -102,6 +102,21 @@ pub(crate) enum Lettering {
     Badge,
 }
 
+/// How a unit's header row (its name, sound and buttons) is set out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeaderStyle {
+    /// The kit's own row.
+    Kit,
+    /// Small capitals engraved on the plate, the sound in a window in
+    /// the unit's screen style, and a rule under the row: an analogue
+    /// front panel.
+    Engraved,
+    /// The row on its own strip a shade off the plate, the sound in a
+    /// window in the unit's screen style: a membrane panel on a digital
+    /// or later box.
+    Membrane,
+}
+
 /// A band across the top of the plate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Band {
@@ -144,7 +159,11 @@ pub(crate) struct Character {
     pub screen: ScreenStyle,
     pub lettering: Lettering,
     pub band: Band,
+    pub header: HeaderStyle,
 }
+
+/// How wide wooden side cheeks are, inside the mounting ears.
+pub(crate) const CHEEK: f32 = 22.0;
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
@@ -171,6 +190,7 @@ impl Character {
         screen: ScreenStyle::Scope,
         lettering: Lettering::Caps,
         band: Band::None,
+        header: HeaderStyle::Kit,
     };
 
     /// The character of a built-in instrument; the plain look for one
@@ -178,6 +198,7 @@ impl Character {
     pub(crate) fn of(kind: Option<Kind>) -> Character {
         let own = Character {
             plain: false,
+            header: HeaderStyle::Engraved,
             ..Character::PLAIN
         };
         match kind {
@@ -224,6 +245,7 @@ impl Character {
                 screen: ScreenStyle::Lamp,
                 lettering: Lettering::Caps,
                 band: Band::Pinstripe,
+                header: HeaderStyle::Membrane,
                 ..own
             },
             // The one-oscillator monosynth: grey-blue plastic, coral
@@ -354,6 +376,7 @@ impl Character {
                 screen: ScreenStyle::Lcd,
                 lettering: Lettering::Readout,
                 band: Band::Stripe,
+                header: HeaderStyle::Membrane,
                 ..own
             },
             // The six-operator FM synth: near-black, teal lines, a
@@ -375,10 +398,28 @@ impl Character {
                 screen: ScreenStyle::Lcd,
                 lettering: Lettering::Badge,
                 band: Band::Pinstripe,
+                header: HeaderStyle::Membrane,
                 ..own
             },
             _ => Character::PLAIN,
         }
+    }
+
+    /// How far in from each end of the plate its contents start: the
+    /// mounting ears, and the wooden cheeks inside them where it has
+    /// them.
+    pub(crate) fn side(&self, ear: f32) -> f32 {
+        if self.cheeks.is_some() {
+            ear + CHEEK
+        } else {
+            ear
+        }
+    }
+
+    /// Whether values under knobs show in small liquid-crystal boxes,
+    /// as on a digital unit with a liquid-crystal screen.
+    pub(crate) fn lcd_readouts(&self) -> bool {
+        !self.plain && self.screen == ScreenStyle::Lcd
     }
 
     /// Whether the plate is dark, for the shades drawn on it.
@@ -471,6 +512,9 @@ impl Character {
             "plate": hex(self.plate),
             "accent": hex(self.accent),
             "cheeks": self.cheeks.is_some(),
+            "cheek_width": if self.cheeks.is_some() { CHEEK } else { 0.0 },
+            "header": lower(&self.header),
+            "readouts": if self.lcd_readouts() { "lcd" } else { "plain" },
         })
     }
 }

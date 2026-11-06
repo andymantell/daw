@@ -954,12 +954,14 @@ pub(crate) fn sound_menu(
                 ui.close();
             }
             ui.separator();
-            ui.label(egui::RichText::new("Made here").weak());
-            for (id, name) in made::SOUNDS {
-                let r = made::reference(id);
-                // ai: set_sound.sound
-                if ui.selectable_label(current == r, *name).clicked() {
-                    pick = Some(r);
+            for g in made::Group::ALL {
+                ui.label(egui::RichText::new(format!("Made here: {}", g.name())).weak());
+                for m in made::SOUNDS.iter().filter(|m| m.group == g) {
+                    let r = made::reference(m.id);
+                    // ai: set_sound.sound
+                    if ui.selectable_label(current == r, m.name).clicked() {
+                        pick = Some(r);
+                    }
                 }
             }
         })
@@ -2045,7 +2047,7 @@ fn sampler_controls(ui: &mut egui::Ui, slot: &mut Slot, cx: &Ctx, shown: &mut Sh
             if let Some(r) = sound_menu(ui, ("zone-sound", id, chosen), &current)
                 && let Some(l) = read_sound(&r, cx, shown)
             {
-                b.set_sample(&format!("zone{chosen}"), Some(l));
+                b.set_zone_sound(chosen, l);
                 renew = true;
             }
             // ai: edit_instrument.remove_zone
@@ -3810,7 +3812,7 @@ mod mono_panel_tests {
         d.h.get_by_label("Width moved by: Env");
         d.command("previous-sound");
         d.h.run();
-        assert_eq!(info(&mut d, &oh)["sound"], "Resonant sweep");
+        assert_eq!(info(&mut d, &oh)["sound"], "Soft mono pad");
 
         // Collapsed to a strip by tool, it has no knobs.
         d.call(

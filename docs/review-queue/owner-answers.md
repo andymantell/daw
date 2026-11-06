@@ -57,14 +57,19 @@ No sample files ship with the built-in instruments
 (`3.4-built-in-instruments.md`). Instead, the sounds made in code are
 widened so every instrument has a useful starting set: drum kits, keys,
 basses, pads, and each synth's own sounds. The four Patch Twenty sounds
-ship under the names they have now. Not built yet: after the polish pass.
+ship under the names they have now. Built: 34 sounds made in code for
+the samplers (keys, basses, pads, plucks, drums, loops), six drum kits
+for the drum machine, the Patch Twenty's four sounds in its own Sound
+menu, and more sounds for every synth, so each has basses, leads, pads,
+keys or plucks of its own. Listening checks wait for the PC.
 
 ## 2026-11-05: Empty and Guitar lesson ship, with effects
 
 Empty and Guitar lesson ship; Band demo is removed
 (`2.8-templates-and-changes.md`). The Guitar lesson tracks get a light
-EQ and a little reverb from the built-in effects. Not built yet: after
-the polish pass.
+EQ and a little reverb from the built-in effects. Built: the Teacher
+and Student tracks have both; the backing track, a finished mix, has
+neither.
 
 ## 2026-11-05: plugins run in the shared helper by default
 

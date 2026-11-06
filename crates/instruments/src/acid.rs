@@ -135,6 +135,56 @@ pub fn sounds() -> Vec<crate::Sound> {
                 ("slide", 0.03),
             ],
         },
+        Sound {
+            name: "Rubber bass",
+            settings: &[
+                ("wave", 1.0),
+                ("cutoff", 180.0),
+                ("resonance", 0.7),
+                ("env_mod", 0.6),
+                ("decay", 0.3),
+                ("accent", 0.5),
+                ("slide", 0.1),
+                ("drive", 0.2),
+            ],
+        },
+        Sound {
+            name: "Distorted acid",
+            settings: &[
+                ("cutoff", 450.0),
+                ("resonance", 0.85),
+                ("env_mod", 0.75),
+                ("decay", 0.5),
+                ("accent", 0.8),
+                ("drive", 0.9),
+                ("level", 0.0),
+            ],
+        },
+        Sound {
+            name: "Bleep",
+            settings: &[
+                ("wave", 1.0),
+                ("tune", 12.0),
+                ("cutoff", 1500.0),
+                ("resonance", 0.6),
+                ("env_mod", 0.4),
+                ("decay", 0.08),
+                ("accent", 0.5),
+                ("slide", 0.02),
+                ("level", -6.0),
+            ],
+        },
+        Sound {
+            name: "Slow open line",
+            settings: &[
+                ("cutoff", 220.0),
+                ("resonance", 0.75),
+                ("env_mod", 0.9),
+                ("decay", 1.6),
+                ("accent", 0.6),
+                ("slide", 0.12),
+            ],
+        },
     ]
 }
 

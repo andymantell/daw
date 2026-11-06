@@ -169,26 +169,214 @@ pub fn kit_source(p: usize) -> f64 {
     KIT.get(p).map_or(0.0, |k| 2.0 + k.1 as usize as f64)
 }
 
-/// Sets up the kit made here: a drum on each pad, the hi-hats choking
-/// each other, and the snare layered with a quiet clap.
-pub fn default_kit(params: &Params) {
-    for (p, &(_, drum, tune, decay, tone)) in KIT.iter().enumerate() {
-        params.set(layer_at(p, 0, layer::SOURCE), 2.0 + drum as usize as f64);
-        params.set(layer_at(p, 0, layer::TUNE), tune);
-        params.set(layer_at(p, 0, layer::DECAY), decay);
-        params.set(layer_at(p, 0, layer::TONE), tone);
-        if matches!(drum, Drum::ClosedHat | Drum::OpenHat) {
-            params.set(pad_at(p, pad::CHOKE), 1.0);
-        }
+/// A drum kit made here, for the instrument's Sound menu: what each pad
+/// plays, in the standard drum key map from note 36 as [`KIT`] names
+/// them, as (drum, tune, decay, tone); pads' levels, by pad; and layers
+/// added under a pad's first, as (pad, layer, drum, tune, decay, tone,
+/// level).
+struct KitDef {
+    name: &'static str,
+    pads: [(Drum, f64, f64, f64); PADS],
+    levels: &'static [(usize, f64)],
+    layers: &'static [(usize, usize, Drum, f64, f64, f64, f64)],
+}
+
+/// The standard kit's pads, as [`KIT`] has them.
+const fn standard() -> [(Drum, f64, f64, f64); PADS] {
+    let mut v = [(Drum::Kick, 0.0, 0.0, 0.0); PADS];
+    let mut p = 0;
+    while p < PADS {
+        v[p] = (KIT[p].1, KIT[p].2, KIT[p].3, KIT[p].4);
+        p += 1;
     }
-    params.set(
-        layer_at(2, 1, layer::SOURCE),
-        2.0 + Drum::Clap as usize as f64,
-    );
-    params.set(layer_at(2, 1, layer::LEVEL), -12.0);
-    params.set(layer_at(2, 1, layer::DECAY), 0.2);
-    params.set(pad_at(13, pad::LEVEL), -4.0);
-    params.set(pad_at(15, pad::LEVEL), -6.0);
+    v
+}
+
+use Drum::{Clap, ClosedHat as Ch, Cymbal as Cy, Kick, OpenHat as Oh, Rim, Snare, Tom};
+
+const KITS: &[KitDef] = &[
+    KitDef {
+        name: "Standard kit",
+        pads: standard(),
+        levels: &[(13, -4.0), (15, -6.0)],
+        layers: &[(2, 1, Clap, 0.0, 0.2, 0.5, -12.0)],
+    },
+    KitDef {
+        name: "Tight kit",
+        pads: [
+            (Kick, 2.0, 0.3, 0.85),
+            (Rim, 2.0, 0.04, 0.6),
+            (Snare, 4.0, 0.16, 0.85),
+            (Clap, 2.0, 0.22, 0.6),
+            (Snare, 6.0, 0.12, 1.0),
+            (Tom, -4.0, 0.35, 0.5),
+            (Ch, 2.0, 0.04, 0.7),
+            (Tom, -1.0, 0.33, 0.5),
+            (Ch, 0.0, 0.03, 0.5),
+            (Tom, 3.0, 0.3, 0.5),
+            (Oh, 2.0, 0.35, 0.7),
+            (Tom, 6.0, 0.28, 0.5),
+            (Tom, 9.0, 0.26, 0.5),
+            (Cy, 3.0, 1.2, 0.8),
+            (Tom, 12.0, 0.24, 0.5),
+            (Cy, 7.0, 1.8, 0.3),
+        ],
+        levels: &[(13, -5.0), (15, -7.0)],
+        layers: &[],
+    },
+    KitDef {
+        name: "Deep electronic kit",
+        pads: [
+            (Kick, -5.0, 1.4, 0.15),
+            (Rim, -2.0, 0.08, 0.4),
+            (Snare, -3.0, 0.4, 0.3),
+            (Clap, -2.0, 0.5, 0.4),
+            (Snare, -1.0, 0.3, 0.5),
+            (Tom, -12.0, 1.2, 0.1),
+            (Ch, -3.0, 0.1, 0.25),
+            (Tom, -9.0, 1.1, 0.1),
+            (Ch, -5.0, 0.06, 0.2),
+            (Tom, -6.0, 1.0, 0.1),
+            (Oh, -3.0, 0.8, 0.25),
+            (Tom, -3.0, 0.9, 0.1),
+            (Tom, 0.0, 0.8, 0.1),
+            (Cy, -3.0, 2.5, 0.4),
+            (Tom, 3.0, 0.7, 0.1),
+            (Cy, 2.0, 3.5, 0.1),
+        ],
+        levels: &[(13, -6.0), (15, -8.0)],
+        layers: &[(2, 1, Clap, -2.0, 0.35, 0.4, -8.0)],
+    },
+    KitDef {
+        name: "Vintage machine kit",
+        pads: [
+            (Kick, 0.0, 0.45, 0.7),
+            (Rim, 0.0, 0.05, 0.6),
+            (Snare, 1.0, 0.22, 0.65),
+            (Clap, 0.0, 0.3, 0.6),
+            (Snare, 3.0, 0.2, 0.9),
+            (Tom, -5.0, 0.5, 0.45),
+            (Ch, 0.0, 0.06, 0.6),
+            (Tom, -2.0, 0.48, 0.45),
+            (Ch, -1.0, 0.04, 0.45),
+            (Tom, 1.0, 0.45, 0.45),
+            (Oh, 0.0, 0.45, 0.6),
+            (Tom, 4.0, 0.42, 0.45),
+            (Tom, 7.0, 0.4, 0.45),
+            (Cy, 0.0, 1.6, 0.7),
+            (Tom, 10.0, 0.38, 0.45),
+            (Cy, 5.0, 2.4, 0.25),
+        ],
+        levels: &[(13, -5.0), (15, -6.0)],
+        layers: &[],
+    },
+    KitDef {
+        name: "Lo-fi kit",
+        pads: [
+            (Kick, -2.0, 0.5, 0.2),
+            (Rim, -1.0, 0.05, 0.25),
+            (Snare, -1.0, 0.25, 0.2),
+            (Clap, -1.0, 0.3, 0.25),
+            (Snare, 1.0, 0.2, 0.35),
+            (Tom, -8.0, 0.55, 0.15),
+            (Ch, -4.0, 0.06, 0.1),
+            (Tom, -5.0, 0.5, 0.15),
+            (Ch, -6.0, 0.04, 0.05),
+            (Tom, -2.0, 0.48, 0.15),
+            (Oh, -4.0, 0.45, 0.1),
+            (Tom, 1.0, 0.45, 0.15),
+            (Tom, 4.0, 0.42, 0.15),
+            (Cy, -4.0, 1.5, 0.2),
+            (Tom, 7.0, 0.4, 0.15),
+            (Cy, 1.0, 2.0, 0.05),
+        ],
+        levels: &[(6, -3.0), (8, -3.0), (10, -4.0), (13, -7.0), (15, -8.0)],
+        layers: &[],
+    },
+    KitDef {
+        name: "Big room kit",
+        pads: [
+            (Kick, -2.0, 0.9, 0.5),
+            (Rim, 0.0, 0.08, 0.5),
+            (Snare, -1.0, 0.45, 0.4),
+            (Clap, -1.0, 0.6, 0.5),
+            (Snare, 1.0, 0.4, 0.6),
+            (Tom, -9.0, 1.1, 0.25),
+            (Ch, 0.0, 0.1, 0.5),
+            (Tom, -6.0, 1.0, 0.25),
+            (Ch, -2.0, 0.06, 0.35),
+            (Tom, -3.0, 0.95, 0.25),
+            (Oh, 0.0, 0.9, 0.5),
+            (Tom, 0.0, 0.9, 0.25),
+            (Tom, 3.0, 0.85, 0.25),
+            (Cy, 0.0, 3.0, 0.6),
+            (Tom, 6.0, 0.8, 0.25),
+            (Cy, 5.0, 4.0, 0.2),
+        ],
+        levels: &[(13, -5.0), (15, -7.0)],
+        layers: &[
+            (0, 1, Tom, -10.0, 0.4, 0.2, -10.0),
+            (2, 1, Clap, -1.0, 0.5, 0.5, -4.0),
+        ],
+    },
+];
+
+/// A key that lives as long as the program, for a kit's settings.
+fn key(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// The drum kits made here, as sounds: each pad's drum, the hi-hats
+/// choking each other, levels and extra layers. The first is the kit a
+/// new drum machine has.
+pub fn kits() -> Vec<crate::Sound> {
+    static MADE: std::sync::OnceLock<Vec<crate::Sound>> = std::sync::OnceLock::new();
+    let at = |p: usize, k: usize| params_keys()[pad_at(p, k)];
+    let in_layer = |p: usize, l: usize, k: usize| params_keys()[layer_at(p, l, k)];
+    MADE.get_or_init(|| {
+        (KITS.iter())
+            .map(|kit| {
+                let mut v: Vec<(&'static str, f64)> = Vec::new();
+                for (p, &(drum, tune, decay, tone)) in kit.pads.iter().enumerate() {
+                    v.push((in_layer(p, 0, layer::SOURCE), 2.0 + drum as usize as f64));
+                    v.push((in_layer(p, 0, layer::TUNE), tune));
+                    v.push((in_layer(p, 0, layer::DECAY), decay));
+                    v.push((in_layer(p, 0, layer::TONE), tone));
+                    if matches!(drum, Drum::ClosedHat | Drum::OpenHat) {
+                        v.push((at(p, pad::CHOKE), 1.0));
+                    }
+                }
+                for &(p, level) in kit.levels {
+                    v.push((at(p, pad::LEVEL), level));
+                }
+                for &(p, l, drum, tune, decay, tone, level) in kit.layers {
+                    v.push((in_layer(p, l, layer::SOURCE), 2.0 + drum as usize as f64));
+                    v.push((in_layer(p, l, layer::TUNE), tune));
+                    v.push((in_layer(p, l, layer::DECAY), decay));
+                    v.push((in_layer(p, l, layer::TONE), tone));
+                    v.push((in_layer(p, l, layer::LEVEL), level));
+                }
+                crate::Sound {
+                    name: kit.name,
+                    settings: Box::leak(v.into_boxed_slice()),
+                }
+            })
+            .collect()
+    })
+    .clone()
+}
+
+/// Every setting's key, by index, made once.
+fn params_keys() -> &'static [&'static str] {
+    static KEYS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    KEYS.get_or_init(|| params().into_iter().map(|p| key(p.key)).collect())
+}
+
+/// Sets up the kit made here, the first of [`kits`].
+pub fn default_kit(params: &Params) {
+    for (k, v) in kits()[0].settings {
+        params.set_key(k, *v);
+    }
 }
 
 /// Frames worked at a time: settings are read and pads mixed this often.

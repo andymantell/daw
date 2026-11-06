@@ -196,7 +196,8 @@ impl Kind {
     }
 
     /// The sounds it makes from its settings, by name, for the browser
-    /// and the assistant; none for the samplers, whose sounds are files.
+    /// and the assistant (a drum machine's are its kits); none for the
+    /// samplers, whose sounds are files or [`made`] ones.
     pub fn sounds(self) -> Vec<Sound> {
         match self {
             Kind::Synth => synth::sounds(),
@@ -208,7 +209,9 @@ impl Kind {
             Kind::Oracle => oracle::sounds(),
             Kind::BlueWave => blue_wave::sounds(),
             Kind::LuckySeven => lucky_seven::sounds(),
-            _ => Vec::new(),
+            Kind::PatchTwenty => patch_twenty::sounds(),
+            Kind::DrumMachine => drum_machine::kits(),
+            Kind::Sampler | Kind::DrumSampler | Kind::Slicer => Vec::new(),
         }
     }
 }
@@ -463,6 +466,17 @@ impl Builtin {
         self.samples.retain(|(k, _)| k != slot);
         if let Some(s) = sound {
             self.samples.push((slot.to_string(), Arc::new(s)));
+        }
+    }
+
+    /// Puts `sound` in the sampler's zone `z`; one made here also sets
+    /// the zone's root note to the note it was made at, and its loop if
+    /// it is a held sound.
+    pub fn set_zone_sound(&mut self, z: usize, sound: Loaded) {
+        let r = sound.reference.clone();
+        self.set_sample(&format!("zone{z}"), Some(sound));
+        for (k, v) in made::zone_settings(&r) {
+            self.params.set_key(&format!("zone{z}.{k}"), v);
         }
     }
 
@@ -896,6 +910,11 @@ mod tests {
                     assert!(b.params.index(key).is_some(), "{k:?} {}: {key}", s.name);
                 }
                 assert!(b.set_sound(s.name).is_some());
+                assert_eq!(b.current_sound(), Some(s.name));
+                if b.takes_input() && b.params.get_key("ext_in") == Some(1.0) {
+                    // It plays the guitar through it, not notes.
+                    continue;
+                }
                 let peak = loudness(&b, 36);
                 assert!(peak > 0.005 && peak < 4.0, "{k:?} {}: {peak}", s.name);
             }

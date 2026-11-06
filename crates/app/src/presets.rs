@@ -177,6 +177,13 @@ fn instrument_preset(
     }
 }
 
+/// The settings of one of a built-in instrument's sounds, by name.
+fn sound(kind: daw_instruments::Kind, name: &str) -> &'static [(&'static str, f64)] {
+    (kind.sounds().into_iter())
+        .find(|s| s.name == name)
+        .map_or(&[], |s| s.settings)
+}
+
 /// The presets that come with the app. Placeholders until the owner
 /// chooses which tones ship (see the review queue).
 pub(crate) fn included() -> Vec<Preset> {
@@ -268,7 +275,7 @@ pub(crate) fn included() -> Vec<Preset> {
         ),
     ];
     // Patch Twenty, the semi-modular monosynth (classic synths, S7):
-    // sounds made from its settings alone.
+    // its sounds made from its settings alone, as presets too.
     use daw_instruments::Kind::PatchTwenty;
     list.extend([
         instrument_preset(
@@ -278,28 +285,7 @@ pub(crate) fn included() -> Vec<Preset> {
             "Pulse against a ring modulator, both filters peaking, envelope 2 opening the \
              low-pass, the keyboard tracking both filters and the mod generator moving \
              the pulse width.",
-            &[
-                ("osc1", 2.0),
-                ("osc2", 3.0),
-                ("osc2_level", 0.7),
-                ("hp_cutoff", 150.0),
-                ("hp_peak", 0.7),
-                ("lp_cutoff", 500.0),
-                ("lp_peak", 0.95),
-                ("lp_eg2", 3.0),
-                ("drive", 0.8),
-                ("eg2_decay", 0.5),
-                ("eg2_sustain", 0.4),
-                ("glide", 0.05),
-                ("retrigger", 0.0),
-                ("patch1_from", 7.0),
-                ("patch1_to", 7.0),
-                ("patch1_amount", 0.7),
-                ("patch2_from", 1.0),
-                ("patch2_to", 4.0),
-                ("patch2_amount", 0.6),
-                ("vintage", 0.5),
-            ],
+            sound(PatchTwenty, "Patch Twenty screaming lead"),
         ),
         instrument_preset(
             PatchTwenty,
@@ -307,22 +293,7 @@ pub(crate) fn included() -> Vec<Preset> {
             "synth, bass, mono",
             "A saw an octave down with a square under it, the low-pass snapping shut on \
              each note, a little drive and a short glide between notes.",
-            &[
-                ("osc1", 1.0),
-                ("osc1_octave", 1.0),
-                ("osc2", 1.0),
-                ("osc2_octave", 0.0),
-                ("osc2_level", 0.5),
-                ("lp_cutoff", 250.0),
-                ("lp_peak", 0.5),
-                ("lp_eg2", 2.5),
-                ("eg2_decay", 0.25),
-                ("eg2_sustain", 0.1),
-                ("drive", 0.5),
-                ("glide", 0.06),
-                ("retrigger", 0.0),
-                ("vintage", 0.4),
-            ],
+            sound(PatchTwenty, "Patch Twenty bass"),
         ),
         instrument_preset(
             PatchTwenty,
@@ -331,30 +302,7 @@ pub(crate) fn included() -> Vec<Preset> {
             "No key needed: the amplifier is held open, the mod generator sweeps the \
              low-pass, its sample-and-hold steps the high-pass, the oscillators a fifth \
              apart. Play one note to set the pitch.",
-            &[
-                ("osc1", 1.0),
-                ("osc1_octave", 1.0),
-                ("osc2", 0.0),
-                ("osc2_pitch", 7.0),
-                ("osc2_level", 0.6),
-                ("hp_cutoff", 120.0),
-                ("hp_peak", 0.6),
-                ("lp_cutoff", 400.0),
-                ("lp_peak", 0.8),
-                ("lp_eg2", 0.0),
-                ("lp_mg", 1.5),
-                ("mg_rate", 0.25),
-                ("mg_shape", 0.3),
-                ("drive", 0.6),
-                ("drone", 1.0),
-                ("patch1_from", 5.0),
-                ("patch1_to", 5.0),
-                ("patch1_amount", 0.8),
-                ("patch2_from", 1.0),
-                ("patch2_to", 9.0),
-                ("patch2_amount", 0.5),
-                ("vintage", 0.6),
-            ],
+            sound(PatchTwenty, "Patch Twenty drone"),
         ),
         instrument_preset(
             PatchTwenty,
@@ -363,25 +311,7 @@ pub(crate) fn included() -> Vec<Preset> {
             "The guitar through the synth's two filters: pick the guitar's input on the \
              track's strip and turn on Monitor. Each pluck triggers the envelope, which \
              sweeps the low-pass; no oscillators.",
-            &[
-                ("osc1_level", 0.0),
-                ("osc2_level", 0.0),
-                ("ext_in", 1.0),
-                ("ext_gain", 6.0),
-                ("ext_trigger", 1.0),
-                ("ext_threshold", -24.0),
-                ("hp_cutoff", 90.0),
-                ("hp_peak", 0.3),
-                ("lp_cutoff", 300.0),
-                ("lp_peak", 0.75),
-                ("lp_eg2", 3.0),
-                ("eg2_attack", 0.005),
-                ("eg2_decay", 0.35),
-                ("eg2_sustain", 0.2),
-                ("eg2_release", 0.3),
-                ("drive", 0.6),
-                ("level", -4.0),
-            ],
+            sound(PatchTwenty, "Guitar through Patch Twenty"),
         ),
     ]);
     let mut bus = Track::new(String::new(), "Reverb".into());

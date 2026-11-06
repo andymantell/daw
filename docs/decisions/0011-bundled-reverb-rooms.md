@@ -74,8 +74,9 @@ they are not captures of another maker's hardware.
 - **Adventure Kid small rooms:** the page says they were made "from real
   rooms and reverb units" without saying which file is which. Some may be
   captures of another maker's reverb unit, so we skip the whole set.
-- **Adventure Kid speakers and amps:** cabinet captures, not rooms. Left for
-  the amp simulator work to decide.
+- **Adventure Kid speakers and amps:** cabinet captures, not rooms. Seven
+  of them now ship with the Speaker cabinet instead; see
+  [0016](0016-bundled-recorded-cabinets.md).
 - **Usina del Arte Symphony Hall (OpenAIR):** its page shows no licence.
 - **Maes Howe, Falkland Palace Bottle Dungeon, Slinky IR and Theatre@41
   (OpenAIR):** on the day, Maes Howe's page showed no licence, the other

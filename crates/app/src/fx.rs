@@ -996,8 +996,8 @@ impl Effects {
         }
         let r = match daw_effects::library::find(reference) {
             Some(room) => room.response()?,
-            None if reference.starts_with(daw_effects::library::PREFIX) => {
-                return Err("that recorded room comes with a newer version of the app".into());
+            None if daw_effects::library::is_recorded(reference) => {
+                return Err("that recording comes with a newer version of the app".into());
             }
             None => daw_effects::Response::from_file(&self.file_path(reference))?,
         };
@@ -1183,7 +1183,8 @@ impl Effects {
         Ok((plugin, processor))
     }
 
-    /// The credits of the recorded rooms that come with the app.
+    /// The credits of the recorded rooms and cabinets that come with the
+    /// app.
     pub fn credits_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_credits;
         egui::Window::new("Sound credits")
@@ -1191,24 +1192,32 @@ impl Effects {
             .default_width(520.0)
             .show(ctx, |ui| {
                 ui.label(
-                    "The Room reverb's recorded spaces were recorded by these people, who share \
-                     them under the licences shown.",
+                    "The Room reverb's recorded spaces and the Speaker cabinet's recorded \
+                     cabinets were recorded by these people, who share them under the licences \
+                     shown.",
                 );
                 ui.separator();
                 let rooms = daw_effects::library::ROOMS;
-                if rooms.is_empty() {
-                    ui.label(
-                        RichText::new("No recorded spaces come with this version yet.").weak(),
-                    );
+                let cabinets = daw_effects::library::CABINETS;
+                if rooms.is_empty() && cabinets.is_empty() {
+                    ui.label(RichText::new("No recordings come with this version yet.").weak());
                 }
                 egui::ScrollArea::vertical()
                     .max_height(360.0)
                     .show(ui, |ui| {
-                        for room in rooms {
-                            ui.strong(room.name);
-                            ui.label(room.credit());
-                            ui.hyperlink_to(room.licence.name(), room.licence.url());
-                            ui.add_space(6.0);
+                        for (heading, list) in
+                            [("Recorded spaces", rooms), ("Recorded cabinets", cabinets)]
+                        {
+                            if list.is_empty() {
+                                continue;
+                            }
+                            ui.heading(heading);
+                            for room in list {
+                                ui.strong(room.name);
+                                ui.label(room.credit());
+                                ui.hyperlink_to(room.licence.name(), room.licence.url());
+                                ui.add_space(6.0);
+                            }
                         }
                     });
             });
@@ -2412,10 +2421,13 @@ pub(crate) fn cabinet_picker(
     id: u64,
     b: &daw_effects::Effect,
 ) -> Option<RoomPick> {
+    use daw_effects::library;
     let reference = b.response_ref();
     let made = daw_effects::Kind::Cabinet.params()[0];
     let now = if reference.is_empty() {
         made.text(b.get(0))
+    } else if let Some(cab) = library::find(&reference) {
+        cab.name.to_string()
     } else {
         file_name(&reference)
     };
@@ -2430,6 +2442,21 @@ pub(crate) fn cabinet_picker(
                 // ai: set_parameter
                 if ui.selectable_label(on, *name).clicked() {
                     pick = Some(RoomPick::Made(i));
+                }
+            }
+            if !library::CABINETS.is_empty() {
+                ui.separator();
+                ui.label(RichText::new("Recorded cabinets").small().weak());
+                for cab in library::CABINETS {
+                    let on = library::find(&reference).is_some_and(|r| r.id == cab.id);
+                    if ui
+                        // ai: edit_effect
+                        .selectable_label(on, cab.name)
+                        .on_hover_text(cab.credit())
+                        .clicked()
+                    {
+                        pick = Some(RoomPick::Recorded(cab));
+                    }
                 }
             }
             ui.separator();

@@ -579,7 +579,9 @@ speaker cabinets made here (or the user's own cabinet response file)
 and a player for amp capture files the user supplies were added
 2026-10-30, at risk; the capture library's licence is checked in
 decision 0012 and the listening checks are in
-`docs/review-queue/2.5-amp-and-cabinet.md`.
+`docs/review-queue/2.5-amp-and-cabinet.md`. Seven recorded cabinets
+(CC BY 4.0, credited like the rooms) came with the Speaker cabinet on
+2026-11-06; licences checked in decision 0016.
 On 2026-11-01 the limiter became true-peak (it watches the level between
 samples, 4× oversampled as BS.1770 measures it), and three effects for
 lo-fi character were added: a worn record (hiss, crackle, rumble, wear),

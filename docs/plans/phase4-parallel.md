@@ -79,8 +79,8 @@ keeps its own types.
   sounds). After the polish pass.
 - **Recorded cabinets** (decided 2026-11-05): ship a few recorded
   cabinet impulse responses under licences that allow it, credited like
-  the recorded rooms, beside the five made in code. After the polish
-  pass.
+  the recorded rooms, beside the five made in code. Built 2026-11-06
+  (decision 0016).
 - **Unsigned macOS release builds** (decided 2026-11-05): add a macOS
   job to the release workflow that ships an unsigned universal app, and
   document how to allow it on first launch.

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Recorded rooms that come with the app, for the convolution reverb.
+//! Recorded rooms that come with the app, for the convolution reverb,
+//! and recorded speaker cabinets, for the speaker cabinet.
 //!
 //! Each was recorded by someone else and is shipped under a licence that
 //! lets us (see docs/decisions for how each was checked). Its credit is
 //! shown whenever it is chosen, and all of them in Help → Sound credits.
-//! The files in `rooms/` were made from the originals with the
-//! `convert_room` example, which records what it changed.
+//! The files in `rooms/` and `cabinets/` were made from the originals
+//! with the `convert_room` example, which records what it changed.
 
 use crate::response::Response;
 
@@ -44,14 +45,24 @@ impl Licence {
     }
 }
 
-/// A recorded room.
+/// What a recording is of, and so which effect plays it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum What {
+    /// A room, for the convolution reverb.
+    Room,
+    /// A speaker cabinet, for the speaker cabinet.
+    Cabinet,
+}
+
+/// A recorded room or cabinet.
 #[derive(Debug)]
 pub struct Room {
-    /// How projects name it. Never change one.
+    pub what: What,
+    /// How projects name it, after its prefix. Never change one.
     pub id: &'static str,
     /// What the list shows.
     pub name: &'static str,
-    /// The place, as its recorders name it.
+    /// The place, or the cabinet, as its recorders name it.
     pub place: &'static str,
     /// Who recorded it, as they ask to be credited.
     pub by: &'static str,
@@ -60,7 +71,7 @@ pub struct Room {
     pub source: &'static str,
     /// What was changed from the original.
     pub changes: &'static str,
-    /// The file in `rooms/`.
+    /// The file in `rooms/` or `cabinets/`.
     pub file: &'static str,
     wav: &'static [u8],
 }
@@ -86,6 +97,7 @@ impl Room {
 /// Every recorded room, in the order listed.
 pub static ROOMS: &[Room] = &[
     Room {
+        what: What::Room,
         id: "concert-hall-jack-lyons",
         name: "Concert hall",
         place: "Jack Lyons Concert Hall, University of York",
@@ -97,6 +109,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/concert-hall-jack-lyons.wav"),
     },
     Room {
+        what: What::Room,
         id: "cathedral-york-minster",
         name: "Cathedral",
         place: "York Minster",
@@ -108,6 +121,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/cathedral-york-minster.wav"),
     },
     Room {
+        what: What::Room,
         id: "chapel-st-albans",
         name: "Chapel",
         place: "Lady Chapel, St Albans Cathedral",
@@ -119,6 +133,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/chapel-st-albans.wav"),
     },
     Room {
+        what: What::Room,
         id: "church-patrington",
         name: "Village church",
         place: "St Patrick's Church, Patrington",
@@ -130,6 +145,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/church-patrington.wav"),
     },
     Room {
+        what: What::Room,
         id: "theatre-dixon-studio",
         name: "Studio theatre",
         place: "The Dixon Studio Theatre, University of York",
@@ -141,6 +157,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/theatre-dixon-studio.wav"),
     },
     Room {
+        what: What::Room,
         id: "stairwell-york",
         name: "Stairwell",
         place: "Stairway, University of York",
@@ -152,6 +169,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/stairwell-york.wav"),
     },
     Room {
+        what: What::Room,
         id: "typing-room-terrys",
         name: "Small room",
         place: "Terry's Typing Room, York",
@@ -163,6 +181,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/typing-room-terrys.wav"),
     },
     Room {
+        what: What::Room,
         id: "marble-hall-elveden",
         name: "Marble hall",
         place: "Marble Hall, Elveden Hall, Suffolk",
@@ -174,6 +193,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/marble-hall-elveden.wav"),
     },
     Room {
+        what: What::Room,
         id: "warehouse-terrys",
         name: "Warehouse",
         place: "Terry's Factory Warehouse, York",
@@ -185,6 +205,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/warehouse-terrys.wav"),
     },
     Room {
+        what: What::Room,
         id: "reactor-hall-r1",
         name: "Reactor hall",
         place: "R1 Nuclear Reactor Hall",
@@ -196,6 +217,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/reactor-hall-r1.wav"),
     },
     Room {
+        what: What::Room,
         id: "tunnel-innocent-railway",
         name: "Railway tunnel",
         place: "Innocent Railway Tunnel, Edinburgh",
@@ -207,6 +229,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/tunnel-innocent-railway.wav"),
     },
     Room {
+        what: What::Room,
         id: "mausoleum-hamilton",
         name: "Mausoleum",
         place: "Hamilton Mausoleum, Hamilton, Scotland",
@@ -218,6 +241,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/mausoleum-hamilton.wav"),
     },
     Room {
+        what: What::Room,
         id: "hall-spokane",
         name: "Wooden hall",
         place: "Spokane Woman's Club hall, Spokane",
@@ -229,6 +253,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/hall-spokane.wav"),
     },
     Room {
+        what: What::Room,
         id: "tennis-court-falkland",
         name: "Walled court, open sky",
         place: "Royal Tennis Court, Falkland Palace, Fife",
@@ -240,6 +265,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/tennis-court-falkland.wav"),
     },
     Room {
+        what: What::Room,
         id: "forest-koli",
         name: "Forest",
         place: "Forest in Koli National Park, Finland, in summer",
@@ -251,6 +277,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/forest-koli.wav"),
     },
     Room {
+        what: What::Room,
         id: "gorge-trollers-gill",
         name: "Limestone gorge",
         place: "Troller's Gill, Yorkshire Dales",
@@ -262,6 +289,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/gorge-trollers-gill.wav"),
     },
     Room {
+        what: What::Room,
         id: "cave-creswell-crags",
         name: "Cave",
         place: "Creswell Crags caves",
@@ -273,6 +301,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/cave-creswell-crags.wav"),
     },
     Room {
+        what: What::Room,
         id: "mine-gill-heads",
         name: "Disused mine",
         place: "Gill Heads Mine, Yorkshire Dales",
@@ -284,6 +313,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/mine-gill-heads.wav"),
     },
     Room {
+        what: What::Room,
         id: "spring-ak-springer",
         name: "Spring",
         place: "AKIR Springer, setting 10",
@@ -295,6 +325,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/spring-ak-springer.wav"),
     },
     Room {
+        what: What::Room,
         id: "spring-ak-smooth",
         name: "Spring, smooth",
         place: "AKIR Smooth Springer, setting 10",
@@ -306,6 +337,7 @@ pub static ROOMS: &[Room] = &[
         wav: include_bytes!("../rooms/spring-ak-smooth.wav"),
     },
     Room {
+        what: What::Room,
         id: "spring-ak-dual",
         name: "Spring, bright stereo",
         place: "AKIR Dual Springer, setting 8",
@@ -318,18 +350,123 @@ pub static ROOMS: &[Room] = &[
     },
 ];
 
+/// Every recorded cabinet, in the order listed. All from one set, whose
+/// folder names say the style of cabinet but not the make.
+pub static CABINETS: &[Room] = &[
+    Room {
+        what: What::Cabinet,
+        id: "ak-vintage-us",
+        name: "Vintage American",
+        place: "AK-SPKRS speakers and amps, VintageUs set, file 002",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 24 ms, level set",
+        file: "ak-vintage-us.wav",
+        wav: include_bytes!("../cabinets/ak-vintage-us.wav"),
+    },
+    Room {
+        what: What::Cabinet,
+        id: "ak-vintage-uk",
+        name: "Vintage British",
+        place: "AK-SPKRS speakers and amps, VintageUk set, file 002",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 31 ms, level set",
+        file: "ak-vintage-uk.wav",
+        wav: include_bytes!("../cabinets/ak-vintage-uk.wav"),
+    },
+    Room {
+        what: What::Cabinet,
+        id: "ak-modern-us",
+        name: "Modern American",
+        place: "AK-SPKRS speakers and amps, ModernUs set, file 003",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 71 ms, level set",
+        file: "ak-modern-us.wav",
+        wav: include_bytes!("../cabinets/ak-modern-us.wav"),
+    },
+    Room {
+        what: What::Cabinet,
+        id: "ak-modern-uk",
+        name: "Modern British",
+        place: "AK-SPKRS speakers and amps, ModernUk set, file 002",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 72 ms, level set",
+        file: "ak-modern-uk.wav",
+        wav: include_bytes!("../cabinets/ak-modern-uk.wav"),
+    },
+    Room {
+        what: What::Cabinet,
+        id: "ak-eighties-us",
+        name: "1980s American",
+        place: "AK-SPKRS speakers and amps, 80sUs set, file 002",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 30 ms, level set",
+        file: "ak-eighties-us.wav",
+        wav: include_bytes!("../cabinets/ak-eighties-us.wav"),
+    },
+    Room {
+        what: What::Cabinet,
+        id: "ak-eighties-uk",
+        name: "1980s British",
+        place: "AK-SPKRS speakers and amps, 80sUk set, file 002",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 20 ms, level set",
+        file: "ak-eighties-uk.wav",
+        wav: include_bytes!("../cabinets/ak-eighties-uk.wav"),
+    },
+    Room {
+        what: What::Cabinet,
+        id: "ak-radio",
+        name: "Small radio speaker",
+        place: "AK-SPKRS speakers and amps, Radio set, file 001",
+        by: "Adventure Kid",
+        licence: Licence::CcBy4,
+        source: "https://www.adventurekid.se/akrt/free-reverb-impulse-responses/",
+        changes: "resampled from 44100 to 48 kHz, 16-bit, trimmed to 118 ms, level set",
+        file: "ak-radio.wav",
+        wav: include_bytes!("../cabinets/ak-radio.wav"),
+    },
+];
+
 /// What a project names a recorded room by, in an effect's response.
 pub const PREFIX: &str = "room:";
 
-/// The room a response reference names, if it names one.
+/// What a project names a recorded cabinet by, in an effect's response.
+pub const CABINET_PREFIX: &str = "cabinet:";
+
+/// The room or cabinet a response reference names, if it names one.
 pub fn find(reference: &str) -> Option<&'static Room> {
-    let id = reference.strip_prefix(PREFIX)?;
-    ROOMS.iter().find(|r| r.id == id)
+    if let Some(id) = reference.strip_prefix(PREFIX) {
+        return ROOMS.iter().find(|r| r.id == id);
+    }
+    let id = reference.strip_prefix(CABINET_PREFIX)?;
+    CABINETS.iter().find(|r| r.id == id)
+}
+
+/// Whether `reference` names a recording that comes with the app (one
+/// this version may not have), rather than a file.
+pub fn is_recorded(reference: &str) -> bool {
+    reference.starts_with(PREFIX) || reference.starts_with(CABINET_PREFIX)
 }
 
 /// The reference for `room`, as saved in projects.
 pub fn reference(room: &Room) -> String {
-    format!("{PREFIX}{}", room.id)
+    let prefix = match room.what {
+        What::Room => PREFIX,
+        What::Cabinet => CABINET_PREFIX,
+    };
+    format!("{prefix}{}", room.id)
 }
 
 #[cfg(test)]
@@ -337,10 +474,32 @@ mod tests {
     use super::*;
 
     /// Every file shipped is listed, credited and under a licence we may
-    /// ship, and every listed room reads.
+    /// ship, and every listed room and cabinet reads.
     #[test]
     fn every_room_is_listed_credited_and_reads() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("rooms");
+        check("rooms", ROOMS, What::Room);
+        check("cabinets", CABINETS, What::Cabinet);
+        assert!(find("room:nowhere").is_none());
+        assert!(find("cabinet:nowhere").is_none());
+        assert!(find("guitar.wav").is_none());
+        // A room isn't found as a cabinet, or the reverse.
+        assert!(find(&format!("{CABINET_PREFIX}{}", ROOMS[0].id)).is_none());
+        assert!(find(&format!("{PREFIX}{}", CABINETS[0].id)).is_none());
+        assert!(is_recorded("cabinet:ak-radio") && is_recorded("room:x"));
+        assert!(!is_recorded("guitar.wav"));
+    }
+
+    /// A recorded cabinet is short: a speaker in a box, not a room.
+    #[test]
+    fn recorded_cabinets_are_short() {
+        for c in CABINETS {
+            let r = c.response().unwrap();
+            assert!(r.seconds() < 0.2, "{}: {}", c.id, r.seconds());
+        }
+    }
+
+    fn check(folder: &str, list: &[Room], what: What) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(folder);
         let mut files: Vec<String> = std::fs::read_dir(&dir)
             .into_iter()
             .flatten()
@@ -349,14 +508,18 @@ mod tests {
             .filter(|n| n.ends_with(".wav"))
             .collect();
         files.sort();
-        let mut listed: Vec<String> = ROOMS.iter().map(|r| r.file.to_string()).collect();
+        let mut listed: Vec<String> = list.iter().map(|r| r.file.to_string()).collect();
         listed.sort();
-        assert_eq!(files, listed, "every file in rooms/ is listed, and no more");
-        let mut ids: Vec<&str> = ROOMS.iter().map(|r| r.id).collect();
+        assert_eq!(
+            files, listed,
+            "every file in {folder}/ is listed, and no more"
+        );
+        let mut ids: Vec<&str> = list.iter().map(|r| r.id).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), ROOMS.len(), "ids are unique");
-        for r in ROOMS {
+        assert_eq!(ids.len(), list.len(), "ids are unique");
+        for r in list {
+            assert_eq!(r.what, what, "{}", r.id);
             for (what, v) in [
                 ("name", r.name),
                 ("place", r.place),
@@ -375,10 +538,10 @@ mod tests {
                 );
             }
             let resp = r.response().unwrap();
-            assert!(resp.seconds() > 0.05, "{}", r.id);
+            // A room rings on; a cabinet lasts a few milliseconds.
+            let least = if what == What::Room { 0.05 } else { 0.005 };
+            assert!(resp.seconds() > least, "{}", r.id);
             assert_eq!(find(&reference(r)).map(|f| f.id), Some(r.id));
         }
-        assert!(find("room:nowhere").is_none());
-        assert!(find("guitar.wav").is_none());
     }
 }

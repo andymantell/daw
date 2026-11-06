@@ -190,10 +190,17 @@ fn a_reverb_response_is_saved_and_its_file_kept_with_the_project() {
     assert!(back.assets_in_use().contains(&"0123abcd.wav".to_string()));
     // A recorded room that comes with the app is no file of ours.
     reverb.response = "room:york-minster".into();
-    p.tracks[1].effects[0] = reverb;
+    p.tracks[1].effects[0] = reverb.clone();
     d.set(&p);
     assert_eq!(d.get(), p);
     assert!(!d.assets_in_use().iter().any(|a| a.starts_with("room:")));
+    // Nor is a recorded cabinet.
+    reverb.builtin = "cabinet".into();
+    reverb.response = "cabinet:ak-radio".into();
+    p.tracks[1].effects[0] = reverb;
+    d.set(&p);
+    assert_eq!(d.get(), p);
+    assert!(!d.assets_in_use().iter().any(|a| a.starts_with("cabinet:")));
 }
 
 #[test]

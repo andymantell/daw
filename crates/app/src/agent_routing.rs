@@ -83,8 +83,9 @@ pub(crate) fn wiring_schema() -> Value {
                     lists them."},
         "file": {"type": "string", "description": "For a convolution reverb or speaker cabinet, \
                  its impulse response; for an amp capture player, its capture (.nam): a full \
-                 path, a recorded room as \"room:\" and its id, or \"\" for its own rooms or \
-                 cabinets (or no capture)."}
+                 path, a recorded room as \"room:\" and its id, a recorded cabinet as \
+                 \"cabinet:\" and its id (get_effects lists both, with their credits), or \"\" \
+                 for its own rooms or cabinets (or no capture)."}
     })
 }
 
@@ -203,15 +204,24 @@ impl App {
                 daw_effects::Uses::Nothing => {
                     return Err(format!("{} uses no file.", slot.name));
                 }
-                daw_effects::Uses::Capture if f.starts_with("room:") => {
+                daw_effects::Uses::Capture if daw_effects::library::is_recorded(f) => {
                     return Err("An amp capture player takes a capture file.".into());
                 }
-                _ if f.starts_with("room:") => {
-                    if slot.builtin().map(daw_effects::Effect::kind)
-                        != Some(daw_effects::Kind::Convolution)
-                        || daw_effects::library::find(f).is_none()
-                    {
-                        return Err(format!("There is no recorded room {f} for this effect."));
+                _ if daw_effects::library::is_recorded(f) => {
+                    use daw_effects::library::What;
+                    let wants = match slot.builtin().map(daw_effects::Effect::kind) {
+                        Some(daw_effects::Kind::Convolution) => Some(What::Room),
+                        Some(daw_effects::Kind::Cabinet) => Some(What::Cabinet),
+                        _ => None,
+                    };
+                    let found = daw_effects::library::find(f).map(|r| r.what);
+                    if found.is_none() || found != wants {
+                        let what = if f.starts_with(daw_effects::library::PREFIX) {
+                            "room"
+                        } else {
+                            "cabinet"
+                        };
+                        return Err(format!("There is no recorded {what} {f} for this effect."));
                     }
                 }
                 _ if !f.is_empty() && !Path::new(f).is_file() => {
@@ -287,10 +297,26 @@ impl App {
                 v
             })
             .collect();
-        let rooms: Vec<Value> = (daw_effects::library::ROOMS.iter())
-            .map(|r| json!({"file": daw_effects::library::reference(r), "name": r.name}))
-            .collect();
-        Ok(json!({"track": key, "layers": layers, "effects": effects, "rooms": rooms}))
+        let listed = |list: &[daw_effects::library::Room]| -> Vec<Value> {
+            (list.iter())
+                .map(|r| {
+                    json!({
+                        "file": daw_effects::library::reference(r),
+                        "name": r.name,
+                        "credit": r.credit(),
+                    })
+                })
+                .collect()
+        };
+        let rooms = listed(daw_effects::library::ROOMS);
+        let cabinets = listed(daw_effects::library::CABINETS);
+        Ok(json!({
+            "track": key,
+            "layers": layers,
+            "effects": effects,
+            "rooms": rooms,
+            "cabinets": cabinets,
+        }))
     }
 
     fn plugin_preset_tool(&mut self, args: &Value) -> Done {
@@ -500,6 +526,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(effect(&mut d, &t, &cap)["file"], "");
+    }
+
+    /// A recorded cabinet that comes with the app, chosen and read back
+    /// through the assistant interface: listed with its credit, played
+    /// by the speaker cabinet only, saved by name and undone.
+    #[test]
+    fn a_recorded_cabinet_is_listed_chosen_and_credited() {
+        let mut d = Driver::new();
+        let t = id(
+            d.call("add_track", json!({"kind": "audio"})).unwrap(),
+            "track",
+        );
+        let cab = add(&mut d, json!({"track": t, "effect": "cabinet"}));
+        let verb = add(&mut d, json!({"track": t, "effect": "convolution"}));
+        let listed = d.call("get_effects", json!({"track": t})).unwrap();
+        let cabinets = listed["cabinets"].as_array().unwrap().clone();
+        assert_eq!(cabinets.len(), daw_effects::library::CABINETS.len());
+        for c in &cabinets {
+            let credit = c["credit"].as_str().unwrap();
+            assert!(credit.contains("CC BY 4.0"), "{c}");
+            assert!(c["file"].as_str().unwrap().starts_with("cabinet:"), "{c}");
+        }
+        assert!(listed["rooms"][0]["credit"].is_string(), "{listed}");
+        let file = cabinets[0]["file"].as_str().unwrap().to_string();
+
+        d.call(
+            "edit_effect",
+            json!({"track": t, "effect": cab, "file": file}),
+        )
+        .unwrap();
+        assert_eq!(effect(&mut d, &t, &cab)["file"], file);
+        // Played from the app's own copy, read without trouble.
+        let slot = (d.app().tracks[0].fx.iter())
+            .find(|s| s.key == cab)
+            .and_then(|s| s.builtin())
+            .unwrap();
+        assert_eq!(slot.response_ref(), file);
+        assert!(!slot.response_missing());
+        // The project names it; it is not a sound file to copy in.
+        let saved = d.app().project();
+        let e = (saved.tracks[0].effects.iter())
+            .find(|e| e.id == cab)
+            .unwrap();
+        assert_eq!(e.response, file);
+        assert_eq!(e.asset(), None);
+
+        // A cabinet isn't a room, a room isn't a cabinet, and neither is
+        // a capture.
+        let cap = add(&mut d, json!({"track": t, "effect": "amp-capture"}));
+        let room = listed["rooms"][0]["file"].as_str().unwrap();
+        for (e, f) in [
+            (&verb, file.as_str()),
+            (&cab, room),
+            (&cap, file.as_str()),
+            (&cab, "cabinet:no-such-cabinet"),
+        ] {
+            assert!(
+                d.call("edit_effect", json!({"track": t, "effect": e, "file": f}))
+                    .is_err(),
+                "{e} {f}"
+            );
+        }
+
+        d.command("undo");
+        d.command("undo");
+        assert_eq!(effect(&mut d, &t, &cab)["file"], "");
     }
 
     #[test]

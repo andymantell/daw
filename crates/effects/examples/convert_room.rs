@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Makes a recorded room's file for `crates/effects/rooms/` from an
-//! original response, the same way the app reads a user's own file:
+//! Makes a recorded room's file for `crates/effects/rooms/`, or a
+//! recorded cabinet's for `crates/effects/cabinets/`, from an original
+//! response, the same way the app reads a user's own file:
 //! B-format decoded to stereo, silence trimmed, at most ten seconds,
 //! 48 kHz, 16-bit. Prints what it changed, for the room's `changes`.
 //!
@@ -31,7 +32,12 @@ fn main() -> Result<(), String> {
             changes.push("16-bit".to_string());
         }
     }
-    changes.push(format!("trimmed to {:.1} s", r48.seconds()));
+    // Cabinets are a few milliseconds long; rooms, seconds.
+    changes.push(if r48.seconds() < 1.0 {
+        format!("trimmed to {:.0} ms", r48.seconds() * 1000.0)
+    } else {
+        format!("trimmed to {:.1} s", r48.seconds())
+    });
     changes.push("level set".to_string());
     println!("{}", changes.join(", "));
     Ok(())

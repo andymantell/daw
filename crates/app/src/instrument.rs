@@ -372,6 +372,14 @@ impl Slot {
         }
     }
 
+    /// The plugin as saved, if it couldn't be made here.
+    pub fn missing(&self) -> Option<&daw_project::Effect> {
+        match &self.inner {
+            Inner::Missing(e) => Some(e),
+            _ => None,
+        }
+    }
+
     pub fn plugin_mut(&mut self) -> Option<&mut FxSlot> {
         match &mut self.inner {
             Inner::Plugin(fx) => Some(fx),

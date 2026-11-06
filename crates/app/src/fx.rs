@@ -30,6 +30,7 @@ use daw_plugins::scan::{self, Available, PluginList};
 use daw_plugins::{Host, Layout, Library, Plugin, PluginState, Processor, Sandbox};
 use eframe::egui::{self, RichText};
 
+use crate::plugin_windows::{Load, Timed};
 use crate::spoken;
 
 /// One effect in a track's chain.
@@ -56,6 +57,8 @@ pub struct FxSlot {
     pub needs_reload: bool,
     /// When its editor was last opened, to close the oldest first.
     opened: u64,
+    /// The time its audio takes, for the plugin windows.
+    pub(crate) load: Arc<Load>,
     /// Where it runs (in the app, for a built-in effect).
     pub sandbox: Sandbox,
     /// Why it stopped working: its helper process crashed or hung. The
@@ -183,7 +186,7 @@ impl FxSlot {
         self.plugin().is_some_and(|p| p.editor_open())
     }
 
-    fn close_editor(&mut self) {
+    pub(crate) fn close_editor(&mut self) {
         if let Some(p) = self.plugin_mut() {
             p.close_editor();
         }
@@ -293,6 +296,9 @@ impl FxSlot {
             return true;
         }
         let status = plugin.poll();
+        if plugin.is_remote() {
+            self.load.helper_busy(status.busy_ns);
+        }
         if status.reload {
             self.needs_reload = true;
         }
@@ -303,7 +309,7 @@ impl FxSlot {
         false
     }
 
-    fn open_editor(&mut self) -> Result<(), String> {
+    pub(crate) fn open_editor(&mut self) -> Result<(), String> {
         if let Some(why) = &self.crashed {
             return Err(why.clone());
         }
@@ -784,11 +790,12 @@ impl Effects {
     }
 
     /// Hands a newly made audio side to the next graph.
-    fn hand_over(&mut self, id: u64, instrument: bool, processor: Processor) {
+    fn hand_over(&mut self, id: u64, instrument: bool, processor: Processor, load: &Arc<Load>) {
+        let timed = Timed::new(processor, load.clone());
         if instrument {
-            self.pending_instruments.push((id, Box::new(processor)));
+            self.pending_instruments.push((id, Box::new(timed)));
         } else {
-            self.pending.push((id, Box::new(processor)));
+            self.pending.push((id, Box::new(timed)));
         }
     }
 
@@ -802,7 +809,9 @@ impl Effects {
         let id = self.next_id;
         self.next_id += 1;
         let latency = processor.latency();
-        self.pending.push((id, Box::new(processor)));
+        let load = Arc::new(Load::default());
+        self.pending
+            .push((id, Box::new(Timed::new(processor, load.clone()))));
         FxSlot {
             id,
             key: daw_project::new_id(),
@@ -814,6 +823,7 @@ impl Effects {
             note: None,
             needs_reload: false,
             opened: 0,
+            load,
             latency,
             sandbox: Sandbox::InApp,
             crashed: None,
@@ -854,7 +864,8 @@ impl Effects {
         } else {
             layout.outputs.clone()
         };
-        self.hand_over(id, instrument, processor);
+        let load = Arc::new(Load::default());
+        self.hand_over(id, instrument, processor, &load);
         Ok(FxSlot {
             id,
             key: daw_project::new_id(),
@@ -866,6 +877,7 @@ impl Effects {
             note: None,
             needs_reload: false,
             opened: 0,
+            load,
             latency: plugin.latency(),
             sandbox: if plugin.is_remote() {
                 sandbox
@@ -1083,7 +1095,8 @@ impl Effects {
             SlotKind::Builtin(b) => {
                 let processor = b.processor(rate);
                 slot.latency = processor.latency();
-                self.pending.push((slot.id, Box::new(processor)));
+                let timed = Timed::new(processor, slot.load.clone());
+                self.pending.push((slot.id, Box::new(timed)));
                 return Ok(());
             }
             SlotKind::Plugin { bundle, cid, .. } => (bundle.clone(), *cid),
@@ -1118,7 +1131,8 @@ impl Effects {
         if let Some(s) = &state {
             slot.load(s)?;
         }
-        self.hand_over(slot.id, slot.instrument, processor);
+        let load = slot.load.clone();
+        self.hand_over(slot.id, slot.instrument, processor, &load);
         if had_editor {
             let _ = slot.open_editor();
         }
@@ -1728,6 +1742,17 @@ impl Effects {
                                         "Delay this effect adds (counting its helper process, \
                                          if any); other tracks are kept in time",
                                     );
+                            }
+                            if let Some(share) = crate::plugin_windows::share_of(s)
+                                && share >= 0.001
+                            {
+                                ui.label(
+                                    RichText::new(crate::plugin_windows::percent(Some(share)))
+                                        .weak(),
+                                )
+                                .on_hover_text(
+                                    "The share of one processor core its audio took lately",
+                                );
                             }
                             let late = s.late();
                             if late > 0 {
@@ -2851,7 +2876,7 @@ fn presets_menu(ui: &mut egui::Ui, s: &mut FxSlot, dir: &Path) -> Option<String>
     error
 }
 
-fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
+pub(crate) fn plugin_params(ui: &mut egui::Ui, id: u64, plugin: &Plugin) {
     const MOST: usize = 64;
     let list = plugin.params();
     if list.is_empty() {

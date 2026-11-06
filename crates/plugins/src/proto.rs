@@ -139,6 +139,10 @@ pub struct Status {
     /// The user changed something in the plugin's editor.
     pub edited: bool,
     pub editor_open: bool,
+    /// Nanoseconds spent running the plugin's audio since it was made,
+    /// counted where it runs: filled in by a helper process. A plugin
+    /// in the app leaves it 0, and the app times its audio itself.
+    pub busy_ns: u64,
 }
 
 /// One of a plugin's own program (preset) lists.
@@ -162,6 +166,9 @@ impl W {
         self.u8(v as u8);
     }
     fn u32(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn u64(&mut self, v: u64) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
     fn i32(&mut self, v: i32) {
@@ -313,6 +320,9 @@ impl R<'_> {
     }
     fn u32(&mut self) -> Res<u32> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn u64(&mut self) -> Res<u64> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
     fn i32(&mut self) -> Res<i32> {
         Ok(i32::from_le_bytes(self.take(4)?.try_into().unwrap()))
@@ -693,6 +703,7 @@ impl Reply {
                 w.bool(s.reload);
                 w.bool(s.edited);
                 w.bool(s.editor_open);
+                w.u64(s.busy_ns);
             }
             Reply::Programs(lists) => {
                 w.u8(9);
@@ -748,6 +759,7 @@ impl Reply {
                 reload: r.bool()?,
                 edited: r.bool()?,
                 editor_open: r.bool()?,
+                busy_ns: r.u64()?,
             }),
             9 => {
                 let n = r.u32()?;
@@ -959,6 +971,7 @@ mod tests {
                 reload: false,
                 edited: false,
                 editor_open: true,
+                busy_ns: 12_345_678_901,
             }),
             Reply::ParamId(Some(4)),
             Reply::ParamId(None),

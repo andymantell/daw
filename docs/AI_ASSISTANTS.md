@@ -257,6 +257,18 @@ assistant finds them for itself. In outline:
 - **Plugins on this computer:** `get_plugins` and `manage_plugins`
   (rescan, check, try a failed one again, offer or hide, where each
   runs, how many plugin windows may be open).
+- **Plugin windows:** `get_plugin_windows` (the track shown, a tab
+  for each of its plugins with whether its own window is open and the
+  share of a processor core its audio takes, and every plugin the
+  project uses) and `set_plugin_windows` (open them, follow the
+  selected track or not, show a track, choose a tab, open or close the
+  plugin's own window, show the project's plugins). The commands
+  `plugin-windows`, `plugin-windows-follow`, `next-plugin-tab`,
+  `previous-plugin-tab` and `project-plugins` do the same from keys.
+- **Macros:** `get_macros` and `edit_macro` (make a macro of several
+  commands by id, rename it, change or add steps, delete it). Macros
+  are the commands `macro-1` to `macro-9`, so `run_command` runs one
+  and `edit_keys` gives it a key.
 - **Practice:** `set_practice` (speed, transpose, fine pitch, the
   metronome, count-in, the tempo trainer, and measuring how far a
   track is from concert pitch).

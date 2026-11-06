@@ -30,6 +30,8 @@ pub(crate) enum Item {
     Suggest,
     /// The saved layouts, and Save layout….
     Layouts,
+    /// The macros there are, and Macros….
+    Macros,
 }
 
 use Item::{Check, Gap, Pane, Run, Sub};
@@ -51,6 +53,15 @@ const ADD_INSTRUMENT: &[Cmd] = &[
     Cmd::AddInstrument(11),
     Cmd::AddInstrument(12),
     Cmd::AddInstrument(13),
+];
+
+/// The plugin windows' commands.
+const PLUGIN_WINDOWS: &[Cmd] = &[
+    Cmd::PluginWindows,
+    Cmd::PluginWindowsFollow,
+    Cmd::NextPluginTab,
+    Cmd::PrevPluginTab,
+    Cmd::ProjectPlugins,
 ];
 
 const NOTE_EFFECTS: &[Cmd] = &[
@@ -129,6 +140,8 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Run(Cmd::VolumeLines),
             Run(Cmd::GroupEdit),
             Run(Cmd::EditGroups),
+            Gap,
+            Item::Macros,
         ],
     ),
     (
@@ -343,6 +356,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Pane(Cmd::Video),
             Pane(Cmd::InstrumentWindow),
             Pane(Cmd::EffectsPane),
+            Sub("Plugin windows", PLUGIN_WINDOWS),
             Run(Cmd::Meters),
             Run(Cmd::FullSize),
             Gap,
@@ -411,6 +425,7 @@ pub(crate) fn menu_of(cmd: Cmd) -> Option<&'static str> {
                 Sub(_, cs) => cs.contains(&cmd),
                 Item::Suggest => matches!(cmd, Cmd::SuggestEdits | Cmd::StopSuggesting),
                 Item::Layouts => matches!(cmd, Cmd::Layout(_) | Cmd::SaveLayout),
+                Item::Macros => matches!(cmd, Cmd::Macro(_) | Cmd::EditMacros),
                 Gap => false,
             })
             .then_some(*title)
@@ -445,6 +460,13 @@ impl App {
                     self.menu_item(ui, Cmd::Layout(n as u8));
                 }
                 self.menu_item(ui, Cmd::SaveLayout);
+            }
+            Item::Macros => {
+                let made: Vec<usize> = self.commands.macros.iter().map(|(n, _)| n).collect();
+                for n in made {
+                    self.menu_item(ui, crate::macros::cmd(n));
+                }
+                self.menu_item(ui, Cmd::EditMacros);
             }
         }
     }
@@ -497,6 +519,8 @@ impl App {
             Cmd::Timecode => self.timecode.shown,
             Cmd::PaneWindows => self.workspace.windows_allowed,
             Cmd::SimpleMode => self.simple.on,
+            Cmd::PluginWindows => self.plugin_windows.open,
+            Cmd::PluginWindowsFollow => self.plugin_windows.follow,
             _ => return None,
         })
     }
@@ -519,6 +543,7 @@ mod tests {
                     Sub(_, cs) => cs.to_vec(),
                     Item::Suggest => vec![Cmd::SuggestEdits, Cmd::StopSuggesting],
                     Item::Layouts => vec![Cmd::SaveLayout],
+                    Item::Macros => vec![Cmd::EditMacros],
                     Gap => vec![],
                 };
                 for c in cmds {

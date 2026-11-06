@@ -403,7 +403,7 @@ fn zone_module(
             if let Some(r) = sound_menu(ui, ("zone-sound", salt, *chosen), &current)
                 && let Some(l) = read_sound(&r, cx, shown)
             {
-                b.set_sample(&format!("zone{chosen}"), Some(l));
+                b.set_zone_sound(*chosen, l);
                 renew = true;
             }
             // ai: edit_instrument.remove_zone

@@ -21,7 +21,7 @@ type Done = Result<(Value, Option<String>), String>;
 
 const INSTRUMENT: &str = "The instrument: synth (the simple synth), one that comes with the \
                           app by id (poly-synth, sampler, drum-sampler, drum-machine, slicer, patch-twenty, oh-one, \
-                          model-mono, june, eighty, oracle, blue-wave, lucky-seven), or a plugin instrument by name (list_effect_kinds gives them).";
+                          acid-three, model-mono, june, eighty, oracle, blue-wave, lucky-seven), or a plugin instrument by name (list_effect_kinds gives them).";
 
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
@@ -29,7 +29,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "An instrument track's instrument, or its layers (each with its \
                       instrument, level, pan, note and velocity ranges, transpose and \
                       effects), the sounds a synth makes from its settings (each a name \
-                      and the settings to give set_instrument), the effects on a drum \
+                      and its settings, to give set_instrument as sound) and a drum \
+                      machine's kits the same way, the effects on a drum \
                       machine's pads, and the instrument's \
                       extra outputs with the bus each goes to; for a Lucky Seven with a \
                       sound bank loaded (load-synth-bank), the bank's sounds with their \
@@ -57,14 +58,18 @@ pub(crate) const TOOLS: &[Tool] = &[
                       For the track, its layers go (with their effects); \"none\" plays no \
                       instrument, sending its notes only to a MIDI output. With settings \
                       and no instrument, the instrument stays and only its settings change; \
-                      with both, the new instrument starts from them. All or none: a key \
-                      it doesn't have changes nothing.",
+                      with both, the new instrument starts from them. A sound (one of \
+                      those get_instrument lists: a synth's sounds, a drum machine's \
+                      kits) sets every setting as the instrument's Sound menu does, back \
+                      to its default and then the sound's own; settings given with it \
+                      go on top. All or none: a key it doesn't have changes nothing.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
                 "track": {"type": "string"},
                 "layer": {"type": "string", "description": "A layer's id, to change only that layer's instrument."},
                 "instrument": {"type": "string", "description": INSTRUMENT},
+                "sound": {"type": "string", "description": "One of the instrument's sounds by name, as get_instrument lists them."},
                 "settings": {"type": "object", "additionalProperties": {"type": "number"},
                              "description": "The instrument's settings by key (the part after instrument. in list_parameters, or as get_instrument with settings lists a layer's); each kept in its range."}
             }, "required": ["track"]})
@@ -117,6 +122,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "add": {"type": "boolean", "description": "Adds a layer (the simple synth unless instrument says)."},
                 "remove": {"type": "boolean", "description": "Removes the layer and its effects."},
                 "instrument": {"type": "string", "description": INSTRUMENT},
+                "sound": {"type": "string", "description": "One of the instrument's sounds by name, as get_instrument lists them."},
                 "index": {"type": "integer", "description": "Its place among the layers, from 0."},
                 "on": {"type": "boolean"},
                 "gain_db": {"type": "number", "description": "-60 to 12."},
@@ -469,8 +475,9 @@ impl App {
         let key = text(args, "track", "the track's id")?;
         let which = args["instrument"].as_str();
         let settings = args["settings"].as_object();
-        if which.is_none() && settings.is_none() {
-            return Err("Give the instrument, its settings, or both.".into());
+        let sound = args["sound"].as_str();
+        if which.is_none() && settings.is_none() && sound.is_none() {
+            return Err("Give the instrument, one of its sounds, its settings, or more.".into());
         }
         let ti = self.note_track(key)?;
         let layer = args["layer"].as_str();
@@ -492,9 +499,11 @@ impl App {
         };
         // The settings are checked against the instrument they go on
         // before anything changes.
-        let settings = match settings {
-            None => Vec::new(),
-            Some(m) => {
+        let settings = match (settings, sound) {
+            (None, None) => Vec::new(),
+            (m, sound) => {
+                let empty = serde_json::Map::new();
+                let m = m.unwrap_or(&empty);
                 let t = &self.tracks[ti];
                 let on = match (&slot, n) {
                     (Some(s), _) => s.as_ref(),
@@ -512,6 +521,33 @@ impl App {
                 };
                 let have = on.settings();
                 let mut out = Vec::new();
+                if let Some(name) = sound {
+                    // As the Sound menu does: every setting back to its
+                    // default, then the sound's own.
+                    let kind = (on.builtin_ref())
+                        .map(daw_instruments::Builtin::kind)
+                        .ok_or_else(|| format!("{} has no sounds made in code.", on.name))?;
+                    let b = daw_instruments::Builtin::new(kind);
+                    b.set_sound(name).ok_or_else(|| {
+                        let names: Vec<&str> = kind.sounds().iter().map(|s| s.name).collect();
+                        match names.is_empty() {
+                            true => format!("{} has no sounds made in code.", on.name),
+                            false => format!(
+                                "{} has no sound {name}; its sounds are {}.",
+                                on.name,
+                                names.join(", ")
+                            ),
+                        }
+                    })?;
+                    let p = b.params();
+                    // Only the settings it has now: a sampler's zones
+                    // aren't the new instrument's.
+                    for (i, x) in p.list().iter().enumerate() {
+                        if have.iter().any(|h| h.0 == x.key) {
+                            out.push((x.key.clone(), p.get(i)));
+                        }
+                    }
+                }
                 for (k, v) in m {
                     let (_, _, _, min, max, _) = (have.iter())
                         .find(|x| &x.0 == k)
@@ -519,6 +555,7 @@ impl App {
                     let v = (v.as_f64())
                         .filter(|v| v.is_finite())
                         .ok_or_else(|| format!("The setting {k} isn't a number."))?;
+                    out.retain(|(x, _)| x != k);
                     out.push((k.clone(), v.clamp(*min, *max)));
                 }
                 out
@@ -711,6 +748,7 @@ impl App {
                             .find(|x| &x.0 == k)
                             .ok_or_else(|| format!("The layer's instrument has no setting {k}."))?;
                         let v = v.as_f64().ok_or("Settings are numbers.")?;
+                        out.retain(|(x, _)| x != k);
                         out.push((k.clone(), v.clamp(*min, *max)));
                     }
                     out
@@ -1530,5 +1568,137 @@ mod big_rusty {
                 .unwrap();
             std::fs::copy(r["file"].as_str().unwrap(), out).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod starter_sounds {
+    use serde_json::{Value, json};
+
+    use crate::agent::driver::Driver;
+
+    fn id(v: Value, key: &str) -> String {
+        v[key].as_str().unwrap().to_string()
+    }
+
+    fn instrument(d: &mut Driver, t: &str) -> Value {
+        d.call("get_instrument", json!({"track": t})).unwrap()
+    }
+
+    /// Every built-in instrument's own sounds, a drum machine's kits
+    /// among them, are listed by get_instrument and chosen by name with
+    /// set_instrument, as the Sound menu chooses them.
+    #[test]
+    fn every_starter_sound_is_listed_and_chosen_by_name() {
+        let mut d = Driver::new();
+        d.access = crate::agent::Access::Edit;
+        for k in daw_instruments::Kind::ALL {
+            let want = k.sounds();
+            if want.is_empty() {
+                continue;
+            }
+            let t = id(
+                d.call("add_track", json!({"kind": k.id()})).unwrap(),
+                "track",
+            );
+            let got = instrument(&mut d, &t);
+            let names: Vec<&str> = (got["instrument"]["sounds"].as_array())
+                .map(|a| a.iter().filter_map(|s| s["name"].as_str()).collect())
+                .unwrap_or_default();
+            let want_names: Vec<&str> = want.iter().map(|s| s.name).collect();
+            assert_eq!(names, want_names, "{}", k.id());
+            for s in &want {
+                d.call("set_instrument", json!({"track": t, "sound": s.name}))
+                    .unwrap();
+                let now = instrument(&mut d, &t);
+                assert_eq!(now["sound"], s.name, "{} {}", k.id(), s.name);
+            }
+        }
+    }
+
+    #[test]
+    fn a_drum_machine_opens_on_its_standard_kit_and_changes_kit() {
+        let mut d = Driver::new();
+        d.access = crate::agent::Access::Edit;
+        let t = id(
+            d.call("add_track", json!({"kind": "drum-machine"}))
+                .unwrap(),
+            "track",
+        );
+        assert_eq!(instrument(&mut d, &t)["sound"], "Standard kit");
+        // A kit with a setting changed on top.
+        d.call(
+            "set_instrument",
+            json!({"track": t, "sound": "Deep electronic kit",
+                   "settings": {"pad0.level": -3.0}}),
+        )
+        .unwrap();
+        let p = d
+            .call("list_parameters", json!({"track": t}))
+            .unwrap()
+            .to_string();
+        assert!(p.contains("pad0.level"), "{p}");
+        let now = instrument(&mut d, &t);
+        assert!(now["sound"].is_null(), "no longer the kit as it was: {now}");
+        let e = d
+            .call("set_instrument", json!({"track": t, "sound": "Kazoo kit"}))
+            .unwrap_err();
+        assert!(e.contains("Lo-fi kit"), "{e}");
+        d.command("undo");
+        assert_eq!(instrument(&mut d, &t)["sound"], "Standard kit");
+        // The Patch Twenty's four sounds keep their names.
+        let p = id(
+            d.call("add_track", json!({"kind": "patch-twenty"}))
+                .unwrap(),
+            "track",
+        );
+        d.call(
+            "set_instrument",
+            json!({"track": p, "sound": "Patch Twenty bass"}),
+        )
+        .unwrap();
+        assert_eq!(instrument(&mut d, &p)["sound"], "Patch Twenty bass");
+    }
+
+    /// The sounds made in code are listed for set_sound, and one in a
+    /// sampler zone plays at the note it was made at.
+    #[test]
+    fn a_made_sound_in_a_sampler_zone_plays_at_its_own_note() {
+        let mut d = Driver::new();
+        d.access = crate::agent::Access::Edit;
+        let list = d.call("list_made_sounds", json!({})).unwrap();
+        let sounds = list["sounds"].as_array().unwrap();
+        assert!(sounds.len() >= 30, "{list}");
+        let find = |r: &str| sounds.iter().find(|s| s["sound"] == r).unwrap().clone();
+        assert_eq!(find("made:round_bass")["root"], "C2");
+        assert_eq!(find("made:round_bass")["kind"], "basses");
+        assert_eq!(find("made:warm_pad")["held"], true);
+        assert!(find("made:loop_four")["root"].is_null());
+        let t = id(
+            d.call("add_track", json!({"kind": "sampler"})).unwrap(),
+            "track",
+        );
+        d.call(
+            "set_sound",
+            json!({"track": t, "slot": "zone0", "sound": "made:warm_pad"}),
+        )
+        .unwrap();
+        d.call(
+            "set_sound",
+            json!({"track": t, "slot": "zone1", "sound": "made:round_bass"}),
+        )
+        .unwrap();
+        let app = d.app();
+        let b = (app.tracks.iter().find(|x| x.key == t))
+            .and_then(|x| x.instrument.as_ref())
+            .and_then(|s| s.builtin_ref())
+            .unwrap();
+        let p = b.params();
+        assert_eq!(p.get_key("zone0.root"), Some(60.0));
+        assert_eq!(p.get_key("zone0.loop"), Some(1.0));
+        assert!(p.get_key("zone0.loop_start").unwrap() > 0.0);
+        assert_eq!(p.get_key("zone1.root"), Some(36.0));
+        assert_eq!(p.get_key("zone1.loop"), Some(0.0));
+        assert!(b.sample("zone1").and_then(|s| s.sample.as_ref()).is_some());
     }
 }

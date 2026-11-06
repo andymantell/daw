@@ -175,8 +175,11 @@ pub(crate) const TOOLS: &[Tool] = &[
                       instrument.ccN, its articulation instrument.keyswitch; \
                       get_instrument describes it). The sound \
                       is a full path to a sound file (wav, flac, mp3, ogg, opus, aiff, \
-                      m4a), or one the app makes: made:keys, made:pluck, made:kick, \
-                      made:snare, made:hat, made:loop; empty to clear the slot.",
+                      m4a), or one the app makes, made: and its id, as \
+                      list_made_sounds lists them (made:keys, made:round_bass, \
+                      made:warm_pad, made:kick, made:loop and more; one in a sampler \
+                      zone also sets the zone's root note, and its loop if it is held); \
+                      empty to clear the slot.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -187,6 +190,17 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "sound": {"type": "string"}
             }, "required": ["track", "slot", "sound"]})
         },
+    },
+    Tool {
+        name: "list_made_sounds",
+        description: "The sounds the app makes in code for the sampler's zones, the \
+                      drum sampler, a drum machine pad's layers and the loop slicer, \
+                      to give set_sound (or edit_instrument's loop): each with its \
+                      reference (made: and its id), name, kind (keys, basses, pads, \
+                      plucks, drums or loops), the note it plays at if it has a pitch, \
+                      and whether it is held (it loops while the key is down).",
+        access: Access::Read,
+        schema: || json!({"type": "object", "properties": {}}),
     },
     Tool {
         name: "remove_effect",
@@ -237,6 +251,23 @@ fn effects_at<'a>(p: &'a mut Project, key: &str) -> Result<&'a mut Vec<Effect>, 
 }
 
 /// Moves item `from` to `to` (clamped), keeping the rest in order.
+/// The sounds the app makes, for list_made_sounds.
+pub(crate) fn made_sounds() -> Value {
+    use daw_instruments::made;
+    let list: Vec<Value> = (made::SOUNDS.iter())
+        .map(|m| {
+            json!({
+                "sound": made::reference(m.id),
+                "name": m.name,
+                "kind": m.group.name().to_lowercase(),
+                "root": m.root.map(|r| daw_instruments::params::note_name(r as i32)),
+                "held": m.looped.is_some(),
+            })
+        })
+        .collect();
+    json!({"sounds": list})
+}
+
 fn move_to<T>(v: &mut Vec<T>, from: usize, to: i64) {
     let t = v.remove(from);
     let to = (to.max(0) as usize).min(v.len());
@@ -461,6 +492,15 @@ impl App {
             e.samples.retain(|(k, _)| *k != slot);
             if !sound.is_empty() {
                 e.samples.push((slot.clone(), sound.clone()));
+            }
+            if kind == daw_instruments::Kind::Sampler && slot.starts_with("zone") {
+                // A sound made here plays at the note it was made at,
+                // and a held one loops.
+                for (k, v) in daw_instruments::made::zone_settings(&sound) {
+                    let k = format!("{slot}.{k}");
+                    e.params.retain(|(x, _)| *x != k);
+                    e.params.push((k, v));
+                }
             }
             if let Some((pad, l)) = pad_layer(&slot)
                 && !sound.is_empty()

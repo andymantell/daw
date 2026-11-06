@@ -115,7 +115,11 @@ assistant finds them for itself. In outline:
   settings too, as `instrument.<key>`), `set_parameters` (many settings,
   on one or many tracks, in one call and one undo step; all or none, so
   an interruption can't leave a voicing half-set), `set_sound` (a sound file on a
-  drum pad, a sampler zone or the drum sampler), `edit_control_group`,
+  drum pad, a sampler zone or the drum sampler, or one the app makes in
+  code, which `list_made_sounds` lists: keys, basses, pads, plucks,
+  drums and loops, each with the note it plays at; one in a sampler
+  zone sets the zone's root note, and its loop if it is held),
+  `edit_control_group`,
   `add_effect`,
   `edit_effect`, `remove_effect`, `add_preset`, `save_preset`,
   `switch_version`. `add_effect` and `edit_effect` place an effect in a
@@ -132,8 +136,10 @@ assistant finds them for itself. In outline:
   `get_project` shows it as `master`. Exported stems go through it.
 - **Instruments and layers:** `set_instrument` (a built-in or plugin
   instrument, for a track or one layer, and/or a `settings` dict for it,
-  as `edit_layer` takes for a layer; `get_instrument` lists the sounds a
-  synth makes in code, each with the settings to give here), an SFZ sample library on the
+  as `edit_layer` takes for a layer, and/or one of its `sound`s by name,
+  which sets every setting as the Sound menu does; `get_instrument` lists
+  the sounds each built-in instrument makes in code, a drum machine's
+  kits among them, each with its settings), an SFZ sample library on the
   sampler (`file_command` with `load-sfz`, or `set_sound` with the
   slot `sfz`; `get_instrument` then lists its keys, articulations and
   controls, and each control, such as a mic level, is a setting,

@@ -1086,6 +1086,7 @@ impl App {
             "get_history" => Ok(self.history_value(args["runs"].as_u64().unwrap_or(20) as usize)),
             "get_exports" => Ok(self.exports_value()),
             "list_effect_kinds" => Ok(self.effect_kinds_value()),
+            "list_made_sounds" => Ok(crate::agent_edit::made_sounds()),
             "get_comments" => Ok(self.comments_value()),
             "list_projects" => Ok(self.projects_value()),
             "get_automation" => self.automation_value(args["track"].as_str()),

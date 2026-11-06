@@ -459,6 +459,28 @@ mod tests {
         );
     }
 
+    /// The Guitar lesson's guitar tracks come with a light EQ and a
+    /// little reverb, which an assistant reads like any other effects.
+    #[test]
+    fn the_guitar_lesson_comes_with_eq_and_reverb_on_its_guitars() {
+        let mut d = Driver::new();
+        d.call("new_project", json!({"template": "Guitar lesson"}))
+            .unwrap();
+        let p = d.project();
+        let tracks = p["tracks"].as_array().unwrap();
+        for (i, want) in [(0, true), (1, true), (2, false)] {
+            let t = tracks[i]["id"].as_str().unwrap();
+            let fx = d.call("get_effects", json!({"track": t})).unwrap();
+            let kinds: Vec<&str> = (fx["effects"].as_array().unwrap().iter())
+                .filter_map(|e| e["builtin"].as_str())
+                .collect();
+            match want {
+                true => assert_eq!(kinds, ["eq", "reverb"], "{fx}"),
+                false => assert!(kinds.is_empty(), "{fx}"),
+            }
+        }
+    }
+
     #[test]
     fn unsaved_work_is_never_thrown_away() {
         let mut d = Driver::new();

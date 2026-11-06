@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use crate::{Marker, Project, ProjectDoc, Track, new_id, new_peer};
+use crate::{Effect, Marker, Project, ProjectDoc, Track, new_id, new_peer};
 
 /// What saved templates' files are called: `Guitar lesson.dawtemplate`.
 pub const TEMPLATE_EXTENSION: &str = "dawtemplate";
@@ -97,6 +97,34 @@ pub fn template_from_bytes(bytes: &[u8]) -> Result<Project, String> {
 /// The templates that come with the app, empty project first.
 pub fn built_in_templates() -> Vec<Template> {
     let track = |name: &str| Track::new(String::new(), name.into());
+    // A built-in effect with the settings it changes from its defaults.
+    let effect = |builtin: &str, name: &str, set: &[(&str, f64)]| Effect {
+        id: new_id(),
+        name: name.into(),
+        builtin: builtin.into(),
+        params: set.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+        ..Effect::default()
+    };
+    // The guitar tracks get a light EQ (the rumble below the guitar
+    // off, a touch of presence, the fizz above it softened) and a
+    // little reverb, so a dry guitar sounds like it is in a room. The
+    // backing track, a finished mix, is left as it is.
+    let guitar = |name: &str| {
+        let mut t = track(name);
+        t.effects = vec![
+            effect(
+                "eq",
+                "EQ",
+                &[
+                    ("high_cut", 12_000.0),
+                    ("high_gain", 1.5),
+                    ("low_cut", 80.0),
+                ],
+            ),
+            effect("reverb", "Reverb", &[("decay", 1.2), ("mix", 12.0)]),
+        ];
+        t
+    };
     let marker = |bar: i64, name: &str| Marker {
         id: name.to_lowercase(),
         bar,
@@ -106,7 +134,7 @@ pub fn built_in_templates() -> Vec<Template> {
     let lesson = Project {
         tempo_bpm: 90.0,
         loop_bars: (5, 9),
-        tracks: vec![track("Teacher"), track("Student"), track("Backing track")],
+        tracks: vec![guitar("Teacher"), guitar("Student"), track("Backing track")],
         markers: vec![
             marker(1, "Warm-up"),
             marker(5, "Song"),
@@ -124,7 +152,8 @@ pub fn built_in_templates() -> Vec<Template> {
         Template {
             name: "Guitar lesson".into(),
             about: "Teacher, student and backing tracks, sections for the lesson, \
-                    and notes to fill in."
+                    and notes to fill in. The guitar tracks have a light EQ and a \
+                    little reverb."
                 .into(),
             project: lesson,
         },
@@ -265,6 +294,13 @@ mod tests {
         assert_eq!(all[0].project, Project::default());
         let names: Vec<_> = all.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["Empty", "Guitar lesson"]);
+        // The lesson's guitar tracks have a light EQ and a little reverb.
+        let lesson = &all[1].project;
+        for t in &lesson.tracks[..2] {
+            let fx: Vec<&str> = t.effects.iter().map(|e| e.builtin.as_str()).collect();
+            assert_eq!(fx, ["eq", "reverb"], "{}", t.name);
+        }
+        assert!(lesson.tracks[2].effects.is_empty());
         for t in &all {
             let p = t.project.from_template(48_000);
             assert!(p.markers.windows(2).all(|w| w[0].bar < w[1].bar));

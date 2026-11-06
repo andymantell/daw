@@ -58,8 +58,21 @@ Screen readers still hear the name plate as the unit's name in capitals.
 
 ## Sign-off items
 
-Left for the owner's call after the review of the renders: the wooden
-cheeks are only as wide as the mounting ears; the header row (Sound,
-Save, Compare, Notes in) is the kit's same row on every unit; and all
-readouts share one numerals face, where the digital units could show
-theirs in small liquid-crystal boxes.
+Follow-up (the three touches left after the first review):
+
+- **Wider wooden cheeks**: units with wood (Model Mono, Eighty) now
+  have cheeks 22 pt wide inside the metal mounting ears, with a
+  wandering grain and a shade at each join; the panel starts inside
+  them.
+- **A header row per unit**: the analogue units engrave their header
+  (small capitals, a cut rule under the row); the later and digital
+  units (Acid Three, Blue Wave, Lucky Seven) set it on a membrane strip
+  a shade off the plate. On every unit with a character the sound
+  playing shows in a small window in that unit's screen style (lamp,
+  scope or liquid crystal). The plain kit keeps its own row.
+- **Liquid-crystal readouts**: on units with a liquid-crystal screen
+  (Blue Wave, Lucky Seven) the value under each knob sits in a small
+  liquid-crystal box.
+
+`get_instrument`'s `instrument.character` also reports `cheek_width`,
+`header` (kit, engraved or membrane) and `readouts` (lcd or plain).

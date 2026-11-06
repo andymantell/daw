@@ -36,7 +36,7 @@ use eframe::egui::{
 };
 
 use crate::character::{
-    self, Band, Character, KnobStyle, Lettering, ModuleStyle, ScreenStyle, SwitchStyle,
+    self, Band, Character, HeaderStyle, KnobStyle, Lettering, ModuleStyle, ScreenStyle, SwitchStyle,
 };
 use crate::desk::{asked_value, key_steps, wheel_steps};
 use crate::icons::{Icon, IconButton};
@@ -402,7 +402,30 @@ impl<'a> Knob<'a> {
             small.clone(),
             c.text,
         );
-        if !self.readout.is_empty() {
+        if !self.readout.is_empty() && ch.lcd_readouts() {
+            // A small liquid-crystal box, as on a digital unit.
+            let ink = screen_ink(&ch, c);
+            let galley = ui.fonts_mut(|f| {
+                f.layout_no_wrap(
+                    self.readout.clone(),
+                    look.numerals_font_at(look.small * 0.95),
+                    ink,
+                )
+            });
+            let w = (galley.size().x + 8.0).max(28.0).min(cell.width());
+            let r = Rect::from_center_size(
+                pos2(cell.center().x, y + LINE + (LINE - 1.0) / 2.0),
+                vec2(w, LINE - 1.0),
+            );
+            p.rect(
+                r,
+                CornerRadius::same(1),
+                c.meter_bg,
+                Stroke::new(1.0, c.plate_shadow),
+                StrokeKind::Inside,
+            );
+            p.galley(r.center() - galley.size() / 2.0, galley, ink);
+        } else if !self.readout.is_empty() {
             p.text(
                 pos2(cell.center().x, y + LINE),
                 egui::Align2::CENTER_TOP,
@@ -1219,8 +1242,16 @@ pub(crate) fn name_plate(ui: &mut Ui, name: &str, look: &theme::Look, size: f32)
 pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Option<HeaderAction> {
     let look = theme::look(ui.ctx());
     let c = look.c();
+    let ch = character::current(ui.ctx());
+    let style = if ch.plain {
+        HeaderStyle::Kit
+    } else {
+        ch.header
+    };
+    // The membrane strip goes under the row once the row is laid out.
+    let behind = ui.painter().add(Shape::Noop);
     let mut action = None;
-    ui.allocate_ui_with_layout(
+    let row = ui.allocate_ui_with_layout(
         vec2(ui.available_width(), HEADER),
         Layout::left_to_right(Align::Center),
         |ui| {
@@ -1239,7 +1270,7 @@ pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Opt
             });
             if h.has_sounds {
                 ui.add_space(8.0);
-                ui.label(RichText::new("Sound").size(look.small).color(c.text_dim));
+                header_label(ui, "Sound", &look, style);
                 // ai: previous-sound
                 if ui
                     .add(IconButton::new(Icon::Previous, "Previous sound").small())
@@ -1248,7 +1279,7 @@ pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Opt
                     action = Some(HeaderAction::Previous);
                 }
                 let name = h.sound.clone().unwrap_or_else(|| "Edited".into());
-                ui.label(RichText::new(name).strong());
+                sound_window(ui, &name, &look, &ch, style);
                 // ai: next-sound
                 if ui
                     .add(IconButton::new(Icon::Next, "Next sound").small())
@@ -1282,7 +1313,113 @@ pub(crate) fn header(ui: &mut Ui, h: Header, right: impl FnOnce(&mut Ui)) -> Opt
             });
         },
     );
+    let row = Rect::from_min_size(
+        row.response.rect.min,
+        vec2(row.response.rect.width(), HEADER),
+    );
+    let p = ui.painter();
+    match style {
+        HeaderStyle::Kit => {}
+        HeaderStyle::Engraved => {
+            // A rule cut under the row: a dark line, a light one under it.
+            let y = row.bottom() - 1.5;
+            p.line_segment(
+                [pos2(row.left() + 4.0, y), pos2(row.right() - 4.0, y)],
+                Stroke::new(1.0, theme::mix(c.text_dim, ch.plate(&look), 0.45)),
+            );
+            p.line_segment(
+                [
+                    pos2(row.left() + 4.0, y + 1.0),
+                    pos2(row.right() - 4.0, y + 1.0),
+                ],
+                Stroke::new(1.0, c.plate_shadow),
+            );
+        }
+        HeaderStyle::Membrane => {
+            let plate = ch.plate(&look);
+            let fill = if theme::is_dark(plate) {
+                theme::mix(plate, egui::Color32::BLACK, 0.35)
+            } else {
+                theme::mix(plate, egui::Color32::BLACK, 0.12)
+            };
+            let strip = row.shrink2(vec2(0.0, 1.0));
+            let radius = CornerRadius::same(plate_radius(&look).min(3.0) as u8);
+            p.set(
+                behind,
+                Shape::Vec(vec![
+                    Shape::rect_filled(strip, radius, fill),
+                    Shape::rect_stroke(
+                        strip,
+                        radius,
+                        Stroke::new(1.0, theme::mix(c.text_dim, plate, 0.6)),
+                        StrokeKind::Inside,
+                    ),
+                ]),
+            );
+        }
+    }
     action
+}
+
+/// A small label in a header, lettered in the header's style.
+fn header_label(ui: &mut Ui, text: &str, look: &theme::Look, style: HeaderStyle) {
+    let c = look.c();
+    let shown = match style {
+        HeaderStyle::Kit => RichText::new(text).size(look.small),
+        HeaderStyle::Engraved | HeaderStyle::Membrane => {
+            RichText::new(text.to_uppercase()).size(look.small * 0.9)
+        }
+    };
+    ui.add(egui::Label::new(shown.color(c.text_dim)))
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+}
+
+/// The sound playing, in a header: plain strong text on the kit, else a
+/// small window in the unit's screen style.
+fn sound_window(ui: &mut Ui, name: &str, look: &theme::Look, ch: &Character, style: HeaderStyle) {
+    if style == HeaderStyle::Kit {
+        ui.label(RichText::new(name).strong());
+        return;
+    }
+    let c = look.c();
+    let ink = screen_ink(ch, c);
+    let galley = ui
+        .fonts_mut(|f| f.layout_no_wrap(name.to_string(), look.numerals_font_at(look.small), ink));
+    let size = vec2((galley.size().x + 16.0).max(120.0), 22.0);
+    let (rect, r) = ui.allocate_exact_size(size, Sense::hover());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, name));
+    let p = ui.painter();
+    let radius = CornerRadius::same(plate_radius(look).min(3.0) as u8);
+    match ch.screen {
+        ScreenStyle::Lcd => {
+            p.rect(
+                rect,
+                radius,
+                c.meter_bg,
+                Stroke::new(2.0, c.plate_shadow),
+                StrokeKind::Inside,
+            );
+        }
+        ScreenStyle::Scope | ScreenStyle::Lamp => {
+            p.rect(
+                rect,
+                radius,
+                c.meter_bg,
+                Stroke::new(1.0, c.line),
+                StrokeKind::Inside,
+            );
+        }
+    }
+    let at = pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0);
+    if ch.screen == ScreenStyle::Lamp {
+        // A glow behind the lit figures.
+        p.rect_filled(
+            Rect::from_min_size(at, galley.size()).expand2(vec2(3.0, 0.0)),
+            CornerRadius::same(2),
+            ink.gamma_multiply(0.1),
+        );
+    }
+    p.galley(at, galley, ink);
 }
 
 // ----------------------------------------------------------------------
@@ -1476,9 +1613,13 @@ impl Rack {
         // The plate is painted once the contents say how tall it is.
         let behind = ui.painter().add(Shape::Noop);
         let surface = ui.painter().add(Shape::Noop);
+        let side = character::current(ui.ctx()).side(EAR);
         let content = Rect::from_min_size(
-            pos2(left + EAR, top + 6.0),
-            vec2(width - 2.0 * EAR, fixed.map_or(f32::INFINITY, |h| h - 12.0)),
+            pos2(left + side, top + 6.0),
+            vec2(
+                width - 2.0 * side,
+                fixed.map_or(f32::INFINITY, |h| h - 12.0),
+            ),
         );
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -1569,9 +1710,10 @@ impl Rack {
         let width = self.inner.width() - 2.0 * PLATE_GAP;
         let behind = ui.painter().add(Shape::Noop);
         let surface = ui.painter().add(Shape::Noop);
+        let side = character::current(ui.ctx()).side(EAR);
         let content = Rect::from_min_size(
-            pos2(self.inner.left() + PLATE_GAP + EAR, top),
-            vec2(width - 2.0 * EAR, STRIP),
+            pos2(self.inner.left() + PLATE_GAP + side, top),
+            vec2(width - 2.0 * side, STRIP),
         );
         let mut child = ui.new_child(
             egui::UiBuilder::new()
@@ -1665,25 +1807,40 @@ impl Rack {
             }
         }
         if let Some(wood) = ch.cheeks {
-            // Side cheeks the full height of the plate, at each end.
-            for side in [
-                Rect::from_min_size(plate.min, vec2(EAR, plate.height())),
-                Rect::from_min_size(
-                    pos2(plate.right() - EAR, plate.top()),
-                    vec2(EAR, plate.height()),
-                ),
-            ] {
-                top.push(Shape::rect_filled(side, radius, wood));
-                top.push(Shape::rect_filled(side.shrink2(vec2(0.0, 1.0)), 0, wood));
-                // The grain, as a few darker lines down the cheek.
-                let line = Stroke::new(1.0, theme::mix(wood, egui::Color32::BLACK, 0.25));
-                for dx in [4.0, 7.5, 10.5] {
+            // Wooden cheeks the full height of the plate, inside the
+            // mounting ears at each end.
+            let dark = theme::mix(wood, egui::Color32::BLACK, 0.3);
+            let light = theme::mix(wood, egui::Color32::WHITE, 0.12);
+            for left in [plate.left() + EAR, plate.right() - EAR - character::CHEEK] {
+                let side = Rect::from_min_size(
+                    pos2(left, plate.top()),
+                    vec2(character::CHEEK, plate.height()),
+                );
+                top.push(Shape::rect_filled(side, 0, wood));
+                // The grain: lines down the cheek that wander a little,
+                // each its own shade.
+                for (n, dx) in [3.0, 6.5, 9.0, 12.5, 15.0, 18.5].iter().enumerate() {
+                    let seed = theme::hash(n as i32, side.left() as i32 / 50);
+                    let sway = 0.6 + (seed % 7) as f32 * 0.15;
+                    let phase = (seed % 13) as f32;
+                    let points: Vec<Pos2> = (0..=12)
+                        .map(|i| {
+                            let t = i as f32 / 12.0;
+                            let y = side.top() + 1.0 + t * (side.height() - 2.0);
+                            pos2(side.left() + dx + sway * (t * 5.0 + phase).sin(), y)
+                        })
+                        .collect();
+                    let shade = if n % 2 == 0 { dark } else { light };
+                    top.push(Shape::line(
+                        points,
+                        Stroke::new(1.0, shade.gamma_multiply(0.7)),
+                    ));
+                }
+                // A shade where the wood meets the plate and the ear.
+                for x in [side.left(), side.right() - 1.0] {
                     top.push(Shape::line_segment(
-                        [
-                            pos2(side.left() + dx, side.top() + 2.0),
-                            pos2(side.left() + dx, side.bottom() - 2.0),
-                        ],
-                        line,
+                        [pos2(x + 0.5, side.top()), pos2(x + 0.5, side.bottom())],
+                        Stroke::new(1.0, theme::mix(wood, egui::Color32::BLACK, 0.5)),
                     ));
                 }
             }
@@ -1724,8 +1881,8 @@ fn plate_radius(look: &theme::Look) -> f32 {
 /// between the ears.
 fn band(top: &mut Vec<Shape>, plate: Rect, inset: f32, ch: &Character, look: &theme::Look) {
     let accent = ch.accent(look);
-    let left = plate.left() + EAR + 2.0;
-    let right = plate.right() - EAR - 2.0;
+    let left = plate.left() + ch.side(EAR) + 2.0;
+    let right = plate.right() - ch.side(EAR) - 2.0;
     let y = plate.top() + inset + 2.0;
     match ch.band {
         Band::None => {}

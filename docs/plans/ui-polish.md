@@ -249,6 +249,9 @@ menu; the master strip's Meters... becomes an icon.
   with bigger Play, Record, Loop, Click and tempo, taller tracks,
   inspector with volume, pan and sound only, and the Practice panel open.
   It changes nothing when off.
+- Built: the Practice panel (tab `practice`, command `practice-panel`),
+  opened by the simpler mode and shown first in the Lesson layout. See
+  `docs/review-queue/ui-polish-8-practice.md`.
 
 ### 9. A consistency checklist
 

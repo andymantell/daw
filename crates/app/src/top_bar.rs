@@ -39,6 +39,15 @@ pub(crate) enum Options {
     Status,
 }
 
+/// Retuning presets: a name and the semitones to play a recording at.
+pub(crate) const TUNINGS: [(&str, i32); 5] = [
+    ("As recorded", 0),
+    ("Half step down to standard (+1)", 1),
+    ("Whole step down to standard (+2)", 2),
+    ("Standard to half step down (−1)", -1),
+    ("Standard to whole step down (−2)", -2),
+];
+
 impl Options {
     #[cfg(test)]
     pub(crate) const ALL: [Options; 7] = [
@@ -601,9 +610,9 @@ impl App {
     }
 
     /// The loop's bars. They can be dragged on the ruler too.
-    fn loop_options(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn loop_options(&mut self, ui: &mut egui::Ui) {
         let mut changed = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("From bar");
             changed |= ui
                 // ai: set_loop
@@ -709,63 +718,10 @@ impl App {
     /// Speed, transpose, tuning presets and the speed trainer.
     fn speed_options(&mut self, ui: &mut egui::Ui) {
         let before = (self.speed_pct, self.semitones, self.cents);
-        egui::Grid::new("speed options")
-            .num_columns(2)
-            .spacing([16.0, 8.0])
-            .show(ui, |ui| {
-                ui.label("Speed");
-                ui.horizontal(|ui| {
-                    ui.add(
-                        // ai: set_practice
-                        egui::DragValue::new(&mut self.speed_pct)
-                            .range(50.0..=150.0)
-                            .speed(0.5)
-                            .fixed_decimals(0)
-                            .suffix(" %"),
-                    )
-                    .accessible_name("Speed")
-                    .on_hover_text("Slow down or speed up without changing pitch");
-                    for pct in [50.0, 75.0, 100.0] {
-                        if ui
-                            // ai: set_practice
-                            .selectable_label(self.speed_pct == pct, format!("{pct:.0}%"))
-                            .clicked()
-                        {
-                            self.speed_pct = pct;
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label("Transpose");
-                ui.horizontal(|ui| {
-                    ui.add(
-                        // ai: set_practice
-                        egui::DragValue::new(&mut self.semitones)
-                            .range(-12..=12)
-                            .suffix(" st"),
-                    )
-                    .accessible_name("Transpose, semitones")
-                    .on_hover_text("Semitones, without changing speed");
-                    ui.add(
-                        // ai: set_practice
-                        egui::DragValue::new(&mut self.cents)
-                            .range(-50..=50)
-                            .suffix(" ¢"),
-                    )
-                    .accessible_name("Fine pitch, cents")
-                    .on_hover_text("Fine pitch, in cents");
-                });
-                ui.end_row();
-            });
+        self.speed_and_pitch(ui);
         ui.separator();
         ui.label("Retune a recording to play along");
-        for (label, st) in [
-            ("As recorded", 0),
-            ("Half step down to standard (+1)", 1),
-            ("Whole step down to standard (+2)", 2),
-            ("Standard to half step down (−1)", -1),
-            ("Standard to whole step down (−2)", -2),
-        ] {
+        for (label, st) in TUNINGS {
             let on = (self.semitones, self.cents) == (st, 0);
             // ai: set_practice
             if ui.selectable_label(on, label).clicked() {
@@ -776,6 +732,16 @@ impl App {
         self.detect_tuning(ui);
         ui.separator();
         ui.horizontal(|ui| self.trainer.controls(ui));
+        self.back_to_normal(ui);
+        if (self.speed_pct, self.semitones, self.cents) != before {
+            let c = self.practice();
+            self.send(c);
+        }
+    }
+
+    /// Back to normal speed and pitch, when either has changed. The
+    /// caller sends the change.
+    pub(crate) fn back_to_normal(&mut self, ui: &mut egui::Ui) {
         if (self.speed_pct, self.semitones, self.cents) != (100.0, 0, 0)
             && ui
                 // ai: normal-speed
@@ -785,14 +751,69 @@ impl App {
         {
             (self.speed_pct, self.semitones, self.cents) = (100.0, 0, 0);
         }
-        if (self.speed_pct, self.semitones, self.cents) != before {
-            let c = self.practice();
-            self.send(c);
+    }
+
+    /// The speed with its 50, 75 and 100% buttons, and the transpose in
+    /// semitones and cents. The caller sends the change.
+    pub(crate) fn speed_and_pitch(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("speed options")
+            .num_columns(2)
+            .spacing([16.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Speed");
+                ui.horizontal(|ui| self.speed_row(ui));
+                ui.end_row();
+                ui.label("Transpose");
+                ui.horizontal(|ui| self.pitch_row(ui));
+                ui.end_row();
+            });
+    }
+
+    /// The speed and its 50, 75 and 100% buttons, in a row.
+    pub(crate) fn speed_row(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            // ai: set_practice
+            egui::DragValue::new(&mut self.speed_pct)
+                .range(50.0..=150.0)
+                .speed(0.5)
+                .fixed_decimals(0)
+                .suffix(" %"),
+        )
+        .accessible_name("Speed")
+        .on_hover_text("Slow down or speed up without changing pitch");
+        for pct in [50.0, 75.0, 100.0] {
+            if ui
+                // ai: set_practice
+                .selectable_label(self.speed_pct == pct, format!("{pct:.0}%"))
+                .clicked()
+            {
+                self.speed_pct = pct;
+            }
         }
     }
 
+    /// The transpose in semitones and cents, in a row.
+    pub(crate) fn pitch_row(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            // ai: set_practice
+            egui::DragValue::new(&mut self.semitones)
+                .range(-12..=12)
+                .suffix(" st"),
+        )
+        .accessible_name("Transpose, semitones")
+        .on_hover_text("Semitones, without changing speed");
+        ui.add(
+            // ai: set_practice
+            egui::DragValue::new(&mut self.cents)
+                .range(-50..=50)
+                .suffix(" ¢"),
+        )
+        .accessible_name("Fine pitch, cents")
+        .on_hover_text("Fine pitch, in cents");
+    }
+
     /// Measuring how far a recording is from concert pitch.
-    fn detect_tuning(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn detect_tuning(&mut self, ui: &mut egui::Ui) {
         for i in 0..self.tracks.len() {
             let t = &self.tracks[i];
             // The newest clip that plays.

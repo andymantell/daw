@@ -22,6 +22,9 @@ use crate::timeline::{Marker, section};
 
 pub(crate) const DAY_MS: i64 = 86_400_000;
 
+/// Due within this many days counts as this week's.
+const WEEK_DAYS: i64 = 7;
+
 /// Time in seconds, times round the loop and top tempo, added up.
 type Totals = (f64, u64, f64);
 
@@ -160,6 +163,112 @@ impl Lessons {
                 Tab::History => self.history(ui, assignments, &data, cx, &mut out),
             });
         self.data = Some((version, data));
+        out
+    }
+
+    /// This week's assignments, for the practice panel: those this
+    /// user hasn't done or reached the tempo of yet that are due within
+    /// a week, are late, or have no date; soonest first. For the log
+    /// last [refreshed](Self::refresh).
+    pub(crate) fn this_week(&self, list: &[Assignment], me: &str, now: i64) -> Vec<Assignment> {
+        let Some((_, data)) = &self.data else {
+            return Vec::new();
+        };
+        let mut week: Vec<Assignment> = (list.iter())
+            .filter(|a| {
+                let finished = progress(a, &data.log, &data.done)
+                    .iter()
+                    .any(|p| p.who == me && (p.reached(a) || p.done.is_some()));
+                !finished && (a.due == 0 || a.due <= now + WEEK_DAYS * DAY_MS)
+            })
+            .cloned()
+            .collect();
+        week.sort_by_key(|a| if a.due == 0 { i64::MAX } else { a.due });
+        week
+    }
+
+    /// This week's assignments, short: each with its bars, when it is
+    /// due, this user's progress, and Practise and Mark done.
+    pub(crate) fn week_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        list: &[Assignment],
+        cx: &Ctx,
+    ) -> Outcome {
+        let mut out = Outcome::default();
+        let week = self.this_week(list, cx.me, cx.now);
+        let Some((_, data)) = &self.data else {
+            return out;
+        };
+        if week.is_empty() {
+            ui.label(
+                RichText::new(match list.is_empty() {
+                    true => "No assignments yet.",
+                    false => "Nothing left to do this week.",
+                })
+                .weak(),
+            );
+        }
+        for a in &week {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new(title(cx.markers, a)).strong());
+                let when = match a.due {
+                    0 => "No date".to_string(),
+                    t => format!("Due {}", day(t, cx.now)),
+                };
+                if a.due != 0 && a.due < cx.now {
+                    ui.colored_label(ui.visuals().warn_fg_color, format!("{when} (past)"));
+                } else {
+                    ui.label(RichText::new(when).weak());
+                }
+                if !a.note.trim().is_empty() {
+                    ui.label(&a.note);
+                }
+                let mine = progress(a, &data.log, &data.done)
+                    .into_iter()
+                    .find(|p| p.who == cx.me);
+                match &mine {
+                    Some(p) if p.best_bpm > 0.0 => {
+                        ui.add(
+                            egui::ProgressBar::new(p.fraction(a) as f32)
+                                .text(format!("{:.0} of {:.0} bpm", p.best_bpm, a.bpm)),
+                        );
+                    }
+                    Some(p) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} so far, not yet all the bars",
+                                duration(p.seconds)
+                            ))
+                            .weak(),
+                        );
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new(format!("Not practised yet: aim for {:.0} bpm", a.bpm))
+                                .weak(),
+                        );
+                    }
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button("Practise") // ai: edit_assignments
+                        .on_hover_text("Loop these bars, with the trainer aiming at the tempo")
+                        .clicked()
+                    {
+                        out.practise = Some(a.clone());
+                    }
+                    if ui
+                        .button("Mark done") // ai: edit_assignments
+                        .on_hover_text("Tell your teacher or student you've done it")
+                        .clicked()
+                    {
+                        out.done = Some((a.id.clone(), true));
+                    }
+                });
+            });
+        }
         out
     }
 
@@ -759,6 +868,41 @@ impl App {
         self.lessons_ui.refresh(&self.proj.doc);
         let out = self.lessons_ui.pane(ui, &mut self.assignments, &cx);
         self.lessons_outcome(ui.ctx(), out, &me, &author);
+    }
+
+    /// The practice panel's list of this week's assignments.
+    pub(crate) fn week_assignments(&mut self, ui: &mut egui::Ui) {
+        let map = self.tempo_map();
+        let end_bar = self.with_song(|_, song| crate::timeline::Timeline::end_bar(&map, song));
+        let me = self.my_log_id();
+        let author = self.my_author_id();
+        let name = |_: &str| String::new();
+        let cx = Ctx {
+            markers: &self.markers,
+            end_bar,
+            loop_bars: self.loop_bars,
+            tempo: map.tempo_at(map.bar_start(self.loop_bars.0)).as_f64(),
+            me: &me,
+            author: &author,
+            may_edit: self.may_edit_song(),
+            name: &name,
+            now: now_ms(),
+        };
+        self.lessons_ui.refresh(&self.proj.doc);
+        let out = self.lessons_ui.week_list(ui, &self.assignments, &cx);
+        self.lessons_outcome(ui.ctx(), out, &me, &author);
+    }
+
+    /// This week's assignments' ids, as the practice panel lists them.
+    pub(crate) fn week_assignment_ids(&mut self) -> Vec<String> {
+        let me = self.my_log_id();
+        self.lessons_ui.refresh(&self.proj.doc);
+        (self
+            .lessons_ui
+            .this_week(&self.assignments, &me, now_ms())
+            .into_iter())
+        .map(|a| a.id)
+        .collect()
     }
 
     pub(crate) fn lessons_outcome(

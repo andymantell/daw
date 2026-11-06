@@ -44,9 +44,12 @@ pub(crate) enum Pane {
     Effects,
     /// How the shown track's notation lane draws its notes.
     Notation,
+    /// What a lesson needs in one place: tuner, speed and pitch, the
+    /// loop and trainer, this week's assignments, lesson notes.
+    Practice,
 }
 
-pub(crate) const PANES: [Pane; 19] = [
+pub(crate) const PANES: [Pane; 20] = [
     Pane::Timeline,
     Pane::Mixer,
     Pane::Comments,
@@ -66,6 +69,7 @@ pub(crate) const PANES: [Pane; 19] = [
     Pane::Instrument,
     Pane::Effects,
     Pane::Notation,
+    Pane::Practice,
 ];
 
 impl Pane {
@@ -91,6 +95,7 @@ impl Pane {
             Pane::Instrument => "instrument",
             Pane::Effects => "effects",
             Pane::Notation => "notation",
+            Pane::Practice => "practice",
         }
     }
 
@@ -119,6 +124,7 @@ impl Pane {
             Pane::Instrument => "Instrument",
             Pane::Effects => "Effects",
             Pane::Notation => "Notation",
+            Pane::Practice => "Practice",
         }
     }
 
@@ -181,9 +187,12 @@ impl Pane {
     pub(crate) fn home(self) -> Region {
         match self {
             Pane::Browser => Region::Left,
-            Pane::Inspector | Pane::Notes | Pane::Comments | Pane::Lessons | Pane::Tuner => {
-                Region::Right
-            }
+            Pane::Inspector
+            | Pane::Practice
+            | Pane::Notes
+            | Pane::Comments
+            | Pane::Lessons
+            | Pane::Tuner => Region::Right,
             _ => Region::Dock,
         }
     }
@@ -276,12 +285,12 @@ impl Layout {
         Layout::with(&[], &[], &[Pane::Mixer], 0.68)
     }
 
-    /// The timeline and mixer, with the notes, comments and tuner at
-    /// the side.
+    /// The timeline and mixer, with the practice panel, notes and
+    /// comments at the side.
     fn lesson() -> Layout {
         let mut l = Layout::with(
             &[],
-            &[Pane::Notes, Pane::Comments, Pane::Tuner],
+            &[Pane::Practice, Pane::Notes, Pane::Comments],
             &[Pane::Mixer],
             0.3,
         );
@@ -1745,9 +1754,14 @@ impl crate::App {
             .collect();
         let mut ws = std::mem::take(&mut self.workspace);
         self.drawing_panes = true;
+        self.practice_ui.drawn = false;
         ws.show(ui, self);
         self.drawing_panes = false;
         self.workspace = ws;
+        // The practice panel's tuner listens while the panel shows.
+        if let Some(c) = self.tuner.set_in_panel(self.practice_ui.drawn) {
+            self.send(c);
+        }
         let ctx = ui.ctx().clone();
         for c in std::mem::take(&mut self.workspace_cmds) {
             self.run(&ctx, c);
@@ -1787,6 +1801,7 @@ impl crate::App {
             Cmd::Video => self.workspace.layout.is_open(Pane::Video),
             Cmd::Fretboard => self.workspace.layout.is_open(Pane::Fretboard),
             Cmd::PitchEditor => self.workspace.layout.is_open(Pane::PitchEditor),
+            Cmd::PracticePanel => self.workspace.layout.is_open(Pane::Practice),
             Cmd::Comments => self.comment_ui.open,
             Cmd::LessonNotes => self.notes_ui.open,
             Cmd::Lessons => self.workspace.layout.is_open(Pane::Lessons),
@@ -2018,6 +2033,7 @@ impl Host for crate::App {
                     self.send(c);
                 }
             }
+            Pane::Practice => self.practice_pane(ui),
         }
     }
 
@@ -2174,7 +2190,7 @@ mod tests {
     #[test]
     fn layouts_are_kept_as_text() {
         let mut l = Layout::lesson();
-        l.toggle_collapsed(Pane::Tuner);
+        l.toggle_collapsed(Pane::Practice);
         l.detach(
             Pane::Mixer,
             Some((
@@ -2318,9 +2334,9 @@ mod tests {
     fn recalls_saved_layouts() {
         let mut w = Workspace::default();
         w.recall(2);
-        assert!(w.layout.is_open(Pane::Tuner));
+        assert!(w.layout.is_open(Pane::Practice));
         w.recall(0);
-        assert!(!w.layout.is_open(Pane::Tuner));
+        assert!(!w.layout.is_open(Pane::Practice));
         // Nine at most.
         for i in 0..SLOTS {
             w.save_as(&format!("Layout {i}"));
@@ -2441,12 +2457,13 @@ mod tests {
             h.run();
             h.run();
             assert!(h.state().workspace.layout.docked(Pane::Notes));
-            assert!(h.state().notes_ui.open && h.state().tuner.open);
+            // The practice panel shows first, and its tuner listens.
+            assert!(h.state().notes_ui.open && h.state().tuner.listening());
             assert!(h.query_by_label("Lesson notes tab").is_some());
             h.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
             h.run();
             h.run();
-            assert!(!h.state().notes_ui.open && !h.state().tuner.open);
+            assert!(!h.state().notes_ui.open && !h.state().tuner.listening());
         }
 
         #[test]

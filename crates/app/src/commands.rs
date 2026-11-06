@@ -177,6 +177,7 @@ pub(crate) enum Cmd {
     Layout(u8),
     SaveLayout,
     PaneWindows,
+    PracticePanel,
     Tuner,
     Meters,
     LessonNotes,
@@ -2085,6 +2086,16 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Let a pane open in a window of its own, to put on another screen")
     .words("detach screens monitors undock float tear"),
+    info(
+        Cmd::PracticePanel,
+        "practice-panel",
+        "Practice",
+        "Practice panel",
+        &[],
+    )
+    .hint("Tuner, speed and pitch, the loop and trainer, this week's assignments and lesson notes in one place")
+    .words("practise lesson tuner speed loop trainer assignments homework")
+    .everyday(),
     info(Cmd::Tuner, "tuner", "Practice", "Tuner…", &[])
         .words("tune pitch")
         .everyday(),
@@ -2549,6 +2560,7 @@ impl Cmd {
                 | Cmd::MonitorSection
                 | Cmd::TakeLanes
                 | Cmd::Lessons
+                | Cmd::PracticePanel
                 | Cmd::NotesEditor
                 | Cmd::PatternEditor
                 | Cmd::AutomationLanes
@@ -3694,6 +3706,7 @@ impl App {
             Cmd::Mono => self.toggle_room(|c| c.mono = !c.mono),
             Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
             Cmd::Lessons => self.workspace.toggle(Pane::Lessons),
+            Cmd::PracticePanel => self.workspace.toggle(Pane::Practice),
             Cmd::NotesEditor => self.workspace.toggle(Pane::NotesEditor),
             Cmd::QuantiseNotes
             | Cmd::HumaniseNotes

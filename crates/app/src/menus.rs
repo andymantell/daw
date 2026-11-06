@@ -367,6 +367,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
     (
         "Practice",
         &[
+            Pane(Cmd::PracticePanel),
             Pane(Cmd::Tuner),
             Pane(Cmd::Lessons),
             Pane(Cmd::LessonNotes),

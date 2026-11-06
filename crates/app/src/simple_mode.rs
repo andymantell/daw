@@ -81,10 +81,15 @@ impl App {
         !self.simple.on || cmd.info().everyday
     }
 
+    /// Turns the simpler mode on or off. On, it opens the practice
+    /// panel, which can then be closed as usual.
     pub(crate) fn toggle_simple(&mut self) {
         let on = !self.simple.on;
         if let Err(e) = self.simple.set(on) {
             self.message = Some(format!("Couldn't keep the simpler mode: {e}"));
+        }
+        if on {
+            self.open_pane(crate::workspace::Pane::Practice);
         }
     }
 

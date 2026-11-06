@@ -42,26 +42,20 @@ pub(crate) fn sampler(
         return false;
     };
     let p = b.params().clone();
-    egui::ScrollArea::horizontal()
-        .id_salt(("sampler-panel", salt))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if let Some(lib) = b.library().cloned() {
-                    library(ui, &p, salt, height, &lib, shown);
-                    articulations(ui, &p, salt, height, &lib);
-                    controls(ui, &p, salt, height);
-                    library_output(ui, &p, salt, height);
-                } else {
-                    renew |= key_map(ui, b, &p, salt, height, &mut chosen, cx, shown);
-                    renew |= zone_module(ui, b, &p, salt, height, &mut chosen, cx, shown);
-                    filter(ui, &p, salt, height);
-                    envelope(ui, &p, salt, height);
-                    playing(ui, &p, salt, height);
-                }
-            });
-        });
+    crate::panel_kit::modules(ui, 8.0, |ui| {
+        if let Some(lib) = b.library().cloned() {
+            library(ui, &p, salt, height, &lib, shown);
+            articulations(ui, &p, salt, height, &lib);
+            controls(ui, &p, salt, height);
+            library_output(ui, &p, salt, height);
+        } else {
+            renew |= key_map(ui, b, &p, salt, height, &mut chosen, cx, shown);
+            renew |= zone_module(ui, b, &p, salt, height, &mut chosen, cx, shown);
+            filter(ui, &p, salt, height);
+            envelope(ui, &p, salt, height);
+            playing(ui, &p, salt, height);
+        }
+    });
     slot.zone = chosen;
     renew
 }

@@ -80,4 +80,6 @@ to the rack), each in the dock at 1440 × 900, and one per theme
       (owner, 2026-11-05: "Click and drag").
 - [x] Lucky Seven: six operators side by side plus one in full, picked
       with "Edit" (owner chose keep it as built, 2026-11-05).
-- [ ] Sideways scrolling at 1440 × 900 in the dock is acceptable.
+- [x] Sideways scrolling at 1440 × 900 in the dock is acceptable.
+      (Owner asked for units to fit the dock instead, 2026-11-06: modules
+      now carry on in a second row and the unit grows down.)

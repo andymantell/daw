@@ -28,7 +28,7 @@ pub(crate) const BODY: f32 = 3.0 * UNIT - 12.0 - HEADER - 2.0;
 /// The width the slice and playing modules take; the loop has the rest.
 const SLICE_W: f32 = 236.0;
 const PLAYING_W: f32 = 300.0;
-/// The loop module's narrowest; the panel scrolls sideways below it.
+/// The loop module's narrowest; the other modules go to a second row below it.
 const LOOP_MIN: f32 = 420.0;
 
 /// The slicer's panel in `slot`, `height` tall. True if the loop was cut
@@ -51,110 +51,104 @@ pub(crate) fn panel(
     let p = b.params().clone();
     let spacing = 8.0;
     let loop_w = (ui.available_width() - SLICE_W - PLAYING_W - 2.0 * spacing).max(LOOP_MIN);
-    egui::ScrollArea::horizontal()
-        .id_salt(("slicer-panel", id))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
+    crate::panel_kit::modules(ui, spacing, |ui| {
+        module(ui, "Loop", vec2(loop_w, height), |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = spacing;
-                module(ui, "Loop", vec2(loop_w, height), |ui| {
-                    ui.horizontal(|ui| {
-                        let current = b
-                            .sample("loop")
-                            .map(|s| s.reference.clone())
-                            .unwrap_or_default();
-                        if let Some(r) = sound_menu(ui, ("slicer-loop", id), &current)
-                            && let Some(l) = read_sound(&r, cx, shown)
-                        {
-                            b.set_loop(std::sync::Arc::new(l), sensitivity);
-                            renew = true;
-                        }
-                        let n = b.slices().len();
-                        if b.loop_sample().is_some() {
-                            ui.label(dim(
-                                ui,
-                                &format!(
-                                    "{n} slice{}, on the keys from {} up",
-                                    if n == 1 { "" } else { "s" },
-                                    note_name(slicer::FIRST_NOTE as i32)
-                                ),
-                            ));
-                        }
-                    });
-                    let knobs = Size::Small.height();
-                    let wave = (ui.available_height() - knobs - 8.0).max(40.0);
-                    if let Some(k) = loop_display(ui, b, vec2(ui.available_width(), wave), chosen) {
-                        chosen = k;
+                let current = b
+                    .sample("loop")
+                    .map(|s| s.reference.clone())
+                    .unwrap_or_default();
+                if let Some(r) = sound_menu(ui, ("slicer-loop", id), &current)
+                    && let Some(l) = read_sound(&r, cx, shown)
+                {
+                    b.set_loop(std::sync::Arc::new(l), sensitivity);
+                    renew = true;
+                }
+                let n = b.slices().len();
+                if b.loop_sample().is_some() {
+                    ui.label(dim(
+                        ui,
+                        &format!(
+                            "{n} slice{}, on the keys from {} up",
+                            if n == 1 { "" } else { "s" },
+                            note_name(slicer::FIRST_NOTE as i32)
+                        ),
+                    ));
+                }
+            });
+            let knobs = Size::Small.height();
+            let wave = (ui.available_height() - knobs - 8.0).max(40.0);
+            if let Some(k) = loop_display(ui, b, vec2(ui.available_width(), wave), chosen) {
+                chosen = k;
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                renew |= cut(ui, id, &mut sensitivity, &mut parts, b);
+            });
+            let n = b.slices().len().max(1);
+            chosen = chosen.min(n - 1);
+            module(ui, "Slice", vec2(SLICE_W, height), |ui| {
+                slice_picker(ui, id, &mut chosen, n);
+                let k = |s| slicer::slice_at(chosen, s);
+                ui.horizontal(|ui| {
+                    for (i, label) in [(slice::TUNE, "Tune"), (slice::PAN, "Pan")] {
+                        param_knob(ui, ("slice", id), &p, k(i), Some(label), Size::Small);
                     }
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        renew |= cut(ui, id, &mut sensitivity, &mut parts, b);
-                    });
+                    param_knob(
+                        ui,
+                        ("slice", id),
+                        &p,
+                        k(slice::CUTOFF),
+                        Some("Low-pass"),
+                        Size::Normal,
+                    );
                 });
-                let n = b.slices().len().max(1);
-                chosen = chosen.min(n - 1);
-                module(ui, "Slice", vec2(SLICE_W, height), |ui| {
-                    slice_picker(ui, id, &mut chosen, n);
-                    let k = |s| slicer::slice_at(chosen, s);
-                    ui.horizontal(|ui| {
-                        for (i, label) in [(slice::TUNE, "Tune"), (slice::PAN, "Pan")] {
-                            param_knob(ui, ("slice", id), &p, k(i), Some(label), Size::Small);
-                        }
-                        param_knob(
-                            ui,
-                            ("slice", id),
-                            &p,
-                            k(slice::CUTOFF),
-                            Some("Low-pass"),
-                            Size::Normal,
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(dim(ui, "Backwards"));
-                        param_switch(ui, ("slice", id), &p, k(slice::REVERSE));
-                    });
+                ui.horizontal(|ui| {
+                    ui.label(dim(ui, "Backwards"));
+                    param_switch(ui, ("slice", id), &p, k(slice::REVERSE));
                 });
-                module(ui, "Playing", vec2(PLAYING_W, height), |ui| {
-                    param_switch(ui, ("slicer", id), &p, at::MODE);
-                    ui.horizontal(|ui| {
-                        for (i, label) in [
-                            (at::TUNE, "Tune"),
-                            (at::ATTACK, "Attack"),
-                            (at::RELEASE, "Release"),
-                            (at::VELOCITY, "Velocity"),
-                            (at::LEVEL, "Level"),
-                        ] {
-                            param_knob(ui, ("slicer", id), &p, i, Some(label), Size::Small);
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        param_knob(
-                            ui,
-                            ("slicer", id),
-                            &p,
-                            at::BEATS,
-                            Some("Beats"),
-                            Size::Small,
-                        );
-                        ui.vertical(|ui| {
-                            ui.add_space(6.0);
-                            if ui
-                                // ai: slice-notes
-                                .button("Make notes that play the loop")
-                                .on_hover_text(
-                                    "A note clip playing the slices in order on their beats, \
+            });
+            module(ui, "Playing", vec2(PLAYING_W, height), |ui| {
+                param_switch(ui, ("slicer", id), &p, at::MODE);
+                ui.horizontal(|ui| {
+                    for (i, label) in [
+                        (at::TUNE, "Tune"),
+                        (at::ATTACK, "Attack"),
+                        (at::RELEASE, "Release"),
+                        (at::VELOCITY, "Velocity"),
+                        (at::LEVEL, "Level"),
+                    ] {
+                        param_knob(ui, ("slicer", id), &p, i, Some(label), Size::Small);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    param_knob(
+                        ui,
+                        ("slicer", id),
+                        &p,
+                        at::BEATS,
+                        Some("Beats"),
+                        Size::Small,
+                    );
+                    ui.vertical(|ui| {
+                        ui.add_space(6.0);
+                        if ui
+                            // ai: slice-notes
+                            .button("Make notes that play the loop")
+                            .on_hover_text(
+                                "A note clip playing the slices in order on their beats, \
                                      so the loop follows the song's tempo",
-                                )
-                                .clicked()
-                            {
-                                shown.cmd = Some(Cmd::SliceNotes);
-                            }
-                            ui.label(dim(ui, "The loop is this many beats long"));
-                        });
+                            )
+                            .clicked()
+                        {
+                            shown.cmd = Some(Cmd::SliceNotes);
+                        }
+                        ui.label(dim(ui, "The loop is this many beats long"));
                     });
                 });
             });
         });
+    });
     slot.sensitivity = sensitivity;
     slot.parts = parts;
     slot.zone = chosen;

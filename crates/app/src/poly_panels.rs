@@ -26,20 +26,16 @@ use crate::panel_kit::{
 };
 use crate::theme;
 
-/// Lays out `modules` left to right, scrolling sideways when the pane is
-/// narrower than they are. True if a setting moved.
-fn row(ui: &mut Ui, salt: (&str, u64), modules: impl FnOnce(&mut Ui) -> bool) -> bool {
-    let mut changed = false;
-    egui::ScrollArea::horizontal()
-        .id_salt(salt)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                changed = modules(ui);
-            });
-        });
-    changed
+/// Lays out `modules` left to right, carrying on in a second row when
+/// the pane is narrower than they are. True if a setting moved.
+fn row(ui: &mut Ui, modules: impl FnOnce(&mut Ui) -> bool) -> bool {
+    crate::panel_kit::modules(ui, 8.0, modules)
+}
+
+/// The small lettering [`dim`] sets text in.
+fn dim_font(ui: &Ui) -> egui::FontId {
+    let look = theme::look(ui.ctx());
+    look.font(look.small)
 }
 
 fn dim(ui: &Ui, text: &str) -> RichText {
@@ -103,7 +99,7 @@ fn across(n: usize, size: Size) -> f32 {
 pub(crate) fn june(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     use june::at;
     let s = ("june", salt);
-    row(ui, s, |ui| {
+    row(ui, |ui| {
         let mut changed = false;
         let range = Switch::width_of(ui, &["16' (an octave down)", "8'", "4' (an octave up)"]);
         module(
@@ -282,7 +278,7 @@ fn oracle_shape(p: &Params) -> FilterShape {
 pub(crate) fn oracle(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     use oracle::at;
     let s = ("oracle", salt);
-    row(ui, s, |ui| {
+    row(ui, |ui| {
         let mut changed = false;
         module(ui, "Osc A", vec2(across(3, Size::Small), height), |ui| {
             tight(ui);
@@ -349,7 +345,18 @@ pub(crate) fn oracle(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
             changed |= toggle(ui, p, at::PM_FILTER, "Filter");
         });
         let board = Switch::width_of(ui, &["A: 4-pole cascade", "B: 2-pole state-variable"]);
-        let width = (board + 18.0).max(Size::Large.cell() + across(2, Size::Small) + GAP);
+        // The keyboard tracking row sits beside the cutoff: its caption
+        // and its three segments, all in view.
+        let font = dim_font(ui);
+        let keys = ui.fonts_mut(|f| {
+            f.layout_no_wrap("Keys".into(), font, egui::Color32::WHITE)
+                .size()
+                .x
+        }) + Switch::width_of(ui, &["Off", "Half", "Full"])
+            + 2.0 * GAP;
+        let width = (board + 18.0)
+            .max(Size::Large.cell() + across(2, Size::Small) + GAP)
+            .max(Size::Large.cell() + keys + 18.0);
         module(ui, "Filter", vec2(width, height), |ui| {
             tight(ui);
             changed |= param_switch(ui, s, p, at::BOARD);
@@ -569,7 +576,7 @@ fn eighty_channel(ui: &mut Ui, p: &Params, salt: u64, c: usize, height: f32) -> 
 pub(crate) fn eighty(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     use eighty::at;
     let s = ("eighty", salt);
-    row(ui, s, |ui| {
+    row(ui, |ui| {
         let mut changed = false;
         changed |= eighty_channel(ui, p, salt, 0, height);
         changed |= eighty_channel(ui, p, salt, 1, height);

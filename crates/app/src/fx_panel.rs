@@ -659,36 +659,30 @@ pub(crate) fn width(ui: &Ui, kind: Kind) -> f32 {
         + n * GAP
 }
 
-/// `b`'s modules, `height` tall, across the width given (scrolling
-/// sideways when the unit is narrower). A room, cabinet or capture file
+/// `b`'s modules, `height` tall, across the width given (in more
+/// than one row when the unit is narrower). A room, cabinet or capture file
 /// chosen, for the effects pane to load.
 pub(crate) fn panel(ui: &mut Ui, id: u64, b: &Effect, height: f32) -> Option<RoomPick> {
     let kind = b.kind();
     let f = face(kind);
     let mut pick = None;
-    egui::ScrollArea::horizontal()
-        .id_salt(("fx-panel", id))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                for m in f.modules {
-                    let w = module_width(ui, kind, m);
-                    module(ui, m.heading, vec2(w, height), |ui| {
-                        for row in m.rows {
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-                                for &it in *row {
-                                    if let Some(p) = item(ui, id, b, it) {
-                                        pick = Some(p);
-                                    }
-                                }
-                            });
+    crate::panel_kit::modules(ui, GAP, |ui| {
+        for m in f.modules {
+            let w = module_width(ui, kind, m);
+            module(ui, m.heading, vec2(w, height), |ui| {
+                for row in m.rows {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for &it in *row {
+                            if let Some(p) = item(ui, id, b, it) {
+                                pick = Some(p);
+                            }
                         }
                     });
                 }
             });
-        });
+        }
+    });
     if let Some(note) = crate::fx::room_note(ui, b) {
         ui.add(egui::Label::new(note).truncate());
     }

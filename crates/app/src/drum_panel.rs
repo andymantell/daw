@@ -74,28 +74,22 @@ pub(crate) fn drum_machine(
             output: p.get(dm::pad_at(k, dm::pad::OUTPUT)) as usize,
         })
         .collect();
-    egui::ScrollArea::horizontal()
-        .id_salt(("drum-machine", id))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if let Some(k) = pads(ui, &names, &marks, pad, height) {
-                    pad = k;
+    crate::panel_kit::modules(ui, 8.0, |ui| {
+        if let Some(k) = pads(ui, &names, &marks, pad, height) {
+            pad = k;
+        }
+        kit(ui, &p, id, height);
+        pad_module(ui, &p, id, pad, &names[pad], &mut part, height);
+        match part {
+            0 => {
+                for l in 0..dm::LAYERS {
+                    renew |= layer(ui, b, &p, id, pad, l, cx, shown, height);
                 }
-                kit(ui, &p, id, height);
-                pad_module(ui, &p, id, pad, &names[pad], &mut part, height);
-                match part {
-                    0 => {
-                        for l in 0..dm::LAYERS {
-                            renew |= layer(ui, b, &p, id, pad, l, cx, shown, height);
-                        }
-                    }
-                    1 => renew |= effects(ui, b, id, pad, height),
-                    _ => outputs(ui, &p, id, pad, &in_use, routes, cx, shown, height),
-                }
-            });
-        });
+            }
+            1 => renew |= effects(ui, b, id, pad, height),
+            _ => outputs(ui, &p, id, pad, &in_use, routes, cx, shown, height),
+        }
+    });
     slot.pad = pad;
     slot.tab = part;
     renew

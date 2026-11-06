@@ -35,8 +35,8 @@ pub(crate) struct Asked {
     pub load_bank: bool,
 }
 
-/// The panel's modules, `height` tall, scrolling sideways when the pane
-/// is narrower than they are. `bank` is the bank loaded, if one is; a
+/// The panel's modules, `height` tall, carrying on in a
+/// second row when the pane is narrower than they are. `bank` is the bank loaded, if one is; a
 /// sound chosen from it is set with `choose`.
 pub(crate) fn lucky_seven(
     ui: &mut Ui,
@@ -49,20 +49,14 @@ pub(crate) fn lucky_seven(
     let mut asked = Asked::default();
     let id = egui::Id::unique(("lucky-seven-view", salt));
     let mut view: View = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
-    egui::ScrollArea::horizontal()
-        .id_salt(("lucky-seven", salt))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let s = ("lucky-seven", salt);
-                asked.changed |= algorithm(ui, p, s, height, view.op);
-                asked.changed |= operators(ui, p, s, height, &mut view);
-                asked.changed |= operator(ui, p, s, height, &mut view);
-                asked.changed |= modulation(ui, p, s, height);
-                playing(ui, p, s, height, bank, choose, &mut asked);
-            });
-        });
+    crate::panel_kit::modules(ui, 8.0, |ui| {
+        let s = ("lucky-seven", salt);
+        asked.changed |= algorithm(ui, p, s, height, view.op);
+        asked.changed |= operators(ui, p, s, height, &mut view);
+        asked.changed |= operator(ui, p, s, height, &mut view);
+        asked.changed |= modulation(ui, p, s, height);
+        playing(ui, p, s, height, bank, choose, &mut asked);
+    });
     ui.ctx().data_mut(|d| d.insert_temp(id, view));
     asked
 }

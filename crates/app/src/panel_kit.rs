@@ -929,6 +929,21 @@ pub(crate) fn module<R>(
     add(&mut child)
 }
 
+/// Lays a panel's modules out left to right, `gap` apart, carrying on in
+/// a row under the first when the unit is narrower than they are side
+/// by side: the unit grows down to hold the rows, so nothing is a
+/// sideways scroll away.
+pub(crate) fn modules<R>(ui: &mut Ui, gap: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.with_layout(
+        Layout::left_to_right(Align::Min).with_main_wrap(true),
+        |ui| {
+            ui.spacing_mut().item_spacing = vec2(gap, gap);
+            add(ui)
+        },
+    )
+    .inner
+}
+
 /// The response a filter display draws: a low-pass of so many poles, a
 /// band-pass, a high-pass or a notch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1488,11 +1503,18 @@ impl Rack {
         );
         if let Some(h) = fixed {
             child.set_min_height(h - 12.0);
-            child.set_clip_rect(content.intersect(ui.clip_rect()));
         }
+        // Kept to the plate's width; its height is what the rows take.
+        child.set_clip_rect(
+            Rect::from_min_max(content.min, pos2(content.right(), f32::INFINITY))
+                .intersect(ui.clip_rect()),
+        );
         character::style(&mut child);
         let out = add(&mut child);
-        let h = fixed.unwrap_or_else(|| child.min_rect().height() + 12.0);
+        // A unit whose modules ran on to another row (the unit narrower
+        // than they are side by side) grows to hold them.
+        let grown = child.min_rect().height() + 12.0;
+        let h = fixed.map_or(grown, |h| h.max(grown));
         let plate = Rect::from_min_size(pos2(left, top), vec2(width, h));
         self.paint_plate(ui, plate, &look, behind, surface);
         // Keep the frame's layout in step: the space the plate took.

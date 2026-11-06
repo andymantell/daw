@@ -96,6 +96,8 @@ impl Sandbox {
 struct Held {
     plugin: Plugin,
     processor: Processor,
+    /// Nanoseconds spent running its audio, for the app's plugin load.
+    busy_ns: u64,
 }
 
 #[derive(Default)]
@@ -140,7 +142,14 @@ impl Helper {
                             params: plugin.params(),
                             buses: plugin.buses(),
                         };
-                        self.plugins.insert(id, Held { plugin, processor });
+                        self.plugins.insert(
+                            id,
+                            Held {
+                                plugin,
+                                processor,
+                                busy_ns: 0,
+                            },
+                        );
                         reply
                     }
                     Err(e) => Reply::Error(e),
@@ -157,18 +166,25 @@ impl Helper {
                 key,
             } => match self.held(id) {
                 Ok(h) => {
+                    let start = std::time::Instant::now();
                     match &key {
                         Some((kl, kr)) => {
                             h.processor.process_keyed(&mut left, &mut right, (kl, kr))
                         }
                         None => Insert::process(&mut h.processor, &mut left, &mut right),
                     }
+                    h.busy_ns += start.elapsed().as_nanos() as u64;
                     Reply::Audio { left, right }
                 }
                 Err(e) => e,
             },
             Request::Play { id, frames, events } => match self.held(id) {
-                Ok(h) => Reply::Played(h.processor.play_apart(&events, frames as usize)),
+                Ok(h) => {
+                    let start = std::time::Instant::now();
+                    let played = h.processor.play_apart(&events, frames as usize);
+                    h.busy_ns += start.elapsed().as_nanos() as u64;
+                    Reply::Played(played)
+                }
                 Err(e) => e,
             },
             Request::SetParam { id, param, value } => match self.held(id) {
@@ -205,7 +221,10 @@ impl Helper {
                 Err(e) => e,
             },
             Request::Poll { id } => match self.held(id) {
-                Ok(h) => Reply::Status(h.plugin.poll()),
+                Ok(h) => Reply::Status(Status {
+                    busy_ns: h.busy_ns,
+                    ..h.plugin.poll()
+                }),
                 Err(e) => e,
             },
             Request::OpenEditor { id, title } => match self.held(id) {

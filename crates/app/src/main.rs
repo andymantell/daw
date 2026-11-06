@@ -72,6 +72,7 @@ mod linked;
 mod listen;
 mod lucky_seven_panel;
 mod lyrics;
+mod macros;
 mod menus;
 mod meters;
 mod midi;
@@ -91,6 +92,7 @@ mod patterns;
 mod people;
 mod perf;
 mod pitch_edit;
+mod plugin_windows;
 mod poly_panels;
 mod practice;
 mod practice_panel;
@@ -590,6 +592,10 @@ struct App {
     drawing_panes: bool,
     /// Workspace commands that came while it was out.
     workspace_cmds: Vec<Cmd>,
+    /// A macro's steps waiting for the timeline or panes.
+    macro_waiting: macros::Waiting,
+    /// The plugin windows: tabs over a track's plugins.
+    plugin_windows: plugin_windows::PluginWindows,
     /// Panes asked for while the panes were drawn, opened after.
     panes_to_open: Vec<workspace::Pane>,
     /// The look, chosen per computer.
@@ -768,6 +774,8 @@ impl App {
             ),
             drawing_panes: false,
             workspace_cmds: Vec::new(),
+            macro_waiting: Default::default(),
+            plugin_windows: Default::default(),
             panes_to_open: Vec::new(),
             themes: theme::Themes::new((!cfg!(test)).then(config_dir).as_deref()),
             browser: browser::Browser::new((!cfg!(test)).then(|| config_dir().join("browser.txt"))),
@@ -2701,6 +2709,7 @@ impl eframe::App for App {
         self.kits_update();
         self.layout_windows(&ctx);
         self.command_windows(&ctx);
+        self.plugin_windows_window(&ctx);
         self.updates.poll(&ctx);
         self.updates.window(&ctx);
         self.updates.ask_window(&ctx);

@@ -94,6 +94,9 @@ pub(crate) enum Cmd {
     /// A switching container's chain n, counted from 0.
     HearChain(u8),
     EditGroups,
+    /// Runs macro n's commands, counted from 0 (see `macros`).
+    Macro(u8),
+    EditMacros,
     FixTiming,
     FollowTempo,
     ClipTempo,
@@ -209,6 +212,12 @@ pub(crate) enum Cmd {
     InstrumentWindow,
     /// Opens the Effects pane on the selected track.
     EffectsPane,
+    /// The plugin windows: a tab for each plugin on a track.
+    PluginWindows,
+    PluginWindowsFollow,
+    NextPluginTab,
+    PrevPluginTab,
+    ProjectPlugins,
     SliceNotes,
     PadBuses,
     LoadSfz,
@@ -813,6 +822,51 @@ pub(crate) const COMMANDS: &[Info] = &[
         .hint("Show the selected track's effects in a pane: add, reorder and change them")
         .words("fx chain insert plugin reverb delay compressor eq panel"),
     info(
+        Cmd::PluginWindows,
+        "plugin-windows",
+        "View",
+        "Plugin windows",
+        &[],
+    )
+    .hint("A tab for each plugin on the selected track, with its controls, its own window and how much of the computer it uses")
+    .words("plugin editor gui tabs window cpu load vst clap"),
+    info(
+        Cmd::PluginWindowsFollow,
+        "plugin-windows-follow",
+        "View",
+        "Plugin windows follow the selected track",
+        &[],
+    )
+    .hint("Selecting another track shows its plugins in the plugin windows, and moves an open plugin window to it")
+    .words("plugin editor tabs follow selected track"),
+    info(
+        Cmd::NextPluginTab,
+        "next-plugin-tab",
+        "View",
+        "Next plugin tab",
+        &[],
+    )
+    .hint("Show the track's next plugin in the plugin windows")
+    .words("plugin editor tab switch"),
+    info(
+        Cmd::PrevPluginTab,
+        "previous-plugin-tab",
+        "View",
+        "Previous plugin tab",
+        &[],
+    )
+    .hint("Show the track's previous plugin in the plugin windows")
+    .words("plugin editor tab switch"),
+    info(
+        Cmd::ProjectPlugins,
+        "project-plugins",
+        "View",
+        "Plugins in this project",
+        &[],
+    )
+    .hint("Every plugin the project uses, on which track, where it runs and how much of the computer it uses")
+    .words("plugin list used cpu load missing installed"),
+    info(
         Cmd::SliceNotes,
         "slice-notes",
         "Track",
@@ -1407,6 +1461,45 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::EditGroups, "edit-groups", "Edit", "Edit groups…", &[])
         .hint("Group tracks, such as drum mics, so their clips are edited together")
         .words("link tracks drums multitrack"),
+    info(Cmd::Macro(0), "macro-1", "Edit", "Macro 1", &[])
+        .hint("Run the commands chained in macro 1")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(1), "macro-2", "Edit", "Macro 2", &[])
+        .hint("Run the commands chained in macro 2")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(2), "macro-3", "Edit", "Macro 3", &[])
+        .hint("Run the commands chained in macro 3")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(3), "macro-4", "Edit", "Macro 4", &[])
+        .hint("Run the commands chained in macro 4")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(4), "macro-5", "Edit", "Macro 5", &[])
+        .hint("Run the commands chained in macro 5")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(5), "macro-6", "Edit", "Macro 6", &[])
+        .hint("Run the commands chained in macro 6")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(6), "macro-7", "Edit", "Macro 7", &[])
+        .hint("Run the commands chained in macro 7")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(7), "macro-8", "Edit", "Macro 8", &[])
+        .hint("Run the commands chained in macro 8")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::Macro(8), "macro-9", "Edit", "Macro 9", &[])
+        .hint("Run the commands chained in macro 9")
+        .words("chain sequence several commands one key")
+        .everyday(),
+    info(Cmd::EditMacros, "edit-macros", "Edit", "Macros…", &[])
+        .hint("Chain several commands to run one after another from one key")
+        .words("chain sequence several commands one key shortcut"),
     info(Cmd::FixTiming, "fix-timing", "Clip", "Fix timing…", &[])
         .hint("Cut the selected clips at each note and move the notes toward the grid")
         .words("quantise quantize tighten align beat slice transient attack groove"),
@@ -2909,7 +3002,7 @@ pub(crate) struct Editor {
     pub(crate) capturing: Option<Cmd>,
     /// A key pressed for the first command that the second has.
     pub(crate) clash: Option<(Cmd, Shortcut, Cmd)>,
-    note: Option<String>,
+    pub(crate) note: Option<String>,
 }
 
 pub(crate) struct Commands {
@@ -2922,6 +3015,11 @@ pub(crate) struct Commands {
     pub(crate) timeline: Vec<Cmd>,
     /// Names shown instead of a command's own, such as a layout's.
     pub(crate) names: BTreeMap<Cmd, String>,
+    /// Commands chained to run from one key.
+    pub(crate) macros: crate::macros::Macros,
+    /// Where they are kept; none in tests.
+    pub(crate) macros_path: Option<PathBuf>,
+    pub(crate) macros_ui: crate::macros::MacrosUi,
 }
 
 impl Commands {
@@ -2931,6 +3029,11 @@ impl Commands {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .map(|t| Keymap::from_text(&t))
             .unwrap_or_default();
+        let macros_path = Commands::macros_path(path.as_ref());
+        let macros = (macros_path.as_ref())
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| crate::macros::Macros::from_text(&t))
+            .unwrap_or_default();
         Commands {
             keymap,
             path,
@@ -2938,6 +3041,9 @@ impl Commands {
             editor: Editor::default(),
             timeline: Vec::new(),
             names: BTreeMap::new(),
+            macros,
+            macros_path,
+            macros_ui: Default::default(),
         }
     }
 
@@ -3024,7 +3130,22 @@ impl Commands {
 
     /// Its name as shown: a layout's, say, or its own.
     pub(crate) fn name(&self, cmd: Cmd) -> &str {
+        if let Cmd::Macro(n) = cmd
+            && let Some(label) = self.macros.label(n as usize)
+        {
+            return label;
+        }
         self.names.get(&cmd).map_or(cmd.info().name, String::as_str)
+    }
+
+    /// The names shown instead of commands' own: layouts' and macros'.
+    fn shown_names(&self) -> BTreeMap<Cmd, String> {
+        let mut names = self.names.clone();
+        for (n, _) in self.macros.iter() {
+            let c = crate::macros::cmd(n);
+            names.insert(c, self.name(c).to_string());
+        }
+        names
     }
 
     /// For a hover text: its name and keys, such as "Play or stop (Space)".
@@ -3137,7 +3258,7 @@ impl Commands {
         if !self.palette.open {
             return None;
         }
-        let mut found = search_named(&self.palette.query, &self.names);
+        let mut found = search_named(&self.palette.query, &self.shown_names());
         let mut left_out = 0;
         if simple && !self.palette.all {
             let before = found.len();
@@ -3301,7 +3422,9 @@ impl Commands {
                 ui.label(n);
             }
             ui.separator();
-            let shown = search_named(&self.editor.filter, &self.names);
+            self.macros_page(ui);
+            ui.separator();
+            let shown = search_named(&self.editor.filter, &self.shown_names());
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("key commands")
                     .striped(true)
@@ -3434,6 +3557,10 @@ impl App {
             self.top.open = None;
             return;
         }
+        // A macro's steps held back for the timeline or panes go on.
+        if !self.macro_waiting.steps.is_empty() {
+            self.macro_steps(ctx);
+        }
         // Typing tab takes numbers and arrows first, then typing on
         // the fretboard.
         self.notation_keys(ctx);
@@ -3468,10 +3595,14 @@ impl App {
             self.proj.bundle_job.is_none(),
         );
         let layouts = self.workspace.saved.len();
+        let macros: Vec<bool> = (0..crate::macros::MOST)
+            .map(|n| self.commands.macros.runs(n))
+            .collect();
         let chosen = self
             .commands
             .palette_window(ctx, self.simple.on, |c| match c {
                 Cmd::Layout(n) => (n as usize) < layouts,
+                Cmd::Macro(n) => macros[n as usize],
                 Cmd::Undo => can_undo,
                 Cmd::Redo => can_redo,
                 Cmd::ExportBundle | Cmd::ImportBundle => idle,
@@ -3485,6 +3616,7 @@ impl App {
     pub(crate) fn can_run(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::Layout(n) => (n as usize) < self.workspace.saved.len(),
+            Cmd::Macro(n) => self.commands.macros.runs(n as usize),
             Cmd::Undo => self.can_undo(),
             Cmd::SuggestEdits => self.suggesting().is_none(),
             Cmd::StopSuggesting => self.suggesting().is_some(),
@@ -3998,6 +4130,16 @@ impl App {
             }
             Cmd::Theme => self.themes.open = true,
             Cmd::EditGroups => self.groups_ui.open = true,
+            Cmd::Macro(n) => self.run_macro(ctx, n as usize),
+            Cmd::EditMacros => {
+                self.commands.editor.open = true;
+                self.commands.macros_ui.open = true;
+            }
+            Cmd::PluginWindows
+            | Cmd::PluginWindowsFollow
+            | Cmd::NextPluginTab
+            | Cmd::PrevPluginTab
+            | Cmd::ProjectPlugins => self.plugin_windows_command(cmd),
             Cmd::TrackVersions => {
                 self.versions_ui.track = self.version_track().map(|i| self.tracks[i].key.clone());
                 self.versions_ui.open = true;

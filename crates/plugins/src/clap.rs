@@ -1230,6 +1230,7 @@ impl ClapPlugin {
             reload: flags.ports.swap(false, Ordering::Relaxed),
             edited,
             editor_open: self.editor_open(),
+            busy_ns: 0,
         }
     }
 

@@ -630,6 +630,7 @@ impl LocalPlugin {
             reload: flags & (RestartFlags_::kIoChanged | RestartFlags_::kReloadComponent) != 0,
             edited: self.take_edited(),
             editor_open: self.editor_open(),
+            busy_ns: 0,
         }
     }
 

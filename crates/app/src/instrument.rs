@@ -359,6 +359,12 @@ impl Slot {
         }
     }
 
+    /// Whether it is a plugin that couldn't be made here (not
+    /// installed, or switched off after a crash), kept as saved.
+    pub fn is_missing(&self) -> bool {
+        matches!(self.inner, Inner::Missing(_))
+    }
+
     /// Whether it is a plugin (made here or not).
     pub fn is_plugin(&self) -> bool {
         matches!(self.inner, Inner::Plugin(_) | Inner::Missing(_))

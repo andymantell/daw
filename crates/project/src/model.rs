@@ -176,6 +176,12 @@ pub struct Track {
     pub pan: f64,
     pub mute: bool,
     pub solo: bool,
+    /// Solo-safe: soloing other tracks leaves it heard (a reverb bus, a
+    /// click track).
+    pub solo_safe: bool,
+    /// Turned off: kept in the project with everything on it, but it
+    /// plays nothing and its instrument and effects do no processing.
+    pub off: bool,
     /// In the order added: later clips draw (and play) on top.
     pub clips: Vec<Clip>,
     /// Note clips (roadmap 3.1), in time order. Only an instrument
@@ -430,6 +436,8 @@ impl Track {
             pan: 0.0,
             mute: false,
             solo: false,
+            solo_safe: false,
+            off: false,
             clips: Vec::new(),
             note_clips: Vec::new(),
             instrument: None,

@@ -91,6 +91,12 @@ pub(crate) enum Cmd {
     DeleteVersion,
     /// A switching container's next chain, on the track it acts on.
     NextChain,
+    /// Turn the track it acts on off, or on again.
+    TrackOff,
+    /// Make the track it acts on solo-safe, or not.
+    SoloSafe,
+    /// Start the plugins kept switched off after a crash.
+    PluginsOn,
     /// A switching container's chain n, counted from 0.
     HearChain(u8),
     EditGroups,
@@ -1440,6 +1446,24 @@ pub(crate) const COMMANDS: &[Info] = &[
     )
     .hint("Delete the version the track plays; the one before it plays instead")
     .words("alternative alternate playlist remove"),
+    info(Cmd::TrackOff, "track-off", "Track", "Turn track off or on", &[])
+        .hint(
+            "Keep the track in the project but play nothing, so its instrument and effects \
+             use no computer power; again to turn it back on",
+        )
+        .words("disable deactivate inactive freeze cpu heavy power bypass"),
+    info(Cmd::SoloSafe, "solo-safe", "Track", "Solo-safe", &[])
+        .hint("The track stays heard when others are soloed, as a reverb bus should")
+        .words("solo isolate safe defeat reverb bus"),
+    info(
+        Cmd::PluginsOn,
+        "plugins-on",
+        "Settings",
+        "Turn plugins back on",
+        &[],
+    )
+    .hint("Start the plugins kept switched off because the app didn't close properly last time")
+    .words("crash safe mode plugins off restart effects instruments"),
     info(Cmd::NextChain, "next-chain", "Track", "Switch to the next chain", &[])
         .hint(
             "Hear the next chain of the track's switching container, such as the driven \
@@ -3631,6 +3655,8 @@ impl App {
                 .version_track()
                 .is_some_and(|i| !self.tracks[i].versions.is_empty()),
             Cmd::NextChain => self.switch_track().is_some(),
+            Cmd::TrackOff | Cmd::SoloSafe => self.acted_track().is_some(),
+            Cmd::PluginsOn => self.effects.plugins_off,
             Cmd::HearChain(n) => self
                 .switch_track()
                 .is_some_and(|i| self.switch_chains(i) > n as usize),
@@ -4112,6 +4138,23 @@ impl App {
             }
             Cmd::MixAhead => self.toggle_mix_ahead(),
             Cmd::Plugins => self.effects.show_manager = true,
+            Cmd::TrackOff => {
+                if let Some(i) = self.acted_track() {
+                    let off = !self.tracks[i].off;
+                    self.set_track_off(i, off);
+                }
+            }
+            Cmd::SoloSafe => {
+                if let Some(i) = self.acted_track() {
+                    let on = !self.tracks[i].mix.solo_safe;
+                    self.set_solo_safe(i, on);
+                }
+            }
+            Cmd::PluginsOn => {
+                if let Err(e) = self.turn_plugins_on(None) {
+                    self.message = Some(e);
+                }
+            }
             Cmd::PerformanceCheck => self.perf.open = true,
             Cmd::AddTestTracks => self.perf.add_test_tracks(self.rate),
             Cmd::DrumKits

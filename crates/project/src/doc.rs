@@ -1413,6 +1413,13 @@ fn write_body(w: &mut Writer, m: &LoroMap, t: &Track) {
     if t.freeze || m.get("freeze").is_some() {
         w.put(m, "freeze", t.freeze);
     }
+    // Only tracks ever made solo-safe or turned off gain an entry.
+    if t.solo_safe || m.get("solo_safe").is_some() {
+        w.put(m, "solo_safe", t.solo_safe);
+    }
+    if t.off || m.get("off").is_some() {
+        w.put(m, "off", t.off);
+    }
 }
 
 /// Writes an effect chain into `m`: one map per effect under `fx`, in
@@ -2112,6 +2119,8 @@ fn read_track(id: &str, t: &LoroMapValue) -> Track {
         pan: float(t, "pan").unwrap_or(0.0),
         mute: boolean(t, "mute").unwrap_or(false),
         solo: boolean(t, "solo").unwrap_or(false),
+        solo_safe: boolean(t, "solo_safe").unwrap_or(false),
+        off: boolean(t, "off").unwrap_or(false),
         clips: Vec::new(),
         note_clips: Vec::new(),
         instrument: None,
@@ -2704,6 +2713,36 @@ mod tests {
     use super::*;
     use crate::{Articulation, Note, NoteClip, PPQ, Technique};
     use crate::{ControlGroup, Send, Track, TrackKind};
+
+    #[test]
+    fn a_track_turned_off_or_solo_safe_round_trips_and_others_gain_no_entry() {
+        let mut d = ProjectDoc::new(1);
+        let mut p = Project::default();
+        p.tracks.push(Track::new("a".into(), "Reverb".into()));
+        p.tracks.push(Track::new("b".into(), "Strings".into()));
+        d.set(&p);
+        let entry = |d: &ProjectDoc, k: &str| {
+            let LoroValue::Map(tracks) = d.doc.get_map("tracks").get_deep_value() else {
+                panic!()
+            };
+            let LoroValue::Map(a) = tracks.get("a").unwrap() else {
+                panic!()
+            };
+            a.get(k).is_some()
+        };
+        assert!(!entry(&d, "solo_safe") && !entry(&d, "off"));
+        p.tracks[0].solo_safe = true;
+        p.tracks[1].off = true;
+        assert!(d.set(&p));
+        let back = d.get();
+        assert!(back.tracks[0].solo_safe && !back.tracks[0].off);
+        assert!(back.tracks[1].off && !back.tracks[1].solo_safe);
+        p.tracks[0].solo_safe = false;
+        p.tracks[1].off = false;
+        assert!(d.set(&p));
+        let back = d.get();
+        assert!(!back.tracks[0].solo_safe && !back.tracks[1].off);
+    }
 
     #[test]
     fn the_master_channel_round_trips_and_older_projects_gain_no_entry() {

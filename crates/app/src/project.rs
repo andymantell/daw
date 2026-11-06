@@ -343,6 +343,8 @@ impl App {
             pan: t.mix.pan as f64,
             mute: t.mix.mute,
             solo: t.mix.solo,
+            solo_safe: t.mix.solo_safe,
+            off: t.off,
             clips,
             note_clips: t.note_clips.clone(),
             instrument: t.instrument.as_ref().map(crate::instrument::Slot::value),
@@ -662,7 +664,9 @@ impl App {
                 pan: pt.pan as f32,
                 mute: pt.mute,
                 solo: pt.solo,
+                solo_safe: pt.solo_safe,
             };
+            t.off = pt.off;
             let mut had: HashMap<String, Clip> =
                 t.clips.drain(..).map(|c| (c.key.clone(), c)).collect();
             for pc in &pt.clips {
@@ -797,6 +801,8 @@ impl App {
         self.effects.open_track =
             open_key.and_then(|k| self.tracks.iter().position(|t| t.key == k));
         self.proj.committed = self.project();
+        // Plugins switched off after a crash have a note of their own.
+        problems.retain(|p| !p.ends_with(crate::fx::SWITCHED_OFF));
         if !problems.is_empty() {
             let mut m = format!("Couldn't load {}", problems.join("; "));
             if !frozen.is_empty() {
@@ -1339,7 +1345,15 @@ impl App {
 
     /// Asks before the window closes with unsaved work.
     pub(crate) fn on_close(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().close_requested()) && !self.proj.may_close {
+        if !ctx.input(|i| i.viewport().close_requested()) {
+            return;
+        }
+        if self.proj.may_close {
+            // Closing properly: the next start opens plugins as usual.
+            if let Some(r) = &mut self.running {
+                r.closed();
+            }
+        } else {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             self.then(ctx, After::Quit);
         }

@@ -70,7 +70,7 @@ and download the **daw-windows-x64** artifact (a zip holding `daw.exe`).
 1. Install the Visual Studio Build Tools with the **Desktop development
    with C++** workload (the MSVC linker Rust needs).
 2. Install Rust with [rustup](https://rustup.rs), stable toolchain
-   (1.88 or newer).
+   (1.89 or newer).
 3. Install LLVM and point `LIBCLANG_PATH` at it, for example
    `C:\Program Files\LLVM\bin`. The ASIO bindings are generated with
    bindgen, which needs libclang.

@@ -126,6 +126,42 @@ fn mute_and_solo() {
 }
 
 #[test]
+fn a_solo_safe_track_is_heard_while_others_are_soloed() {
+    let mut s = session();
+    for v in [0.1, 0.2, 0.4] {
+        let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), mono(vec![v; 4]))]);
+        t.mix.pan = -1.0;
+        s.tracks.push(t);
+    }
+    s.tracks[2].mix.solo_safe = true;
+    let [l, _] = render(&s, 4, 64);
+    assert!(close(l[0], 0.7), "nothing soloed, all play: {}", l[0]);
+    s.tracks[1].mix.solo = true;
+    let [l, _] = render(&s, 4, 64);
+    assert!(close(l[0], 0.6), "the soloed and the safe: {}", l[0]);
+    // Muting still silences it.
+    s.tracks[2].mix.mute = true;
+    let [l, _] = render(&s, 4, 64);
+    assert!(close(l[0], 0.2), "muted: {}", l[0]);
+}
+
+#[test]
+fn a_track_turned_off_is_silent_and_soloing_it_does_not_bring_it_back() {
+    let mut s = session();
+    for v in [0.1, 0.2] {
+        let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), mono(vec![v; 4]))]);
+        t.mix.pan = -1.0;
+        s.tracks.push(t);
+    }
+    s.tracks[0].off = true;
+    let [l, _] = render(&s, 4, 64);
+    assert!(close(l[0], 0.2), "only the track still on: {}", l[0]);
+    s.tracks[0].mix.solo = true;
+    let [l, _] = render(&s, 4, 64);
+    assert!(close(l[0], 0.0), "soloed but off: {}", l[0]);
+}
+
+#[test]
 fn loop_is_sample_accurate() {
     let mut s = session();
     let mut t = TrackSpec::new(vec![ClipSpec::new(Ticks(0), counting(10_000))]);

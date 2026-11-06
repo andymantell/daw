@@ -276,7 +276,9 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "set_parameter",
         description: "Sets one track setting to a value, the same all through the song, \
                       or the master channel's (track \"master\"). list_parameters gives \
-                      each setting's param name and range. Mute and solo take 0 or 1. For \
+                      each setting's param name and range. Mute, solo, solo_safe (stays \
+                      heard while others are soloed) and off (kept in the project but \
+                      plays nothing and does no processing) take 0 or 1. For \
                       a setting that changes as the song plays (a volume ride, fade, filter \
                       sweep or pan move), use edit_automation.",
         access: Access::Edit,
@@ -1779,6 +1781,8 @@ impl App {
                     "pan": t.pan,
                     "mute": t.mute,
                     "solo": t.solo,
+                    "solo_safe": t.solo_safe,
+                    "off": t.off,
                     "folder": t.parent,
                     "group": t.group,
                     "output": t.output,
@@ -1851,6 +1855,7 @@ impl App {
             "control_groups": p.control_groups.iter().map(|g| json!({
                 "id": g.id, "name": g.name, "gain_db": g.gain_db, "mute": g.mute,
             })).collect::<Vec<_>>(),
+            "plugins_off": self.plugins_off_value(),
             "comments": p.comments.len(),
             "lesson_notes": p.notes,
             "timecode": timecode,
@@ -1964,6 +1969,8 @@ impl App {
             let mut params = vec![
                 json!({"param": MUTE, "name": "Mute", "value": t.mix.mute as u8, "min": 0, "max": 1}),
                 json!({"param": SOLO, "name": "Solo", "value": t.mix.solo as u8, "min": 0, "max": 1}),
+                json!({"param": SOLO_SAFE, "name": "Solo-safe", "value": t.mix.solo_safe as u8, "min": 0, "max": 1}),
+                json!({"param": OFF, "name": "Off", "value": t.off as u8, "min": 0, "max": 1}),
             ];
             // The instrument's are listed below, with its own names.
             for c in crate::automation::choices_up_to(t, &buses, usize::MAX)
@@ -2183,6 +2190,16 @@ impl App {
         if let Some(k) = param.strip_prefix(INSTRUMENT) {
             return self.set_instrument_setting(i, k, v);
         }
+        if param == OFF {
+            return self
+                .set_track_off(i, v >= 0.5)
+                .ok_or_else(|| "No such track.".into());
+        }
+        if param == SOLO_SAFE {
+            return self
+                .set_solo_safe(i, v >= 0.5)
+                .ok_or_else(|| "No such track.".into());
+        }
         let t = &mut self.tracks[i];
         let label = match param {
             p if p.starts_with(crate::notefx::PARAM_PREFIX) => {
@@ -2266,6 +2283,10 @@ const MUTE: &str = "mute";
 /// How an instrument's settings are named to assistants.
 const INSTRUMENT: &str = daw_project::Lane::INSTRUMENT;
 const SOLO: &str = "solo";
+/// Solo-safe: heard while others are soloed.
+const SOLO_SAFE: &str = "solo_safe";
+/// Turned off: kept, but plays nothing and does no processing.
+const OFF: &str = "off";
 
 /// Drives the app headless through the tools, for end-to-end tests:
 /// the calls an assistant makes, without a server or a window.

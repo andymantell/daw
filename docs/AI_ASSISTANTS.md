@@ -112,7 +112,10 @@ assistant finds them for itself. In outline:
   next changes, by anyone.
 - **Tracks, routing and effects:** `add_track`, `edit_track`,
   `delete_track`, `set_send`, `set_parameter` (a built-in instrument's
-  settings too, as `instrument.<key>`), `set_parameters` (many settings,
+  settings too, as `instrument.<key>`; `off` turns a track off, so it
+  stays in the project but plays nothing and does no processing, and
+  `solo_safe` keeps it heard while others are soloed; the commands
+  `track-off` and `solo-safe` switch them, with `track`), `set_parameters` (many settings,
   on one or many tracks, in one call and one undo step; all or none, so
   an interruption can't leave a voicing half-set), `set_sound` (a sound file on a
   drum pad, a sampler zone or the drum sampler), `edit_control_group`,
@@ -256,7 +259,10 @@ assistant finds them for itself. In outline:
   `hear-chain-1` to `hear-chain-4` switch it (with `track`).
 - **Plugins on this computer:** `get_plugins` and `manage_plugins`
   (rescan, check, try a failed one again, offer or hide, where each
-  runs, how many plugin windows may be open).
+  runs, how many plugin windows may be open). After a run that didn't
+  close properly, plugins in projects start switched off: `get_plugins`
+  and `get_project` list them under `plugins_off`, and
+  `turn_plugins_on` (or the command `plugins-on`) starts one or all.
 - **Plugin windows:** `get_plugin_windows` (the track shown, a tab
   for each of its plugins with whether its own window is open and the
   share of a processor core its audio takes, and every plugin the

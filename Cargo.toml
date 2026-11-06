@@ -9,7 +9,7 @@ exclude = ["spikes"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/andymantell/daw"
 publish = false

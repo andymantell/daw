@@ -31,7 +31,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 # One binary holding both architectures.
 lipo -create -output "$app/Contents/MacOS/daw" "$arm" "$intel"
 chmod 755 "$app/Contents/MacOS/daw"
-lipo -verify_arch "$app/Contents/MacOS/daw" arm64 x86_64
+lipo "$app/Contents/MacOS/daw" -verify_arch arm64 x86_64
 
 # The bundle version must be numbers only, so a pre-release suffix such
 # as -beta.1 stays in CFBundleVersion alone.

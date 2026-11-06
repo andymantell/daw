@@ -93,6 +93,7 @@ mod perf;
 mod pitch_edit;
 mod poly_panels;
 mod practice;
+mod practice_panel;
 mod presets;
 mod process;
 mod project;
@@ -529,6 +530,7 @@ struct App {
     assignments: Vec<daw_project::Assignment>,
     lessons_ui: lessons::Lessons,
     practice_log: practice::Logger,
+    practice_ui: practice_panel::PracticePanel,
     /// Tracks edited together, as in the project, and their window.
     edit_groups: Vec<daw_project::EditGroup>,
     groups_ui: groups::Groups,
@@ -718,6 +720,7 @@ impl App {
             pattern_editor: patterns::Editor::default(),
             instrument_open: None,
             practice_log: practice::Logger::default(),
+            practice_ui: practice_panel::PracticePanel::default(),
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
@@ -2680,7 +2683,7 @@ impl eframe::App for App {
         }
         self.browser_update(&ctx);
         self.tuner.update(&mut self.ctl, self.rate);
-        if self.tuner.open {
+        if self.tuner.listening() {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
         let names: Vec<_> = (self.tracks.iter())

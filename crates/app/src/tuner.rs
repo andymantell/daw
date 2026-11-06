@@ -6,7 +6,10 @@ use daw_engine::tuner::{Detector, Note, Smoother, window};
 use eframe::egui::{self, RichText, Sense, Stroke, pos2, vec2};
 
 pub struct Tuner {
+    /// Its own pane is open.
     pub open: bool,
+    /// The practice panel, which shows a reading too, is showing.
+    in_panel: bool,
     /// Device input channel listened to.
     input: usize,
     /// The A above middle C, in Hz.
@@ -24,6 +27,7 @@ impl Tuner {
     pub fn new(rate: u32) -> Tuner {
         Tuner {
             open: false,
+            in_panel: false,
             input: 0,
             a4: 440.0,
             buf: Vec::new(),
@@ -33,14 +37,25 @@ impl Tuner {
         }
     }
 
+    /// Listening to the input: its pane is open, or the practice
+    /// panel is showing.
+    pub fn listening(&self) -> bool {
+        self.open || self.in_panel
+    }
+
     /// What the engine should send the tuner now.
     pub fn command(&self) -> Command {
-        Command::SetTunerInput(self.open.then_some(self.input))
+        Command::SetTunerInput(self.listening().then_some(self.input))
+    }
+
+    /// The note heard now, if any, and its frequency in Hz.
+    pub fn reading(&self) -> Option<(Note, f32)> {
+        self.shown.map(|hz| (Note::from_hz(hz, self.a4), hz))
     }
 
     /// Reads new input and updates the pitch shown. Call every frame.
     pub fn update(&mut self, ctl: &mut Controller, rate: u32) {
-        if !self.open {
+        if !self.listening() {
             return;
         }
         if self.detector.rate() != rate {
@@ -65,12 +80,46 @@ impl Tuner {
         if open == self.open {
             return None;
         }
-        self.open = open;
-        if !open {
+        self.listen(|t| t.open = open)
+    }
+
+    /// Says whether the practice panel showed this frame. Returns the
+    /// command to send if that changed whether it listens.
+    pub fn set_in_panel(&mut self, on: bool) -> Option<Command> {
+        if on == self.in_panel {
+            return None;
+        }
+        self.listen(|t| t.in_panel = on)
+    }
+
+    fn listen(&mut self, change: impl FnOnce(&mut Tuner)) -> Option<Command> {
+        let was = self.listening();
+        change(self);
+        if !self.listening() {
             self.shown = None;
             self.buf.clear();
         }
-        Some(self.command())
+        (self.listening() != was).then(|| self.command())
+    }
+
+    /// The note, its needle and the frequency, in a narrow space: the
+    /// practice panel's reading.
+    pub fn compact(&self, ui: &mut egui::Ui) {
+        let note = self.shown.map(|hz| Note::from_hz(hz, self.a4));
+        ui.horizontal(|ui| {
+            note_label(ui, note, 28.0);
+            ui.vertical(|ui| match (self.shown, note) {
+                (Some(hz), Some(n)) => {
+                    ui.label(format!("{:+.1} cents", n.cents));
+                    ui.label(RichText::new(format!("{hz:.2} Hz")).weak());
+                }
+                _ => {
+                    ui.label(RichText::new("Play a single note").weak());
+                    ui.label(RichText::new(format!("A = {:.1} Hz", self.a4)).weak());
+                }
+            });
+        });
+        needle(ui, note.map(|n| n.cents));
     }
 
     /// Draws the pane. Returns a command to send if the input changed.
@@ -108,20 +157,7 @@ impl Tuner {
         });
         ui.add_space(8.0);
         let note = self.shown.map(|hz| Note::from_hz(hz, self.a4));
-        ui.vertical_centered(|ui| {
-            let (text, color) = match note {
-                Some(n) if n.cents.abs() <= IN_TUNE => (
-                    format!("{}{}", n.name(), n.octave()),
-                    crate::theme::look(ui.ctx()).c().good,
-                ),
-                Some(n) => (
-                    format!("{}{}", n.name(), n.octave()),
-                    ui.visuals().strong_text_color(),
-                ),
-                None => ("–".into(), ui.visuals().weak_text_color()),
-            };
-            ui.label(RichText::new(text).size(48.0).color(color));
-        });
+        ui.vertical_centered(|ui| note_label(ui, note, 48.0));
         needle(ui, note.map(|n| n.cents));
         ui.horizontal(|ui| match (self.shown, note) {
             (Some(hz), Some(n)) => {
@@ -134,6 +170,22 @@ impl Tuner {
         });
         (self.input != before).then(|| self.command())
     }
+}
+
+/// The note's name and octave, green when in tune.
+fn note_label(ui: &mut egui::Ui, note: Option<Note>, size: f32) {
+    let (text, color) = match note {
+        Some(n) if n.cents.abs() <= IN_TUNE => (
+            format!("{}{}", n.name(), n.octave()),
+            crate::theme::look(ui.ctx()).c().good,
+        ),
+        Some(n) => (
+            format!("{}{}", n.name(), n.octave()),
+            ui.visuals().strong_text_color(),
+        ),
+        None => ("–".into(), ui.visuals().weak_text_color()),
+    };
+    ui.label(RichText::new(text).size(size).color(color));
 }
 
 /// A meter from −50 to +50 cents with a needle.

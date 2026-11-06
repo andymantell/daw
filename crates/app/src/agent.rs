@@ -215,7 +215,8 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "A picture (PNG) of the app's window as it is drawn next, or of one \
                       pane: timeline, mixer, comments, notes, lessons, tuner, takes, \
                       monitor, notes-editor, automation, browser, patterns, video, \
-                      fretboard, pitch-editor, inspector, instrument, effects or notation.",
+                      fretboard, pitch-editor, inspector, instrument, effects, notation or \
+                      practice.",
         access: Access::Read,
         schema: || {
             json!({"type": "object", "properties": {
@@ -429,14 +430,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "set_pane",
         description: "Opens, moves, collapses or closes a pane of the main window. Round \
                       the timeline are three regions that hold panes as tabs: the left \
-                      panel (the browser), the right panel (the inspector, lesson notes, \
-                      comments, lessons, tuner) and the dock along the bottom (the mixer \
+                      panel (the browser), the right panel (the inspector, the practice \
+                      panel, lesson notes, comments, lessons, tuner) and the dock along the bottom (the mixer \
                       and the editors). A pane opens in its own region and its tab is \
                       shown; give `to` to move it into another. get_selection's `panels` \
                       says what each region holds and shows. Pane ids: timeline, mixer, \
                       comments, notes, lessons, tuner, takes, monitor, notes-editor, \
                       automation, browser, patterns, video, fretboard, pitch-editor, \
-                      inspector.",
+                      inspector, instrument, effects, notation, practice.",
         access: Access::Edit,
         schema: || {
             json!({"type": "object", "properties": {
@@ -1901,6 +1902,7 @@ impl App {
             "top_bar": self.top_bar_open(),
             "start_screen_at_launch": self.start.settings.show,
             "panels": self.workspace.value(),
+            "practice_panel": self.practice_panel_value(),
         })
     }
 

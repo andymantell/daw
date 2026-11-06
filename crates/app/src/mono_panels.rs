@@ -11,7 +11,7 @@
 
 use daw_instruments::params::{Params, Unit};
 use daw_instruments::{acid, model_mono, oh_one};
-use eframe::egui::{self, RichText, Ui, vec2};
+use eframe::egui::{RichText, Ui, vec2};
 
 use crate::panel_kit::{
     FilterShape, Knob, Size, Switch, envelope_display, filter_display, module, param_knob,
@@ -26,20 +26,10 @@ pub(crate) const ACID_THREE_UNITS: u8 = 2;
 /// Oh-One's.
 pub(crate) const OH_ONE_UNITS: u8 = 3;
 
-/// Modules side by side, `height` tall, scrolling sideways when the pane
-/// is narrower than they are.
-fn row(ui: &mut Ui, id: (&str, u64), add: impl FnOnce(&mut Ui) -> bool) -> bool {
-    let mut changed = false;
-    egui::ScrollArea::horizontal()
-        .id_salt(id)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                changed = add(ui);
-            });
-        });
-    changed
+/// Modules side by side, `height` tall, carrying on in a
+/// second row when the pane is narrower than they are.
+fn row(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> bool) -> bool {
+    crate::panel_kit::modules(ui, 8.0, add)
 }
 
 fn dim(ui: &Ui, text: &str) -> RichText {
@@ -139,7 +129,7 @@ fn knobs(ui: &mut Ui, salt: (&str, u64), p: &Params, row: &[(usize, &str)]) -> b
 pub(crate) fn model_mono(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     use model_mono::at;
     let s = ("model-mono", salt);
-    row(ui, s, |ui| {
+    row(ui, |ui| {
         let mut changed = false;
         // The oscillators: shape and footage on rotary switches, as the
         // originals had them; oscillators 2 and 3 tuned against 1.
@@ -324,7 +314,7 @@ const PRIORITIES: &[&str] = &["Low", "High", "Last"];
 pub(crate) fn acid_three(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     use acid::at;
     let s = ("acid-three", salt);
-    row(ui, s, |ui| {
+    row(ui, |ui| {
         let mut changed = false;
         module(ui, "Oscillator", vec2(120.0, height), |ui| {
             changed |= param_switch(ui, s, p, at::WAVE);
@@ -393,7 +383,7 @@ pub(crate) fn acid_three(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> boo
 pub(crate) fn oh_one(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     use oh_one::at;
     let s = ("oh-one", salt);
-    row(ui, s, |ui| {
+    row(ui, |ui| {
         let mut changed = false;
         module(ui, "Oscillator", vec2(184.0, height), |ui| {
             changed |= segments(

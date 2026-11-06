@@ -3822,3 +3822,155 @@ mod mono_panel_tests {
         assert!(d.h.query_by_label("Range: 16'").is_none());
     }
 }
+
+/// Rack units fit the dock: at the smaller screen with both side panels
+/// open, every control of each built-in instrument sits inside the
+/// dock, none of them a sideways scroll away.
+#[cfg(test)]
+mod fit_tests {
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    use crate::agent::driver::Driver;
+    use crate::workspace::Pane;
+
+    #[test]
+    fn every_instruments_controls_fit_the_dock_at_1440_by_900() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size([1440.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| crate::App::new(Vec::new()));
+        h.run();
+        let mut d = Driver {
+            h,
+            access: crate::agent::Access::EditExport,
+        };
+        d.app().workspace.open(Pane::Browser);
+        d.app().workspace.open(Pane::Inspector);
+        d.h.run();
+        let kinds = [
+            "poly-synth",
+            "sampler",
+            "drum-machine",
+            "slicer",
+            "patch-twenty",
+            "oh-one",
+            "acid-three",
+            "model-mono",
+            "june",
+            "eighty",
+            "oracle",
+            "blue-wave",
+            "lucky-seven",
+        ];
+        for (i, kind) in kinds.iter().enumerate() {
+            let t = d
+                .call("add_track", json!({"kind": kind, "name": kind}))
+                .unwrap()["track"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            d.call("select_track", json!({"track": t})).unwrap();
+            d.app().instrument_open = Some(i);
+            d.app().workspace.open(Pane::Instrument);
+            d.h.run();
+            d.h.run();
+            // The dock runs from the rack's left rail to its header's
+            // last button, the one that closes the pane.
+            let rack = d.h.get_by_label("Show in rack").rect();
+            let right = d.h.get_by_label("Close instrument").rect().max.x;
+            assert!(rack.min.x < right, "{kind}: the rack is in the dock");
+            let params = d.call("list_parameters", json!({"track": t})).unwrap();
+            let mut seen = 0;
+            for p in params[0]["params"].as_array().unwrap() {
+                let name = p["name"].as_str().unwrap();
+                // In the dock, under the rack's top (not the inspector's
+                // own volume and pan, up the right-hand panel).
+                for n in d.h.query_all_by_label(name) {
+                    let r = n.rect();
+                    if r.min.y < rack.min.y {
+                        continue;
+                    }
+                    seen += 1;
+                    assert!(
+                        r.max.x <= right,
+                        "{kind}: {name} ends at {} beyond the dock's edge at {right}",
+                        r.max.x
+                    );
+                }
+            }
+            assert!(seen > 0, "{kind}: its controls are on the panel");
+            // The unit is still the kind the assistant reads, in full.
+            let info = d.call("get_instrument", json!({"track": t})).unwrap();
+            assert_eq!(info["rack"][0]["view"], "shown", "{kind}: {info}");
+        }
+    }
+
+    #[test]
+    fn every_effects_controls_fit_the_dock_at_1440_by_900() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size([1440.0, 900.0])
+            .allow_missing_glyphs()
+            .build_eframe(|_cc| crate::App::new(Vec::new()));
+        h.run();
+        let mut d = Driver {
+            h,
+            access: crate::agent::Access::EditExport,
+        };
+        d.app().workspace.open(Pane::Browser);
+        d.app().workspace.open(Pane::Inspector);
+        let t = d
+            .call("add_track", json!({"kind": "audio", "name": "Guitar"}))
+            .unwrap()["track"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Each built-in effect on its own track's chain, a few at a time
+        // so each unit is in the dock while it is checked.
+        for chunk in daw_effects::Kind::ALL.chunks(3) {
+            let added: Vec<String> = (chunk.iter())
+                .map(|k| {
+                    d.call("add_effect", json!({"track": t, "effect": k.id()}))
+                        .unwrap()["effect"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            d.app().effects.open_track = Some(0);
+            d.app().workspace.open(Pane::Effects);
+            d.h.run();
+            d.h.run();
+            let rack = d.h.get_by_label("Show in rack").rect();
+            let right = d.h.get_by_label("Close effects").rect().max.x;
+            let params = d.call("list_parameters", json!({"track": t})).unwrap();
+            let mut seen = 0;
+            for group in params.as_array().unwrap() {
+                for p in group["params"].as_array().into_iter().flatten() {
+                    // Named "Effect: setting" here; the knob's own name
+                    // is the setting's.
+                    let full = p["name"].as_str().unwrap();
+                    let name = full.rsplit(": ").next().unwrap_or(full);
+                    for n in d.h.query_all_by_label(name) {
+                        let r = n.rect();
+                        if r.min.y < rack.min.y {
+                            continue;
+                        }
+                        seen += 1;
+                        assert!(
+                            r.max.x <= right,
+                            "{name} ends at {} beyond the dock's edge at {right}",
+                            r.max.x
+                        );
+                    }
+                }
+            }
+            assert!(seen > 0, "{chunk:?}: their controls are on the panel");
+            // Take them off again for the next few.
+            for e in added {
+                d.call("remove_effect", json!({"track": t, "effect": e}))
+                    .unwrap();
+            }
+        }
+    }
+}

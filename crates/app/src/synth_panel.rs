@@ -10,31 +10,25 @@
 
 use daw_instruments::params::Params;
 use daw_instruments::synth::at;
-use eframe::egui::{self, RichText, Ui, vec2};
+use eframe::egui::{RichText, Ui, vec2};
 
 use crate::panel_kit::{
     FilterShape, Size, Switch, envelope_display, filter_display, module, param_knob, param_switch,
 };
 use crate::theme;
 
-/// The panel's modules, `height` tall, across the width given (scrolling
-/// sideways when the pane is narrower than they are). True if a setting
+/// The panel's modules, `height` tall, across the width given (in more
+/// than one row when the pane is narrower than they are). True if a setting
 /// moved.
 pub(crate) fn poly_synth(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     let mut changed = false;
-    egui::ScrollArea::horizontal()
-        .id_salt(("poly-synth", salt))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                changed |= oscillators(ui, p, salt, height);
-                changed |= filter(ui, p, salt, height);
-                changed |= envelopes(ui, p, salt, height);
-                changed |= lfo(ui, p, salt, height);
-                changed |= playing(ui, p, salt, height);
-            });
-        });
+    crate::panel_kit::modules(ui, 8.0, |ui| {
+        changed |= oscillators(ui, p, salt, height);
+        changed |= filter(ui, p, salt, height);
+        changed |= envelopes(ui, p, salt, height);
+        changed |= lfo(ui, p, salt, height);
+        changed |= playing(ui, p, salt, height);
+    });
     changed
 }
 

@@ -20,26 +20,20 @@ use crate::panel_kit::{
 };
 use crate::theme;
 
-/// The panel's modules, `height` tall, scrolling sideways when the pane
-/// is narrower than they are. True if a setting moved.
+/// The panel's modules, `height` tall, carrying on in a
+/// second row when the pane is narrower than they are. True if a setting moved.
 pub(crate) fn blue_wave(ui: &mut Ui, p: &Params, salt: u64, height: f32) -> bool {
     let mut changed = false;
-    egui::ScrollArea::horizontal()
-        .id_salt(("blue-wave", salt))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let s = ("blue-wave", salt);
-                changed |= wavetable_module(ui, p, s, height);
-                changed |= oscillator_b(ui, p, s, height);
-                changed |= wave_envelope(ui, p, s, height);
-                changed |= filter(ui, p, s, height);
-                changed |= envelopes(ui, p, s, height);
-                changed |= lfo(ui, p, s, height);
-                changed |= playing(ui, p, s, height);
-            });
-        });
+    crate::panel_kit::modules(ui, 8.0, |ui| {
+        let s = ("blue-wave", salt);
+        changed |= wavetable_module(ui, p, s, height);
+        changed |= oscillator_b(ui, p, s, height);
+        changed |= wave_envelope(ui, p, s, height);
+        changed |= filter(ui, p, s, height);
+        changed |= envelopes(ui, p, s, height);
+        changed |= lfo(ui, p, s, height);
+        changed |= playing(ui, p, s, height);
+    });
     changed
 }
 

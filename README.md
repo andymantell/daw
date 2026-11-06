@@ -87,6 +87,29 @@ For the lowest delay, install your audio interface maker's ASIO driver.
 The first time the app starts with no audio settings saved, the guided
 audio setup opens and offers the ASIO device first.
 
+## Running it on a Mac
+
+Releases carry `daw-<version>-macos-universal.dmg`, one app for Apple
+Silicon and Intel Macs on macOS 13 or later. The release workflow can
+also be run by hand from the Actions tab; its **release-files** artifact
+holds the same .dmg. Open the .dmg and drag DAW onto Applications.
+
+The app is not signed by a registered developer, so macOS refuses it
+the first time:
+
+1. Open DAW from Applications. macOS says it can't open the app; click
+   **Done**.
+2. Open **System Settings**, click **Privacy & Security**, scroll down,
+   and click **Open Anyway** next to the note about DAW.
+3. Click **Open** in the warning that follows (macOS may ask for your
+   password). From then on DAW opens normally.
+
+Allow the microphone when DAW asks, or recordings stay silent. To change
+it later: System Settings → Privacy & Security → Microphone.
+
+No Mac has tested these builds yet; they are built and checked in CI
+only.
+
 ## Documents
 
 | Document | Purpose |

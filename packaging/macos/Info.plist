@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- The app bundle's description. packaging/macos/build.sh fills in
+     @VERSION@, @NUMVERSION@ and @MINOS@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleName</key>
+  <string>DAW</string>
+  <key>CFBundleDisplayName</key>
+  <string>DAW</string>
+  <key>CFBundleIdentifier</key>
+  <string>org.daw.app</string>
+  <key>CFBundleExecutable</key>
+  <string>daw</string>
+  <key>CFBundleIconFile</key>
+  <string>DAW</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@NUMVERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>@MINOS@</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.music</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!-- Without this, macOS stops the app the first time it opens an audio
+       input, so recording would never work. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>DAW records from your microphone or audio interface.</string>
+  <!-- Shown when the phone remote or a lesson connects over the home
+       network. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>DAW talks to your phone remote and to the other person in a lesson on your network.</string>
+</dict>
+</plist>

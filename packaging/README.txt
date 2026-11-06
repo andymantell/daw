@@ -16,6 +16,18 @@ Nothing is sent anywhere unless you send it yourself.
 Checking for new versions is off until you turn it on
 (Help -> Check for updates).
 
+On a Mac
+--------
+
+This build is not signed by a registered developer, so macOS refuses
+it the first time. Open DAW from Applications and click Done. Then open
+System Settings, click Privacy & Security, scroll down, click Open
+Anyway next to the note about DAW, and click Open. After that it opens
+normally.
+
+Allow the microphone when DAW asks, or recordings stay silent (System
+Settings -> Privacy & Security -> Microphone).
+
 Speech model
 ------------
 

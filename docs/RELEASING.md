@@ -14,12 +14,39 @@ changes if they do is listed at the end.
 | `daw-<version>-windows-x64.zip` | The same program to unpack and run without installing. |
 | `daw-<version>-linux-x86_64.AppImage` | Linux, 64-bit: one file; make it executable and run it. Needs the system's ALSA library, as any audio app does. |
 | `daw-<version>-linux-x86_64.tar.gz` | The Linux program with a desktop entry and icon, to unpack anywhere. |
+| `daw-<version>-macos-universal.dmg` | macOS 13 or later, Apple Silicon and Intel in one app. Open it and drag DAW onto Applications. Not signed by a registered developer, so macOS refuses it until it is allowed once ([first launch on a Mac](#first-launch-on-a-mac)). |
 | `latest.txt` | The version and every file's SHA-256 checksum. |
 | `latest.txt.minisig` | The release workflow's signature over `latest.txt`. |
 
-macOS builds are not in the release yet. The owner chose (2026-11-05)
-unsigned macOS builds, as for Windows; adding them to the release
-workflow is planned.
+## First launch on a Mac
+
+The owner chose (2026-11-05) unsigned macOS builds, as for Windows: the
+app carries only an ad-hoc signature (which Apple Silicon needs to run
+anything) and is not notarised. A downloaded copy is refused the first
+time. To allow it once, following Apple's "Safely open apps on your
+Mac" page:
+
+1. Open DAW from Applications. macOS says it can't open the app; click
+   **Done**.
+2. Open **System Settings**, click **Privacy & Security**, scroll down,
+   and click **Open Anyway** next to the note about DAW. The button only
+   appears after step 1.
+3. Click **Open** in the warning that follows (macOS may ask for your
+   password). From then on DAW opens normally.
+
+Since macOS 15 the older Control-click → Open way no longer skips the
+warning, so these are the steps on current systems. The same steps go in
+every draft release's notes, the README and the readme inside the .dmg.
+
+The app asks for the microphone the first time it opens an audio input
+(the bundle's `NSMicrophoneUsageDescription`). If that is refused,
+recordings are silent until it is allowed in System Settings → Privacy &
+Security → Microphone. Likewise the phone remote and shared sessions
+ask for the local network.
+
+No Mac has tested these builds yet: the workflow only checks that the
+.dmg mounts, the app's signature is valid, both halves are in the
+binary, and the app prints its version.
 
 ## Making one
 
@@ -35,6 +62,11 @@ workflow is planned.
 4. Check the draft on the repository's Releases page, then publish it by
    hand. Nothing is public until then, and the app's update check only
    sees the newest published release that is not a pre-release.
+
+The macOS job builds the app twice on the Apple Silicon runner (once
+per architecture, with `MACOSX_DEPLOYMENT_TARGET` 13.0), and
+`packaging/macos/build.sh` joins them with `lipo` into one universal
+`DAW.app`, signs it ad hoc and puts it in a compressed .dmg.
 
 The same workflow runs on pull requests that change `packaging/` or the
 workflow itself, and can be run by hand from the Actions tab: it then
@@ -86,8 +118,8 @@ Help → Check for updates turns it on or off and checks on demand.
 
 If the app hits an internal error (a Rust panic), it writes a text
 report into `%LOCALAPPDATA%\DAW\Crash reports` on Windows, or
-`~/.local/state/DAW/Crash reports` on Linux: version, system, where it
-happened and a backtrace, with the user's name, home folder and any file
+`~/.local/state/DAW/Crash reports` on Linux and macOS: version,
+system, where it happened and a backtrace, with the user's name, home folder and any file
 path in the error message taken out. At the next start a note says a
 report was saved; Help → Crash reports shows each one's exact text and
 opens the folder. Nothing is sent. The 20 newest are kept.
@@ -111,4 +143,7 @@ change:
 - **Linux packaging:** if Flatpak came first, the AppImage step would be
   swapped; the `.tar.gz` stays useful either way.
 - **macOS:** unsigned for now (owner, 2026-11-05). Joining the paid
-  developer program later would add signing and notarisation.
+  developer program later would add signing and notarisation to the
+  macOS job, and the first-launch steps would go. The macOS 13 minimum
+  is the proposal's guess; changing it means changing
+  `MACOSX_DEPLOYMENT_TARGET` and `MACOS_MIN` in the workflow.

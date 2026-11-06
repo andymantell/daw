@@ -1,6 +1,6 @@
 # Release builds (roadmap 1.8; see docs/RELEASING.md). Pushing a tag
-# such as v0.1.0 builds the Windows installer and .zip and the Linux
-# AppImage and .tar.gz, writes and signs latest.txt (the list the app's
+# such as v0.1.0 builds the Windows installer and .zip, the Linux
+# AppImage and .tar.gz and the macOS .dmg (a universal app), writes and signs latest.txt (the list the app's
 # update check reads), and attaches them all to a *draft* GitHub Release.
 # A person publishes the draft by hand; nothing here makes a release
 # public.
@@ -99,8 +99,59 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  macos:
+    # Apple Silicon runner; the Intel half is built alongside it and the
+    # two are joined into one universal app. Not signed by a developer
+    # (owner's choice, 2026-11-05), only ad-hoc, which Apple Silicon needs.
+    runs-on: macos-latest
+    env:
+      # The oldest macOS the app claims to run on (the 0.7 proposal);
+      # packaging/macos/build.sh writes the same into the bundle.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      MACOS_MIN: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: cargo build --release --locked -p daw-app --target aarch64-apple-darwin
+      - run: cargo build --release --locked -p daw-app --target x86_64-apple-darwin
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          packaging/macos/build.sh "$version" \
+            target/aarch64-apple-darwin/release/daw \
+            target/x86_64-apple-darwin/release/daw dist
+          ls -l dist
+      - name: The packaged app starts
+        run: |
+          mnt=$(mktemp -d)
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$mnt" dist/daw-*-macos-universal.dmg
+          app="$mnt/DAW.app"
+          lipo -archs "$app/Contents/MacOS/daw"
+          codesign --verify --strict --verbose=2 "$app"
+          # Prints its version and exits: the Apple Silicon half loads.
+          "$app/Contents/MacOS/daw" --version
+          # And the Intel half, where the runner can run it.
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 "$app/Contents/MacOS/daw" --version
+          else
+            echo "::notice::No Intel translation on this runner; Intel half not started"
+          fi
+          # The oldest macOS each half was built for.
+          otool -arch arm64 -l "$app/Contents/MacOS/daw" | grep -A3 LC_BUILD_VERSION | grep minos
+          otool -arch x86_64 -l "$app/Contents/MacOS/daw" | grep -A3 LC_BUILD_VERSION | grep minos
+          hdiutil detach -quiet "$mnt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-macos
+          path: dist/
+          if-no-files-found: error
+
   package:
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -113,6 +164,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: build-linux
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-macos
           path: dist
       - name: Windows installer and .zip
         run: |
@@ -168,10 +223,13 @@ jobs:
             exit 1
           fi
           {
-            echo "Unsigned test build: Windows will warn before running the installer (More info, then Run anyway)."
+            echo "Unsigned test build: Windows will warn before running the installer (More info, then Run anyway), and macOS will not open the app the first time (see below)."
             echo
             echo "- Windows 10 22H2 or 11, 64-bit: daw-$version-windows-x64-setup.exe, or the .zip to run without installing."
             echo "- Linux, 64-bit: the .AppImage (make it executable, then run it), or the .tar.gz."
+            echo "- macOS 13 or later, Apple Silicon or Intel: daw-$version-macos-universal.dmg. Open it and drag DAW onto Applications."
+            echo
+            echo "**First launch on macOS:** open DAW from Applications. macOS says it can't check the app; click Done. Then open System Settings, click Privacy & Security, scroll down, click Open Anyway next to the note about DAW, and confirm with Open. After that it opens normally. Allow the microphone when asked, or recording stays silent."
             echo
             echo "latest.txt lists every file's SHA-256 checksum."
             if [ ! -f dist/latest.txt.minisig ]; then

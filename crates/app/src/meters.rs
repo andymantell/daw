@@ -63,6 +63,11 @@ impl Meters {
         }
     }
 
+    /// Whether the window is open on the master (not on a track).
+    pub fn on_master(&self) -> bool {
+        self.open && self.track.is_none()
+    }
+
     /// The tap the engine should have now, given the tracks' keys in
     /// order. A deleted track falls back to the master.
     fn wanted(&mut self, keys: &[&str]) -> Option<Tap> {

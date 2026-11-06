@@ -85,13 +85,15 @@ pub(crate) enum Icon {
     Mute,
     Headphones,
     Arm,
+    /// Level bars: the Meters window.
+    Meters,
     Wave,
     Keys,
 }
 
 #[allow(dead_code, reason = "for the icon sheet and tests")]
 impl Icon {
-    pub(crate) const ALL: [Icon; 54] = [
+    pub(crate) const ALL: [Icon; 55] = [
         Icon::Play,
         Icon::Stop,
         Icon::Pause,
@@ -144,6 +146,7 @@ impl Icon {
         Icon::Mute,
         Icon::Headphones,
         Icon::Arm,
+        Icon::Meters,
         Icon::Wave,
         Icon::Keys,
     ];
@@ -203,6 +206,7 @@ impl Icon {
             Icon::Mute => "Mute",
             Icon::Headphones => "Headphones",
             Icon::Arm => "Arm",
+            Icon::Meters => "Meters",
             Icon::Wave => "Audio",
             Icon::Keys => "Instrument",
         }
@@ -556,6 +560,13 @@ pub(crate) fn paint(painter: &Painter, rect: Rect, icon: Icon, colour: Color32) 
         Icon::Arm => {
             pen.ring(0.5, 0.5, 0.32);
             pen.dot(0.5, 0.5, 0.16);
+        }
+        Icon::Meters => {
+            // Level bars lit to different heights; solid, so they
+            // stay apart at the size of a line of text.
+            for (x, top) in [(0.14, 0.44), (0.41, 0.14), (0.68, 0.58)] {
+                pen.rect_fill(x, top, x + 0.18, 0.88, 0.0);
+            }
         }
         Icon::Wave => pen.line(&[
             (0.08, 0.5),

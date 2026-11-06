@@ -907,12 +907,7 @@ impl App {
                     ui.label(RichText::new("Master").strong());
                 });
             }
-            rows.row(ui, ROW, |ui| {
-                // ai: view
-                if ui.button("Meters…").clicked() {
-                    self.meters.show(None);
-                }
-            });
+            // Effects and the Meters window share a row.
             rows.row(ui, ROW, |ui| {
                 let fx = self.master.fx.len()
                     + (self.proj.missing_fx.get(daw_project::Master::KEY)).map_or(0, Vec::len);
@@ -938,8 +933,27 @@ impl App {
                     self.effects.open_master = !open;
                     self.effects.open_track = None;
                 }
+                let on = self.meters.on_master();
+                // ai: meters
+                let m = ui.add(
+                    crate::icons::IconButton::new(
+                        crate::icons::Icon::Meters,
+                        "Meters on the master",
+                    )
+                    .tip("Meters: loudness, peaks, stereo and spectrum of the mix")
+                    .selected(on)
+                    .small(),
+                );
+                if m.clicked() {
+                    if on {
+                        self.meters.open = false;
+                    } else {
+                        self.meters.show(None);
+                    }
+                }
             });
-            rows.skip(g.rows.saturating_sub(3) as f32 * ROW);
+            let used = if g.compact { 1 } else { 2 };
+            rows.skip(g.rows.saturating_sub(used) as f32 * ROW);
         }
         rows.skip(PAN_ROW);
         let mut db = self.master.mix.gain_db as f64;
@@ -1783,6 +1797,38 @@ mod tests {
         only_direct.tracks[2].clips.clear();
         let stem = render(&super::through_bus(&only_direct, 1));
         assert!(stem.iter().flatten().all(|x| x.abs() < 1e-6));
+    }
+
+    /// The master strip's Meters icon opens the Meters window on the mix
+    /// and shows it lit while open; a second press closes it. An
+    /// assistant opens the same window with the `meters` command and
+    /// reads the same levels with get_meters.
+    #[test]
+    fn the_master_strips_meters_icon_opens_the_meters_window() {
+        use serde_json::json;
+
+        use crate::agent::driver::Driver;
+
+        let mut d = Driver::new();
+        d.call("add_track", json!({"kind": "audio"})).unwrap();
+        d.app().workspace.layout = crate::workspace::Layout::mixing();
+        d.h.run();
+        assert!(!d.app().meters.open);
+        assert!(d.h.query_by_label("Meters…").is_none(), "no text button");
+
+        d.h.get_by_label("Meters on the master").click();
+        d.h.run();
+        assert!(d.app().meters.on_master(), "opened on the master");
+        d.h.get_by_label("Meters on the master").click();
+        d.h.run();
+        assert!(!d.app().meters.open, "a second press closes it");
+
+        // An assistant opens it by the command the icon is marked with.
+        d.call("run_command", json!({"id": "meters"})).unwrap();
+        d.h.run();
+        assert!(d.app().meters.on_master());
+        let m = d.call("get_meters", json!({})).unwrap();
+        assert!(m.get("master").is_some(), "the master's levels: {m}");
     }
 
     /// The desk end to end, as an assistant and a person share it: what

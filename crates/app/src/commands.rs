@@ -83,6 +83,7 @@ pub(crate) enum Cmd {
     Copy,
     Paste,
     Bounce,
+    Glue,
     UnlinkClips,
     TrackVersions,
     NewVersion,
@@ -1396,6 +1397,12 @@ pub(crate) const COMMANDS: &[Info] = &[
              its own",
         )
         .words("make unique instance copy linked alias ghost independent"),
+    info(Cmd::Glue, "glue", "Clip", "Glue clips into one", &[])
+        .hint(
+            "The selected clips on a track become one clip that moves, loops and fades as one \
+             piece; one clip selected is glued to the next",
+        )
+        .words("join merge consolidate combine stitch"),
     info(Cmd::Bounce, "bounce", "Clip", "Bounce to a new track", &[])
         .hint(
             "The selected clips through their track's effects, as new audio on a track beside \
@@ -3660,6 +3667,7 @@ impl App {
             Cmd::ExportStemPackage => !self.export.busy(),
             Cmd::MakePatternUnique | Cmd::PatternToNotes => self.selected_pattern_clip().is_some(),
             Cmd::UnlinkClips => !self.selected_linked().is_empty(),
+            Cmd::Glue => self.can_glue(),
             Cmd::NoteRepeat => self.instrument_track(None).is_some(),
             Cmd::NextVersion | Cmd::PrevVersion | Cmd::DeleteVersion => self
                 .version_track()
@@ -4273,6 +4281,7 @@ impl App {
                 }
             }
             Cmd::Bounce => self.bounce_selection(),
+            Cmd::Glue => self.glue_selection(),
             Cmd::UnlinkClips => self.unlink_selected(),
             Cmd::NextTheme => self.themes.next(),
             Cmd::LightDark => self.themes.flip(ctx),

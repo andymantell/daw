@@ -55,6 +55,7 @@ mod freeze;
 mod fretboard;
 mod fx;
 mod fx_panel;
+mod glue;
 mod groups;
 mod headless;
 mod history;
@@ -1909,6 +1910,12 @@ impl App {
         }
         if out.bounce {
             self.bounce_selection();
+        }
+        if out.glue {
+            self.glue_selection();
+        }
+        if let Some(m) = out.message {
+            self.message = Some(m);
         }
         if let Some((lane, at, rendered)) = out.paste {
             if rendered {

@@ -638,6 +638,7 @@ pub(crate) fn all_tools() -> impl Iterator<Item = &'static Tool> {
         .chain(crate::notation::TOOLS)
         .chain(crate::agent_plugins::TOOLS)
         .chain(crate::macros::TOOLS)
+        .chain(crate::glue::TOOLS)
         .chain(crate::plugin_windows::TOOLS)
         .chain(crate::review::TOOLS)
         .chain(crate::agent_midi::TOOLS)

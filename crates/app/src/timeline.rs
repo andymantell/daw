@@ -1179,6 +1179,10 @@ pub struct Outcome {
     pub track: Option<(usize, TrackAsk)>,
     /// Bounce the selected clips to new tracks.
     pub bounce: bool,
+    /// Glue the selected clips into one (or the one picked to the next).
+    pub glue: bool,
+    /// Something to tell the user.
+    pub message: Option<String>,
     /// Copy the selected clips.
     pub copy: bool,
     /// Paste the copied clips onto a lane at a frame: as they are, or
@@ -4572,6 +4576,18 @@ impl Timeline {
                     ui.close();
                 }
                 if ui
+                    // ai: glue
+                    .button("Glue into one clip")
+                    .on_hover_text(
+                        "The selected clips on a track become one clip that moves, loops and \
+                         fades as one piece; one clip selected is glued to the next",
+                    )
+                    .clicked()
+                {
+                    out.glue = true;
+                    ui.close();
+                }
+                if ui
                     // ai: bounce
                     .button("Bounce to a new track")
                     .on_hover_text(
@@ -4711,6 +4727,30 @@ impl Timeline {
                         self.note_sel = Some(c.id.clone());
                         song.lanes[lane].notes.push(c);
                         out.changed = true;
+                        ui.close();
+                    }
+                    let after = (song.lanes[lane].notes.iter())
+                        .filter(|n| !n.muted && n.id != key)
+                        .filter(|n| n.start >= song.lanes[lane].notes[index].start)
+                        .min_by_key(|n| n.start)
+                        .map(|n| n.id.clone());
+                    if let Some(next) = after.filter(|_| !linked)
+                        && ui
+                            // ai: glue_clips
+                            .button("Glue to the next clip")
+                            .on_hover_text(
+                                "This clip and the next one on the track become one clip, \
+                                 holding the notes both played",
+                            )
+                            .clicked()
+                    {
+                        match daw_project::glue_note_clips(song.lanes[lane].notes, &[&key, &next]) {
+                            Ok(id) => {
+                                self.note_sel = Some(id);
+                                out.changed = true;
+                            }
+                            Err(e) => out.message = Some(e),
+                        }
                         ui.close();
                     }
                     // ai: delete_clip

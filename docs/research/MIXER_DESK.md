@@ -66,6 +66,48 @@ most of them, which is why players find it familiar:
 - **Agents:** the strip changes nothing in the command layer (2.11);
   volume, pan, mute, solo and routing remain the same commands.
 
+## Pedalboard mode
+
+Follow-up request (2026-11-07): a mode where one mixer channel's effects
+expand to fill the window, all visible at once to tweak, with drag to
+rearrange.
+
+Where we are: the Effects tab (UI polish step 5) already draws a track's
+chain as rack units, two half-width units to a row, with Move arrows to
+reorder and per-unit collapsed or hidden views; a dock pane can be shown
+full size. There is no drag-to-reorder, and full size keeps the same
+unit scale.
+
+What the mode adds:
+
+- **Scale.** The same panel kit faces drawn larger (about 1.5 times, so
+  knobs are easy to grab) and laid out in signal order left to right,
+  wrapping to the next row when the window runs out, as pedals sit on a
+  board. Rows read left to right then down. Hardware boards usually run
+  right to left because the guitar lead comes in on the right; we keep
+  the app's left-to-right reading so it matches the rack and the chain
+  list.
+- **Everything open.** Collapsed units open for the mode; hidden ones
+  are drawn dimmed at the end with a Show button, so the board always
+  tells the truth about what plays. Leaving the mode puts the views back
+  as they were.
+- **Ends of the chain.** The input (and the instrument on an instrument
+  track) at the start; the fader, sends and output as a last unit, so
+  the board is the whole channel.
+- **Drag to rearrange.** Drag a unit by its name plate; a gap opens
+  where it would land, including inside a container's chain or out of
+  one; the drop is one labelled undo step and the engine takes the new
+  order with the same click-free swap the Move arrows use. The arrows
+  stay, for the keyboard and screen readers.
+- **Stomp.** A larger On button on each unit, as the one control that
+  matters on a pedal; everything else is the unit's normal face.
+- **Getting there and back.** A button on each mixer strip and on the
+  Effects tab's toolbar, a command (so a key and the command palette),
+  previous and next track while in the mode, and Escape to leave. Enter,
+  leave, select track and reorder are commands; the selection reports
+  the mode and the boarded track, so an assistant sees the same board.
+- **Themes.** Nothing new to define: the rack tokens cover it.
+
 ## Not researched yet
 
 - Whether to keep the current table as an alternative "list" view for

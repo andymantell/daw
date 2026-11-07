@@ -522,6 +522,21 @@ pane in `app/monitor.rs`. Owner checks on the interface's outputs in
   pane each strip folds its routing into a menu; shorter still, the desk
   starts scrolled to the faders. Review steps:
   [review-queue/2.3-mixer-desk.md](review-queue/2.3-mixer-desk.md).*
+- **Pedalboard mode (M):** from a mixer strip (or the Effects tab), one
+  track's whole effect chain takes over the window at a larger scale:
+  every unit shown full, none collapsed, hidden ones shown dimmed with a
+  way to bring them back, laid out in signal order left to right and
+  wrapping to the next row like pedals on a board, with the input at
+  the start and the fader, sends and output at the end. Everything is
+  live to tweak at that size. **Drag to rearrange:** pick a unit up by
+  its name plate and drop it between others, into or out of a container,
+  with the chain's sound following the drop; the Move arrows stay for
+  the keyboard. A stomp-sized On button per unit, Add effect at the end,
+  chain presets, previous and next track to board the next strip, and
+  Escape or the same button to come back. Reorder, enter and leave are
+  commands, and the selection reports the mode, so assistants see the
+  board too. See
+  [research/MIXER_DESK.md](research/MIXER_DESK.md#pedalboard-mode).
 
 ### 2.4 Plugin hosting — depth (L)
 *Started 2026-10-29, at risk. Done so far: a choice per plugin (Settings

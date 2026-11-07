@@ -206,6 +206,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Run(Cmd::ClipFades),
             Run(Cmd::Crossfade),
             Run(Cmd::UnlinkClips),
+            Run(Cmd::Glue),
             Run(Cmd::Bounce),
             Gap,
             Run(Cmd::FixTiming),

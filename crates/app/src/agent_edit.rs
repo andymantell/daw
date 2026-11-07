@@ -321,6 +321,7 @@ impl App {
                     .or_else(|| self.notation_tool(name, args))
                     .or_else(|| self.plugins_tool(name, args))
                     .or_else(|| self.macros_tool(name, args))
+                    .or_else(|| self.glue_tool(name, args))
                     .or_else(|| self.plugin_windows_tool(name, args))
                     .or_else(|| self.midi_tool(name, args));
             }

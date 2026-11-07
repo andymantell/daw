@@ -13,6 +13,8 @@
 //!   are muted where they are.
 //! - **Paste as rendered audio**: copied clips, through their own tracks'
 //!   effects, pasted onto another track as one new clip.
+//! - **Glue** clips on a track (see `glue.rs`): their own audio, without
+//!   the track's effects or fader, becomes one clip in their place.
 //!
 //! Renders run on a thread of their own with their own copies of any
 //! plugins, the way an export does, and write files that wait with the
@@ -26,7 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
 use daw_engine::automation::Target as AutoTarget;
-use daw_engine::export::{Written, write_wav};
+use daw_engine::export::{Written, write_wav, write_wav_mono};
 use daw_engine::graph::{Mix, Output, Session, TrackSpec};
 use daw_engine::stream::StreamSource;
 use daw_engine::time::Frames;
@@ -54,12 +56,33 @@ pub(crate) enum Place {
     },
     /// A clip on the track with this key, starting at this frame.
     Clip { lane: String, at: i64 },
+    /// One clip, with key `key`, in place of the clips (by key) glued
+    /// on the track with key `lane` (see `glue.rs`).
+    Glue {
+        lane: String,
+        clips: Vec<String>,
+        key: String,
+    },
 }
 
 /// One track to render, and the clips to play on it instead of its own.
 pub(crate) struct Target {
     pub index: usize,
     pub clips: Option<Vec<Clip>>,
+}
+
+/// A render about to start.
+struct Queued {
+    place: Place,
+    name: String,
+    from: i64,
+    lead: usize,
+    frames: usize,
+    /// The tracks it hears, by index.
+    heard: Vec<usize>,
+    plugins: Vec<Plugin>,
+    /// Mono, from the left side.
+    mono: bool,
 }
 
 struct Job {
@@ -331,26 +354,106 @@ impl App {
         if frames == 0 {
             return Err("There is nothing to render there.".into());
         }
+        let job = Queued {
+            place,
+            name,
+            from,
+            lead: (first - from) as usize,
+            frames,
+            heard,
+            plugins,
+            mono: false,
+        };
+        self.queue_render(graph, job)
+    }
+
+    /// Glues `clips` of track `i` into one clip with key `key`, in
+    /// their place: their own audio, with their volume, fades,
+    /// stretching and pitch edits, but not the track's effects, fader or
+    /// lanes, which go on playing it. Mono clips make a mono clip.
+    pub(crate) fn start_glue(
+        &mut self,
+        i: usize,
+        clips: Vec<Clip>,
+        key: String,
+    ) -> Result<(), String> {
+        let t = &self.tracks[i];
+        if t.freeze {
+            return Err(format!("{} is frozen: unfreeze it first.", t.name));
+        }
+        if clips.iter().any(|c| c.source.rate != self.rate) {
+            return Err(
+                "Some of its audio is still being converted: try again in a moment.".into(),
+            );
+        }
+        let first = (clips.iter().map(|c| c.start).min()).ok_or("There is nothing to glue.")?;
+        let mono = clips.iter().all(|c| c.source.channels == 1);
+        let mut s = self.session();
+        s.master_inserts.clear();
+        s.master_db = 0.0;
+        s.master_automation.clear();
+        s.groups.clear();
+        let mut spec = TrackSpec::new(clips.iter().map(|c| clip_spec(c, &s.tempo)).collect());
+        // Hard left, a mono clip comes out at its own level there, and
+        // only that side is kept.
+        if mono {
+            spec.mix.pan = -1.0;
+        }
+        s.tracks = vec![spec];
+        let graph = s
+            .compile_with(daw_audio_io::MAX_BLOCK, &mut Vec::new())
+            .map_err(|e| e.to_string())?;
+        let frames = (graph.end().0 - first).max(0) as usize;
+        if frames == 0 {
+            return Err("There is nothing to glue there.".into());
+        }
+        let place = Place::Glue {
+            lane: t.key.clone(),
+            clips: clips.iter().map(|c| c.key.clone()).collect(),
+            key,
+        };
+        let job = Queued {
+            place,
+            name: clips[0].name(),
+            from: first,
+            lead: 0,
+            frames,
+            heard: vec![i],
+            plugins: Vec::new(),
+            mono,
+        };
+        self.queue_render(graph, job)
+    }
+
+    /// Starts rendering `graph` on a thread of its own, to become `job`.
+    fn queue_render(&mut self, graph: daw_engine::graph::Graph, job: Queued) -> Result<(), String> {
         let dir = rendered_dir();
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let path = dir.join(format!("{}.wav", daw_project::new_id()));
         let done = Arc::new(AtomicU64::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let (d, c, p) = (done.clone(), cancel.clone(), path.clone());
-        let thread = std::thread::spawn(move || write_wav(graph, Frames(from), frames, &p, &d, &c));
-        let print = self.render_print(&heard);
+        let (from, frames, mono) = (job.from, job.frames, job.mono);
+        let thread = std::thread::spawn(move || {
+            if mono {
+                write_wav_mono(graph, Frames(from), frames, &p, &d, &c)
+            } else {
+                write_wav(graph, Frames(from), frames, &p, &d, &c)
+            }
+        });
+        let print = self.render_print(&job.heard);
         self.renders.jobs.push(Job {
-            place,
-            name,
+            place: job.place,
+            name: job.name,
             path,
             from,
-            lead: (first - from) as usize,
+            lead: job.lead,
             print,
             thread: Some(thread),
             done,
             total: frames as u64,
             cancel,
-            _plugins: plugins,
+            _plugins: job.plugins,
         });
         Ok(())
     }
@@ -461,12 +564,27 @@ impl App {
                     .ok_or("the track to paste onto is gone")?;
                 self.tracks[i].clips.push(clip);
             }
+            Place::Glue { lane, clips, key } => {
+                let i = self.track_index(lane).ok_or("its track is gone")?;
+                let t = &mut self.tracks[i];
+                if !clips.iter().all(|k| t.clips.iter().any(|c| &c.key == k)) {
+                    return Err("its clips changed while it was being glued: try again".into());
+                }
+                let at = (t.clips.iter().position(|c| clips.contains(&c.key))).unwrap_or(0);
+                t.clips.retain(|c| !clips.contains(&c.key));
+                clip.key = key.clone();
+                t.clips.insert(at.min(t.clips.len()), clip);
+            }
         }
         self.timeline.selected = HashSet::from([id]);
         if written.clipped() {
+            let what = match job.place {
+                Place::Glue { .. } => "its clips' volume",
+                _ => "its effects",
+            };
             self.message = Some(format!(
-                "{} went {:.1} dB over full scale and was clipped: turn its effects down and \
-                 render again",
+                "{} went {:.1} dB over full scale and was clipped: turn {what} down and \
+                 try again",
                 job.name,
                 20.0 * written.peak.log10()
             ));
@@ -699,7 +817,7 @@ pub(crate) fn can_freeze(t: &Track) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
@@ -757,7 +875,7 @@ mod tests {
 
     /// What the app plays, from the start, rendered offline in blocks
     /// as long as a render's: lanes are read once a block.
-    fn render(app: &mut App, frames: usize) -> Vec<f32> {
+    pub(crate) fn render(app: &mut App, frames: usize) -> Vec<f32> {
         let s = app.session();
         let mut keep = Vec::new();
         let mut fx = Vec::new();
@@ -778,7 +896,7 @@ mod tests {
         out
     }
 
-    fn worst(a: &[f32], b: &[f32]) -> f32 {
+    pub(crate) fn worst(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
         a.iter()
             .zip(b)

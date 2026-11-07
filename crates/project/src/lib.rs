@@ -12,6 +12,7 @@ mod cleanup;
 mod diff;
 mod doc;
 mod folder;
+mod glue;
 mod history;
 mod identity;
 pub mod kit;
@@ -34,6 +35,7 @@ pub use cleanup::{AudioFile, project_assets};
 pub use diff::{Difference, differences};
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};
+pub use glue::{glue_note_clips, glue_order};
 pub use history::{Activity, RUN_GAP, UndoStep, label};
 pub use identity::{Check, Identity, MAX_NAME, Member, Role, clean_name};
 pub use lessons::{

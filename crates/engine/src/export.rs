@@ -62,6 +62,30 @@ pub fn write_wav(
     write(graph, from, frames, path, Format::Wav, done, cancel)
 }
 
+/// Renders `frames` frames of `graph` from `from` into a mono 24-bit
+/// WAV file at `path`, of its left side only: for mono audio panned
+/// hard left, which comes out at its own level there. See [`write`].
+pub fn write_wav_mono(
+    graph: Graph,
+    from: Frames,
+    frames: usize,
+    path: &Path,
+    done: &AtomicU64,
+    cancel: &AtomicBool,
+) -> Result<Written, String> {
+    let rate = graph.tempo().sample_rate();
+    write_with(
+        graph,
+        from,
+        frames,
+        path,
+        "wav",
+        |out| Wav::new(out, rate, 1).map(|e| Box::new(e) as _),
+        done,
+        cancel,
+    )
+}
+
 /// Renders `frames` frames of `graph` from `from` into a stereo file of
 /// `format` at `path`. `done` counts frames rendered so far; setting
 /// `cancel` stops early and removes the file. The file appears only when
@@ -76,16 +100,42 @@ pub fn write(
     cancel: &AtomicBool,
 ) -> Result<Written, String> {
     let rate = graph.tempo().sample_rate();
-    let tmp = path.with_extension(format!("{}.part", format.extension()));
+    let encoder = move |out: Out| -> Result<Box<dyn Encode>, String> {
+        match format {
+            Format::Wav => Wav::new(out, rate, 2).map(|e| Box::new(e) as _),
+            Format::Flac => Flac::new(out, rate).map(|e| Box::new(e) as _),
+            Format::Mp3(kbps) => Mp3::new(out, rate, kbps).map(|e| Box::new(e) as _),
+            Format::Opus(kbps) => Opus::new(out, rate, kbps).map(|e| Box::new(e) as _),
+        }
+    };
+    write_with(
+        graph,
+        from,
+        frames,
+        path,
+        format.extension(),
+        encoder,
+        done,
+        cancel,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_with(
+    graph: Graph,
+    from: Frames,
+    frames: usize,
+    path: &Path,
+    extension: &str,
+    encoder: impl FnOnce(Out) -> Result<Box<dyn Encode>, String>,
+    done: &AtomicU64,
+    cancel: &AtomicBool,
+) -> Result<Written, String> {
+    let tmp = path.with_extension(format!("{extension}.part"));
     let file =
         File::create(&tmp).map_err(|e| format!("could not create {}: {e}", tmp.display()))?;
     let out = BufWriter::new(file);
-    let made: Result<Box<dyn Encode>, String> = match format {
-        Format::Wav => Wav::new(out, rate).map(|e| Box::new(e) as _),
-        Format::Flac => Flac::new(out, rate).map(|e| Box::new(e) as _),
-        Format::Mp3(kbps) => Mp3::new(out, rate, kbps).map(|e| Box::new(e) as _),
-        Format::Opus(kbps) => Opus::new(out, rate, kbps).map(|e| Box::new(e) as _),
-    };
+    let made = encoder(out);
     let mut enc = match made {
         Ok(e) => e,
         Err(e) => {
@@ -154,25 +204,25 @@ fn to_24(x: f32) -> i32 {
     (x.clamp(-1.0, 1.0) * FULL_24).round() as i32
 }
 
-struct Wav(hound::WavWriter<Out>);
+struct Wav(hound::WavWriter<Out>, u16);
 
 impl Wav {
-    fn new(out: Out, rate: u32) -> Result<Wav, String> {
+    fn new(out: Out, rate: u32, channels: u16) -> Result<Wav, String> {
         let spec = hound::WavSpec {
-            channels: 2,
+            channels,
             sample_rate: rate,
             bits_per_sample: 24,
             sample_format: hound::SampleFormat::Int,
         };
         let w = hound::WavWriter::new(out, spec).map_err(|e| e.to_string())?;
-        Ok(Wav(w))
+        Ok(Wav(w, channels))
     }
 }
 
 impl Encode for Wav {
     fn push(&mut self, l: &[f32], r: &[f32]) -> Result<(), String> {
         for (a, b) in l.iter().zip(r) {
-            for x in [a, b] {
+            for x in [a, b].into_iter().take(self.1 as usize) {
                 self.0.write_sample(to_24(*x)).map_err(|e| e.to_string())?;
             }
         }

@@ -189,6 +189,8 @@ assistant finds them for itself. In outline:
   preview), `stretch_clips` (follow tempo, a clip's own tempo, stretch
   markers placed, moved, removed or quantised), `tempo_from_clip`,
   `freeze_track`, `render_track` (render in place, or bounce clips),
+  `glue_clips` (clips side by side on a track become one: note clips'
+  notes merge, audio clips' own audio is rendered into one clip),
   `process_clips` (normalise, reverse, change gain), `edit_clip_volume`
   (fade shapes and the volume line), `edit_groups`, `edit_snapshot`, and
   `set_track_input` (arm, monitor, input and MIDI out, which belong to

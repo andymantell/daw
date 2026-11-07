@@ -1212,8 +1212,13 @@ impl<'a> Writer<'a> {
                 "normalized",
                 Box::new(|v: f64| v),
             ),
-            // Instrument lanes are not carried over (reported below).
-            LaneTarget::Instrument(_) | LaneTarget::Unknown => (None, "linear", Box::new(|v| v)),
+            // Instrument and layer lanes are not carried over (reported
+            // below).
+            LaneTarget::Instrument(_)
+            | LaneTarget::LayerGain(_)
+            | LaneTarget::LayerPan(_)
+            | LaneTarget::LayerInstrument { .. }
+            | LaneTarget::Unknown => (None, "linear", Box::new(|v| v)),
         };
         let Some(param) = param else {
             self.report

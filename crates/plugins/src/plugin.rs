@@ -1399,6 +1399,13 @@ impl Instrument for Processor {
             Processor::Clap(p) => p.process_outputs(events, left, right, outs),
         }
     }
+
+    /// A parameter for the next block, from an automation lane: by its
+    /// id, 0 to 1, as an effect plugin's is (see `Insert::set_param`).
+    /// The plugin keeps it; there is nothing to give back.
+    fn automate(&mut self, param: u32, value: f64) {
+        Insert::set_param(self, param, value);
+    }
 }
 
 /// A loaded plugin file, in either format.

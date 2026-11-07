@@ -5,8 +5,10 @@
 //!
 //! A lane is named by the setting it is on, as `list_parameters` names
 //! it (`gain`, `pan`, `send:<bus>`, `fx:<effect>:<key>`,
-//! `plugin:<effect>:<id>`). Its points are joined by straight lines and
-//! held level before the first and after the last; there are no curves.
+//! `plugin:<effect>:<id>`, `instrument.<key>`, `layer:<layer>:gain`,
+//! `layer:<layer>:pan`, `layer:<layer>:instrument.<key>`). Its points
+//! are joined by straight lines and held level before the first and
+//! after the last; there are no curves.
 //! A point is found by its place in its lane, from 0 in time order, as
 //! `get_automation` lists it.
 
@@ -45,8 +47,10 @@ pub(crate) const TOOLS: &[Tool] = &[
         name: "edit_automation",
         description: "Automates a track setting so it changes over time as the song plays: \
                       a volume ride or fade, a filter sweep (a synth's instrument.cutoff, or \
-                      a Filter effect's cutoff), a pan move, a send, effect or built-in \
-                      instrument setting rising or falling. Draws points on the setting's automation \
+                      a Filter effect's cutoff), a pan move, a send, effect or \
+                      instrument setting rising or falling (a plugin instrument's \
+                      parameters too, and each layer of a layered instrument: its level, \
+                      pan and instrument's settings). Draws points on the setting's automation \
                       lane, which the setting follows from point to point. It changes one \
                       lane: adds it (for any setting \
                       list_parameters names that can be automated; it starts level at the \
@@ -907,5 +911,196 @@ mod tests {
         d.command("undo");
         assert!(d.app().master.automation.is_empty());
         assert!(d.app().session().master_automation.is_empty());
+    }
+
+    /// The level of a track over the whole song, by its sample peak.
+    fn peak(d: &mut Driver, t: &str) -> f64 {
+        let r = d.call("analyse", json!({"track": t})).unwrap();
+        r["sample_peak_dbfs"].as_f64().unwrap()
+    }
+
+    /// The wish from the third song test: a plugin instrument's
+    /// parameter takes a lane, which the export (here, analyse) follows.
+    #[test]
+    fn a_plugin_instruments_parameter_follows_its_lane() {
+        use crate::freeze::test_plugin;
+        let mut d = Driver::new();
+        let app = d.app();
+        app.effects.helper = Some(test_plugin::helper());
+        let bundle = test_plugin::bundle();
+        app.effects.list.bundles = vec![daw_plugins::scan::BundleEntry {
+            result: Ok(daw_plugins::scan::scan_here(&bundle).unwrap()),
+            path: bundle,
+            modified: 0,
+        }];
+        let t = id(
+            d.call("add_track", json!({"kind": "instrument"})).unwrap(),
+            "track",
+        );
+        d.call(
+            "set_instrument",
+            json!({"track": t, "instrument": daw_test_plugin::SYNTH_NAME}),
+        )
+        .unwrap();
+        let c = id(
+            d.call("add_note_clip", json!({"track": t, "bar": 1, "bars": 2}))
+                .unwrap(),
+            "clip",
+        );
+        d.call(
+            "edit_notes",
+            json!({"clip": c, "add": [{"beat": 4, "beats": 1, "pitch": 60}]}),
+        )
+        .unwrap();
+
+        // The plugin's gain is listed as the instrument's, by its id.
+        let listed = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": "instrument."}),
+            )
+            .unwrap();
+        let gain = (listed[0]["params"].as_array().unwrap().iter())
+            .find(|p| p["name"].as_str().unwrap().ends_with("Gain"))
+            .unwrap_or_else(|| panic!("{listed}"))
+            .clone();
+        let param = gain["param"].as_str().unwrap().to_string();
+        assert_eq!(param, "instrument.0");
+        assert_eq!(gain["automated"], false);
+        assert_eq!(
+            (gain["min"].as_f64(), gain["max"].as_f64()),
+            (Some(0.0), Some(1.0))
+        );
+        let own = gain["value"].as_f64().unwrap();
+        let loud = peak(&mut d, &t);
+
+        // A lane at a quarter of the gain plays a quarter as loud.
+        d.call(
+            "edit_automation",
+            json!({"track": t, "param": param, "add": [{"bar": 1, "value": own / 4.0}]}),
+        )
+        .unwrap();
+        let l = lanes(&mut d, &t);
+        assert_eq!(l[0]["param"], "instrument.0");
+        assert_eq!(l[0]["missing"], false);
+        assert!(l[0]["name"].as_str().unwrap().ends_with(": Gain"), "{l}");
+        let quiet = peak(&mut d, &t);
+        assert!((loud - quiet - 12.04).abs() < 0.5, "{loud} {quiet}");
+        let listed = d
+            .call(
+                "list_parameters",
+                json!({"track": t, "prefix": "instrument.0"}),
+            )
+            .unwrap();
+        assert_eq!(listed[0]["params"][0]["automated"], true);
+
+        // With the lane off, set by value, the plugin takes it. (As with
+        // a plugin effect, the plugin keeps the lane's last value until
+        // it is set.)
+        d.call("set_automation_mode", json!({"track": t, "mode": "off"}))
+            .unwrap();
+        d.call(
+            "set_parameter",
+            json!({"track": t, "param": param, "value": own / 2.0}),
+        )
+        .unwrap();
+        assert!((loud - peak(&mut d, &t) - 6.02).abs() < 0.5);
+    }
+
+    /// The same wish for a layered instrument: each layer's level, pan
+    /// and instrument settings take lanes, and the track's instrument's
+    /// lanes go with it when it becomes the first layer.
+    #[test]
+    fn a_layers_level_and_instrument_settings_follow_their_lanes() {
+        let (mut d, t) = synth_note();
+        let open = highs(&mut d, &t);
+        let loud = peak(&mut d, &t);
+        // A sweep on the synth's own filter, before it is layered.
+        d.call(
+            "edit_automation",
+            json!({"track": t, "param": "instrument.cutoff", "add": [
+                {"bar": 1, "value": 18_000.0},
+                {"bar": 2, "value": 200.0}
+            ]}),
+        )
+        .unwrap();
+        let swept = highs(&mut d, &t);
+        assert!(swept < open - 30.0, "{open} {swept}");
+
+        // Layered: the synth is layer 1, and its lane moves with it.
+        let second = id(
+            d.call("edit_layer", json!({"track": t, "add": true}))
+                .unwrap(),
+            "layer",
+        );
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        let first = i["layers"][0]["id"].as_str().unwrap().to_string();
+        // Layer 2 off, so only the synth is heard.
+        d.call(
+            "edit_layer",
+            json!({"track": t, "layer": second, "on": false}),
+        )
+        .unwrap();
+        let l = lanes(&mut d, &t);
+        let cutoff = format!("layer:{first}:instrument.cutoff");
+        assert_eq!(l[0]["param"], cutoff.as_str(), "{l}");
+        assert_eq!(l[0]["missing"], false);
+        let name = l[0]["name"].as_str().unwrap();
+        assert!(
+            name.starts_with("Layer 1 ") && name.ends_with(": Cutoff"),
+            "{name}"
+        );
+        assert!((highs(&mut d, &t) - swept).abs() < 3.0);
+
+        // Every layer's settings are listed for lanes.
+        let listed = d
+            .call("list_parameters", json!({"track": t, "prefix": "layer:"}))
+            .unwrap();
+        let params = listed[0]["params"].as_array().unwrap();
+        let level = format!("layer:{first}:gain");
+        let pan = format!("layer:{second}:pan");
+        for want in [&level, &pan, &cutoff] {
+            assert!(
+                params.iter().any(|p| p["param"] == want.as_str()),
+                "{want}: {listed}"
+            );
+        }
+        let lp = params
+            .iter()
+            .find(|p| p["param"] == level.as_str())
+            .unwrap();
+        assert_eq!(lp["name"], "Layer 1: Level");
+        assert_eq!(
+            (lp["min"].as_f64(), lp["max"].as_f64()),
+            (Some(-60.0), Some(12.0))
+        );
+
+        // A lane takes layer 1 down 20 dB; its control stays at 0 dB.
+        let before = peak(&mut d, &t);
+        d.call(
+            "edit_automation",
+            json!({"track": t, "param": level, "add": [{"bar": 1, "value": -20.0}]}),
+        )
+        .unwrap();
+        let l = lanes(&mut d, &t);
+        assert_eq!(l[1]["name"], "Layer 1: Level", "{l}");
+        assert_eq!(l[1]["points"][0]["text"], "-20.0 dB");
+        let quiet = peak(&mut d, &t);
+        assert!((before - quiet - 20.0).abs() < 1.0, "{before} {quiet}");
+        let i = d.call("get_instrument", json!({"track": t})).unwrap();
+        assert_eq!(i["layers"][0]["gain_db"].as_f64(), Some(0.0), "{i}");
+
+        // Off, the lanes are ignored; back to one instrument, the cutoff
+        // lane goes back onto the synth.
+        d.call("set_automation_mode", json!({"track": t, "mode": "off"}))
+            .unwrap();
+        assert!((peak(&mut d, &t) - loud).abs() < 1.0);
+        assert!((highs(&mut d, &t) - open).abs() < 1.0);
+        d.call("set_automation_mode", json!({"track": t, "mode": "read"}))
+            .unwrap();
+        d.command("single-instrument");
+        let l = lanes(&mut d, &t);
+        assert_eq!(l[0]["param"], "instrument.cutoff", "{l}");
+        assert!((highs(&mut d, &t) - swept).abs() < 3.0);
     }
 }

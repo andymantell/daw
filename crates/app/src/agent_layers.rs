@@ -705,7 +705,9 @@ impl App {
             if t.layers.is_empty()
                 && let Some(first) = t.instrument.take()
             {
-                t.layers.push(crate::layers::Layer::new(first));
+                let first = crate::layers::Layer::new(first);
+                crate::layers::move_instrument_lanes(t, &first.key, false);
+                t.layers.push(first);
             }
             let l = crate::layers::Layer::new(slot);
             let id = l.key.clone();

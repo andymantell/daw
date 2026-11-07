@@ -20,6 +20,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
+use crate::automation::{LaneSpec, LayerParam, Target};
 use crate::chain::{self, Keys, LayerChain, Step};
 use crate::graph::{InsertNode, InstrumentNode, InstrumentSpec, db_to_gain, pan_gains};
 use crate::midi::{Event, Instrument, Kind, MAX_EVENTS};
@@ -236,6 +237,8 @@ impl Held {
 }
 
 pub(crate) struct LayerNode {
+    /// The layer's id, as its lanes name it.
+    id: u64,
     pub instrument: Option<InstrumentNode>,
     controls: Arc<LayerControls>,
     /// This block's events for the layer; capacity [`MAX_EVENTS`].
@@ -247,6 +250,16 @@ pub(crate) struct LayerNode {
     buf: [Vec<f32>; 2],
     /// Gains reached at the end of the last block, for smoothing.
     last: (f32, f32),
+    /// This block's level (dB) and pan from the layer's lanes, if they
+    /// set them; else its controls'.
+    auto_gain: Option<f32>,
+    auto_pan: Option<f32>,
+    /// Whether a lane set the instrument last block, so it is given back
+    /// to its controls once no lane does.
+    inst_automated: bool,
+    /// Whether it has played a block: the first starts at the gains its
+    /// lanes give, not ramping from its controls'.
+    started: bool,
 }
 
 impl LayerNode {
@@ -256,8 +269,9 @@ impl LayerNode {
         new_instruments: &mut Vec<(u64, Box<dyn Instrument>)>,
         max_block: usize,
     ) -> LayerNode {
-        let gain = start_gains(&spec.controls);
+        let gain = start_gains(&spec.controls, None, None);
         LayerNode {
+            id: spec.id,
             instrument: spec.instrument.map(|i| InstrumentNode {
                 id: i.id,
                 inst: new_instruments
@@ -272,17 +286,68 @@ impl LayerNode {
             line: chain.line,
             buf: [vec![0.0; max_block], vec![0.0; max_block]],
             last: gain,
+            auto_gain: None,
+            auto_pan: None,
+            inst_automated: false,
+            started: false,
         }
     }
 }
 
-fn start_gains(c: &LayerControls) -> (f32, f32) {
+/// The layer's left and right gains: its level and pan, each from its
+/// lane when one sets it.
+fn start_gains(c: &LayerControls, gain_db: Option<f32>, pan: Option<f32>) -> (f32, f32) {
     if c.mute() {
         return (0.0, 0.0);
     }
-    let g = db_to_gain(c.gain_db());
-    let (l, r) = pan_gains(c.pan(), true);
+    let g = db_to_gain(gain_db.unwrap_or_else(|| c.gain_db()));
+    let (l, r) = pan_gains(pan.unwrap_or_else(|| c.pan()).clamp(-1.0, 1.0), true);
     (g * l, g * r)
+}
+
+/// Reads the track's lanes on its layers at `at`: each layer's level,
+/// pan and instrument settings, before the layers play the block. A
+/// setting without a lane (or one being written) is its control's.
+pub(crate) fn read_lanes(layers: &mut [LayerNode], lanes: &[LaneSpec], at: i64) {
+    for layer in layers.iter_mut() {
+        layer.auto_gain = None;
+        layer.auto_pan = None;
+        let on_inst = lanes.iter().any(|l| {
+            matches!(l.target, Target::Layer { id, what: LayerParam::Instrument(_) } if id == layer.id)
+        });
+        if (on_inst || layer.inst_automated)
+            && let Some(InstrumentNode {
+                inst: Some(inst), ..
+            }) = &mut layer.instrument
+        {
+            inst.clear_automation();
+        }
+        layer.inst_automated = on_inst;
+    }
+    for lane in lanes {
+        let Target::Layer { id, what } = lane.target else {
+            continue;
+        };
+        if lane.live {
+            continue;
+        }
+        let (Some(layer), Some(v)) = (layers.iter_mut().find(|l| l.id == id), lane.curve.at(at))
+        else {
+            continue;
+        };
+        match what {
+            LayerParam::Gain => layer.auto_gain = Some(v),
+            LayerParam::Pan => layer.auto_pan = Some(v),
+            LayerParam::Instrument(param) => {
+                if let Some(InstrumentNode {
+                    inst: Some(inst), ..
+                }) = &mut layer.instrument
+                {
+                    inst.automate(param, v as f64);
+                }
+            }
+        }
+    }
 }
 
 /// Plays the block's `events` through every layer, adding each layer's
@@ -320,7 +385,11 @@ pub(crate) fn run(
         chain::run(&mut layer.steps, inserts, keys, bl, br);
         layer.line.run(bl, br);
         // Ramp from last block's gains so changes don't click.
-        let target = start_gains(&layer.controls);
+        let target = start_gains(&layer.controls, layer.auto_gain, layer.auto_pan);
+        if !layer.started {
+            layer.last = target;
+            layer.started = true;
+        }
         let (l0, r0) = layer.last;
         let step = 1.0 / n.max(1) as f32;
         for i in 0..n {

@@ -145,8 +145,11 @@ pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "list_parameters",
         description: "Every setting of a track that can be set by value (volume, pan, \
-                      mute, solo, sends, each effect's settings, and its built-in \
-                      instrument's, named instrument.<key>), with its value, range and \
+                      mute, solo, sends, each effect's settings, its instrument's, named \
+                      instrument.<key> (a plugin instrument's parameters by id, 0 to 1), \
+                      and a layered instrument's layers' level, pan and instrument \
+                      settings, named layer:<layer id>:gain, layer:<layer id>:pan and \
+                      layer:<layer id>:instrument.<key>), with its value, range and \
                       how it reads, and whether it is automated. The track \"master\" is \
                       the master channel: its volume and its effects' settings, which can be automated too. Without a \
                       track, every track's and the master's; a drum machine has hundreds, \
@@ -1975,10 +1978,13 @@ impl App {
                 json!({"param": SOLO_SAFE, "name": "Solo-safe", "value": t.mix.solo_safe as u8, "min": 0, "max": 1}),
                 json!({"param": OFF, "name": "Off", "value": t.off as u8, "min": 0, "max": 1}),
             ];
-            // The instrument's are listed below, with its own names.
+            // A built-in instrument's are listed below, with its own
+            // names; a plugin instrument's parameters here, as a plugin
+            // effect's are, and so are the layers' settings.
+            let builtin = t.instrument.as_ref().is_some_and(|s| !s.is_plugin());
             for c in crate::automation::choices_up_to(t, &buses, usize::MAX)
                 .into_iter()
-                .filter(|c| !c.param.starts_with(INSTRUMENT))
+                .filter(|c| !(builtin && c.param.starts_with(INSTRUMENT)))
             {
                 let (Some(v), Some(r)) = (
                     crate::automation::control(t, &c.param),
@@ -2190,7 +2196,11 @@ impl App {
             .filter(|t| t.kind.is_bus())
             .map(|t| (t.key.clone(), t.name.clone()))
             .collect();
-        if let Some(k) = param.strip_prefix(INSTRUMENT) {
+        // A plugin instrument's parameters are set on the plugin, as a
+        // plugin effect's are (below).
+        if let Some(k) = param.strip_prefix(INSTRUMENT)
+            && !(self.tracks[i].instrument.as_ref()).is_some_and(|s| s.is_plugin())
+        {
             return self.set_instrument_setting(i, k, v);
         }
         if param == OFF {

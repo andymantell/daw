@@ -260,6 +260,9 @@ pub(crate) const TOOLS: &[Tool] = &[
                       track or a note clip (note effects, layers, quantise and the other \
                       note tools, patterns) act on the track or clip given, as if it \
                       were open; otherwise on the one open or chosen, or the first. \
+                      pedalboard given a track (or \"master\") puts that channel's \
+                      effects on the pedalboard; get_selection's pedalboard says what \
+                      it shows, and edit_effect's index moves an effect along it. \
                       Commands that save or write files need the edit and export \
                       permission; commands that open a file chooser need a person and \
                       are refused.",
@@ -1156,6 +1159,21 @@ impl App {
                         self.instrument_open = Some(ti);
                     }
                 }
+                // The pedalboard given a track (or the master) boards it,
+                // entering the mode if it is off.
+                if cmd == Cmd::Pedalboard
+                    && let Some(key) = args["track"].as_str()
+                {
+                    if key != daw_project::Master::KEY && self.track_index(key).is_none() {
+                        return Err(format!("There is no track {key}."));
+                    }
+                    self.enter_pedalboard(ctx, key.to_string());
+                    let name = self.commands.name(cmd).to_string();
+                    return Ok((
+                        json!({"ran": id, "message": self.message.clone()}),
+                        Some(name),
+                    ));
+                }
                 let before = self.instrument_open;
                 let mut focus = None;
                 if let Some(key) = args["track"].as_str() {
@@ -1915,6 +1933,7 @@ impl App {
             "start_screen_at_launch": self.start.settings.show,
             "panels": self.workspace.value(),
             "practice_panel": self.practice_panel_value(),
+            "pedalboard": self.pedalboard_value(),
         })
     }
 

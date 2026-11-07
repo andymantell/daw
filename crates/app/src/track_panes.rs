@@ -222,6 +222,9 @@ impl App {
             if changed {
                 self.rebuild();
             }
+            if std::mem::take(&mut self.effects.board_asked) {
+                self.board.ask = Some(daw_project::Master::KEY.into());
+            }
             return;
         }
         let Some(i) = self.effects.open_track.filter(|&i| i < self.tracks.len()) else {
@@ -250,6 +253,9 @@ impl App {
             &mut self.message,
         ) {
             self.rebuild();
+        }
+        if std::mem::take(&mut self.effects.board_asked) {
+            self.board.ask = Some(self.tracks[i].key.clone());
         }
     }
 

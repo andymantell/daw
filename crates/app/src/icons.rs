@@ -89,11 +89,13 @@ pub(crate) enum Icon {
     Meters,
     Wave,
     Keys,
+    /// A stompbox: pedalboard mode.
+    Pedal,
 }
 
 #[allow(dead_code, reason = "for the icon sheet and tests")]
 impl Icon {
-    pub(crate) const ALL: [Icon; 55] = [
+    pub(crate) const ALL: [Icon; 56] = [
         Icon::Play,
         Icon::Stop,
         Icon::Pause,
@@ -149,6 +151,7 @@ impl Icon {
         Icon::Meters,
         Icon::Wave,
         Icon::Keys,
+        Icon::Pedal,
     ];
 
     /// What the icon shows, in words (for the icon sheet and tests).
@@ -209,6 +212,7 @@ impl Icon {
             Icon::Meters => "Meters",
             Icon::Wave => "Audio",
             Icon::Keys => "Instrument",
+            Icon::Pedal => "Pedalboard",
         }
     }
 }
@@ -581,6 +585,14 @@ pub(crate) fn paint(painter: &Painter, rect: Rect, icon: Icon, colour: Color32) 
             (0.82, 0.5),
             (0.92, 0.5),
         ]),
+        Icon::Pedal => {
+            // A stompbox from above: its body, two knobs and the
+            // footswitch.
+            pen.rect_line(0.2, 0.08, 0.8, 0.92, 0.08);
+            pen.dot(0.38, 0.28, 0.07);
+            pen.dot(0.62, 0.28, 0.07);
+            pen.dot(0.5, 0.68, 0.12);
+        }
         Icon::Keys => {
             pen.rect_line(0.1, 0.2, 0.9, 0.8, 0.04);
             for x in [0.3, 0.5, 0.7] {

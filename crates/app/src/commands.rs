@@ -188,6 +188,9 @@ pub(crate) enum Cmd {
     SaveLayout,
     PaneWindows,
     PracticePanel,
+    Pedalboard,
+    PedalboardNext,
+    PedalboardPrevious,
     Tuner,
     Meters,
     LessonNotes,
@@ -837,6 +840,33 @@ pub(crate) const COMMANDS: &[Info] = &[
     info(Cmd::EffectsPane, "effects", "View", "Effects", &[])
         .hint("Show the selected track's effects in a pane: add, reorder and change them")
         .words("fx chain insert plugin reverb delay compressor eq panel"),
+    info(
+        Cmd::Pedalboard,
+        "pedalboard",
+        "View",
+        "Pedalboard",
+        &[key(CTRL_SHIFT, Key::B)],
+    )
+    .hint("The selected track's effects across the whole window, larger, every one open: tweak them, stomp them on and off, drag them into a new order")
+    .words("pedals stompbox board fx chain effects rearrange reorder drag big full screen"),
+    info(
+        Cmd::PedalboardNext,
+        "pedalboard-next-track",
+        "View",
+        "Pedalboard: next track",
+        &[],
+    )
+    .hint("Put the next track's effects on the pedalboard")
+    .words("pedals board following channel"),
+    info(
+        Cmd::PedalboardPrevious,
+        "pedalboard-previous-track",
+        "View",
+        "Pedalboard: previous track",
+        &[],
+    )
+    .hint("Put the track before's effects on the pedalboard")
+    .words("pedals board earlier channel"),
     info(
         Cmd::PluginWindows,
         "plugin-windows",
@@ -3591,6 +3621,10 @@ impl App {
             self.top.open = None;
             return;
         }
+        // On the pedalboard, Escape comes back from it.
+        if self.pedalboard_keys(ctx) {
+            return;
+        }
         // A macro's steps held back for the timeline or panes go on.
         if !self.macro_waiting.steps.is_empty() {
             self.macro_steps(ctx);
@@ -3729,6 +3763,7 @@ impl App {
             | Cmd::AudioSetupBack
             | Cmd::AudioSetupCancel => self.audio_setup.open,
             Cmd::MeasureLatency => !self.recording && !self.latency.busy(),
+            Cmd::PedalboardNext | Cmd::PedalboardPrevious => self.board.shows(),
             _ => true,
         }
     }
@@ -3786,9 +3821,18 @@ impl App {
             return;
         }
         if cmd.on_timeline() {
+            // The board covers the timeline: what acts there waits for
+            // nothing it can't see.
+            if self.board.shows() {
+                return;
+            }
             self.commands.timeline.push(cmd);
             ctx.request_repaint();
             return;
+        }
+        // A pane or layout command shows the window again first.
+        if self.command_leaves_board(cmd) {
+            self.leave_pedalboard(ctx);
         }
         // Keys pressed in a pane's own window come while the workspace
         // is being drawn: its commands wait until it has been.
@@ -3876,6 +3920,9 @@ impl App {
             Cmd::TakeLanes => self.workspace.toggle(Pane::Takes),
             Cmd::Lessons => self.workspace.toggle(Pane::Lessons),
             Cmd::PracticePanel => self.workspace.toggle(Pane::Practice),
+            Cmd::Pedalboard => self.toggle_pedalboard(ctx),
+            Cmd::PedalboardNext => self.pedalboard_step(ctx, 1),
+            Cmd::PedalboardPrevious => self.pedalboard_step(ctx, -1),
             Cmd::NotesEditor => self.workspace.toggle(Pane::NotesEditor),
             Cmd::QuantiseNotes
             | Cmd::HumaniseNotes

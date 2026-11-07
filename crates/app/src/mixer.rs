@@ -643,6 +643,18 @@ impl App {
                     self.effects.open_track = (!open).then_some(i);
                     self.effects.open_master = false;
                 }
+                // ai: pedalboard
+                let board = ui.add(
+                    crate::icons::IconButton::new(
+                        crate::icons::Icon::Pedal,
+                        format!("Pedalboard for {name}"),
+                    )
+                    .tip("Pedalboard: this track's effects full size, to tweak and rearrange")
+                    .small(),
+                );
+                if board.clicked() {
+                    self.board.ask = Some(t.key.clone());
+                }
             }
             Part::Out => {
                 let spoken = format!("Output of {}", t.name);
@@ -951,6 +963,18 @@ impl App {
                         self.meters.show(None);
                     }
                 }
+                // ai: pedalboard
+                let board = ui.add(
+                    crate::icons::IconButton::new(
+                        crate::icons::Icon::Pedal,
+                        "Pedalboard for the master",
+                    )
+                    .tip("Pedalboard: the master's effects full size, to tweak and rearrange")
+                    .small(),
+                );
+                if board.clicked() {
+                    self.board.ask = Some(daw_project::Master::KEY.to_string());
+                }
             });
             let used = if g.compact { 1 } else { 2 };
             rows.skip(g.rows.saturating_sub(used) as f32 * ROW);
@@ -1235,6 +1259,102 @@ impl App {
             }
         }
         rebuild
+    }
+
+    /// The start of track `i`'s pedalboard: where its sound comes from
+    /// (an input, or its instrument) and arming, as on its strip. True
+    /// if the graph needs building again.
+    pub(crate) fn board_input(&mut self, ui: &mut egui::Ui, i: usize) -> bool {
+        let r = self.routing();
+        let mut actions = Vec::new();
+        let mut rebuild = self.strip_part(ui, i, Part::Source, &r, &mut actions);
+        ui.horizontal(|ui| {
+            rebuild |= self.strip_part(ui, i, Part::Arm, &r, &mut actions);
+        });
+        rebuild | self.desk_actions(actions)
+    }
+
+    /// The end of track `i`'s pedalboard: its level, pan, mute and solo,
+    /// where it goes and its sends. True if the graph needs building
+    /// again.
+    pub(crate) fn board_output(&mut self, ui: &mut egui::Ui, i: usize) -> bool {
+        let r = self.routing();
+        let mut actions = Vec::new();
+        let mut rebuild = false;
+        let before = self.tracks[i].heard();
+        let t = &mut self.tracks[i];
+        let name = t.name.clone();
+        ui.horizontal(|ui| {
+            let mut db = t.mix.gain_db as f64;
+            let reading = if db <= desk::MIN_DB {
+                "off".to_string()
+            } else {
+                format!("{db:.1} dB")
+            };
+            // ai: set_parameter
+            let k = crate::panel_kit::Knob::new(
+                &mut db,
+                desk::MIN_DB,
+                desk::MAX_DB,
+                format!("{name} volume"),
+            )
+            .label("Level")
+            .readout(reading)
+            .bipolar(false)
+            .default(0.0)
+            .size(crate::panel_kit::Size::Large)
+            .show(ui, "board level");
+            if k.changed() {
+                t.mix.gain_db = db as f32;
+            }
+            let mut pan = t.mix.pan as f64;
+            // ai: set_parameter
+            let k = crate::panel_kit::Knob::new(&mut pan, -1.0, 1.0, format!("{name} pan"))
+                .label("Pan")
+                .readout(desk::pan_short(t.mix.pan))
+                .default(0.0)
+                .show(ui, "board pan");
+            if k.changed() {
+                t.mix.pan = pan as f32;
+            }
+        });
+        ui.horizontal(|ui| {
+            let c = theme::look(ui.ctx()).c().clone();
+            // ai: set_parameter
+            lit(ui, c.warn, |ui| ui.toggle_value(&mut t.mix.mute, "Mute"))
+                .accessible_name(format!("Mute {name}"));
+            // ai: set_parameter
+            lit(ui, c.good, |ui| ui.toggle_value(&mut t.mix.solo, "Solo"))
+                .accessible_name(format!("Solo {name}"));
+        });
+        if t.heard() != before {
+            actions.push(Action::Mix(i, t.heard()));
+        }
+        for part in [Part::Out, Part::Sends] {
+            ui.horizontal(|ui| {
+                ui.label(part.title());
+                rebuild |= self.strip_part(ui, i, part, &r, &mut actions);
+            });
+        }
+        rebuild | self.desk_actions(actions)
+    }
+
+    /// The end of the master's pedalboard: the mix's level.
+    pub(crate) fn board_master_output(&mut self, ui: &mut egui::Ui) {
+        let mut db = self.master.mix.gain_db as f64;
+        let reading = format!("{db:.1} dB");
+        // ai: set_parameter
+        let k = crate::panel_kit::Knob::new(&mut db, desk::MIN_DB, desk::MAX_DB, "Master volume")
+            .label("Level")
+            .readout(reading)
+            .bipolar(false)
+            .default(0.0)
+            .size(crate::panel_kit::Size::Large)
+            .show(ui, "board master level");
+        if k.changed() {
+            self.master.mix.gain_db = db as f32;
+            self.desk_actions(vec![Action::MasterGain(db as f32)]);
+        }
     }
 
     /// Moves the faders of the selected strips other than `key` by `by`

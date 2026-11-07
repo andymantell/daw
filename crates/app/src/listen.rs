@@ -1108,6 +1108,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn analysis_from_partway_in_hears_a_note_held_over_from_before() {
+        let mut d = Driver::new();
+        let key = synth(&mut d);
+        // Make the held note two bars long, in a three-bar clip: it
+        // starts in bar 1.
+        let a = d.app();
+        a.tracks[0].note_clips[0].notes[0].len = 8 * 960;
+        a.tracks[0].note_clips[0].len = 12 * 960;
+        a.rebuild();
+        let r = d
+            .call("analyse", json!({"track": key, "from_bar": 2, "to_bar": 3}))
+            .unwrap();
+        assert!(r["rms_dbfs"].as_f64().unwrap() > -60.0, "{r}");
+        // And past its end, only the tail of its release.
+        let after = d
+            .call("analyse", json!({"track": key, "from_bar": 3, "to_bar": 4}))
+            .unwrap();
+        let level = |v: &Value| v["rms_dbfs"].as_f64().unwrap();
+        assert!(level(&after) < level(&r) - 30.0, "{after} {r}");
+    }
+
+    #[test]
     fn analysis_of_the_master_goes_through_its_fader_and_effects() {
         let mut d = Driver::new();
         synth(&mut d);
@@ -1140,13 +1162,22 @@ pub(crate) mod tests {
         let params = d
             .call("list_parameters", json!({"track": "master"}))
             .unwrap();
-        let ceiling = (params[0]["params"].as_array().unwrap().iter())
-            .map(|p| p["param"].as_str().unwrap().to_string())
-            .find(|p| p.contains(&lim) && p.ends_with("ceiling"))
-            .expect("the limiter's ceiling");
+        let named = |end: &str| {
+            (params[0]["params"].as_array().unwrap().iter())
+                .map(|p| p["param"].as_str().unwrap().to_string())
+                .find(|p| p.contains(&lim) && p.ends_with(end))
+                .expect("the limiter's parameter")
+        };
+        let ceiling = named("ceiling");
+        // Driven 12 dB into it, with the fader (after it) back at 0.
         d.call(
             "set_parameter",
-            json!({"track": "master", "param": "gain", "value": 12.0}),
+            json!({"track": "master", "param": "gain", "value": 0.0}),
+        )
+        .unwrap();
+        d.call(
+            "set_parameter",
+            json!({"track": "master", "param": named("drive"), "value": 12.0}),
         )
         .unwrap();
         d.call(
@@ -1156,6 +1187,9 @@ pub(crate) mod tests {
         .unwrap();
         let limited = d.call("analyse", range(Some("master"))).unwrap();
         let peak = |v: &Value| v["sample_peak_dbfs"].as_f64().unwrap();
+        // Heard, not silent: the limiter's delay doesn't lose the
+        // note that starts the song.
+        assert!(peak(&limited) > -20.0, "{limited}");
         assert!(peak(&limited) < -11.0, "{limited}");
         assert!(peak(&mix) + 12.0 > -11.0, "{mix}");
         // A track on its own is heard before the master.

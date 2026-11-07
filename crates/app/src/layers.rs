@@ -156,6 +156,28 @@ fn effects_in(slots: &[FxSlot], key: &str) -> Vec<usize> {
     out
 }
 
+/// Moves the lanes on the track's own instrument (`instrument.<key>`)
+/// onto the layer `key`, when that instrument becomes the track's first
+/// layer, so they go on playing it; or, with `back`, the layer's
+/// instrument's lanes back onto the track's instrument, when the track
+/// goes back to playing that one.
+pub fn move_instrument_lanes(t: &mut crate::Track, key: &str, back: bool) {
+    let layer = crate::automation::layer_param(key, daw_project::Lane::INSTRUMENT);
+    for l in &mut t.automation {
+        let moved = if back {
+            l.param
+                .strip_prefix(&layer)
+                .map(|k| format!("{}{k}", daw_project::Lane::INSTRUMENT))
+        } else {
+            (l.param.starts_with(daw_project::Lane::INSTRUMENT))
+                .then(|| crate::automation::layer_param(key, &l.param))
+        };
+        if let Some(p) = moved {
+            l.param = p;
+        }
+    }
+}
+
 /// Takes away all of `t`'s layers, with their effects.
 pub fn drop_layers(t: &mut crate::Track) {
     for l in std::mem::take(&mut t.layers) {
@@ -202,7 +224,9 @@ impl App {
         if t.layers.is_empty()
             && let Some(slot) = t.instrument.take()
         {
-            t.layers.push(Layer::new(slot));
+            let first = Layer::new(slot);
+            move_instrument_lanes(t, &first.key, false);
+            t.layers.push(first);
         }
         let layer = Layer::new(Slot::synth());
         layer
@@ -269,6 +293,7 @@ impl App {
             }
             kept.extend(rest);
             t.fx = kept;
+            move_instrument_lanes(t, &first.key, true);
             t.instrument = Some(first.slot);
         }
         self.rebuild();

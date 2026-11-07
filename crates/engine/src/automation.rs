@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Automation (roadmap 2.6): a setting moving along a line of points as
 //! the song plays. The graph reads each track's lanes once a block and
-//! sets the track's volume, pan, a send's level or one of a built-in
-//! effect's settings from them, so playback and export follow the same
-//! lines. Plugins' parameters are set from the UI thread instead (the
-//! plugin's own controls must be told on that thread).
+//! sets the track's volume, pan, a send's level, an effect's setting,
+//! its instrument's or one of its layers' from them, so playback and
+//! export follow the same lines. A plugin's own window is told the value
+//! from the UI thread, as it has to be told on that thread.
 
 use std::sync::Arc;
 
@@ -68,7 +68,22 @@ pub enum Target {
     Send(usize),
     /// A setting of the insert with this id, by the setting's index.
     Insert { id: u64, param: u32 },
-    /// A setting of the track's instrument, by the setting's index.
+    /// A setting of the track's instrument, by the setting's index (a
+    /// plugin instrument's parameter by its id).
+    Instrument(u32),
+    /// A setting of one of the track's layers (a layered instrument), by
+    /// the layer's id.
+    Layer { id: u64, what: LayerParam },
+}
+
+/// What a lane on a layer sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerParam {
+    /// The layer's level, in dB.
+    Gain,
+    /// The layer's pan, −1 to +1.
+    Pan,
+    /// A setting of the layer's instrument, as [`Target::Instrument`].
     Instrument(u32),
 }
 

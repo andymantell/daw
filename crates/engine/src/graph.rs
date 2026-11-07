@@ -1296,8 +1296,9 @@ impl TrackNode {
                         fx.set_param(param, v as f64);
                     }
                 }
-                // Read before the instrument plays, by `read_instrument_lanes`.
-                Target::Instrument(_) => {}
+                // Read before the instrument plays, by `read_instrument_lanes`
+                // (and a layer's by `layers::read_lanes`).
+                Target::Instrument(_) | Target::Layer { .. } => {}
             }
         }
     }
@@ -2711,6 +2712,7 @@ impl Graph {
                 r[..n].fill(0.0);
             }
             if !t.layers.is_empty() {
+                layers::read_lanes(&mut t.layers, &t.automation, pos);
                 let mut keys = chain::Keys {
                     edges: &mut self.edges,
                     post: &self.post,
@@ -2891,7 +2893,7 @@ impl Graph {
                         fx.set_param(param, v as f64);
                     }
                 }
-                Target::Pan | Target::Send(_) | Target::Instrument(_) => {}
+                Target::Pan | Target::Send(_) | Target::Instrument(_) | Target::Layer { .. } => {}
             }
         }
         gain

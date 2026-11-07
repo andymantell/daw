@@ -27,13 +27,15 @@ use crate::icons::{Icon, IconButton};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use daw_engine::automation::{Curve, LaneSpec, Target};
+use daw_engine::automation::{Curve, LaneSpec, LayerParam, Target};
 use daw_engine::engine::Command;
+use daw_plugins::Plugin;
 use daw_project::{AutoPoint, Lane, LaneTarget};
 use eframe::egui::{self, Align2, Rect, RichText, Sense, Stroke, pos2, vec2};
 
 use crate::Track;
 use crate::fx::FxSlot;
+use crate::instrument::Slot;
 use crate::timeline::{self, HEADER};
 
 /// A track's automation mode.
@@ -208,6 +210,11 @@ fn slot<'a>(t: &'a Track, key: &str) -> Option<&'a FxSlot> {
     t.fx.iter().find(|s| s.key == key)
 }
 
+/// The layer with this key.
+fn layer<'a>(t: &'a Track, key: &str) -> Option<&'a crate::layers::Layer> {
+    t.layers.iter().find(|l| l.key == key)
+}
+
 /// A built-in setting's index in its effect, by key.
 fn fx_index(s: &FxSlot, key: &str) -> Option<usize> {
     s.builtin()?
@@ -217,11 +224,128 @@ fn fx_index(s: &FxSlot, key: &str) -> Option<usize> {
         .position(|p| p.key == key)
 }
 
+/// The instrument a lane is on, with the setting's key in it: the
+/// track's own (`instrument.<key>`) or a layer's.
+fn instrument_of<'a>(t: &'a Track, target: LaneTarget<'a>) -> Option<(&'a Slot, &'a str)> {
+    match target {
+        LaneTarget::Instrument(key) => Some((t.instrument.as_ref()?, key)),
+        LaneTarget::LayerInstrument { layer: l, key } => Some((&layer(t, l)?.slot, key)),
+        _ => None,
+    }
+}
+
+/// A plugin instrument's parameter, by its id as a lane's key names it.
+fn instrument_plugin<'a>(s: &'a Slot, key: &str) -> Option<(&'a Plugin, u32)> {
+    Some((s.plugin()?.plugin()?, key.parse().ok()?))
+}
+
+/// The plugin parameter a lane is on, if it is on one: a plugin
+/// effect's, a plugin instrument's or a layer's plugin instrument's.
+/// The engine sets these block by block, and the plugin's window is
+/// told from here.
+fn plugin_param<'a>(t: &'a Track, param: &'a str) -> Option<(&'a Plugin, u32)> {
+    match LaneTarget::of(param) {
+        LaneTarget::Plugin { effect, id } => Some((slot(t, effect)?.plugin()?, id)),
+        target => {
+            let (s, key) = instrument_of(t, target)?;
+            instrument_plugin(s, key)
+        }
+    }
+}
+
+/// Whether a lane is on a plugin's parameter (see [`plugin_param`]).
+fn on_plugin(t: &Track, param: &str) -> bool {
+    match LaneTarget::of(param) {
+        LaneTarget::Plugin { .. } => true,
+        target => instrument_of(t, target).is_some_and(|(s, _)| s.is_plugin()),
+    }
+}
+
+/// The keys of an instrument's settings a lane can be on: a built-in
+/// one's settings, or at most `most` of a plugin's parameters, by id.
+fn instrument_keys(s: &Slot, most: usize) -> Vec<String> {
+    match s.plugin().and_then(FxSlot::plugin) {
+        Some(p) => (p.params().into_iter())
+            .filter(|p| p.automatable && !p.bypass && !p.program_change)
+            .take(most)
+            .map(|p| p.id.to_string())
+            .collect(),
+        None => s.setting_keys(),
+    }
+}
+
+/// An instrument's setting's value now, as its control has it.
+fn instrument_value(s: &Slot, key: &str) -> Option<f64> {
+    match instrument_plugin(s, key) {
+        Some((p, id)) => p.param(id),
+        None => s.get_setting(key),
+    }
+}
+
+/// Sets an instrument's setting's control.
+fn set_instrument_value(s: &Slot, key: &str, v: f64) {
+    match instrument_plugin(s, key) {
+        Some((p, id)) => p.set_param(id, v.clamp(0.0, 1.0)),
+        None => s.set_setting(key, v),
+    }
+}
+
+/// An instrument's setting's range: a plugin's parameters go 0 to 1.
+fn instrument_range(s: &Slot, key: &str) -> Option<Range> {
+    if instrument_plugin(s, key).is_some() {
+        return Some(UNIT);
+    }
+    let s = s.setting(key)?;
+    Some(Range {
+        min: s.min,
+        max: s.max,
+        log: s.log && s.min > 0.0,
+    })
+}
+
+/// The index the engine knows an instrument's setting by: a plugin
+/// parameter's id, or a built-in setting's place.
+fn instrument_index(s: &Slot, key: &str) -> Option<u32> {
+    match instrument_plugin(s, key) {
+        Some((_, id)) => Some(id),
+        None => Some(s.setting(key)?.index),
+    }
+}
+
+/// An instrument's setting's name, with the instrument's.
+fn instrument_name(s: &Slot, key: &str) -> String {
+    let setting = match instrument_plugin(s, key) {
+        Some((p, id)) => (p.params().into_iter())
+            .find(|p| p.id == id)
+            .map_or_else(|| format!("#{id}"), |p| p.title),
+        None => s.setting(key).map_or_else(|| key.to_string(), |x| x.name),
+    };
+    format!("{}: {setting}", s.name)
+}
+
+/// An instrument's setting's value for showing.
+fn instrument_text(s: &Slot, key: &str, v: f64) -> String {
+    match instrument_plugin(s, key) {
+        Some((p, id)) => p
+            .param_text(id, v)
+            .unwrap_or_else(|| format!("{:.0}%", v * 100.0)),
+        None => s.setting_text(key, v).unwrap_or_else(|| format!("{v:.2}")),
+    }
+}
+
+/// A layer's place among the track's layers, from 1, for its name.
+fn layer_name(t: &Track, key: &str) -> String {
+    match t.layers.iter().position(|l| l.key == key) {
+        Some(n) => format!("Layer {}", n + 1),
+        None => "A missing layer".into(),
+    }
+}
+
 /// What to know about a built-in effect's setting with the settings now,
 /// at `bpm`: a delay's note length in ms, or that a setting does nothing
 /// (a delay's time while it follows the tempo).
 pub(crate) fn note_of(t: &Track, param: &str, bpm: f64) -> Option<String> {
-    match Lane::new(param).target() {
+    match LaneTarget::of(param) {
         LaneTarget::Fx { effect, key } => {
             let b = slot(t, effect)?.builtin()?;
             if key == "sync" {
@@ -248,7 +372,7 @@ pub(crate) fn note_of(t: &Track, param: &str, bpm: f64) -> Option<String> {
 
 /// The value a track's control holds now, if the setting is there.
 pub(crate) fn control(t: &Track, param: &str) -> Option<f64> {
-    match Lane::new(param).target() {
+    match LaneTarget::of(param) {
         LaneTarget::Gain => Some(t.mix.gain_db as f64),
         LaneTarget::Pan => Some(t.mix.pan as f64),
         LaneTarget::Send(bus) => t.sends.iter().find(|s| s.to == bus).map(|s| s.gain_db),
@@ -257,14 +381,19 @@ pub(crate) fn control(t: &Track, param: &str) -> Option<f64> {
             Some(s.builtin()?.get(fx_index(s, key)?))
         }
         LaneTarget::Plugin { effect, id } => slot(t, effect)?.plugin()?.param(id),
-        LaneTarget::Instrument(key) => t.instrument.as_ref()?.get_setting(key),
+        LaneTarget::LayerGain(l) => Some(layer(t, l)?.controls.gain_db() as f64),
+        LaneTarget::LayerPan(l) => Some(layer(t, l)?.controls.pan() as f64),
+        target @ (LaneTarget::Instrument(_) | LaneTarget::LayerInstrument { .. }) => {
+            let (s, key) = instrument_of(t, target)?;
+            instrument_value(s, key)
+        }
         LaneTarget::Unknown => None,
     }
 }
 
 /// Sets a track's control.
 pub(crate) fn set_control(t: &mut Track, param: &str, v: f64) {
-    match Lane::new(param).target() {
+    match LaneTarget::of(param) {
         LaneTarget::Gain => t.mix.gain_db = v as f32,
         LaneTarget::Pan => t.mix.pan = v as f32,
         LaneTarget::Send(bus) => {
@@ -285,9 +414,19 @@ pub(crate) fn set_control(t: &mut Track, param: &str, v: f64) {
                 p.set_param(id, v);
             }
         }
-        LaneTarget::Instrument(key) => {
-            if let Some(s) = &t.instrument {
-                s.set_setting(key, v);
+        LaneTarget::LayerGain(l) => {
+            if let Some(l) = layer(t, l) {
+                l.controls.set_gain_db(v.clamp(DB.min, DB.max) as f32);
+            }
+        }
+        LaneTarget::LayerPan(l) => {
+            if let Some(l) = layer(t, l) {
+                l.controls.set_pan(v as f32);
+            }
+        }
+        target @ (LaneTarget::Instrument(_) | LaneTarget::LayerInstrument { .. }) => {
+            if let Some((s, key)) = instrument_of(t, target) {
+                set_instrument_value(s, key, v);
             }
         }
         LaneTarget::Unknown => {}
@@ -302,7 +441,7 @@ pub(crate) fn step_control(t: &mut Track, param: &str) -> bool {
     let (Some(v), Some(r)) = (control(t, param), range(t, param)) else {
         return false;
     };
-    let choices = match Lane::new(param).target() {
+    let choices = match LaneTarget::of(param) {
         LaneTarget::Fx { effect, key } => slot(t, effect).and_then(|s| {
             let b = s.builtin()?;
             let p = b.kind().params()[fx_index(s, key)?];
@@ -314,9 +453,9 @@ pub(crate) fn step_control(t: &mut Track, param: &str) -> bool {
                 Some((p.max - p.min).round() as usize + 1)
             }
         }),
-        LaneTarget::Instrument(key) => (t.instrument.as_ref())
-            .and_then(|s| s.setting(key))
-            .and_then(|s| s.steps),
+        target @ (LaneTarget::Instrument(_) | LaneTarget::LayerInstrument { .. }) => {
+            instrument_of(t, target).and_then(|(s, key)| s.setting(key)?.steps)
+        }
         _ => None,
     };
     let next = match choices {
@@ -333,7 +472,7 @@ pub(crate) fn step_control(t: &mut Track, param: &str) -> bool {
 
 /// The setting's range, if it is there.
 pub(crate) fn range(t: &Track, param: &str) -> Option<Range> {
-    match Lane::new(param).target() {
+    match LaneTarget::of(param) {
         LaneTarget::Gain | LaneTarget::Send(_) => Some(DB),
         LaneTarget::Pan => Some(PAN),
         LaneTarget::Fx { effect, key } => {
@@ -346,13 +485,11 @@ pub(crate) fn range(t: &Track, param: &str) -> Option<Range> {
             })
         }
         LaneTarget::Plugin { .. } => Some(UNIT),
-        LaneTarget::Instrument(key) => {
-            let s = t.instrument.as_ref()?.setting(key)?;
-            Some(Range {
-                min: s.min,
-                max: s.max,
-                log: s.log && s.min > 0.0,
-            })
+        LaneTarget::LayerGain(l) => layer(t, l).map(|_| DB),
+        LaneTarget::LayerPan(l) => layer(t, l).map(|_| PAN),
+        target @ (LaneTarget::Instrument(_) | LaneTarget::LayerInstrument { .. }) => {
+            let (s, key) = instrument_of(t, target)?;
+            instrument_range(s, key)
         }
         LaneTarget::Unknown => None,
     }
@@ -360,7 +497,9 @@ pub(crate) fn range(t: &Track, param: &str) -> Option<Range> {
 
 /// Whether the engine plays this lane (else this module does, or no one).
 fn engine_target(t: &Track, sends: &[(&daw_project::Send, usize)], param: &str) -> Option<Target> {
-    match Lane::new(param).target() {
+    let on_layer =
+        |l: &str, what: LayerParam| layer(t, l).map(|l| Target::Layer { id: l.id, what });
+    match LaneTarget::of(param) {
         LaneTarget::Gain => Some(Target::Gain),
         LaneTarget::Pan => Some(Target::Pan),
         LaneTarget::Send(bus) => sends
@@ -382,16 +521,23 @@ fn engine_target(t: &Track, sends: &[(&daw_project::Send, usize)], param: &str) 
                 param: id,
             })
         }
-        LaneTarget::Instrument(key) => Some(Target::Instrument(
-            t.instrument.as_ref()?.setting(key)?.index,
-        )),
+        LaneTarget::Instrument(key) => Some(Target::Instrument(instrument_index(
+            t.instrument.as_ref()?,
+            key,
+        )?)),
+        LaneTarget::LayerGain(l) => on_layer(l, LayerParam::Gain),
+        LaneTarget::LayerPan(l) => on_layer(l, LayerParam::Pan),
+        LaneTarget::LayerInstrument { layer: l, key } => {
+            let index = instrument_index(&layer(t, l)?.slot, key)?;
+            on_layer(l, LayerParam::Instrument(index))
+        }
         LaneTarget::Unknown => None,
     }
 }
 
 /// The setting's name, with its effect's.
 pub(crate) fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> String {
-    match Lane::new(param).target() {
+    match LaneTarget::of(param) {
         LaneTarget::Gain => "Volume".into(),
         LaneTarget::Pan => "Pan".into(),
         LaneTarget::Send(bus) => {
@@ -419,12 +565,14 @@ pub(crate) fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> Str
             None => format!("Missing plugin: #{id}"),
         },
         LaneTarget::Instrument(key) => match &t.instrument {
-            Some(s) => format!(
-                "{}: {}",
-                s.name,
-                s.setting(key).map_or_else(|| key.to_string(), |x| x.name)
-            ),
+            Some(s) => instrument_name(s, key),
             None => format!("Missing instrument: {key}"),
+        },
+        LaneTarget::LayerGain(l) => format!("{}: Level", layer_name(t, l)),
+        LaneTarget::LayerPan(l) => format!("{}: Pan", layer_name(t, l)),
+        LaneTarget::LayerInstrument { layer: l, key } => match layer(t, l) {
+            Some(x) => format!("{} {}", layer_name(t, l), instrument_name(&x.slot, key)),
+            None => format!("Missing layer: {key}"),
         },
         LaneTarget::Unknown => param.to_string(),
     }
@@ -432,30 +580,38 @@ pub(crate) fn name_of(t: &Track, buses: &[(String, String)], param: &str) -> Str
 
 /// The setting's value for showing.
 pub(crate) fn text_of(t: &Track, param: &str, v: f64) -> String {
-    match Lane::new(param).target() {
-        LaneTarget::Gain | LaneTarget::Send(_) => format!("{v:+.1} dB"),
-        LaneTarget::Pan if v.abs() < 0.005 => "Centre".into(),
-        LaneTarget::Pan if v < 0.0 => format!("L {:.0}%", -v * 100.0),
-        LaneTarget::Pan => format!("R {:.0}%", v * 100.0),
+    match LaneTarget::of(param) {
+        LaneTarget::Gain | LaneTarget::Send(_) | LaneTarget::LayerGain(_) => {
+            format!("{v:+.1} dB")
+        }
+        LaneTarget::Pan | LaneTarget::LayerPan(_) if v.abs() < 0.005 => "Centre".into(),
+        LaneTarget::Pan | LaneTarget::LayerPan(_) if v < 0.0 => format!("L {:.0}%", -v * 100.0),
+        LaneTarget::Pan | LaneTarget::LayerPan(_) => format!("R {:.0}%", v * 100.0),
         LaneTarget::Fx { effect, key } => slot(t, effect)
             .and_then(|s| Some(s.builtin()?.kind().params()[fx_index(s, key)?].text(v)))
             .unwrap_or_else(|| format!("{v:.2}")),
         LaneTarget::Plugin { effect, id } => slot(t, effect)
             .and_then(|s| s.plugin()?.param_text(id, v))
             .unwrap_or_else(|| format!("{:.0}%", v * 100.0)),
-        LaneTarget::Instrument(key) => (t.instrument.as_ref())
-            .and_then(|s| s.setting_text(key, v))
-            .unwrap_or_else(|| format!("{v:.2}")),
+        target @ (LaneTarget::Instrument(_) | LaneTarget::LayerInstrument { .. }) => {
+            match instrument_of(t, target) {
+                Some((s, key)) => instrument_text(s, key, v),
+                None => format!("{v:.2}"),
+            }
+        }
         LaneTarget::Unknown => format!("{v:.2}"),
     }
 }
 
-/// The names of a built-in effect setting's values, by value from 0,
-/// when it picks one of a list (a mode, a number of stages); empty for
-/// any other setting.
+/// The names of a built-in effect's or instrument's setting's values,
+/// by value from its lowest, when it picks one of a list (a mode, a
+/// number of stages); empty for any other setting.
 pub(crate) fn choice_names(t: &Track, param: &str) -> Vec<String> {
-    let lane = Lane::new(param);
-    let LaneTarget::Fx { effect, key } = lane.target() else {
+    let target = LaneTarget::of(param);
+    if let Some((s, key)) = instrument_of(t, target) {
+        return s.choices(key);
+    }
+    let LaneTarget::Fx { effect, key } = target else {
         return Vec::new();
     };
     slot(t, effect)
@@ -573,7 +729,7 @@ pub(crate) fn choices_up_to(t: &Track, buses: &[(String, String)], most: usize) 
         }
     }
     if let Some(s) = &t.instrument {
-        for key in s.setting_keys() {
+        for key in instrument_keys(s, most) {
             let param = format!("{}{key}", Lane::INSTRUMENT);
             out.push(Choice {
                 name: name_of(t, buses, &param),
@@ -581,7 +737,24 @@ pub(crate) fn choices_up_to(t: &Track, buses: &[(String, String)], most: usize) 
             });
         }
     }
+    for l in &t.layers {
+        let own = [Lane::LAYER_GAIN, Lane::LAYER_PAN].map(String::from);
+        let inst = (instrument_keys(&l.slot, most).into_iter())
+            .map(|k| format!("{}{k}", Lane::INSTRUMENT));
+        for setting in own.into_iter().chain(inst) {
+            let param = layer_param(&l.key, &setting);
+            out.push(Choice {
+                name: name_of(t, buses, &param),
+                param,
+            });
+        }
+    }
     out
+}
+
+/// A lane's name for a layer's setting: `layer:<id>:<setting>`.
+pub(crate) fn layer_param(layer: &str, setting: &str) -> String {
+    format!("{}{layer}:{setting}", Lane::LAYER)
 }
 
 /// Whether `t` is the master channel, which has no pan or sends.
@@ -680,7 +853,7 @@ impl crate::App {
             for (param, v) in lanes {
                 // Plugins' windows are told in `automation_tick`, and
                 // show it themselves.
-                if param.starts_with(Lane::PLUGIN) {
+                if on_plugin(t, &param) {
                     continue;
                 }
                 let Some(own) = control(t, &param) else {
@@ -728,7 +901,7 @@ impl crate::App {
         for t in self.tracks.iter().chain([&self.master]) {
             let mode = self.automation.mode(&t.key);
             for param in self.watched(t) {
-                let plugin = param.starts_with(Lane::PLUGIN);
+                let plugin = on_plugin(t, &param);
                 let Some(v) = control(t, &param) else {
                     continue;
                 };
@@ -833,7 +1006,7 @@ impl crate::App {
                 p.value = v;
                 p.last_at = at;
             }
-            let plugin = p.param.starts_with(Lane::PLUGIN);
+            let plugin = on_plugin(t, &p.param);
             let let_go = match mode {
                 Mode::Touch if plugin => now.duration_since(p.moved) > PLUGIN_RELEASE,
                 Mode::Touch => !pointer_down,
@@ -850,18 +1023,18 @@ impl crate::App {
 
         // Plugins' own windows follow their lanes (the engine sets the
         // plugins themselves, block by block).
-        let mut sets: Vec<(usize, String, u32, f64, String)> = Vec::new();
-        for (ti, t) in self.tracks.iter().chain([&self.master]).enumerate() {
+        let mut sets: Vec<((String, String), f64)> = Vec::new();
+        for t in self.tracks.iter().chain([&self.master]) {
             if self.automation.mode(&t.key) == Mode::Off {
                 continue;
             }
             for l in &t.automation {
-                let LaneTarget::Plugin { effect, id } = l.target() else {
-                    continue;
-                };
                 if self.automation.writing(&t.key, &l.param) {
                     continue;
                 }
+                let Some((p, id)) = plugin_param(t, &l.param) else {
+                    continue;
+                };
                 let Some(v) = l.value_at(at) else { continue };
                 let k = (t.key.clone(), l.param.clone());
                 if self
@@ -870,17 +1043,12 @@ impl crate::App {
                     .get(&k)
                     .is_none_or(|d| (d - v).abs() > 1e-6)
                 {
-                    sets.push((ti, effect.to_string(), id, v, l.param.clone()));
+                    p.show_param(id, v);
+                    sets.push((k, v));
                 }
             }
         }
-        for (ti, effect, id, v, param) in sets {
-            let t = pick(&self.tracks, &self.master, ti);
-            if let Some(p) = slot(t, &effect).and_then(FxSlot::plugin) {
-                p.show_param(id, v);
-                self.automation.driven.insert((t.key.clone(), param), v);
-            }
-        }
+        self.automation.driven.extend(sets);
         let keep: HashSet<(String, String)> = (self.tracks.iter())
             .chain([&self.master])
             .flat_map(|t| {
@@ -923,26 +1091,42 @@ impl crate::App {
                 );
             }
         }
+        // Plugin parameters with a lane (an effect's or an instrument's).
         out.extend(
-            t.automation
-                .iter()
-                .filter(|l| l.param.starts_with(Lane::PLUGIN))
+            (t.automation.iter())
+                .filter(|l| on_plugin(t, &l.param))
                 .map(|l| l.param.clone()),
         );
-        // The instrument's settings, unless it has too many to ask
-        // after each frame (a drum machine's every pad and layer): then
-        // those with a lane.
-        if let Some(s) = &t.instrument {
+        // The instrument's settings, unless it has too many to ask after
+        // each frame (a drum machine's every pad and layer): then those
+        // with a lane. A plugin's are those with a lane, above.
+        let mut instrument = |s: &Slot, param: &dyn Fn(&str) -> String| {
+            if s.is_plugin() {
+                return;
+            }
             let keys = s.setting_keys();
             if keys.len() <= MOST_WATCHED_INSTRUMENT {
-                out.extend(keys.iter().map(|k| format!("{}{k}", Lane::INSTRUMENT)));
+                out.extend(keys.iter().map(|k| param(k)));
             } else {
+                let all: HashSet<String> = keys.iter().map(|k| param(k)).collect();
                 out.extend(
                     (t.automation.iter())
-                        .filter(|l| l.param.starts_with(Lane::INSTRUMENT))
+                        .filter(|l| all.contains(&l.param))
                         .map(|l| l.param.clone()),
                 );
             }
+        };
+        if let Some(s) = &t.instrument {
+            instrument(s, &|k| format!("{}{k}", Lane::INSTRUMENT));
+        }
+        for l in &t.layers {
+            instrument(&l.slot, &|k| {
+                layer_param(&l.key, &format!("{}{k}", Lane::INSTRUMENT))
+            });
+        }
+        for l in &t.layers {
+            out.push(layer_param(&l.key, Lane::LAYER_GAIN));
+            out.push(layer_param(&l.key, Lane::LAYER_PAN));
         }
         out
     }

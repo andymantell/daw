@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Automation (roadmap 2.6): lanes on the volume, pan, a send and an
-//! effect's setting are followed by playback and export alike, a lane
+//! Automation (roadmap 2.6): lanes on the volume, pan, a send, an
+//! effect's setting, the instrument's and a layer's are followed by playback and export alike, a lane
 //! being written leaves its control in charge, and reading lanes costs
 //! the audio thread no allocation.
 
@@ -374,6 +374,82 @@ fn an_instrument_lane_being_written_leaves_the_control_in_charge() {
     let [l, _] = engine::render_offline(g, Frames(0), LEN, BLOCK);
     // Cleared to the control's 1.0, as the lane plays nothing.
     assert!((l[100] - 1.0).abs() < 1e-3, "{}", l[100]);
+}
+
+#[test]
+fn a_layers_level_pan_and_instrument_follow_their_lanes() {
+    use daw_engine::automation::LayerParam;
+    use daw_engine::graph::InstrumentSpec;
+    use daw_engine::layers::LayerSpec;
+    let mut s = session();
+    let mut t = TrackSpec::new(Vec::new());
+    t.layers = vec![
+        LayerSpec::new(10, Some(InstrumentSpec { id: 1, latency: 0 })),
+        LayerSpec::new(20, Some(InstrumentSpec { id: 2, latency: 0 })),
+    ];
+    let on = |id, what| Target::Layer { id, what };
+    t.automation = vec![
+        // Layer 10 at half its level, all the way left.
+        lane(on(10, LayerParam::Gain), vec![(0, -6.0206)]),
+        lane(on(10, LayerParam::Pan), vec![(0, -1.0)]),
+        // Layer 20's instrument from 0.25 to 0.75 over 2400 frames.
+        lane(
+            on(20, LayerParam::Instrument(0)),
+            vec![(0, 0.25), (2400, 0.75)],
+        ),
+        // A lane on a layer that isn't there does nothing.
+        lane(on(99, LayerParam::Gain), vec![(0, -60.0)]),
+    ];
+    s.tracks.push(t);
+    let mut inst: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> = vec![
+        (1, Box::new(Level { set: None })),
+        (2, Box::new(Level { set: None })),
+    ];
+    let g = s.compile_all(BLOCK, &mut Vec::new(), &mut inst).unwrap();
+    let [l, r] = engine::render_offline(g, Frames(0), LEN, BLOCK);
+    // Past the first block, where the gains ramp from the controls'.
+    let i = BLOCK + 10;
+    let b = 0.25 + 0.5 * (i / BLOCK * BLOCK) as f32 / 2400.0;
+    assert!((l[i] - (0.5 + b)).abs() < 1e-3, "left {} {b}", l[i]);
+    assert!((r[i] - b).abs() < 1e-3, "right {} {b}", r[i]);
+    assert!((r[LEN - 1] - 0.75).abs() < 1e-3, "{}", r[LEN - 1]);
+}
+
+#[test]
+fn a_layer_lane_being_written_leaves_the_control_in_charge() {
+    use daw_engine::automation::LayerParam;
+    use daw_engine::graph::InstrumentSpec;
+    use daw_engine::layers::LayerSpec;
+    let mut s = session();
+    let mut t = TrackSpec::new(Vec::new());
+    t.layers = vec![LayerSpec::new(
+        10,
+        Some(InstrumentSpec { id: 1, latency: 0 }),
+    )];
+    let mut g = lane(
+        Target::Layer {
+            id: 10,
+            what: LayerParam::Gain,
+        },
+        vec![(0, -60.0)],
+    );
+    g.live = true;
+    let mut i = lane(
+        Target::Layer {
+            id: 10,
+            what: LayerParam::Instrument(0),
+        },
+        vec![(0, 0.25)],
+    );
+    i.live = true;
+    t.automation = vec![g, i];
+    s.tracks.push(t);
+    let mut inst: Vec<(u64, Box<dyn daw_engine::midi::Instrument>)> =
+        vec![(1, Box::new(Level { set: Some(0.5) }))];
+    let g = s.compile_all(BLOCK, &mut Vec::new(), &mut inst).unwrap();
+    let [l, _] = engine::render_offline(g, Frames(0), LEN, BLOCK);
+    // The layer's 0 dB, and the instrument cleared to its control's 1.0.
+    assert!((l[LEN - 1] - 1.0).abs() < 1e-3, "{}", l[LEN - 1]);
 }
 
 #[test]

@@ -211,7 +211,9 @@ impl App {
                 spec.automation.retain(|l| {
                     matches!(
                         l.target,
-                        AutoTarget::Insert { .. } | AutoTarget::Instrument(_)
+                        AutoTarget::Insert { .. }
+                            | AutoTarget::Instrument(_)
+                            | AutoTarget::Layer { .. }
                     )
                 });
             } else if who.heard(i) {

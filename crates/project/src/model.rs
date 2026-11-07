@@ -750,7 +750,10 @@ pub struct Lane {
     /// Which setting: `gain`, `pan`, `send:<bus id>`, `fx:<effect
     /// id>:<setting key>` for a built-in effect (in the setting's own
     /// unit) or `plugin:<effect id>:<parameter id>` for a plugin (0 to
-    /// 1, as the plugin counts it). Never change one.
+    /// 1, as the plugin counts it), `instrument.<key>` for a setting of
+    /// the track's instrument (a plugin instrument's parameter by its id)
+    /// or `layer:<layer id>:<setting>` for a layer's (see
+    /// [`Lane::LAYER`]). Never change one.
     pub param: String,
     /// In time order.
     pub points: Vec<AutoPoint>,
@@ -772,6 +775,15 @@ impl Lane {
     /// A setting of the track's built-in instrument: `instrument.` and
     /// the setting's key (as assistants name it too).
     pub const INSTRUMENT: &'static str = "instrument.";
+    /// A setting of one of the track's layers (a layered instrument):
+    /// `layer:`, the layer's id, `:` and [`Lane::LAYER_GAIN`],
+    /// [`Lane::LAYER_PAN`] or `instrument.` and the setting of the
+    /// layer's instrument, named as a track's own instrument's.
+    pub const LAYER: &'static str = "layer:";
+    /// A layer's level, in dB.
+    pub const LAYER_GAIN: &'static str = "gain";
+    /// A layer's pan, −1 to +1.
+    pub const LAYER_PAN: &'static str = "pan";
 
     pub fn new(param: impl Into<String>) -> Lane {
         Lane {
@@ -783,28 +795,16 @@ impl Lane {
     /// The lane's setting, taken apart: a send's bus, or an effect's id
     /// and its setting, if it names one.
     pub fn target(&self) -> LaneTarget<'_> {
-        let p = self.param.as_str();
-        if p == Lane::GAIN {
-            LaneTarget::Gain
-        } else if p == Lane::PAN {
-            LaneTarget::Pan
-        } else if let Some(bus) = p.strip_prefix(Lane::SEND) {
-            LaneTarget::Send(bus)
-        } else if let Some(rest) = p.strip_prefix(Lane::FX)
-            && let Some((effect, key)) = rest.split_once(':')
-        {
-            LaneTarget::Fx { effect, key }
-        } else if let Some(rest) = p.strip_prefix(Lane::PLUGIN)
-            && let Some((effect, id)) = rest.split_once(':')
-            && let Ok(id) = id.parse()
-        {
-            LaneTarget::Plugin { effect, id }
-        } else if let Some(key) = p.strip_prefix(Lane::INSTRUMENT)
-            && !key.is_empty()
-        {
-            LaneTarget::Instrument(key)
-        } else {
-            LaneTarget::Unknown
+        LaneTarget::of(&self.param)
+    }
+
+    /// The layer the lane belongs to, if it belongs to one.
+    pub fn layer(&self) -> Option<&str> {
+        match self.target() {
+            LaneTarget::LayerGain(l)
+            | LaneTarget::LayerPan(l)
+            | LaneTarget::LayerInstrument { layer: l, .. } => Some(l),
+            _ => None,
         }
     }
 
@@ -876,6 +876,46 @@ impl Lane {
     }
 }
 
+impl<'a> LaneTarget<'a> {
+    /// A lane's setting (see [`Lane::param`]), taken apart.
+    pub fn of(p: &'a str) -> LaneTarget<'a> {
+        if p == Lane::GAIN {
+            LaneTarget::Gain
+        } else if p == Lane::PAN {
+            LaneTarget::Pan
+        } else if let Some(bus) = p.strip_prefix(Lane::SEND) {
+            LaneTarget::Send(bus)
+        } else if let Some(rest) = p.strip_prefix(Lane::FX)
+            && let Some((effect, key)) = rest.split_once(':')
+        {
+            LaneTarget::Fx { effect, key }
+        } else if let Some(rest) = p.strip_prefix(Lane::PLUGIN)
+            && let Some((effect, id)) = rest.split_once(':')
+            && let Ok(id) = id.parse()
+        {
+            LaneTarget::Plugin { effect, id }
+        } else if let Some(key) = p.strip_prefix(Lane::INSTRUMENT)
+            && !key.is_empty()
+        {
+            LaneTarget::Instrument(key)
+        } else if let Some(rest) = p.strip_prefix(Lane::LAYER)
+            && let Some((layer, setting)) = rest.split_once(':')
+            && !layer.is_empty()
+        {
+            match setting {
+                Lane::LAYER_GAIN => LaneTarget::LayerGain(layer),
+                Lane::LAYER_PAN => LaneTarget::LayerPan(layer),
+                s => match s.strip_prefix(Lane::INSTRUMENT) {
+                    Some(key) if !key.is_empty() => LaneTarget::LayerInstrument { layer, key },
+                    _ => LaneTarget::Unknown,
+                },
+            }
+        } else {
+            LaneTarget::Unknown
+        }
+    }
+}
+
 /// What a [`Lane`] sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaneTarget<'a> {
@@ -893,8 +933,19 @@ pub enum LaneTarget<'a> {
         effect: &'a str,
         id: u32,
     },
-    /// A setting of the track's built-in instrument, by its key.
+    /// A setting of the track's instrument, by its key (a plugin
+    /// instrument's parameter by its id).
     Instrument(&'a str),
+    /// A layer's level, by the layer's id.
+    LayerGain(&'a str),
+    /// A layer's pan, by the layer's id.
+    LayerPan(&'a str),
+    /// A setting of a layer's instrument: the layer's id and the
+    /// setting's key, as [`LaneTarget::Instrument`]'s.
+    LayerInstrument {
+        layer: &'a str,
+        key: &'a str,
+    },
     /// A setting this version doesn't know.
     Unknown,
 }
@@ -2480,5 +2531,28 @@ mod tests {
         assert_eq!(Lane::new("instrument.").target(), LaneTarget::Unknown);
         assert_eq!(Lane::new("fx:e1:threshold").effect(), Some("e1"));
         assert_eq!(Lane::new("pan").effect(), None);
+        assert_eq!(
+            Lane::new("layer:l1:gain").target(),
+            LaneTarget::LayerGain("l1")
+        );
+        assert_eq!(
+            Lane::new("layer:l1:pan").target(),
+            LaneTarget::LayerPan("l1")
+        );
+        assert_eq!(
+            Lane::new("layer:l1:instrument.cutoff").target(),
+            LaneTarget::LayerInstrument {
+                layer: "l1",
+                key: "cutoff"
+            }
+        );
+        assert_eq!(
+            Lane::new("layer:l1:instrument.").target(),
+            LaneTarget::Unknown
+        );
+        assert_eq!(Lane::new("layer:l1:width").target(), LaneTarget::Unknown);
+        assert_eq!(Lane::new("layer::gain").target(), LaneTarget::Unknown);
+        assert_eq!(Lane::new("layer:l1:pan").layer(), Some("l1"));
+        assert_eq!(Lane::new("gain").layer(), None);
     }
 }

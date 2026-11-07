@@ -547,6 +547,11 @@ pane in `app/monitor.rs`. Owner checks on the interface's outputs in
   commands, and the selection reports the mode, so assistants see the
   board too. See
   [research/MIXER_DESK.md](research/MIXER_DESK.md#pedalboard-mode).
+  *Built 2026-11-07: `app/pedalboard.rs` (the mode, its bar and the
+  channel's ends; the scale is the window's zoom, so text stays sharp)
+  and `app/fx_board.rs` (the chain as pedals, dragging and dropping).
+  Commands `pedalboard` (Ctrl+Shift+B), `pedalboard-next-track`,
+  `pedalboard-previous-track`; `get_selection.pedalboard`.*
 
 ### 2.4 Plugin hosting — depth (L)
 *Started 2026-10-29, at risk. Done so far: a choice per plugin (Settings

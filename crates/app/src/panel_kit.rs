@@ -168,6 +168,13 @@ impl<'a> Knob<'a> {
         self
     }
 
+    /// Whether the arc runs from the middle; by default it does when the
+    /// range goes either side of zero.
+    pub(crate) fn bipolar(mut self, bipolar: bool) -> Self {
+        self.bipolar = bipolar;
+        self
+    }
+
     /// Where `v` is in the range, 0 to 1.
     fn norm(&self, v: f64) -> f64 {
         let k = if self.log {
@@ -1657,7 +1664,7 @@ impl Rack {
         let grown = child.min_rect().height() + 12.0;
         let h = fixed.map_or(grown, |h| h.max(grown));
         let plate = Rect::from_min_size(pos2(left, top), vec2(width, h));
-        self.paint_plate(ui, plate, &look, behind, surface);
+        paint_plate(ui, plate, &look, behind, surface);
         // Keep the frame's layout in step: the space the plate took.
         ui.allocate_rect(plate, Sense::hover());
         let _ = c;
@@ -1750,146 +1757,333 @@ impl Rack {
         extra(&mut child);
         let plate =
             Rect::from_min_size(pos2(self.inner.left() + PLATE_GAP, top), vec2(width, STRIP));
-        self.paint_plate(ui, plate, &look, behind, surface);
+        paint_plate(ui, plate, &look, behind, surface);
         ui.allocate_rect(plate, Sense::hover());
         self.y = plate.bottom() + PLATE_GAP;
     }
+}
 
-    /// Paints a front plate into the shapes reserved for it: the plate a
-    /// shade apart from the rack, a light along its top edge, a shade
-    /// under its bottom edge, ears at its corners with a screw in each.
-    fn paint_plate(
-        &self,
-        ui: &Ui,
-        plate: Rect,
-        look: &theme::Look,
-        behind: egui::layers::ShapeIdx,
-        surface: egui::layers::ShapeIdx,
-    ) {
-        let c = look.c();
-        let ch = character::current(ui.ctx());
-        let radius = CornerRadius::same(plate_radius(look) as u8);
-        let mut shapes = Vec::new();
-        // The shade under the plate, then the plate.
-        shapes.push(Shape::rect_filled(
-            plate.translate(vec2(0.0, 2.0)),
-            radius,
-            c.plate_shadow.gamma_multiply(0.6),
-        ));
-        shapes.push(Shape::rect_filled(plate, radius, ch.plate(look)));
-        shapes.push(Shape::rect_stroke(
-            plate,
-            radius,
-            Stroke::new(look.rack_line, c.plate_shadow),
-            StrokeKind::Inside,
-        ));
-        // The light along the top edge, inside the stroke.
-        let inset = look.rack_line + 0.5;
-        let r = radius.nw as f32;
-        shapes.push(Shape::line_segment(
-            [
-                pos2(plate.left() + r + inset, plate.top() + inset),
-                pos2(plate.right() - r - inset, plate.top() + inset),
-            ],
-            Stroke::new(1.0, c.plate_edge),
-        ));
-        ui.painter().set(behind, Shape::Vec(shapes));
-        let mut top = Vec::new();
-        // The plate's surface, drawn by code.
-        let inner = plate.shrink(inset + 1.0);
-        match look.plate_surface {
-            theme::Plate::Plain => {}
-            theme::Plate::Brushed => {
-                let line = Stroke::new(1.0, c.plate_edge.gamma_multiply(0.18));
-                let mut y = inner.top() + 3.0;
-                let mut i = 0u32;
-                while y < inner.bottom() {
-                    let wobble = (theme::hash(i as i32, 7) % 5) as f32;
-                    top.push(Shape::line_segment(
-                        [
-                            pos2(inner.left() + wobble, y),
-                            pos2(inner.right() - wobble, y),
-                        ],
-                        line,
-                    ));
-                    y += 3.0;
-                    i += 1;
-                }
-            }
-            theme::Plate::Ruled => {
-                let line = Stroke::new(1.0, c.plate_shadow.gamma_multiply(0.12));
-                let mut x = inner.left() + 12.0;
-                while x < inner.right() {
-                    top.push(Shape::line_segment(
-                        [pos2(x, inner.top()), pos2(x, inner.bottom())],
-                        line,
-                    ));
-                    x += 12.0;
-                }
-            }
-        }
-        if let Some(wood) = ch.cheeks {
-            // Wooden cheeks the full height of the plate, inside the
-            // mounting ears at each end.
-            let dark = theme::mix(wood, egui::Color32::BLACK, 0.3);
-            let light = theme::mix(wood, egui::Color32::WHITE, 0.12);
-            for left in [plate.left() + EAR, plate.right() - EAR - character::CHEEK] {
-                let side = Rect::from_min_size(
-                    pos2(left, plate.top()),
-                    vec2(character::CHEEK, plate.height()),
-                );
-                top.push(Shape::rect_filled(side, 0, wood));
-                // The grain: lines down the cheek that wander a little,
-                // each its own shade.
-                for (n, dx) in [3.0, 6.5, 9.0, 12.5, 15.0, 18.5].iter().enumerate() {
-                    let seed = theme::hash(n as i32, side.left() as i32 / 50);
-                    let sway = 0.6 + (seed % 7) as f32 * 0.15;
-                    let phase = (seed % 13) as f32;
-                    let points: Vec<Pos2> = (0..=12)
-                        .map(|i| {
-                            let t = i as f32 / 12.0;
-                            let y = side.top() + 1.0 + t * (side.height() - 2.0);
-                            pos2(side.left() + dx + sway * (t * 5.0 + phase).sin(), y)
-                        })
-                        .collect();
-                    let shade = if n % 2 == 0 { dark } else { light };
-                    top.push(Shape::line(
-                        points,
-                        Stroke::new(1.0, shade.gamma_multiply(0.7)),
-                    ));
-                }
-                // A shade where the wood meets the plate and the ear.
-                for x in [side.left(), side.right() - 1.0] {
-                    top.push(Shape::line_segment(
-                        [pos2(x + 0.5, side.top()), pos2(x + 0.5, side.bottom())],
-                        Stroke::new(1.0, theme::mix(wood, egui::Color32::BLACK, 0.5)),
-                    ));
-                }
-            }
-        }
-        band(&mut top, plate, inset, &ch, look);
-        // Ears and screws.
-        for (x, y) in [
-            (plate.left() + EAR / 2.0, plate.top() + EAR / 2.0),
-            (plate.right() - EAR / 2.0, plate.top() + EAR / 2.0),
-            (plate.left() + EAR / 2.0, plate.bottom() - EAR / 2.0),
-            (plate.right() - EAR / 2.0, plate.bottom() - EAR / 2.0),
-        ] {
-            let at = pos2(x, y);
-            top.push(Shape::circle_filled(at, 3.2, c.plate_shadow));
-            top.push(Shape::circle_filled(at, 2.6, c.screw));
-            // The slot, each at its own turn.
-            let turn = theme::hash(x as i32, y as i32) % 180;
-            let a = (turn as f32).to_radians();
-            let d = 1.9 * Vec2::angled(a);
-            top.push(Shape::line_segment(
-                [at - d, at + d],
-                Stroke::new(1.0, c.plate_shadow),
-            ));
-        }
-        ui.painter().set(surface, Shape::Vec(top));
-        let _ = self.rails;
+/// The height a [`stomp`] takes.
+pub(crate) const STOMP: f32 = 58.0;
+
+/// A pedal's footswitch: a big round button with a lamp above it, lit
+/// while the effect is on. A screen reader hears a checkbox called
+/// `name`.
+pub(crate) fn stomp(ui: &mut Ui, on: bool, name: &str) -> Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(64.0, STOMP), Sense::click());
+    let spoken = name.to_string();
+    let enabled = ui.is_enabled();
+    r.widget_info(|| {
+        egui::WidgetInfo::selected(egui::accesskit::Role::CheckBox, enabled, on, &spoken)
+    });
+    let look = theme::look(ui.ctx());
+    let c = look.c();
+    let p = ui.painter();
+    // The lamp.
+    let lamp = pos2(rect.center().x, rect.top() + 7.0);
+    let lit = if on {
+        c.record
+    } else {
+        theme::mix(c.record, c.plate_shadow, 0.75)
+    };
+    if on {
+        p.circle_filled(lamp, 7.0, c.record.gamma_multiply(0.25));
     }
+    p.circle_filled(lamp, 4.0, lit);
+    p.circle_stroke(lamp, 4.0, Stroke::new(1.0, c.plate_shadow));
+    // The switch: a ring, its cap pressed in while held.
+    let at = pos2(rect.center().x, rect.top() + 36.0);
+    let held = r.is_pointer_button_down_on();
+    let cap = if held { 15.0 } else { 17.0 };
+    p.circle_filled(
+        at + vec2(0.0, 2.0),
+        21.0,
+        c.plate_shadow.gamma_multiply(0.6),
+    );
+    p.circle_filled(at, 21.0, theme::mix(c.screw, c.plate_shadow, 0.35));
+    let face = if r.hovered() {
+        theme::mix(c.screw, c.plate_edge, 0.35)
+    } else {
+        c.screw
+    };
+    p.circle_filled(at, cap, face);
+    p.circle_stroke(at, cap, Stroke::new(1.0, c.plate_shadow));
+    p.circle_stroke(
+        at + vec2(-1.0, -1.0),
+        cap - 4.0,
+        Stroke::new(1.0, c.plate_edge.gamma_multiply(0.6)),
+    );
+    if r.has_focus() {
+        p.circle_stroke(at, 23.0, ui.visuals().selection.stroke);
+    }
+    r
+}
+
+/// Plates laid out as pedals on a board: left to right in signal
+/// order, carrying on in a new row when the area runs out. Each row is
+/// as tall as its tallest plate; plates sit along its top.
+pub(crate) struct Flow {
+    left: f32,
+    right: f32,
+    x: f32,
+    y: f32,
+    /// The bottom of the row so far.
+    row: f32,
+}
+
+/// Space between pedals on the board.
+pub(crate) const PEDAL_GAP: f32 = 10.0;
+
+impl Flow {
+    /// A board over the width `ui` has, from where it is.
+    pub(crate) fn new(ui: &Ui) -> Flow {
+        let r = ui.available_rect_before_wrap();
+        Flow {
+            left: r.left(),
+            right: r.right(),
+            x: r.left(),
+            y: r.top(),
+            row: r.top(),
+        }
+    }
+
+    /// The width a plate may take at most: the whole row.
+    pub(crate) fn max_width(&self) -> f32 {
+        self.right - self.left
+    }
+
+    /// Where a plate `width` wide goes: beside the last, or at the start
+    /// of a new row.
+    fn place(&mut self, width: f32) -> Pos2 {
+        if self.x > self.left && self.x + width > self.right {
+            self.x = self.left;
+            self.y = self.row + PEDAL_GAP;
+        }
+        pos2(self.x, self.y)
+    }
+
+    fn took(&mut self, ui: &mut Ui, r: Rect) {
+        ui.allocate_rect(r, Sense::hover());
+        self.x = r.right() + PEDAL_GAP;
+        self.row = self.row.max(r.bottom());
+    }
+
+    /// A pedal's front plate, `width` wide and `height` tall (or as tall
+    /// as its contents), holding `add`'s panel. With the plate's rect.
+    pub(crate) fn plate<R>(
+        &mut self,
+        ui: &mut Ui,
+        id: Id,
+        width: f32,
+        height: Option<f32>,
+        add: impl FnOnce(&mut Ui) -> R,
+    ) -> (R, Rect) {
+        let width = width.min(self.max_width());
+        let at = self.place(width);
+        let look = theme::look(ui.ctx());
+        let behind = ui.painter().add(Shape::Noop);
+        let surface = ui.painter().add(Shape::Noop);
+        let side = character::current(ui.ctx()).side(EAR);
+        let content = Rect::from_min_size(
+            at + vec2(side, 6.0),
+            vec2(
+                width - 2.0 * side,
+                height.map_or(f32::INFINITY, |h| h - 12.0),
+            ),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(content)
+                .id_salt(id)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        if let Some(h) = height {
+            child.set_min_height(h - 12.0);
+        }
+        child.set_clip_rect(
+            Rect::from_min_max(content.min, pos2(content.right(), f32::INFINITY))
+                .intersect(ui.clip_rect()),
+        );
+        character::style(&mut child);
+        let out = add(&mut child);
+        let grown = child.min_rect().height() + 12.0;
+        let h = height.map_or(grown, |h| h.max(grown));
+        let plate = Rect::from_min_size(at, vec2(width, h));
+        paint_plate(ui, plate, &look, behind, surface);
+        self.took(ui, plate);
+        (out, plate)
+    }
+
+    /// A tile on the board with no plate: a chain's heading between
+    /// pedals, `height` tall. With its rect.
+    pub(crate) fn tile(
+        &mut self,
+        ui: &mut Ui,
+        id: Id,
+        width: f32,
+        height: f32,
+        add: impl FnOnce(&mut Ui),
+    ) -> Rect {
+        let width = width.min(self.max_width());
+        let at = self.place(width);
+        let r = Rect::from_min_size(at, vec2(width, height));
+        let look = theme::look(ui.ctx());
+        ui.painter().rect_stroke(
+            r,
+            CornerRadius::same(6),
+            Stroke::new(1.0, look.c().text_dim.gamma_multiply(0.5)),
+            StrokeKind::Inside,
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(r.shrink(6.0))
+                .id_salt(id)
+                .layout(Layout::top_down(Align::Center)),
+        );
+        add(&mut child);
+        self.took(ui, r);
+        r
+    }
+
+    /// Takes the space the board used in `ui`.
+    pub(crate) fn finish(&mut self, ui: &mut Ui) {
+        let r = Rect::from_min_max(pos2(self.left, self.row), pos2(self.right, self.row + 1.0));
+        ui.allocate_rect(r, Sense::hover());
+    }
+}
+
+/// Paints a front plate into the shapes reserved for it: the plate a
+/// shade apart from the rack, a light along its top edge, a shade
+/// under its bottom edge, ears at its corners with a screw in each.
+fn paint_plate(
+    ui: &Ui,
+    plate: Rect,
+    look: &theme::Look,
+    behind: egui::layers::ShapeIdx,
+    surface: egui::layers::ShapeIdx,
+) {
+    let c = look.c();
+    let ch = character::current(ui.ctx());
+    let radius = CornerRadius::same(plate_radius(look) as u8);
+    let mut shapes = Vec::new();
+    // The shade under the plate, then the plate.
+    shapes.push(Shape::rect_filled(
+        plate.translate(vec2(0.0, 2.0)),
+        radius,
+        c.plate_shadow.gamma_multiply(0.6),
+    ));
+    shapes.push(Shape::rect_filled(plate, radius, ch.plate(look)));
+    shapes.push(Shape::rect_stroke(
+        plate,
+        radius,
+        Stroke::new(look.rack_line, c.plate_shadow),
+        StrokeKind::Inside,
+    ));
+    // The light along the top edge, inside the stroke.
+    let inset = look.rack_line + 0.5;
+    let r = radius.nw as f32;
+    shapes.push(Shape::line_segment(
+        [
+            pos2(plate.left() + r + inset, plate.top() + inset),
+            pos2(plate.right() - r - inset, plate.top() + inset),
+        ],
+        Stroke::new(1.0, c.plate_edge),
+    ));
+    ui.painter().set(behind, Shape::Vec(shapes));
+    let mut top = Vec::new();
+    // The plate's surface, drawn by code.
+    let inner = plate.shrink(inset + 1.0);
+    match look.plate_surface {
+        theme::Plate::Plain => {}
+        theme::Plate::Brushed => {
+            let line = Stroke::new(1.0, c.plate_edge.gamma_multiply(0.18));
+            let mut y = inner.top() + 3.0;
+            let mut i = 0u32;
+            while y < inner.bottom() {
+                let wobble = (theme::hash(i as i32, 7) % 5) as f32;
+                top.push(Shape::line_segment(
+                    [
+                        pos2(inner.left() + wobble, y),
+                        pos2(inner.right() - wobble, y),
+                    ],
+                    line,
+                ));
+                y += 3.0;
+                i += 1;
+            }
+        }
+        theme::Plate::Ruled => {
+            let line = Stroke::new(1.0, c.plate_shadow.gamma_multiply(0.12));
+            let mut x = inner.left() + 12.0;
+            while x < inner.right() {
+                top.push(Shape::line_segment(
+                    [pos2(x, inner.top()), pos2(x, inner.bottom())],
+                    line,
+                ));
+                x += 12.0;
+            }
+        }
+    }
+    if let Some(wood) = ch.cheeks {
+        // Wooden cheeks the full height of the plate, inside the
+        // mounting ears at each end.
+        let dark = theme::mix(wood, egui::Color32::BLACK, 0.3);
+        let light = theme::mix(wood, egui::Color32::WHITE, 0.12);
+        for left in [plate.left() + EAR, plate.right() - EAR - character::CHEEK] {
+            let side = Rect::from_min_size(
+                pos2(left, plate.top()),
+                vec2(character::CHEEK, plate.height()),
+            );
+            top.push(Shape::rect_filled(side, 0, wood));
+            // The grain: lines down the cheek that wander a little,
+            // each its own shade.
+            for (n, dx) in [3.0, 6.5, 9.0, 12.5, 15.0, 18.5].iter().enumerate() {
+                let seed = theme::hash(n as i32, side.left() as i32 / 50);
+                let sway = 0.6 + (seed % 7) as f32 * 0.15;
+                let phase = (seed % 13) as f32;
+                let points: Vec<Pos2> = (0..=12)
+                    .map(|i| {
+                        let t = i as f32 / 12.0;
+                        let y = side.top() + 1.0 + t * (side.height() - 2.0);
+                        pos2(side.left() + dx + sway * (t * 5.0 + phase).sin(), y)
+                    })
+                    .collect();
+                let shade = if n % 2 == 0 { dark } else { light };
+                top.push(Shape::line(
+                    points,
+                    Stroke::new(1.0, shade.gamma_multiply(0.7)),
+                ));
+            }
+            // A shade where the wood meets the plate and the ear.
+            for x in [side.left(), side.right() - 1.0] {
+                top.push(Shape::line_segment(
+                    [pos2(x + 0.5, side.top()), pos2(x + 0.5, side.bottom())],
+                    Stroke::new(1.0, theme::mix(wood, egui::Color32::BLACK, 0.5)),
+                ));
+            }
+        }
+    }
+    band(&mut top, plate, inset, &ch, look);
+    // Ears and screws.
+    for (x, y) in [
+        (plate.left() + EAR / 2.0, plate.top() + EAR / 2.0),
+        (plate.right() - EAR / 2.0, plate.top() + EAR / 2.0),
+        (plate.left() + EAR / 2.0, plate.bottom() - EAR / 2.0),
+        (plate.right() - EAR / 2.0, plate.bottom() - EAR / 2.0),
+    ] {
+        let at = pos2(x, y);
+        top.push(Shape::circle_filled(at, 3.2, c.plate_shadow));
+        top.push(Shape::circle_filled(at, 2.6, c.screw));
+        // The slot, each at its own turn.
+        let turn = theme::hash(x as i32, y as i32) % 180;
+        let a = (turn as f32).to_radians();
+        let d = 1.9 * Vec2::angled(a);
+        top.push(Shape::line_segment(
+            [at - d, at + d],
+            Stroke::new(1.0, c.plate_shadow),
+        ));
+    }
+    ui.painter().set(surface, Shape::Vec(top));
 }
 
 /// The corner radius of a plate and its modules: the character's own

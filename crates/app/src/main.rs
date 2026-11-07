@@ -90,6 +90,7 @@ mod panel_kit;
 mod patch_twenty;
 mod patch_twenty_panel;
 mod patterns;
+mod pedalboard;
 mod people;
 mod perf;
 mod pitch_edit;
@@ -556,6 +557,8 @@ struct App {
     lessons_ui: lessons::Lessons,
     practice_log: practice::Logger,
     practice_ui: practice_panel::PracticePanel,
+    /// Pedalboard mode: one channel's effects full-window.
+    board: pedalboard::Pedalboard,
     /// Tracks edited together, as in the project, and their window.
     edit_groups: Vec<daw_project::EditGroup>,
     groups_ui: groups::Groups,
@@ -752,6 +755,7 @@ impl App {
             instrument_open: None,
             practice_log: practice::Logger::default(),
             practice_ui: practice_panel::PracticePanel::default(),
+            board: pedalboard::Pedalboard::default(),
             edit_groups: Vec::new(),
             groups_ui: groups::Groups::default(),
             timing: timing::Timing::default(),
@@ -2679,7 +2683,12 @@ impl eframe::App for App {
         // Controls with a lane show the lane's value while it is drawn.
         self.show_automation();
 
-        egui::Panel::top("top bar").show(ui, |ui| self.top_bar(ui));
+        let boarded = self.pedalboard_frame(&ctx);
+        if boarded {
+            egui::Panel::top("pedalboard bar").show(ui, |ui| self.pedalboard_bar(ui));
+        } else {
+            egui::Panel::top("top bar").show(ui, |ui| self.top_bar(ui));
+        }
         if let Some(m) = self.message.clone() {
             egui::Panel::bottom("message").show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -2707,7 +2716,13 @@ impl eframe::App for App {
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).inner_margin(2.0))
-            .show(ui, |ui| self.panes(ui));
+            .show(ui, |ui| {
+                if boarded {
+                    self.pedalboard_body(ui);
+                } else {
+                    self.panes(ui);
+                }
+            });
         self.latency_window(&ctx);
         self.settings_window(&ctx);
         self.audio_setup_update(&ctx);

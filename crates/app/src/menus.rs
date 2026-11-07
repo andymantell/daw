@@ -358,6 +358,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Pane(Cmd::Video),
             Pane(Cmd::InstrumentWindow),
             Pane(Cmd::EffectsPane),
+            Run(Cmd::Pedalboard),
             Sub("Plugin windows", PLUGIN_WINDOWS),
             Run(Cmd::Meters),
             Run(Cmd::FullSize),

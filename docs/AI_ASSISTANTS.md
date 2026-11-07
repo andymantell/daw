@@ -281,6 +281,14 @@ assistant finds them for itself. In outline:
   plugin's own window, show the project's plugins). The commands
   `plugin-windows`, `plugin-windows-follow`, `next-plugin-tab`,
   `previous-plugin-tab` and `project-plugins` do the same from keys.
+- **Pedalboard:** `run_command` with `pedalboard` and a `track` (or
+  `"master"`) puts that channel's effects across the whole window at a
+  larger scale; `pedalboard-next-track` and `pedalboard-previous-track`
+  step along the tracks and the master, and `pedalboard` again (or
+  Escape) comes back. `get_selection` reports it as `pedalboard`: open,
+  the track, the scale and the effects in board order. Moving an effect
+  along the board or into a container is `edit_effect` (`index`,
+  `container`, `branch`); its footswitch is `edit_effect`'s `bypass`.
 - **Macros:** `get_macros` and `edit_macro` (make a macro of several
   commands by id, rename it, change or add steps, delete it). Macros
   are the commands `macro-1` to `macro-9`, so `run_command` runs one

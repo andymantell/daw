@@ -15,6 +15,9 @@
 
 use crate::icons::{Icon, IconButton};
 use crate::panel_kit::{EAR, Height, Rack, RackEntry};
+
+#[path = "fx_board.rs"]
+pub(crate) mod board;
 use daw_project::RackView;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -467,6 +470,9 @@ pub struct Effects {
     pub(crate) check_status: Option<Result<String, String>>,
     /// Asked for from the effects window, for the app to act on.
     pub(crate) chain_ask: Option<ChainAsk>,
+    /// The effects pane's Pedalboard button was pressed, for the app to
+    /// put the chain on the board.
+    pub(crate) board_asked: bool,
     /// The app closed without closing properly last time (a crash, in
     /// it or a plugin it ran), so plugins saved in projects are kept as
     /// they are but not started, until turned back on.
@@ -530,6 +536,7 @@ impl Effects {
             check: None,
             check_status: None,
             chain_ask: None,
+            board_asked: false,
             plugins_off: false,
             turned_on: Default::default(),
             turn_on: None,
@@ -1550,6 +1557,16 @@ impl Effects {
             {
                 self.chain_ask = Some(ChainAsk::Load);
             }
+            if ui
+                .add(
+                    // ai: pedalboard
+                    IconButton::labelled(Icon::Pedal, "Pedalboard")
+                        .tip("This chain full size, every effect open, to tweak and rearrange"),
+                )
+                .clicked()
+            {
+                self.board_asked = true;
+            }
             if let Some(line) = frozen {
                 ui.label(RichText::new(line).weak());
             }
@@ -1974,6 +1991,45 @@ impl Effects {
                 }
                 frame.finish(ui);
             });
+        changed |= self.use_picks(slots, picks, rate, message);
+        if let Some((a, b)) = swap {
+            slots.swap(a, b);
+            changed = true;
+        }
+        if let Some((i, place)) = moved {
+            slots[i].place = place;
+            changed = true;
+        }
+        if let Some((pick, place)) = add {
+            changed |= self.add_picked(slots, pick, place, rate, message);
+        }
+        // A container's number of chains changed: the engine's tree did.
+        if slots
+            .iter()
+            .map(FxSlot::chains)
+            .ne(chains_before.iter().copied())
+        {
+            changed = true;
+        }
+        relayout.extend(restart);
+        changed |= self.reload_each(slots, relayout, rate, message);
+        if let Some(i) = remove {
+            remove_with_contents(slots, i);
+            changed = true;
+        }
+        changed
+    }
+
+    /// Uses the files picked on effects' panels: a room, cabinet or amp
+    /// capture, recorded or from a file dialog. True if any changed.
+    fn use_picks(
+        &mut self,
+        slots: &mut [FxSlot],
+        picks: Vec<(usize, RoomPick)>,
+        rate: u32,
+        message: &mut Option<String>,
+    ) -> bool {
+        let mut changed = false;
         for (i, pick) in picks {
             let reference = match pick {
                 RoomPick::Made(_) => String::new(),
@@ -2001,57 +2057,67 @@ impl Effects {
             }
             changed = true;
         }
-        if let Some((a, b)) = swap {
-            slots.swap(a, b);
-            changed = true;
-        }
-        if let Some((i, place)) = moved {
-            slots[i].place = place;
-            changed = true;
-        }
-        if let Some((pick, place)) = add {
-            let made = match pick {
-                Pick::Builtin(k) => Ok(self.create_builtin(k, rate)),
-                Pick::Plugin(p) => self
-                    .create(&p, rate)
-                    .map_err(|e| format!("{}: {e}", p.class.name)),
-            };
-            match made {
-                Ok(mut slot) => {
-                    slot.place = place;
-                    slots.push(slot);
-                    changed = true;
-                }
-                Err(e) => *message = Some(e),
+        changed
+    }
+
+    /// Makes the effect picked from an Add list and puts it at the end
+    /// of `place`'s chain (the track's own if none). True if it was made.
+    fn add_picked(
+        &mut self,
+        slots: &mut Vec<FxSlot>,
+        pick: Pick,
+        place: Option<(String, u32)>,
+        rate: u32,
+        message: &mut Option<String>,
+    ) -> bool {
+        let made = match pick {
+            Pick::Builtin(k) => Ok(self.create_builtin(k, rate)),
+            Pick::Plugin(p) => self
+                .create(&p, rate)
+                .map_err(|e| format!("{}: {e}", p.class.name)),
+        };
+        match made {
+            Ok(mut slot) => {
+                slot.place = place;
+                slots.push(slot);
+                true
+            }
+            Err(e) => {
+                *message = Some(e);
+                false
             }
         }
-        // A container's number of chains changed: the engine's tree did.
-        if slots
-            .iter()
-            .map(FxSlot::chains)
-            .ne(chains_before.iter().copied())
-        {
-            changed = true;
-        }
-        relayout.extend(restart);
-        relayout.dedup();
-        for i in relayout {
+    }
+
+    /// Makes the plugins at `each` again, with their settings (their
+    /// side buses changed, or one is restarted). True if any was made.
+    fn reload_each(
+        &mut self,
+        slots: &mut [FxSlot],
+        mut each: Vec<usize>,
+        rate: u32,
+        message: &mut Option<String>,
+    ) -> bool {
+        let mut changed = false;
+        each.sort_unstable();
+        each.dedup();
+        for i in each {
             match self.reload(&mut slots[i], rate) {
                 Ok(()) => changed = true,
                 Err(e) => *message = Some(format!("{}: {e}", slots[i].name)),
             }
         }
-        if let Some(i) = remove {
-            // The audio side is dropped with the graph it was in. A
-            // container goes with what's inside it.
-            let mut gone = with_contents(slots, i);
-            gone.sort_unstable();
-            for j in gone.into_iter().rev() {
-                slots.remove(j);
-            }
-            changed = true;
-        }
         changed
+    }
+}
+
+/// Takes the effect at `i` off, with what is inside it if it is a
+/// container. The audio side is dropped with the graph it was in.
+pub(crate) fn remove_with_contents(slots: &mut Vec<FxSlot>, i: usize) {
+    let mut gone = with_contents(slots, i);
+    gone.sort_unstable();
+    for j in gone.into_iter().rev() {
+        slots.remove(j);
     }
 }
 

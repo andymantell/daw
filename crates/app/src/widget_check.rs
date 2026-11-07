@@ -43,6 +43,8 @@ const CONTROLS: &[&str] = &[
     "IconButton::labelled(",
     "Knob::new(",
     "Switch::new(",
+    "panel_kit::stomp(",
+    ".dnd_drag_source(",
     "TextEdit::singleline(",
     "TextEdit::multiline(",
     ".text_edit_singleline(",

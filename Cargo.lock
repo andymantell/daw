@@ -1219,6 +1219,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "hound",
+ "loro",
  "minisign-verify",
  "png",
  "rfd",

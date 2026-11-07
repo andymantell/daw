@@ -8,8 +8,9 @@ first. Each answer is also ticked in its feature's file.
 When a recorded take is deleted, its audio file is removed from the
 project folder, backups and bundles once nothing uses it any more: after
 a save, when undo can no longer bring it back, and when no snapshot
-still refers to it (`1.8-privacy.md`). Not built yet: after the polish
-pass.
+still refers to it (`1.8-privacy.md`). Built 2026-11-06: saving removes
+such audio; what only undo is keeping goes when the project is closed;
+File → Remove unused audio does it on asking.
 
 ## 2026-11-05: a font with the sharp and flat signs
 
@@ -77,9 +78,8 @@ the app" stays a per-plugin choice in Settings → Plugins.
 Options (a) and (b) of `1.7-lesson-notes.md`: deleting a tab block wipes
 it from the saved file, its backup and bundles, as comments are, and
 deleted or rewritten lesson-note text is blanked from the history too.
-Not built yet: it waits until feature work resumes after the polish
-pass. A snapshot taken before a deletion then restores without the
-deleted words (`1.8-snapshots.md`).
+A snapshot taken before a deletion then restores without the deleted
+words (`1.8-snapshots.md`). Built 2026-11-06.
 
 ## 2026-11-05: built-as-is defaults accepted
 

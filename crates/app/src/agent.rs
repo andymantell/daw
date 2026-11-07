@@ -799,6 +799,7 @@ pub(crate) fn command_access(cmd: Cmd) -> Access {
         | Cmd::ExportThisSection
         | Cmd::ExportDawProject
         | Cmd::ExportBundle
+        | Cmd::RemoveUnusedAudio
         | Cmd::ExportMidi
         | Cmd::ExportMusicXml
         | Cmd::ExportTextTab
@@ -1088,6 +1089,7 @@ impl App {
             "list_projects" => Ok(self.projects_value()),
             "get_automation" => self.automation_value(args["track"].as_str()),
             "get_suggestions" => Ok(self.suggestions_value()),
+            "get_unused_audio" => Ok(self.unused_audio_value()),
             _ => (self.takes_read(name, args))
                 .or_else(|| self.notes_read_tool(name, args))
                 .or_else(|| self.layers_read(name, args))

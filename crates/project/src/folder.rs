@@ -92,6 +92,12 @@ impl ProjectFolder {
     /// something that was deleted, such as a comment.
     pub fn save_dropping_backup(&self, bytes: &[u8]) -> Result<(), String> {
         self.save(bytes)?;
+        self.replace_backup(bytes)
+    }
+
+    /// Makes the backup a copy of `bytes` (the document as just saved):
+    /// for when the save before uses something since taken away.
+    pub fn replace_backup(&self, bytes: &[u8]) -> Result<(), String> {
         let doc = self.dir.join(DOC_FILE);
         let err = |e: std::io::Error| format!("could not save {}: {e}", doc.display());
         let tmp = doc.with_extension("daw.tmp");

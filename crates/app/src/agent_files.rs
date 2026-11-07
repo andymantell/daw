@@ -62,6 +62,16 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "get_unused_audio",
+        description: "The saved project's audio files that nothing uses any more (deleted \
+                      takes, say): those that can go now, those kept until the project is \
+                      closed because undo could still bring them back, and those removed \
+                      since it was opened. Saving removes what can go; the \
+                      remove-unused-audio command (run_command) saves and removes them now.",
+        access: Access::Read,
+        schema: || json!({"type": "object", "properties": {}}),
+    },
+    Tool {
         name: "list_projects",
         description: "The projects in the projects folder, and the templates a new project \
                       can start from (those that come with the app, then the user's).",

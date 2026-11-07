@@ -33,6 +33,7 @@ pub(crate) enum Cmd {
     SaveChainPreset,
     ImportPreset,
     ExportBundle,
+    RemoveUnusedAudio,
     ImportBundle,
     Snapshots,
     People,
@@ -516,6 +517,15 @@ pub(crate) const COMMANDS: &[Info] = &[
     .hint("The project and its audio in one file, to send by any means")
     .words("share send")
     .everyday(),
+    info(
+        Cmd::RemoveUnusedAudio,
+        "remove-unused-audio",
+        "File",
+        "Remove unused audio",
+        &[],
+    )
+    .hint("Save, and delete the project's audio files that nothing uses any more, such as deleted takes")
+    .words("clean up tidy delete takes disk space files privacy"),
     info(
         Cmd::ImportBundle,
         "import-bundle",
@@ -3652,6 +3662,7 @@ impl App {
                 });
             }
             Cmd::ExportBundle => self.export_bundle(ctx),
+            Cmd::RemoveUnusedAudio => self.remove_unused_audio_now(ctx),
             Cmd::ImportBundle => self.pick_bundle(),
             Cmd::Snapshots => self.snapshot_ui.open = true,
             Cmd::People => self.people.open = true,

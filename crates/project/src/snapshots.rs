@@ -20,10 +20,13 @@
 //! drop what was set since; and each person's practice settings and
 //! practice log, which aren't the song's.
 
-use loro::{Frontiers, LoroMap, LoroValue};
+use std::collections::HashSet;
+
+use loro::cursor::Side;
+use loro::{Frontiers, ID, LoroMap, LoroText, LoroValue};
 
 use crate::doc::QUIET;
-use crate::{Difference, Project, ProjectDoc, Track, differences};
+use crate::{Difference, Project, ProjectDoc, differences};
 
 /// Where snapshots live in the document.
 const SNAPSHOTS: &str = "snapshots";
@@ -115,14 +118,23 @@ impl ProjectDoc {
     }
 
     /// The project as it was when the snapshot was taken, comments and
-    /// assignments aside: those are the ones there are now.
+    /// assignments aside: those are the ones there are now. Words deleted
+    /// since stay deleted (the owner's choice, 2026-11-05): the lesson
+    /// notes come back without the letters deleted since, and tab blocks
+    /// only if they are still there, with the words they have now.
     pub fn snapshot_project(&self, id: &str) -> Option<Project> {
         let version = self.version_of(id)?;
         let then = self.doc.fork_at(&version).ok()?;
+        let notes = still_there(&then.get_text("notes"), &self.doc.get_text("notes"));
         let mut p = ProjectDoc::wrap(then).get();
         let now = self.get();
         p.comments = now.comments;
         p.assignments = now.assignments;
+        p.notes = notes;
+        let had: Vec<String> = p.tabs.iter().map(|t| t.id.clone()).collect();
+        p.tabs = (now.tabs.into_iter())
+            .filter(|t| had.contains(&t.id))
+            .collect();
         Some(p)
     }
 
@@ -151,14 +163,7 @@ impl ProjectDoc {
     /// all of them. Sorted, once each.
     pub fn assets_in_use(&self) -> Vec<String> {
         let mut v: Vec<String> = Vec::new();
-        let mut add = |p: &Project| {
-            v.extend(
-                (p.tracks.iter())
-                    .flat_map(|t| std::iter::once(t).chain(t.stored_versions()))
-                    .flat_map(Track::assets),
-            );
-            v.extend(p.videos.iter().map(|c| c.asset.clone()));
-        };
+        let mut add = |p: &Project| v.extend(crate::project_assets(p));
         add(&self.get());
         for s in self.snapshots() {
             if let Some(p) = self.snapshot_project(&s.id) {
@@ -206,6 +211,21 @@ impl ProjectDoc {
 }
 
 /// A name with no line breaks or surrounding space, not too long.
+/// The letters of `then` (a text as it was) that `now` (the same text
+/// as it is) still has.
+fn still_there(then: &LoroText, now: &LoroText) -> String {
+    let ids = |t: &LoroText| -> Vec<Option<ID>> {
+        (0..t.len_unicode())
+            .map(|i| t.get_cursor(i, Side::Middle).and_then(|c| c.id))
+            .collect()
+    };
+    let live: HashSet<ID> = ids(now).into_iter().flatten().collect();
+    (then.to_string().chars().zip(ids(then)))
+        .filter(|(_, id)| id.is_some_and(|id| live.contains(&id)))
+        .map(|(c, _)| c)
+        .collect()
+}
+
 fn clean(name: &str) -> String {
     let one_line: String = name
         .chars()
@@ -275,7 +295,8 @@ mod tests {
         q.tracks[0].clips.push(clip("c2", "bbbb.wav"));
         q.tracks.push(Track::new("t2".into(), "Bass".into()));
         q.markers.clear();
-        q.notes = "Now the C chord".into();
+        // Only added to: words deleted since would stay deleted.
+        q.notes = "Practise the G chord, then the C chord".into();
         doc.set(&q);
 
         assert_eq!(doc.restore_snapshot(&id), Some(p.clone()));

@@ -84,7 +84,9 @@ assistant finds them for itself. In outline:
   `list_parameters`, `get_meters`, `get_history`, `get_comments`,
   `get_fretboard`, `get_exports`, `list_presets`, `list_effect_kinds`,
   `list_projects`, `export_report`, `get_takes`, `list_snapshots`,
-  `get_instrument`, `get_effects`. `list_parameters` lists every
+  `get_instrument`, `get_effects`, `get_unused_audio` (audio files
+  nothing uses any more, those kept until the project closes because
+  undo could bring them back, and those removed). `list_parameters` lists every
   parameter of a plugin, and takes `effect`, `search`, `offset` and
   `limit` to narrow and page them.
 - **Hearing and seeing:** `analyse` (peak, true peak, RMS, crest factor,

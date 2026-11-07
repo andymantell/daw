@@ -115,6 +115,7 @@ pub(crate) const MENUS: &[(&str, &[Item])] = &[
             Run(Cmd::ExportBundle),
             Run(Cmd::ImportBundle),
             Run(Cmd::People),
+            Run(Cmd::RemoveUnusedAudio),
             Gap,
             Run(Cmd::Settings),
         ],

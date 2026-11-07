@@ -126,6 +126,7 @@ mod track_panes;
 mod trainer;
 mod transpose;
 mod tuner;
+mod unused_audio;
 mod update;
 mod versions;
 mod video;

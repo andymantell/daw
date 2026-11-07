@@ -27,8 +27,10 @@
 //! document keeps its whole history, so they could otherwise be read
 //! back. [`ProjectDoc::to_bytes`] blanks every value that comments no
 //! longer show in the copy it writes (see [`scrub`]). Tab blocks are laid
-//! out the same way, one value per field, so the same scrub could cover
-//! them; for now their old text, and the notes', stays in the history.
+//! out the same way, one value per field, and get the same scrub; and
+//! every letter deleted from the lesson notes is blanked out of the
+//! notes' history too (see [`scrub_text`]), so rewritten notes keep only
+//! their words as they are now (the owner's choice, 2026-11-05).
 //!
 //! Named versions of the project, and restoring them, are in
 //! `snapshots.rs`.
@@ -60,12 +62,18 @@ pub(crate) const QUIET: &str = "quiet";
 pub struct ProjectDoc {
     pub(crate) doc: LoroDoc,
     pub(crate) undo: UndoManager,
-    /// Whether the history may hold comment text that comments no longer
-    /// show, so saving has to scrub it.
+    /// Whether the history may hold words that comments, tab blocks or
+    /// the notes no longer show, so saving has to scrub it.
     scrub: bool,
-    /// Whether a comment was deleted or changed since
-    /// [`take_dropped`](Self::take_dropped) was last asked.
+    /// Whether a comment or tab block was deleted or changed, or words
+    /// deleted from the notes, since [`take_dropped`](Self::take_dropped)
+    /// was last asked.
     dropped: bool,
+    /// The history's version when this copy was opened, and the assets
+    /// the project used then: undo can only go back to versions since,
+    /// so only those could bring audio back (see `cleanup.rs`).
+    pub(crate) opened_at: VersionVector,
+    pub(crate) opened_with: Vec<String>,
     /// The last scrubbed copy, and the version it was made at.
     scrubbed: RefCell<Option<(VersionVector, Vec<u8>)>>,
     /// Who is editing, once signed in (see [`crate::identity`]).
@@ -93,12 +101,14 @@ impl ProjectDoc {
         // Written by an older version, or by a copy that hadn't heard of
         // a deletion yet: check on the first save.
         d.scrub = true;
+        d.opened_with = d.assets_now();
         Ok(d)
     }
 
     pub(crate) fn wrap(doc: LoroDoc) -> ProjectDoc {
         // When each change was made, for the activity history.
         doc.set_record_timestamp(true);
+        let opened_at = doc.oplog_vv();
         let mut undo = UndoManager::new(&doc);
         // One step per edit, however quickly they follow each other.
         undo.set_merge_interval(0);
@@ -110,6 +120,8 @@ impl ProjectDoc {
             undo,
             scrub: false,
             dropped: false,
+            opened_at,
+            opened_with: Vec::new(),
             scrubbed: RefCell::new(None),
             me: None,
             steps: Steps::default(),
@@ -117,8 +129,9 @@ impl ProjectDoc {
     }
 
     /// The whole document, history included, for saving or sending,
-    /// with the text of deleted comments, and the old text of changed
-    /// ones, blanked out of the history.
+    /// with the text of deleted comments and tab blocks, the old text of
+    /// changed ones, and the letters deleted from the notes, blanked out
+    /// of the history.
     pub fn to_bytes(&self) -> Vec<u8> {
         if !self.scrub {
             return self.raw_bytes();
@@ -134,8 +147,9 @@ impl ProjectDoc {
         bytes
     }
 
-    /// Whether a comment has been deleted or changed (here or by someone
-    /// else) since this was last asked. Saving should then not keep the
+    /// Whether a comment or tab block has been deleted or changed, or
+    /// words deleted from the notes (here or by someone else), since this
+    /// was last asked. Saving should then not keep the
     /// save before as a backup, as it still holds the old text.
     pub fn take_dropped(&mut self) -> bool {
         std::mem::take(&mut self.dropped)
@@ -156,8 +170,11 @@ impl ProjectDoc {
                 &self.doc.oplog_vv(),
             )
             .ok()?;
-        let live: HashSet<ContainerID> = self.comment_maps().into_iter().collect();
-        if scrub(&mut json, &self.comments().id(), &live) == 0 {
+        let roots = [self.comments(), self.tabs()];
+        let live: HashSet<ContainerID> = roots.iter().flat_map(entry_maps).collect();
+        let roots: Vec<ContainerID> = roots.iter().map(|r| r.id()).collect();
+        let blanked = scrub(&mut json, &roots, &live) + scrub_text(&mut json, &self.notes().id());
+        if blanked == 0 {
             return Some(self.raw_bytes());
         }
         let copy = LoroDoc::new();
@@ -167,14 +184,14 @@ impl ProjectDoc {
             .flatten()
     }
 
-    /// The containers of the comments the project shows now.
-    fn comment_maps(&self) -> Vec<ContainerID> {
-        let comments = self.comments();
-        keys(&comments)
-            .iter()
-            .filter_map(|k| comments.get(k)?.into_container().ok()?.into_map().ok())
-            .map(|m| m.id())
-            .collect()
+    /// What the merge and save checks compare: everything that holds
+    /// words which must not outlive their deletion.
+    fn wiped_parts(&self) -> (LoroValue, LoroValue, String) {
+        (
+            self.comments().get_deep_value(),
+            self.tabs().get_deep_value(),
+            self.notes().to_string(),
+        )
     }
 
     /// This document's version, to ask another copy for what is new.
@@ -198,14 +215,15 @@ impl ProjectDoc {
         if !check.ok() {
             return Err(format!("not merged: {}", check.reason()));
         }
-        let before = self.comments().get_deep_value();
+        let before = self.wiped_parts();
         import_lenient(&self.doc, bytes)?;
-        // Someone else may have deleted or changed a comment, or sent
-        // history that still holds old text.
-        if self.comments().get_deep_value() != before {
+        // Someone else may have deleted or changed a comment, a tab block
+        // or the notes, or sent history that still holds old text.
+        if self.wiped_parts() != before {
             self.scrub = true;
             self.dropped = true;
-        } else if !self.comments().is_empty() {
+        } else if !self.comments().is_empty() || !self.tabs().is_empty() || !self.notes().is_empty()
+        {
             self.scrub = true;
         }
         Ok(())
@@ -543,9 +561,15 @@ impl ProjectDoc {
         }
 
         let notes = self.notes();
-        if notes.to_string() != p.notes {
+        let old = notes.to_string();
+        if old != p.notes {
             let _ = notes.update(&p.notes, UpdateOptions::default());
             w.changed = true;
+            self.scrub = true;
+            // Only added to: nothing to take out of the backup.
+            if !is_subsequence(&old, &p.notes) {
+                self.dropped = true;
+            }
         }
 
         let tabs = self.tabs();
@@ -553,13 +577,20 @@ impl ProjectDoc {
         for id in keys(&tabs) {
             if !keep.contains(id.as_str()) {
                 w.delete(&tabs, &id);
+                self.scrub = true;
+                self.dropped = true;
             }
         }
         for t in &p.tabs {
             let m = w.child(&tabs, &t.id);
             w.put(&m, "marker", opt_str(&t.marker));
-            w.put(&m, "title", t.title.as_str());
-            w.put(&m, "text", t.text.as_str());
+            for (k, v) in [("title", &t.title), ("text", &t.text)] {
+                let had = m.get(k).is_some();
+                if w.put(&m, k, v.as_str()) && had {
+                    self.scrub = true;
+                    self.dropped = true;
+                }
+            }
             w.put(&m, "author", t.author.as_str());
             w.put(&m, "created", t.created);
         }
@@ -974,11 +1005,27 @@ impl ProjectDoc {
     }
 }
 
+/// The maps held in `root` now (the comments, or the tab blocks).
+fn entry_maps(root: &LoroMap) -> Vec<ContainerID> {
+    keys(root)
+        .iter()
+        .filter_map(|k| root.get(k)?.into_container().ok()?.into_map().ok())
+        .map(|m| m.id())
+        .collect()
+}
+
+/// Whether every letter of `a` is in `b`, in order: `b` only adds to it.
+fn is_subsequence(a: &str, b: &str) -> bool {
+    let mut b = b.chars();
+    a.chars().all(|c| b.any(|d| d == c))
+}
+
 /// Blanks, in `json` (a document's whole history), every value written
-/// into a comment that the document no longer shows: all of a deleted
-/// comment's fields, and the values a comment's fields had before they
-/// were last changed. Comments are the maps put into `root`; `live` are
-/// the ones still there. Returns how many values it blanked.
+/// into an entry (a comment, a tab block) that the document no longer
+/// shows: all of a deleted entry's fields, and the values an entry's
+/// fields had before they were last changed. Entries are the maps put
+/// into any of `roots`; `live` are the ones still there. Returns how many
+/// values it blanked.
 ///
 /// Only values are blanked, the same way `loro::json::redact` does, so
 /// every change keeps its id and the scrubbed copy still merges with
@@ -987,12 +1034,12 @@ impl ProjectDoc {
 ///
 /// `json` must be exported without peer compression, so that peers and
 /// container ids are written out in full.
-fn scrub(json: &mut JsonSchema, root: &ContainerID, live: &HashSet<ContainerID>) -> usize {
-    // Every comment there has ever been.
+fn scrub(json: &mut JsonSchema, roots: &[ContainerID], live: &HashSet<ContainerID>) -> usize {
+    // Every entry there has ever been.
     let mut ever: HashSet<ContainerID> = HashSet::new();
     for ch in &json.changes {
         for op in &ch.ops {
-            if op.container == *root
+            if roots.contains(&op.container)
                 && let JsonOpContent::Map(JsonMapOp::Insert {
                     value: LoroValue::Container(c),
                     ..
@@ -1002,7 +1049,7 @@ fn scrub(json: &mut JsonSchema, root: &ContainerID, live: &HashSet<ContainerID>)
             }
         }
     }
-    // In a live comment, the write to each field that wins: the latest
+    // In a live entry, the write to each field that wins: the latest
     // by Lamport time, then by peer, as Loro's maps decide.
     let mut wins: HashMap<(&ContainerID, &str), (u32, u64)> = HashMap::new();
     for ch in &json.changes {
@@ -1047,6 +1094,73 @@ fn scrub(json: &mut JsonSchema, root: &ContainerID, live: &HashSet<ContainerID>)
         }
     }
     blanked
+}
+
+/// Blanks, in `json` (a document's whole history, exported as for
+/// [`scrub`]), every letter ever deleted from the text `text`: the
+/// letters stay, so every change keeps its length and id, but each
+/// becomes a placeholder of the same size. Returns how many it blanked.
+fn scrub_text(json: &mut JsonSchema, text: &ContainerID) -> usize {
+    use loro::JsonTextOp as TextOp;
+    // Every deleted letter, by the id of the change that wrote it.
+    let mut gone: HashSet<(u64, i32)> = HashSet::new();
+    for ch in &json.changes {
+        for op in &ch.ops {
+            if op.container != *text {
+                continue;
+            }
+            if let JsonOpContent::Text(TextOp::Delete { len, start_id, .. }) = &op.content {
+                // `start_id` is the lowest of the ids, whichever way the
+                // deletion ran.
+                for i in 0..len.unsigned_abs() as i32 {
+                    gone.insert((start_id.peer, start_id.counter + i));
+                }
+            }
+        }
+    }
+    if gone.is_empty() {
+        return 0;
+    }
+    let mut blanked = 0;
+    for ch in &mut json.changes {
+        let peer = ch.id.peer;
+        for op in &mut ch.ops {
+            if op.container != *text {
+                continue;
+            }
+            let at = op.counter;
+            let JsonOpContent::Text(TextOp::Insert { text: s, .. }) = &mut op.content else {
+                continue;
+            };
+            let mut hit = false;
+            let out: String = (s.chars().enumerate())
+                .map(|(i, c)| {
+                    if gone.contains(&(peer, at + i as i32)) && c != placeholder(c) {
+                        hit = true;
+                        blanked += 1;
+                        placeholder(c)
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            if hit {
+                *s = out;
+            }
+        }
+    }
+    blanked
+}
+
+/// What a deleted letter becomes: a space, or a character as long as it
+/// in every encoding, so positions in the history stay where they were.
+fn placeholder(c: char) -> char {
+    match c.len_utf8() {
+        1 => ' ',
+        2 => '\u{a0}',
+        3 => '\u{fffd}',
+        _ => '\u{10fffd}',
+    }
 }
 
 /// What a document shows, leaving out root containers that are empty

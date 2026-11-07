@@ -171,6 +171,9 @@ pub struct Proj {
     /// What was found there at start, until the user decides. Nothing
     /// is written there meanwhile, so it isn't lost.
     pub(crate) found: Option<Found>,
+    /// Audio taken out of the folder since the project was opened, as
+    /// nothing needed it any more (`unused_audio.rs`).
+    pub(crate) removed_audio: Vec<daw_project::AudioFile>,
 }
 
 impl Proj {
@@ -225,6 +228,7 @@ impl Proj {
             recovery_version: Vec::new(),
             last_recovery: Instant::now(),
             found: None,
+            removed_audio: Vec::new(),
             suggesting: None,
         }
     }
@@ -973,6 +977,8 @@ impl App {
             folder.save(&bytes)?;
         }
         self.save_device_copy(&folder, &bytes)?;
+        // Audio nothing needs any more, a deleted take's say, goes now.
+        self.remove_unused_audio(false);
         // Saved now, so nothing to recover.
         self.discard_recovery();
         self.proj.dirty = false;
@@ -1317,6 +1323,8 @@ impl App {
                 self.message = Some(e);
                 return;
             }
+            // Undo ends here: what only it was keeping goes.
+            self.remove_unused_audio(true);
         } else if self.proj.dirty && !self.tracks.is_empty() {
             self.proj.dialog = Some(Dialog::Unsaved { then });
             return;

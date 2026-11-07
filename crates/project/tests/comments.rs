@@ -142,16 +142,16 @@ fn undoing_a_delete_brings_the_comment_back_and_saves_it() {
 fn other_parts_of_the_project_keep_their_history() {
     let mut d = ProjectDoc::new(1);
     let mut p = with(vec![comment("c1", SECRET)]);
-    p.notes = "First notes".into();
+    p.reference_hz = 432.0;
     d.set(&p);
-    p.notes = "Second notes".into();
+    p.reference_hz = 442.0;
     p.comments.clear();
     d.set(&p);
     let bytes = d.to_bytes();
     assert!(!contains(&bytes, SECRET));
     assert!(
-        everything_in(&bytes).contains("First notes"),
-        "only comments are scrubbed for now"
+        everything_in(&bytes).contains("432"),
+        "only words that were deleted are scrubbed"
     );
 }
 

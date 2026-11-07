@@ -8,6 +8,7 @@
 //! document, so edits made elsewhere to other fields survive a merge.
 //! Undo is the document's, per user.
 
+mod cleanup;
 mod diff;
 mod doc;
 mod folder;
@@ -29,6 +30,7 @@ mod snapshots;
 mod templates;
 mod timeshift;
 
+pub use cleanup::{AudioFile, project_assets};
 pub use diff::{Difference, differences};
 pub use doc::ProjectDoc;
 pub use folder::{ASSETS, DEVICES, DOC_FILE, ProjectFolder, is_asset_name};

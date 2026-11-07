@@ -48,3 +48,4 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 [dev-dependencies]
 daw-test-plugin = { path = "../test-plugin" }
 egui_kittest = { version = "0.37.0", features = ["eframe"] }
+loro = "1.17.1"

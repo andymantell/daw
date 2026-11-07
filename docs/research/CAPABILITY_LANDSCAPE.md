@@ -31,6 +31,7 @@ end for what could not be verified.
 | Retrospective capture (keep input played while not recording) | 2 (audio), 3 (MIDI) | L | Valuable for students. |
 | Android remote app: transport, record, arm, timeline overview to move the start point, input meters | 2 | M | Local network, QR pairing. See [REMOTE_CONTROL.md](REMOTE_CONTROL.md). |
 | Monitor section: control-room output, cue/headphone mixes, talkback, dim/mono, speaker switching | 2 | M | Useful for in-person lessons. |
+| Call mix: the mix plus a headset mic to an extra (virtual) output for video calls, drift-handled across devices | 2 | M | Windows needs a virtual cable driver. See [CALL_MIX.md](CALL_MIX.md). |
 
 ## 2. Audio editing
 

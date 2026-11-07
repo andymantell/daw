@@ -505,6 +505,16 @@ pane in `app/monitor.rs`. Owner checks on the interface's outputs in
 - **Monitor section:** separate control-room output, **cue/headphone mixes**
   per performer, **talkback**, dim/mono, speaker-set switching. This is
   great for in-person lessons: the student gets their own headphone mix.
+- **Call mix (M):** send the app's sound into a video call. An extra
+  output pair carrying the main mix (or a headphone mix) with a chosen
+  microphone mixed in, each with level and mute, so the call app uses
+  that device as its microphone and hears both. The extra output and the
+  mic can be different devices from the interface, with drift handled.
+  On Windows the output is a virtual audio cable the owner installs (a
+  device other apps can see needs a kernel driver); on Linux the app can
+  make the device itself; macOS later. A reminder about the call app's
+  music setting. Per computer, with commands. See
+  [research/CALL_MIX.md](research/CALL_MIX.md).
 - Metering: peak/RMS, LUFS, true peak, spectrum, phase correlation.
 - Mixer view inside the main window, and as a full window.
 - **A desk-style mixer (M):** one narrow vertical strip per channel in

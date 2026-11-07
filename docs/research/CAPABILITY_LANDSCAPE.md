@@ -85,6 +85,7 @@ end for what could not be verified.
 | Automation (draw; read/touch/latch/write), clip automation | 2 | M | |
 | Mixer embedded in main window and as a full window | 2 | L | |
 | Desk-style mixer: vertical channel strips, long-throw faders with unity mark and fader law, meters beside faders, scribble strips | 2 | M | See [MIXER_DESK.md](MIXER_DESK.md). |
+| Pedalboard mode: one track's effect chain full-window at a larger scale, every unit open, drag to rearrange, stomp on/off | 2 | M | See [MIXER_DESK.md](MIXER_DESK.md#pedalboard-mode). |
 | Metering: LUFS, true peak, spectrum, phase correlation | 2 | L | |
 | Channel strip presets, mixer snapshots | 3 | L | |
 | Freeze / render in place | 3 | M | Frozen audio for missing plugins is Phase 1. |

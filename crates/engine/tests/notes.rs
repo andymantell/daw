@@ -172,15 +172,73 @@ fn notes_from_a_clip_start_and_stop_on_their_frames() {
 }
 
 #[test]
-fn playing_from_the_middle_of_a_note_leaves_it_out_and_a_jump_stops_notes() {
+fn playing_from_the_middle_of_a_note_starts_it_there() {
     let mut s = session();
     s.tracks
         .push(track(vec![note(0.0, 2.0, 60), note(1.0, 4.0, 62)], 0));
-    // From halfway through the first note: only the second starts.
+    // From halfway through the first note: it is held there, so it
+    // starts at once, and the second on its own frame.
     let got = play(&s, BEAT / 2, BEAT as usize, None, None);
-    assert_eq!(got.len(), 1);
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(on(60)(&got[0].1));
+    assert_eq!(got[0].0, 0);
+    assert!(on(62)(&got[1].1));
+    assert_eq!(got[1].0, BEAT / 2);
+    // From after the first ends: only the second, held, starts.
+    let got = play(&s, 3 * BEAT, BEAT as usize, None, None);
+    assert_eq!(got.len(), 1, "{got:?}");
     assert!(on(62)(&got[0].1));
-    assert_eq!(got[0].0, BEAT / 2);
+    assert_eq!(got[0].0, 0);
+}
+
+#[test]
+fn going_round_the_loop_starts_the_notes_held_over_its_start() {
+    let mut s = session();
+    // A pad from before the loop, held past it.
+    s.tracks.push(track(vec![note(0.0, 8.0, 60)], 0));
+    let (a, b) = (2 * BEAT, 3 * BEAT);
+    let got = play(&s, a, (3 * BEAT) as usize, Some((a, b)), None);
+    let ons: Vec<i64> = got
+        .iter()
+        .filter(|(_, k)| on(60)(k))
+        .map(|(f, _)| *f)
+        .collect();
+    let offs: Vec<i64> = got
+        .iter()
+        .filter(|(_, k)| off(60)(k))
+        .map(|(f, _)| *f)
+        .collect();
+    // Once on starting, and again each time round, cut at the wrap.
+    assert_eq!(ons.len(), 3, "{got:?}");
+    assert_eq!(ons[0], 0);
+    assert_eq!(offs.len(), 2, "{got:?}");
+    for (k, &f) in offs.iter().enumerate() {
+        let wrap = (k as i64 + 1) * BEAT;
+        assert!((f - wrap).abs() <= BLOCK as i64, "{f}");
+        assert!(f <= ons[k + 1]);
+    }
+}
+
+#[test]
+fn a_held_note_started_partway_gets_the_expression_in_force() {
+    let mut s = session();
+    let mut n = note(0.0, 4.0, 60);
+    n.expr = (0, 2);
+    let mut t = track(vec![n], 0);
+    let point = |at: i64, value: f32| ExprSpec {
+        at: Ticks(at),
+        kind: Expression::Tuning,
+        value,
+    };
+    t.expression = vec![point(0, 1.0), point(PPQ, 2.0)].into();
+    s.tracks.push(t);
+    let got = play_all(&s, 2 * BEAT, BEAT as usize, None, None);
+    assert!(on(60)(&got[0].1), "{got:?}");
+    assert!(
+        got.iter().any(|(f, k)| *f == 0
+            && matches!(k, Kind::NoteExpression { kind: Expression::Tuning, value, .. } if *value == 2.0)),
+        "{got:?}"
+    );
 }
 
 #[test]

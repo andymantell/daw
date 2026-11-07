@@ -1504,7 +1504,8 @@ fn mix_chunk(
 /// the loop), with each output frame covering `speed` timeline frames:
 /// notes starting in the block go on, sounding notes ending in it go
 /// off. A jump in the timeline (a seek, or going round the loop) stops
-/// every sounding note first, and counts one more `pass`, for chance.
+/// every sounding note first, and counts one more `pass`, for chance;
+/// then the notes held over the place it lands on start there.
 /// Events are added to `events` in frame order, up to its capacity.
 #[allow(clippy::too_many_arguments)]
 fn schedule_notes(
@@ -1626,6 +1627,51 @@ fn schedule_notes(
         }
         // Notes starting in it: binary search for the first.
         let first = notes.partition_point(|nn| nn.start < start);
+        // After a jump, or on starting, the notes that began earlier
+        // and are still held here start now, so a chord or pad held
+        // over from before is heard; each with the expression in force.
+        if jumped {
+            for (i, nn) in notes[..first].iter().enumerate() {
+                if nn.end <= start || !nn.plays(*pass) || sounding.contains(&i) {
+                    continue;
+                }
+                let on = frame_of(start);
+                push(Event::note_on(
+                    on,
+                    nn.channel,
+                    nn.pitch,
+                    nn.velocity,
+                    i as u32,
+                ));
+                let points = &exprs[nn.expr.0..nn.expr.1];
+                let before = points.partition_point(|p| p.at < start);
+                for kind in [Expression::Tuning, Expression::Pressure, Expression::Timbre] {
+                    if let Some(p) = points[..before].iter().rev().find(|p| p.kind == kind) {
+                        push(Event {
+                            frame: on,
+                            channel: nn.channel,
+                            kind: Kind::NoteExpression {
+                                id: i as u32,
+                                pitch: nn.pitch,
+                                kind,
+                                value: p.value,
+                            },
+                        });
+                    }
+                }
+                express(i, start, end.min(nn.end), &mut push);
+                if nn.end < end {
+                    push(Event::note_off(
+                        frame_of(nn.end),
+                        nn.channel,
+                        nn.pitch,
+                        i as u32,
+                    ));
+                } else if sounding.len() < sounding.capacity() {
+                    sounding.push(i);
+                }
+            }
+        }
         for (i, nn) in notes.iter().enumerate().skip(first) {
             if nn.start >= end {
                 break;
